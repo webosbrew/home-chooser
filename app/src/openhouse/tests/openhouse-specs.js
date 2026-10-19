@@ -122,7 +122,7 @@ describe('listCandidates', () => {
 		expect(res.candidates[0]).toMatchObject({stock: true, stockLabel: 'Stock Home'});
 		expect(res.candidates[2]).toMatchObject({stock: false, stockLabel: null, icon: '/media/developer/apps/usr/palm/applications/x/icon.png'});
 		expect(res.steps[0].uri).toBe('luna://com.webos.applicationManager/listApps');
-		expect(res.steps[0].payload).toEqual({});
+		expect(res.steps[0].payload).toEqual({properties: ['id', 'title', 'icon', 'appCategory', 'folderPath']});
 	});
 });
 
@@ -309,7 +309,7 @@ describe('apply', () => {
 });
 
 describe('restoreStock', () => {
-	const LIST = ['luna://com.webos.applicationManager/listApps', {}];
+	const LIST = ['luna://com.webos.applicationManager/listApps', {properties: ['id']}];
 	const withApps = (tv, ids) => {
 		const inner = tv.rootLuna;
 		tv.rootLuna = async (uri, payload) => (uri.endsWith('/listApps') ? (tv.luna.push([uri, payload]), {returnValue: true, apps: ids.map((id) => ({id}))}) : inner(uri, payload));

@@ -111,6 +111,10 @@ export const writeDefaultApps = (run, record) =>
 // (docs/research/home-key-and-home-app.md, the 11.2.0 / 10.3.1 results).
 export const removeHomeFromRecord = (run, record) => writeDefaultApps(run, withNullHome(record));
 
+// listApps replies with every field of every app (over 200 KB with a few dozen apps, more than
+// exec's buffer holds), so ask for the few fields the list needs.
+const CANDIDATE_PROPERTIES = ['id', 'title', 'icon', 'appCategory', 'folderPath'];
+
 // A runner logs each call into `log`; a failing call is logged with its error and then rethrown.
 export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) => {
 	const wrap = async (step, fn) => {
@@ -193,7 +197,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			const log = [];
 			const res = Object.assign(result(log), {candidates: []});
 			try {
-				const reply = await runner(log).luna(`${SAM}/listApps`, {});
+				const reply = await runner(log).luna(`${SAM}/listApps`, {properties: CANDIDATE_PROPERTIES});
 				res.candidates = ((reply && reply.apps) || [])
 					.filter((a) => [].concat(a.appCategory || []).indexOf('home') >= 0)
 					.map((a) => ({
@@ -314,7 +318,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				await run.remove(HOME_FILE);
 				if (info.major <= 5) {
 					// 5.x: the key filter launches the record's home directly, so name a stock home.
-					const list = await run.luna(`${SAM}/listApps`, {});
+					const list = await run.luna(`${SAM}/listApps`, {properties: ['id']});
 					const ids = ((list && list.apps) || []).map((a) => a.id);
 					const stock = ids.indexOf(STOCK_FULLHOME) >= 0 ? STOCK_FULLHOME : STOCK_HOME;
 					if (homeOf(state.record) !== stock) {

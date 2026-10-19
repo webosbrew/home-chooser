@@ -18,7 +18,7 @@ export const createExec = (call = createBridgeCall()) => (command) =>
 	});
 
 export const buildLunaSend = (uri, payload) =>
-	'luna-send -n 1 -f ' + shellWord(uri) + ' ' + shellQuote(JSON.stringify(payload === undefined ? {} : payload));
+	'luna-send -n 1 ' + shellWord(uri) + ' ' + shellQuote(JSON.stringify(payload === undefined ? {} : payload));
 
 // rootLuna(uri, payload) -> parsed reply. Runs luna-send as root through exec.
 const parseLunaReply = (text) => {
@@ -41,6 +41,11 @@ export const createRootLuna = (exec) => (uri, payload) =>
 		if (reply.returnValue === false) throw new ServiceError(reply);
 		return reply;
 	}, (e) => {
+		if (e && e.reply && /maxBuffer exceeded/i.test(String(e.reply.errorText || ''))) {
+			// eslint-disable-next-line no-console
+			console.log(`[OpenHouse] luna-send ${uri}: output too large for exec (stdout maxBuffer exceeded)`);
+			throw new ServiceError({returnValue: false, errorText: 'The reply from ' + uri + ' was too large to read (output too large).'});
+		}
 		const reply = e && e.reply && parseLunaReply(e.reply.stdoutString || '');
 		if (reply) {
 			if (reply.returnValue === false) throw new ServiceError(reply);

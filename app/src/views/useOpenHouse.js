@@ -46,6 +46,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 	const [storedId, setStoredId] = useState('');
 	const [patchStatus, setPatchStatus] = useState(null);
 	const [loadFailed, setLoadFailed] = useState(false);
+	const [readFailed, setReadFailed] = useState(false); // the read itself threw
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState('');
 	const [toast, setToast] = useState(null);
@@ -58,13 +59,14 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		return () => { mounted.current = false; };
 	}, []);
 
-	const refreshWith = useCallback(async (e) => {
+	const readInto = async (e) => {
 		const [list, st, per, patchRes] = await Promise.all([
 			e.chooser.listCandidates(), e.chooser.readState(), e.chooser.readPersistence(),
 			e.backport ? e.backport.status() : null
 		]);
 		[['candidates', list], ['state', st], ['persistence', per], ['patch', patchRes]].forEach(([l, r]) => r && logResult(l, r));
 		if (!mounted.current) return;
+		setReadFailed(false);
 		setLoadFailed(!list.ok || !st.ok);
 		setCandidates(list.candidates);
 		const state = st.state;
@@ -72,7 +74,21 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		setStoredId(per.persistence ? per.persistence.stored : '');
 		setPatchStatus(patchRes ? patchRes.status : null);
 		return {home: (state && (state.profileHome || state.recordHome)) || STOCK_HOME};
-	}, []);
+	};
+
+	const refreshWith = useCallback(async (e) => {
+		try {
+			return await readInto(e);
+		} catch (err) {
+			// eslint-disable-next-line no-console
+			console.log(`${LOG_PREFIX} refresh: ${errorMessage(err)}`);
+			if (mounted.current) {
+				setReadFailed(true);
+				setLoadFailed(true);
+			}
+			return null;
+		}
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
 
 	useEffect(() => {
 		let cancelled = false;
@@ -187,7 +203,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
-		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, icons,
+		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
 		busy, notice, toast, choose, dismissToast: () => setToast(null)
 	};
 };

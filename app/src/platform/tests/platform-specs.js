@@ -36,15 +36,15 @@ describe('quoting', () => {
 describe('buildLunaSend', () => {
 	test('builds the luna-send command', () => {
 		expect(buildLunaSend('luna://com.webos.applicationManager/listApps', {})).toBe(
-			"luna-send -n 1 -f luna://com.webos.applicationManager/listApps '{}'"
+			"luna-send -n 1 luna://com.webos.applicationManager/listApps '{}'"
 		);
 	});
 	test('escapes single quotes in the payload', () => {
-		expect(buildLunaSend('luna://x/y', {name: "it's"})).toBe("luna-send -n 1 -f luna://x/y '{\"name\":\"it'\\''s\"}'");
+		expect(buildLunaSend('luna://x/y', {name: "it's"})).toBe("luna-send -n 1 luna://x/y '{\"name\":\"it'\\''s\"}'");
 	});
 	test('the payload survives a real shell', () => {
 		const payload = {a: "it's", b: '$(id)', c: '`x`'};
-		const cmd = buildLunaSend('luna://x/y', payload).replace(/^luna-send -n 1 -f \S+ /, 'printf %s ');
+		const cmd = buildLunaSend('luna://x/y', payload).replace(/^luna-send -n 1 \S+ /, 'printf %s ');
 		expect(JSON.parse(execFileSync('/bin/sh', ['-c', cmd]).toString())).toEqual(payload);
 	});
 });
@@ -76,7 +76,7 @@ describe('rootLuna', () => {
 	test('runs luna-send and parses the JSON', async () => {
 		const exec = execReturning('{"returnValue":true,"apps":[]}\n');
 		await expect(createRootLuna(exec)('luna://a/b', {x: 1})).resolves.toEqual({returnValue: true, apps: []});
-		expect(exec).toHaveBeenCalledWith("luna-send -n 1 -f luna://a/b '{\"x\":1}'");
+		expect(exec).toHaveBeenCalledWith("luna-send -n 1 luna://a/b '{\"x\":1}'");
 	});
 
 	test('rejects on returnValue false with the reply', async () => {
@@ -102,6 +102,15 @@ describe('rootLuna', () => {
 		const execFailure = new ServiceError({returnValue: false, errorText: 'Command failed: luna-send', stdoutString: '', stderrString: 'luna-send: not found'});
 		const err = await createRootLuna(jest.fn().mockRejectedValue(execFailure))('luna://a/b', {}).catch((e) => e);
 		expect(err).toBe(execFailure);
+	});
+
+	test('maps the exec maxBuffer error to a clear error', async () => {
+		const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+		const full = new ServiceError({returnValue: false, errorText: 'stdout maxBuffer exceeded', stdoutString: '{"returnValue":tr'});
+		const err = await createRootLuna(jest.fn().mockRejectedValue(full))('luna://a/b', {}).catch((e) => e);
+		expect(err.message).toMatch(/output too large/);
+		expect(log.mock.calls[0][0]).toMatch(/\[OpenHouse\].*output too large/);
+		log.mockRestore();
 	});
 
 	test('propagates an exec failure unchanged', async () => {

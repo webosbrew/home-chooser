@@ -31,7 +31,7 @@ export const patchFooter = (patch) => {
 };
 
 const MainPanel = ({model, ...rest}) => {
-	const {phase, rootError, candidates, currentId, storedId, loadFailed, icons, busy, notice, toast, patch} = model;
+	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
 	const known = candidates.some((c) => c.id === currentId);
@@ -78,7 +78,7 @@ const MainPanel = ({model, ...rest}) => {
 						/>
 					))}
 					{removed && !rootError ? <BodyText className={css.note}>{'The Home app you chose was removed; using LG Home.'}</BodyText> : null}
-					{loadFailed && !rootError ? <BodyText className={css.note}>{"Couldn't read everything from the TV. Try again in a moment."}</BodyText> : null}
+					{loadFailed && !rootError ? <BodyText className={css.note}>{readFailed ? "Couldn't read the installed apps." : "Couldn't read everything from the TV. Try again in a moment."}</BodyText> : null}
 					{candidates.length === 0 && !loadFailed && !rootError ? (
 						<BodyText className={css.note}>
 							{'No Home apps are installed. A Home app is a launcher that declares appCategory "home" in its appinfo.json. LG Home stays in use.'}

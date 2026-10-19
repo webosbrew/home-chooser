@@ -40,6 +40,17 @@ describe('Open House screen', () => {
 	beforeEach(() => { log = jest.spyOn(console, 'log').mockImplementation(() => {}); });
 	afterEach(() => { log.mockRestore(); window.localStorage.clear(); });
 
+	test('a read that throws shows the failure line, not an endless empty state', async () => {
+		const env = makeEnv();
+		env.chooser.listCandidates.mockRejectedValue(new Error('boom'));
+		mountApp(env);
+		expect(await screen.findByText("Couldn't read the installed apps.")).toBeTruthy();
+		expect(screen.queryByText(/No Home apps are installed/)).toBeNull();
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('[OpenHouse] refresh: boom'));
+		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
+		expect(row.getAttribute('aria-disabled')).not.toBe('true');
+	});
+
 	test.each([
 		['unreachable', /needs Homebrew Channel on a rooted TV/],
 		['denied', /doesn't let apps run root commands yet\. Update Homebrew Channel; Open House needs it\./],
