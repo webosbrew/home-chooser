@@ -192,17 +192,29 @@ Every literal-id site listed for 9.2.1 is replaced by `compositor.isHomeApp(appI
 `compositor.getHomeAppId()`, exposed to the key filter as `global.isHomeApp` and
 `global.getHomeAppId`. [V] They are `StarfishCompositor` methods in
 `usr/lib/plugins/compositor/libstarfishcompositorplugin.so`, which forwards to a native
-interface method (`getHomeAppIdFunc`) whose implementation was not found; where the id comes
-from is [U]. On 11.2.0, `usr/lib/weston/starfish-servicebridge.so`
-(`WStarfishServiceBridge::getHomeAppId`) holds `cbSystemProfile`, `defaultApps`, `categories`
-and `com.webos.app.home`, which suggests the id is read from the system profile with the stock
-id as fallback, and not from the settings record [I].
+interface method (`getHomeAppIdFunc`) whose implementation was not found. On 11.2.0,
+`usr/lib/weston/starfish-servicebridge.so` (`WStarfishServiceBridge::getHomeAppId`) holds
+`cbSystemProfile`, `defaultApps`, `categories` and `com.webos.app.home`. [V]
+
+On both releases the compositor's home id does not follow the settings record. With a launcher
+chosen through `setDefaultApp` in front, a Home press relaunched it (`launchDefaultApp` from
+`com.webos.surfacemanager` on 10.3.1, `com.webos.starfish.keyfilters` on 11.2.0), which the
+key filter only does when `isHomeApp(fullscreenView.appId)` is false. On 11.2.0 a press with the
+stock `com.webos.app.home` in front launched nothing while the record named the test launcher.
+[V, VM] So the id is the system profile's `home` (here the stock id), not the record [I].
 
 The 10.3.1 Super_L handling also changed: the press starts the magnification timer; a release
 before it fires re-injects a synthetic Super_L (`isInternalHomeKey`), and that second pass
 reaches `launchHomeApp()` when `!global.isHomeApp(fullscreenView.appId) && !homeView.appId`. If
 the home view is visible, the key goes to it when `surfaceAcceptsHomeKey(appId)` (the window's
 `_WEBOS_ACCESS_POLICY_KEYS_HOME`) is `"true"`; otherwise the home view is closed. [V]
+
+Evdev `KEY_LEFTMETA` (125) from a generic keyboard or from `com.webos.service.networkinput`'s
+uinput device (`LGE Network Input`) arrives as `Qt.Key_Meta`, not as the remote's IR Super_L. On
+10.3.1 `handleHomeKeys` re-sends it to the focused window as an internal Super_L (`Send home key
+instead of windows key to focused view`), and the release reaches the same
+`!global.isHomeApp(fullscreenView.appId)` launch branch as a remote press. [V, VM] The IR remote's
+Super_L press, which arms the long-press timer, was not exercised on a VM.
 
 11.2.0 has no key filter scripts and no compositor QML at all. The config adds
 `keyFiltersCpp`, naming `/usr/lib/libsystemUI.so`, `libappLaunch.so` and `libpreProcess.so`,
@@ -355,8 +367,8 @@ fails for it.
 
 ### 10.3.1 and 11.2.0: default-app lookup
 
-The platform looks the home app up by category, so the key filter needs no change if
-`isHomeApp` follows the same lookup [U]:
+The platform looks the home app up by category, so the Home key launches the chosen launcher
+with no change:
 
 1. Ship a launcher with `appCategory: ["home"]`. The stock app's `requiredPermissions` are the
    reference.
@@ -364,6 +376,12 @@ The platform looks the home app up by category, so the key filter needs no chang
    `setSystemSettings`; it takes precedence over the device profile. The profile itself is
    read-only on the rootfs; the `override` and `test` layers are writable but unmeasured.
 3. Handle `activateType` and `launchType` as before.
+
+`isHomeApp` does not follow the record (see [10.3.1 and 11.2.0](#1031-and-1120)), so the
+compositor treats the chosen launcher as an ordinary app: each Home press relaunches it, and
+the recents, nudge, voice and gesture sites do not see it as home. If a system profile override
+moves the profile's `home` (T6), `isHomeApp` may follow it [I]; otherwise 10.3.1 needs its QML
+`isHomeApp` sites patched, and 11.2.0, which has no compositor QML, needs a native change.
 
 ## Mod map for a custom home
 
@@ -380,7 +398,10 @@ the system profile on 10.3.1 and 11.2.0.
   `_WEBOS_ACCESS_POLICY_KEYS_HOME = "true"` so a Home press while it is in front reaches it.
   Do not rely on `_WEBOS_WINDOW_TYPE_HOME`: from 6.6.0 the compositor's home view is not the
   stock home's path. [I] On 5.6.1 a card launcher is relaunched by each Home press
-  (`caller com.webos.surfacemanager`) instead of receiving it [V, VM].
+  (`caller com.webos.surfacemanager`) instead of receiving it [V, VM]. On 10.3.1 and 11.2.0
+  a web launcher that sets the property receives the key and is also relaunched with
+  `launchType: "homeKey"` [V, VM], so a launcher should treat that relaunch as a Home press
+  and not as a fresh start.
 * Handle `launchType: "homeKey"` and `activateType` (`home`, `myapps`, `recent`).
 * Add the id to `keepAliveApps` if it should stay resident.
 
@@ -398,10 +419,15 @@ the system profile on 10.3.1 and 11.2.0.
 
   `defaultApps` is one object for all categories (11.2.0 ships `kidsApp` in it), so a
   `setSystemSettings` write has to carry the existing entries.
-* First-write caveat (6.6.0): when the write creates `defaultApps`, `sam` does not see it;
+* First-write caveat (webOS 6): when the write creates `defaultApps`, `sam` does not see it;
   `launchDefaultApp` still answers `no default app is set for the category` until `sam`
-  restarts, after which later writes reach it live. Whether a second write without a restart is
-  enough is [U] (T1b).
+  restarts, after which later writes reach it live. A second identical write does not help, and
+  neither does changing the value and changing it back; settings service logs
+  `SYSTEM_SETTING_CHANGED` for each write. [V, VM: first write and restart on 6.6.0 and 6.5.2,
+  repeated writes on 6.5.2] A writer that creates the
+  key has to restart `sam` once (`systemctl restart sam`). That `sam`'s subscription is left dead
+  when it starts on an absent key is [I]. No luna method deletes the key again:
+  `resetSystemSettings` answers `returnValue: true` and leaves it in place.
 * Going back to stock: on 6.6.0 to 9.2.1 the stock home lacks `appCategory`, so set no `home`
   entry rather than `com.webos.app.home`, and let the key filter fall back.
 * After the change, close the previous home with `closeByAppId {"forceMode": true}`, as the
@@ -435,6 +461,14 @@ On 11.2.0 three developer apps declaring `settings`, `settings` + `applications`
 applies to them. [V, VM] Whether the `applicationManager` methods are granted to them is
 [U] (T5); a root caller passes both checks.
 
+Homebrew Channel's root exec is not open to an ordinary app on 11.2.0. A developer app without
+`requiredPermissions` that called `luna://org.webosbrew.hbchannel.service/exec` got
+`{"returnValue":false,"errorCode":-1,"errorText":"Denied method call \"exec\" for category
+\"/\""}`; the service logged `LS_REQUIRES_SECURITY` (`Service security groups don't allow method
+call.`) and the command did not run. The same call as root replied `uid=0(root)`. On 10.3.1 the
+same app's call ran and wrote the record. [V, VM] How the settings app reaches root on webOS 26
+and later is open; until then the writes are made with root `luna-send`.
+
 ### Key filter backport, 6.6.0 - 9.2.1
 
 Backport the 10.3.1 shape, which has two parts, not one:
@@ -442,7 +476,8 @@ Backport the 10.3.1 shape, which has two parts, not one:
 1. **A home id the whole compositor shares.** Add `getHomeAppId()` and `isHomeApp(appId)` to
    the compositor and to the key filter's `global`. The id is `general/defaultApps.home`
    (subscribed the way 5.6.1's `getLaunchDefaultApp` is, in `StarfishViewStateController.qml`),
-   falling back to `com.webos.app.home` when unset or not installed. Replace every literal-id
+   falling back to `com.webos.app.home` when unset or not installed; unlike 10.3.1, whose
+   compositor id does not follow the record. Replace every literal-id
    and `HOME_APP_ID` site listed under [6.6.0 to 9.2.1](#660-to-921) with them; a site that is
    missed treats the custom launcher as an ordinary app (recents, nudges, voice, gestures,
    relaunch on Home).
@@ -460,12 +495,17 @@ The 10.3.1 sources are `StarfishKeyFilter.qml` (`launchDefaultApp`, `isHomeApp`,
 
 ### 10.3.1 and 11.2.0
 
-On 11.2.0 a Home press with an ordinary app in front launched the launcher chosen through
-`setDefaultApp` (`caller com.webos.starfish.keyfilters`), and a second press with it in front
-did not relaunch it. [V, VM] That second press is the `isHomeApp` path, so the 11.2.0 id
-appears to follow the default app despite the profile strings in the service bridge; with the
-test launcher's `_KEYS_HOME` unset it is not proof [I]. On 10.3.1 the injected Home key reached
-the compositor but nothing launched, so `isHomeApp` there is still [U] (T4).
+A Home press with an ordinary app in front launched the launcher chosen through `setDefaultApp`
+on both releases, from the QEMU key and from `networkinput/sendSpecialKey HOME`. With that
+launcher in front, a press delivered the key to it (`_KEYS_HOME = "true"`; keydown and keyup
+1013) and also relaunched it twice with `launchType: "homeKey"`. [V, VM] An earlier 11.2.0 run
+with `_KEYS_HOME` unset logged no relaunch; why it differed was not isolated.
+
+The relaunch is the `isHomeApp` branch: the compositor's home id is not the record. A launcher
+can live with it by treating a `homeKey` relaunch as a Home press. Making it home to the
+compositor needs either a profile override that `isHomeApp` follows (T6) or a patch: on 10.3.1
+the `isHomeApp`/`getHomeAppId` sites in the QML tree, the same deployment as the 6.6.0 - 9.2.1
+backport; on 11.2.0 the native `getHomeAppId` in `starfish-servicebridge.so`.
 
 ### Boot alignment (optional)
 
@@ -476,9 +516,29 @@ preload in `etc/systemd/system/snapshot-boot-components.service` and
 
 ### Deployment
 
-The stock rootfs is SquashFS. Either replace the files in the packed image, or bind-mount the
-patched files over the originals before `sam` (the compositor) starts. `sam` reads the key
-filter when it starts, so a mount made after boot needs a `sam` restart.
+The stock rootfs is SquashFS. Either replace the files in the packed image, or bind-mount
+patched copies over the originals. What a bind mount on 6.6.0 to 9.2.1 has to work with [V]:
+
+* Tools: `usr/bin/patch`, `diff` and `sha256sum` are busybox applets (`bin/busybox.nosuid`);
+  `bin/mount` is util-linux with `--bind`.
+* No QML cache: `etc/systemd/system.conf.d/80-starfish-global.conf` sets
+  `QML_DISABLE_DISK_CACHE=1`, and there are no `.qmlc`/`.jsc` files and no compiled-in QML
+  resources for the compositor. `StarfishKeyFilterShell.js` loads each key filter script by
+  its path (`Qt.include(Qt.resolvedUrl(file))`), from the `keyFilters` list in
+  `etc/configd/layers/base/com.webos.surfacemanager.json`.
+* The list differs by device layer: `devicename/m16ppez` uses `easytv.js` without
+  `preProcess.js`, `tvoverlay` (tunerless) uses `preProcess_Monitor.js` and, on 9.2.1,
+  `systemUi_monitor.js`; 6.6.0 has no `preProcess.js`. A patch set has to be keyed by the file
+  (and its stock hash), not by the release.
+* The compositor is `surface-manager-daemon.service` (`/usr/bin/surface-manager.sh`), started
+  from `default-webos.target` (6.6.0 to 8.3.0) or `multi-user.target` (9.2.1). It reads
+  `keyFilters` at start and again when that config value changes.
+* Homebrew Channel's `startup.sh` runs `run-parts /var/lib/webosbrew/init.d` once per boot,
+  unjailed, from the developer-mode start script at `minimal-boot-done`, and itself already
+  bind-mounts `/etc/hosts` and others. That is after the compositor has started [I], so a
+  mount made there takes effect after `surface-manager-daemon` restarts or `keyFilters` is
+  re-read. The stock `run-exscript-cbd` core-boot-done hook is not enabled (and absent on
+  9.2.1).
 
 ## Tests
 
@@ -519,8 +579,9 @@ test launcher with `appCategory: ["home"]`. All replies are to be recorded per r
 * **T6, profile override (10.3.1, 11.2.0).** Place a `defaultApps.categories.home` override
   under `/var/webos-profile/override/` (and separately under `/var/webos-profile/testLayer/`),
   call `systemprofile/debug/rescan` or restart `systemprofile`, and read
-  `getProfiles '{"names":["defaultApps"]}'` and the `[override profile]` log lines. Only
-  needed if the settings record is not used.
+  `getProfiles '{"names":["defaultApps"]}'` and the `[override profile]` log lines. Then
+  repeat T4: if the compositor's `isHomeApp` follows the profile, a launcher set in both
+  places is home to the compositor without a patch.
 * **T7, card launcher on 5.6.1.** With `<id>` as a card window set as default, press Home
   with `<id>` in front and record whether it is relaunched or receives the key.
 
@@ -528,20 +589,35 @@ test launcher with `appCategory: ["home"]`. All replies are to be recorded per r
 
 Run on Beanjar VMs on the Raspberry Pi 5, one at a time, as root through the VM's root shell,
 with a web test launcher (`appCategory: ["home"]`) and a control app without the category. Home
-was injected as QEMU `send-key meta_l`. The 11.2.0 VM runs `43.21.89.01` (W22O), the other VMs
-the firmwares in the table at the top; 7.6.0 and 8.3.0 were not run.
+was injected as QEMU `send-key meta_l` and, on 10.3.1 and 11.2.0, also as
+`com.webos.service.networkinput/sendSpecialKey {"key":"HOME","delay":0,"rcu":"true"}`; both
+arrive as evdev 125. The 11.2.0 VM runs `43.21.89.01` (W22O); T1b ran on a W21A VM with 6.5.2
+(`03.53.25.01`); the other VMs run the firmwares in the table at the top. 7.6.0 and 8.3.0 were
+not run.
 
-| Test | 5.6.1 | 6.6.0 | 9.2.1 | 10.3.1 | 11.2.0 |
+| Test | 5.6.1 | 6.x | 9.2.1 | 10.3.1 | 11.2.0 |
 | --- | --- | --- | --- | --- | --- |
-| T1 write | stored (described) | stored, no description | stored; live subscribers notified | - | - |
-| T2 `setDefaultApp` | - | unknown method | `home` set, others kept | same | same |
-| T3 chosen app | launched | launched after a `sam` restart | launched | launched | launched |
-| T3 app without category | refused | refused | refused | refused | refused |
+| T1 write | stored (described) | stored, no description (6.6.0) | stored; live subscribers notified | - | - |
+| T1b first write | - | not seen by `sam` after a second write or a value change; seen after a `sam` restart (6.5.2) | - | - | - |
+| T2 `setDefaultApp` | - | unknown method (6.6.0) | `home` set, others kept | same | same |
+| T3 chosen app | launched | launched after a `sam` restart (6.6.0, 6.5.2) | launched | launched | launched |
+| T3 app without category | refused | refused (6.6.0) | refused | refused | refused |
 | T3 no `home` entry | - | - | refused (no profile) | profile's `com.webos.app.home` | same |
-| T4 Home key | - | - | - | key reached compositor, no launch | launched; no relaunch on second press |
+| T4 Home from another app | - | - | - | chosen launcher launched | same |
+| T4 Home with launcher in front | - | - | - | key delivered and launcher relaunched | same (`_KEYS_HOME` set); no relaunch logged with it unset |
+| T4 Home with stock home in front | - | - | - | - | nothing launched |
 | T5 developer app | - | - | - | - | installs; `Access denied` from settings service; `applicationManager` replies not captured |
+| hbchannel `exec` from an app | - | - | - | ran, record written | `Denied method call "exec"`; root call works |
 | T7 card launcher | relaunched per press | - | - | - | - |
 
-"Refused" is `{"errorCode":1,"errorText":"no default app is set for the category"}`. Open after
-this run: T1b; T4 on 10.3.1 and with `_KEYS_HOME` set on 11.2.0; T5 on the
-`applicationManager` methods; T6.
+"Refused" is `{"errorCode":1,"errorText":"no default app is set for the category"}`.
+
+An earlier 10.3.1 attempt, in which the injected key reached the compositor and nothing
+launched, did not reproduce. On the 11.2.0 VM the record read at boot twice differed from the
+value restored and read back before the previous shutdown: once with an old `home` entry back,
+once without the `kidsApp` entry (read shortly after boot). What rewrites it is not known.
+
+Open after this run: T6, now as the way to make `isHomeApp` follow the choice on 10.3.1 and
+11.2.0; T5 on the `applicationManager` methods; how the settings app reaches root on 11.2.0;
+the 11.2.0 record changing across reboots; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`);
+the IR remote's Super_L long-press path, which no VM injection exercises.

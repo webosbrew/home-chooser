@@ -20,6 +20,9 @@ homebrew app with three parts:
   identity. It runs `luna-send` as root through Homebrew Channel's root exec
   (`luna://org.webosbrew.hbchannel.service/exec`), which passes both the bus permissions and
   settings service's per-key whitelist. A rooted TV with Homebrew Channel is a requirement.
+  On webOS 11.x and 12.x (webOS 26 and later) Homebrew Channel refuses `exec` from an ordinary
+  app (`Denied method call`); how the settings app reaches root there is still open, and the
+  study's tests use root `luna-send`.
 * The UI is built with Enact.
 
 ## Documents
