@@ -516,8 +516,21 @@ preload in `etc/systemd/system/snapshot-boot-components.service` and
 
 ### Deployment
 
-The stock rootfs is SquashFS. Either replace the files in the packed image, or bind-mount
-patched copies over the originals. What a bind mount on 6.6.0 to 9.2.1 has to work with [V]:
+The stock rootfs is SquashFS. Decided: the patch is applied at boot to copies of the stock
+files and the copies are bind-mounted over the originals; the packed image is not modified.
+
+* Open House ships diffs, not patched files, so no LG file is redistributed. Each diff is
+  stored with the sha256 of the stock file it applies to.
+* A boot script in Homebrew Channel's `/var/lib/webosbrew/init.d` hashes each target file,
+  copies the files whose hash it knows, applies the diffs to the copies and bind-mounts each
+  copy over its original.
+* A changed hash (a firmware update) means the file is not patched and stock behaviour stays.
+  The id sites span several files, so a set that cannot be applied completely is not mounted
+  at all.
+* The compositor then has to read the patched files again (see below). Uninstalling is not
+  mounting; nothing on the rootfs changes.
+
+What this works with on 6.6.0 to 9.2.1 [V]:
 
 * Tools: `usr/bin/patch`, `diff` and `sha256sum` are busybox applets (`bin/busybox.nosuid`);
   `bin/mount` is util-linux with `--bind`.

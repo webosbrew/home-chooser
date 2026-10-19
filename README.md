@@ -23,6 +23,10 @@ homebrew app with three parts:
   On webOS 11.x and 12.x (webOS 26 and later) Homebrew Channel refuses `exec` from an ordinary
   app (`Denied method call`); how the settings app reaches root there is still open, and the
   study's tests use root `luna-send`.
+* The webOS 6 to 9 key filter backport is shipped as diffs keyed by the stock file's sha256. A
+  Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
+  copies over the originals; a file with an unknown hash is left stock. See the study's
+  Deployment section.
 * The UI is built with Enact.
 
 ## Documents
