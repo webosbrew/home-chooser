@@ -8,18 +8,22 @@
  
  import "qrc:/WebOSCompositor"
  import "file:///usr/lib/qml/WebOSCompositor"
-@@ -40,6 +41,60 @@
+@@ -40,6 +41,64 @@
          return systemSettings.subscribeOnDemand(type, method, key, returnRaw);
      }
  
-+    // Open House: the home app follows general/defaultApps.home and falls back to the stock launcher.
++    // Open House: the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.
 +    readonly property string stockHomeAppId: "com.webos.app.home"
++    // Set at boot by openhouse-keyfilter from /var/lib/webosbrew/openhouse/home; empty when no choice is stored.
++    readonly property string configuredHomeAppId: "@OPENHOUSE_HOME@"
 +
 +    function getHomeAppId() {
 +        var apps = root.subscribe("com.webos.settingsservice", "getSystemSettings",
 +                                  {"category": "general", "keys": ["defaultApps"]});
 +        if (apps && typeof apps.home === "string" && apps.home !== "")
 +            return apps.home;
++        if (root.configuredHomeAppId !== "")
++            return root.configuredHomeAppId;
 +        return root.stockHomeAppId;
 +    }
 +

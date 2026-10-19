@@ -1,6 +1,11 @@
 // Home-choice logic. Pure over injected {rootLuna, exec, writeFile, removeFile, version}.
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
+import {shellQuote} from '../platform/quote';
+import {
+	HOME_FILE, KEYFILTER_SCRIPT, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand,
+	startWatcherCommand, stopWatcherCommand
+} from './persistence';
 
 export const STOCK_HOME = 'com.webos.app.home';
 export const STOCK_FULLHOME = 'com.webos.app.fullhome';
@@ -99,6 +104,12 @@ export const readDefaultApps = async (run) => {
 
 export const writeDefaultApps = (run, record) =>
 	run.luna(`${SETTINGS}/setSystemSettings`, {category: 'general', settings: {defaultApps: record}});
+
+// Remove `home` from the general/defaultApps record, keeping the other entries.
+// NOT CONFIRMED on a live TV: this writes the record without `home`, but the study found that a
+// partial setSystemSettings write probably merges into the stored object, in which case `home`
+// stays. A live test has to settle how an entry is removed; this is the one place to change.
+export const removeHomeFromRecord = (run, record) => writeDefaultApps(run, withoutHome(record));
 
 // A runner logs each call into `log`; a failing call is logged with its error and then rethrown.
 export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) => {
@@ -211,6 +222,19 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
+		// The boot entry link, the watcher and the stored choice.
+		async readPersistence() {
+			const log = [];
+			const res = Object.assign(result(log), {persistence: null});
+			try {
+				const out = await runner(log).run(persistenceStatusCommand());
+				res.persistence = parsePersistenceStatus(out.stdout);
+			} catch (e) {
+				fail(res, e);
+			}
+			return res;
+		},
+
 		async apply(appId, {onNotice} = {}) {
 			const log = [];
 			const run = runner(log);
@@ -222,6 +246,9 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			try {
 				const state = await readStateWith(run);
 				const record = Object.assign({}, state.record || {}, {home: appId});
+
+				// 0. the stored choice, which the boot entry and the watcher enforce from here on
+				await run.write(HOME_FILE, appId);
 
 				// 1. the settings record
 				if (info.hasSetDefaultApp) {
@@ -246,11 +273,19 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					if (home !== appId) throw new Error(`The system profile still names ${home || 'no home app'} after the rescan`);
 				}
 
-				// 3. close the previous home
+				// 3. the boot entry (a symlink into the app) and the watcher, so the choice survives boots
+				await run.run(ensureEntryCommand());
+				try {
+					await run.run(startWatcherCommand());
+				} catch (e) {
+					res.warnings.push(`Could not start the watcher: ${errorMessage(e)}`);
+				}
+
+				// 4. close the previous home
 				const previous = state.recordHome || state.profileHome || STOCK_HOME;
 				if (previous !== appId) await closeApp(run, res, previous);
 
-				// 4. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
+				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
 				if (needsSamRestart(state)) {
 					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
 					await run.run('systemctl restart sam');
@@ -268,6 +303,13 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			const res = Object.assign(result(log), {needsKeyFilterBackport: info.needsKeyFilterBackport});
 			try {
 				const state = await readStateWith(run);
+				// the watcher would put the choice back, so stop it and drop the choice first
+				try {
+					await run.run(stopWatcherCommand());
+				} catch (e) {
+					res.warnings.push(`Could not stop the watcher: ${errorMessage(e)}`);
+				}
+				await run.remove(HOME_FILE);
 				if (info.major <= 5) {
 					// 5.x: the key filter launches the record's home directly, so name a stock home.
 					const list = await run.luna(`${SAM}/listApps`, {});
@@ -277,12 +319,20 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 						await writeRecord(run, Object.assign({}, state.record || {}, {home: stock}));
 					}
 				} else if (state.record && Object.prototype.hasOwnProperty.call(state.record, 'home')) {
-					await writeRecord(run, withoutHome(state.record));
+					await removeHomeFromRecord(run, state.record);
 				}
 				if (info.usesProfile) {
 					await run.remove(OVERRIDE_PATH);
 					await run.luna(`${PROFILE}/debug/rescan`, {});
 					await readProfile(run);
+				}
+				if (info.needsKeyFilterBackport) {
+					// the patched Settings.qml carries the stored choice as its fallback; clear it if mounted
+					try {
+						await run.run(`sh ${shellQuote(KEYFILTER_SCRIPT)} refresh`);
+					} catch (e) {
+						res.warnings.push(`Could not refresh the key filter backport: ${errorMessage(e)}`);
+					}
 				}
 				const custom = [state.recordHome, state.profileHome].filter((id, i, all) => id && !STOCK_LABELS[id] && all.indexOf(id) === i);
 				for (const id of custom) await closeApp(run, res, id);

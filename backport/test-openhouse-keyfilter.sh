@@ -20,7 +20,7 @@ setup() {
     printf 'one\ntwo\nthree\nhome = "com.webos.app.home"\nfive\n' > "$T/root/usr/lib/qml/a.qml"
     printf 'alpha\nbeta\nHOME_APP_ID\ngamma\n' > "$T/root/usr/lib/qml/b.js"
     cp "$T/root/usr/lib/qml/a.qml" "$T/root/usr/lib/qml/b.js" "$T/orig/"
-    printf 'one\ntwo\nthree\nhome = Settings.getHomeAppId()\nfive\n' > "$T/new-a"
+    printf 'one\ntwo\nthree\nhome = Settings.getHomeAppId()\nproperty string configuredHomeAppId: "@OPENHOUSE_HOME@"\nfive\n' > "$T/new-a"
     printf 'alpha\nbeta\nglobal.isHomeApp(x)\ngamma\n' > "$T/new-b"
     for f in a:a.qml b:b.js; do
         k=${f%%:*}; n=${f##*:}
@@ -68,7 +68,7 @@ STUB
     chmod +x "$T/bin/"*
     export OPENHOUSE_DATA="$T/data" OPENHOUSE_ROOT="$T/root" OPENHOUSE_WORK="$T/work" \
            OPENHOUSE_LOG="$T/log" OPENHOUSE_MOUNTS="$T/mounts" OPENHOUSE_MOUNT="$T/bin/mount" \
-           OPENHOUSE_UMOUNT="$T/bin/umount" OPENHOUSE_SYSTEMCTL="$T/bin/systemctl"
+           OPENHOUSE_UMOUNT="$T/bin/umount" OPENHOUSE_SYSTEMCTL="$T/bin/systemctl" OPENHOUSE_CHOICE="$T/home"
 }
 
 run() { $SH "$SCRIPT" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
@@ -86,9 +86,30 @@ check "two bind mounts" test "$(ncmds mount)" = 2
 check "bind mount of the stage over the original" has "mount --bind $T/work/stage/usr/lib/qml/a.qml $T/root/usr/lib/qml/a.qml" "$T/cmds"
 check "compositor restarted once" test "$(grep -c '^systemctl restart surface-manager-daemon.service$' "$T/cmds")" = 1
 check "log names the set" has 'diff set 1.0 matches' "$T/log"
+check "no choice: placeholder replaced by an empty id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "placeholder gone" hasnt '@OPENHOUSE_HOME@' "$T/work/stage/usr/lib/qml/a.qml"
+check "stock a.qml has no placeholder" hasnt configuredHomeAppId "$T/root/usr/lib/qml/a.qml"
 run status
 check "status mounted" has 'mounted=yes' "$T/out"
 check "status release" has 'release=1.0' "$T/out"
+
+echo "== refresh follows the stored choice"
+: > "$T/cmds"
+run refresh
+check "exit 0" rc 0
+check "nothing changed, no restart" test ! -s "$T/cmds"
+printf '  my.home\r\n' > "$T/home"
+inode=$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)
+run refresh
+check "exit 0" rc 0
+check "mounted copy updated" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+check "same inode" test "$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)" = "$inode"
+check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+rm -f "${T:?}/home"
+: > "$T/cmds"
+run refresh
+check "choice removed: id cleared" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "restart again" has 'systemctl restart' "$T/cmds"
 
 echo "== already mounted is a no-op"
 : > "$T/cmds"
@@ -110,7 +131,7 @@ check "second stop does nothing" test ! -s "$T/cmds"
 run status
 check "status stock" has 'mounted=no' "$T/out"
 check "status match" has 'match=1.0' "$T/out"
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "== one hash mismatch mounts nothing"
 setup
@@ -122,7 +143,7 @@ check "no restart" test "$(ncmds systemctl)" = 0
 check "log says no set" has 'no diff set matches' "$T/log"
 run status
 check "status none" has 'match=none' "$T/out"
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "== missing target mounts nothing"
 setup
@@ -130,7 +151,7 @@ rm "$T/root/usr/lib/qml/a.qml"
 run
 check "exit 0" rc 0
 check "no mount" test "$(ncmds mount)" = 0
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "== patch failure mounts nothing"
 setup
@@ -142,7 +163,7 @@ check "no mount" test "$(ncmds mount)" = 0
 check "no restart" test "$(ncmds systemctl)" = 0
 check "log names the diff" has 'b.js.diff does not apply' "$T/log"
 check "stage removed" test ! -d "$T/work/stage"
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "== mount failure undoes the first mount"
 setup
@@ -152,7 +173,29 @@ check "exit 1" rc 1
 check "first mount undone" test "$(ncmds umount)" = 1
 check "mounts empty" test ! -s "$T/mounts"
 check "no restart" test "$(ncmds systemctl)" = 0
-rm -rf "$T"
+rm -rf "${T:?}"
+
+echo "== stored choice forms are trimmed and validated"
+for form in 'my.home' 'my.home\n' 'my.home\r\n' '  my.home  \n' '\n\nmy.home\t\n'; do
+    setup
+    printf "$form" > "$T/home"
+    run
+    check "id from '$form'" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+    rm -rf "${T:?}"
+done
+for bad in '' '  \r\n' 'a b' 'x"y' 'x|y' 'a&b' 'a\\b' 'a/b' 'a\nb'; do
+    setup
+    printf "$bad" > "$T/home"
+    run
+    check "invalid or empty '$bad': empty id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+    check "invalid or empty '$bad': still mounts" has 'mounted /usr/lib/qml/a.qml' "$T/log"
+    rm -rf "${T:?}"
+done
+setup
+printf 'x"y\n' > "$T/home"
+run
+check "invalid id logged" has 'invalid app id' "$T/log"
+rm -rf "${T:?}"
 
 echo "== no data directory"
 setup
@@ -160,13 +203,13 @@ rm -rf "$T/data"
 run
 check "exit 0" rc 0
 check "no mount" test "$(ncmds mount)" = 0
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "== usage"
 setup
 run bogus
 check "exit 2" rc 2
-rm -rf "$T"
+rm -rf "${T:?}"
 
 echo "$PASS passed, $FAIL failed ($SH)"
 [ "$FAIL" = 0 ]

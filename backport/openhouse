@@ -1,0 +1,99 @@
+#!/bin/sh
+# Open House boot entry. /var/lib/webosbrew/init.d/openhouse is a symlink to this file inside
+# the installed app; Homebrew Channel's run-parts runs it as root once per boot.
+#
+#   openhouse         boot: on webOS 6 to 9, when the key filter backport is enabled, apply it
+#                     (openhouse-keyfilter); if a home choice is stored, start the watcher
+#   openhouse watch   start the watcher now, if a choice is stored and it is not running
+#
+# The watcher is a transient systemd unit, openhouse-home, made with systemd-run: no unit file
+# is written and no other service is touched. The flags used (--unit, --property=Restart,
+# --property=RestartSec) exist in systemd 230 and later, which is what is assumed for webOS 5.
+# Restart=on-failure, not always: the watcher exits 0 when the choice is removed and has to stay
+# stopped then.
+#
+# Files, all under /var/lib/webosbrew/openhouse/: `home` is the stored choice, the app id alone;
+# `keyfilter` exists while the backport is enabled.
+#
+# Overrides, for tests: OPENHOUSE_DIR (the backport directory), OPENHOUSE_CHOICE,
+# OPENHOUSE_KEYFILTER_FLAG, OPENHOUSE_OSRELEASE, OPENHOUSE_SYSTEMCTL, OPENHOUSE_SYSTEMD_RUN,
+# OPENHOUSE_LOG.
+
+APP_BACKPORT=/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse/backport
+CHOICE=${OPENHOUSE_CHOICE:-/var/lib/webosbrew/openhouse/home}
+FLAG=${OPENHOUSE_KEYFILTER_FLAG:-/var/lib/webosbrew/openhouse/keyfilter}
+OSRELEASE=${OPENHOUSE_OSRELEASE:-/etc/os-release}
+SYSTEMCTL=${OPENHOUSE_SYSTEMCTL:-systemctl}
+SYSTEMD_RUN=${OPENHOUSE_SYSTEMD_RUN:-systemd-run}
+LOG=${OPENHOUSE_LOG:-/tmp/openhouse-boot.log}
+UNIT=openhouse-home
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null
+}
+
+# The directory this script really lives in: follow the symlink (readlink -f, else one readlink),
+# then the fixed app path. Exit quietly when the app is gone.
+locate() {
+    if [ -n "$OPENHOUSE_DIR" ]; then
+        HERE=$OPENHOUSE_DIR
+    else
+        real=$(readlink -f "$0" 2>/dev/null)
+        if [ -z "$real" ]; then
+            real=$(readlink "$0" 2>/dev/null)
+            [ -n "$real" ] || real=$0
+        fi
+        HERE=$(dirname "$real")
+        [ -f "$HERE/openhouse-home-watch" ] || HERE=$APP_BACKPORT
+    fi
+    if [ ! -f "$HERE/openhouse-home-watch" ] && [ ! -f "$HERE/openhouse-keyfilter" ]; then
+        exit 0
+    fi
+}
+
+major_version() {
+    for key in VERSION_ID VERSION PRETTY_NAME; do
+        v=$(sed -n "s/^$key=//p" "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+        if [ -n "$v" ]; then echo "$v"; return 0; fi
+    done
+    echo 0
+}
+
+start_watcher() {
+    [ -f "$CHOICE" ] || return 0
+    [ -f "$HERE/openhouse-home-watch" ] || { log "no watcher script in $HERE"; return 0; }
+    if "$SYSTEMCTL" is-active --quiet "$UNIT"; then
+        log "$UNIT is already running"
+        return 0
+    fi
+    "$SYSTEMCTL" reset-failed "$UNIT" 2>/dev/null
+    if "$SYSTEMD_RUN" --unit="$UNIT" --property=Restart=on-failure --property=RestartSec=5 \
+            /bin/sh "$HERE/openhouse-home-watch" >> "$LOG" 2>&1; then
+        log "started $UNIT"
+    else
+        log "ERROR: could not start $UNIT"
+        return 1
+    fi
+}
+
+locate
+
+case "$1" in
+    watch)
+        start_watcher
+        exit $?
+        ;;
+    "")
+        major=$(major_version)
+        if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/openhouse-keyfilter" ]; then
+            log "applying the key filter backport"
+            OPENHOUSE_DATA=$HERE sh "$HERE/openhouse-keyfilter" apply >> "$LOG" 2>&1
+        fi
+        start_watcher
+        ;;
+    *)
+        echo "usage: $0 [watch]" >&2
+        exit 2
+        ;;
+esac
+exit 0

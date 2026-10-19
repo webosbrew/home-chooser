@@ -1,18 +1,22 @@
 import {ServiceError} from '../../platform/errors';
 import {
-	INIT_PATH, SCRIPT_PATH, backportApplies, createBackport, parseStatus
+	SCRIPT_PATH, backportApplies, createBackport, parseStatus
 } from '..';
+import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, persistenceStatusCommand} from '../../openhouse/persistence';
 
-const RUN_INIT = `sh '${INIT_PATH}'`;
+const RUN_WORKER = `sh '${SCRIPT_PATH}' apply`;
+const ENABLE = `mkdir -p '/var/lib/webosbrew/openhouse' && touch '${KEYFILTER_FLAG}'`;
+const ENSURE = ensureEntryCommand();
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
 const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSettings', {category: 'general', settings: {defaultApps}}];
 
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
-// script's `status` prints; running the init.d copy flips `mounted`, `stop` flips it back.
+// script's `status` prints; `installed` is the enable flag file, `entry` the init.d link; running
+// the worker flips `mounted`, `stop` flips it back.
 const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true, stopFails = false, failLuna = null} = {}) => {
 	const calls = [];
-	const tv = {installed: false, mounted: false, release: null};
+	const tv = {installed: false, entry: 'none', mounted: false, release: null};
 	const statusText = () => {
 		if (dataMissing) return 'data=missing\nmounted=no\nmatch=none\n';
 		return tv.mounted ? `mounted=yes\nrelease=${tv.release}\n` : `mounted=no\nmatch=${match || 'none'}\n`;
@@ -33,13 +37,20 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 	};
 	const exec = async (command) => {
 		calls.push(['exec', command]);
-		if (command.startsWith('[ -f')) return {stdout: tv.installed ? 'yes\n' : 'no\n', stderr: ''};
+		if (command === persistenceStatusCommand()) {
+			const entry = tv.entry === 'ok' ? `link:${ENTRY_SCRIPT}` : tv.entry;
+			return {stdout: `entry=${entry}\nactive=\nstored=\nkeyfilter=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
+		}
 		if (command.endsWith(' status')) return {stdout: statusText(), stderr: ''};
-		if (command.startsWith('mkdir -p')) {
+		if (command === ENABLE) {
 			tv.installed = true;
 			return {stdout: '', stderr: ''};
 		}
-		if (command === RUN_INIT) {
+		if (command === ENSURE) {
+			tv.entry = 'ok';
+			return {stdout: '', stderr: ''};
+		}
+		if (command === RUN_WORKER) {
 			if (mountWorks) {
 				tv.mounted = true;
 				tv.release = match;
@@ -57,7 +68,7 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 	const writeFile = async () => { throw new Error('unexpected writeFile'); };
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
-		if (path === INIT_PATH) tv.installed = false;
+		if (path === KEYFILTER_FLAG) tv.installed = false;
 	};
 	return {rootLuna, exec, writeFile, removeFile, calls, tv, record: () => record};
 };
@@ -86,18 +97,19 @@ describe('parseStatus', () => {
 });
 
 describe('status', () => {
-	test('reports init.d and the script status', async () => {
+	test('reports the flag, the init.d link and the script status', async () => {
 		const tv = fakeTV();
 		tv.tv.installed = true;
+		tv.tv.entry = 'ok';
 		const res = await backport(tv).status();
 		expect(res.ok).toBe(true);
-		expect(res.status).toEqual({installed: true, dataMissing: false, mounted: false, release: null, match: '9.2.1'});
+		expect(res.status).toEqual({enabled: true, entry: 'ok', dataMissing: false, mounted: false, release: null, match: '9.2.1'});
 		expect(res.steps.map((s) => s.kind)).toEqual(['exec', 'exec']);
 	});
 });
 
 describe('install', () => {
-	test('absent key: create it, copy, run, restart sam last', async () => {
+	test('absent key: create it, enable and link, run, restart sam last', async () => {
 		const tv = fakeTV();
 		const notices = [];
 		const res = await backport(tv).install({onNotice: (n) => notices.push(n)});
@@ -108,12 +120,13 @@ describe('install', () => {
 		const seq = kinds(tv);
 		const at = (s) => seq.findIndex((x) => x === s || (x.startsWith && x.startsWith(s)));
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
-		expect(at('setSystemSettings')).toBeLessThan(at('mkdir -p'));
-		expect(at('mkdir -p')).toBeLessThan(at(RUN_INIT));
-		expect(at(RUN_INIT)).toBeLessThan(at('systemctl restart sam'));
+		expect(at('setSystemSettings')).toBeLessThan(at(ENABLE));
+		expect(at(ENABLE)).toBeLessThan(at(ENSURE));
+		expect(at(ENSURE)).toBeLessThan(at(RUN_WORKER));
+		expect(at(RUN_WORKER)).toBeLessThan(at('systemctl restart sam'));
 		expect(seq.filter((x) => x === 'systemctl restart sam')).toHaveLength(1);
-		expect(tv.calls.find((c) => String(c[1]).startsWith('mkdir -p'))[1]).toContain(`cp -f '${SCRIPT_PATH}' '${INIT_PATH}' && chmod 755 '${INIT_PATH}'`);
-		expect(res.status).toMatchObject({installed: true, mounted: true, release: '9.2.1'});
+		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
+		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: true, release: '9.2.1'});
 		expect(notices).toHaveLength(2);
 	});
 
@@ -134,6 +147,7 @@ describe('install', () => {
 		expect(res.errors[0]).toMatch(/No backport set matches/);
 		expect(kinds(tv)).not.toContain('setSystemSettings');
 		expect(tv.tv.installed).toBe(false);
+		expect(tv.tv.entry).toBe('none');
 	});
 
 	test('data missing from the package: fails before changing anything', async () => {
@@ -173,19 +187,20 @@ describe('install', () => {
 });
 
 describe('remove', () => {
-	test('stop first, then delete from init.d', async () => {
+	test('delete the flag, then stop; the init.d link stays', async () => {
 		const tv = fakeTV({record: {}});
 		await backport(tv).install();
 		tv.calls.length = 0;
 		const res = await backport(tv).remove();
 		expect(res.ok).toBe(true);
 		const seq = kinds(tv);
-		expect(seq[0]).toMatch(/ stop$/);
-		expect(seq[1]).toBe('rm ' + INIT_PATH);
-		expect(res.status).toMatchObject({installed: false, mounted: false});
+		expect(seq[0]).toBe('rm ' + KEYFILTER_FLAG);
+		expect(seq[1]).toMatch(/ stop$/);
+		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + KEYFILTER_FLAG]);
+		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: false});
 	});
 
-	test('a failed stop is reported but init.d is still cleaned', async () => {
+	test('a failed stop is reported but the flag is still deleted', async () => {
 		const tv = fakeTV({record: {}, stopFails: true});
 		await backport(tv).install();
 		const res = await backport(tv).remove();

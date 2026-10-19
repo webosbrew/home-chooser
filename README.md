@@ -30,6 +30,11 @@ homebrew app with three parts:
 * Open House does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.
+* The choice persists through Open House's own file, `/var/lib/webosbrew/openhouse/home` (the app
+  id alone), which a watcher (a transient systemd unit started from the init.d entry) enforces
+  against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
+  entry is a symlink into the installed app, never a copy. See
+  [Persistence](docs/settings-app.md#persistence).
 * The UI is built with Enact.
 
 ## Documents

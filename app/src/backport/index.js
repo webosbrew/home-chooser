@@ -2,11 +2,14 @@
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/key-filter-backport.md.
 import {errorMessage} from '../platform/errors';
 import {shellQuote} from '../platform/quote';
+import {
+	KEYFILTER_FLAG, KEYFILTER_SCRIPT, STATE_DIR, ensureEntryCommand, parsePersistenceStatus,
+	persistenceStatusCommand
+} from '../openhouse/persistence';
 import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../openhouse';
 
-export const APP_DIR = '/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse';
-export const SCRIPT_PATH = `${APP_DIR}/backport/openhouse-keyfilter`;
-export const INIT_PATH = '/var/lib/webosbrew/init.d/openhouse-keyfilter';
+export {APP_DIR, INIT_PATH} from '../openhouse/persistence';
+export const SCRIPT_PATH = KEYFILTER_SCRIPT;
 export const LOG_PATH = '/tmp/openhouse-backport.log';
 
 // The release gate is the major version; which diff set applies is decided by the script, by hash.
@@ -34,10 +37,11 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 	const runner = createRunner({rootLuna, exec, writeFile, removeFile});
 	const script = (arg) => `sh ${shellQuote(SCRIPT_PATH)}${arg ? ' ' + arg : ''}`;
 
+	// `enabled`: the flag file the boot entry checks; `entry`: the state of the init.d link.
 	const readStatus = async (run) => {
-		const installed = (await run.run(`[ -f ${shellQuote(INIT_PATH)} ] && echo yes || echo no`)).stdout.trim() === 'yes';
+		const persistence = parsePersistenceStatus((await run.run(persistenceStatusCommand())).stdout);
 		const state = parseStatus((await run.run(script('status'))).stdout);
-		return Object.assign({installed}, state);
+		return Object.assign({enabled: persistence.keyfilterEnabled, entry: persistence.entry}, state);
 	};
 
 	const result = (log) => ({ok: true, steps: log, warnings: [], errors: []});
@@ -62,7 +66,8 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 		},
 
 		// 1. make sure general/defaultApps exists, so the compositor's and sam's subscriptions see later writes
-		// 2. copy the script into init.d  3. run it once  4. restart sam if step 1 created the key
+		// 2. enable the backport (flag file) and link the boot entry into init.d
+		// 3. run the worker once  4. restart sam if step 1 created the key
 		async install({onNotice} = {}) {
 			const log = [];
 			const run = runner(log);
@@ -80,10 +85,11 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 					res.createdKey = true;
 				}
 
-				await run.run(`mkdir -p ${shellQuote('/var/lib/webosbrew/init.d')} && cp -f ${shellQuote(SCRIPT_PATH)} ${shellQuote(INIT_PATH)} && chmod 755 ${shellQuote(INIT_PATH)}`);
+				await run.run(`mkdir -p ${shellQuote(STATE_DIR)} && touch ${shellQuote(KEYFILTER_FLAG)}`);
+				await run.run(ensureEntryCommand());
 
 				if (onNotice) onNotice('Applying the backport and restarting the compositor; running apps may close.');
-				await run.run(`sh ${shellQuote(INIT_PATH)}`);
+				await run.run(script('apply'));
 
 				if (res.createdKey) {
 					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
@@ -98,19 +104,20 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			return res;
 		},
 
-		// Unmount and restart the compositor, then delete the script from init.d. The deletion is
-		// attempted even if the unmount failed, so the next boot does not mount it again.
+		// Disable the backport (delete the flag file, so the next boot does not mount it again), then
+		// unmount and restart the compositor. The flag is deleted even if the unmount fails. The
+		// init.d link stays: the watcher needs it while a choice is stored.
 		async remove() {
 			const log = [];
 			const run = runner(log);
 			const res = Object.assign(result(log), {status: null});
 			try {
-				await run.run(script('stop'));
+				await run.remove(KEYFILTER_FLAG);
 			} catch (e) {
 				fail(res, e);
 			}
 			try {
-				await run.remove(INIT_PATH);
+				await run.run(script('stop'));
 			} catch (e) {
 				fail(res, e);
 			}

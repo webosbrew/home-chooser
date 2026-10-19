@@ -3,10 +3,18 @@ import {
 	OVERRIDE_PATH, buildOverride, createHomeChooser, extractDefaultAppsProfile, releaseInfo
 } from '..';
 import {diagnoseExecFailure} from '../diagnose';
+import {
+	HOME_FILE, KEYFILTER_SCRIPT, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
+	stopWatcherCommand, ENTRY_SCRIPT
+} from '../persistence';
 
 const MINE = 'org.webosbrew.openhouse.launcher';
 const OTHER = 'com.example.otherhome';
 const STOCK = 'com.webos.app.home';
+const ENSURE = ensureEntryCommand();
+const WATCH = startWatcherCommand();
+const STOP = stopWatcherCommand();
+const REFRESH = `sh '${KEYFILTER_SCRIPT}' refresh`;
 
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const UNKNOWN = {returnValue: false, errorText: 'Unknown method "setDefaultApp" for category "/"'};
@@ -53,6 +61,7 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => 
 	const writeFile = async (path, text) => {
 		calls.push(['write', path]);
 		files.push([path, text]);
+		if (path === HOME_FILE) return;
 		// the real service reads the override on rescan
 		const o = JSON.parse(text).defaultApps;
 		profile = {returnValue: true, profiles: {defaultApps: Object.assign({}, o)}};
@@ -165,7 +174,8 @@ describe('apply', () => {
 		const res = await chooser(tv, [5, 6, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'}), CLOSE('com.webos.app.fullhome')]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.needsKeyFilterBackport).toBe(false);
 		expect(res.restartedSam).toBe(false);
 	});
@@ -176,7 +186,7 @@ describe('apply', () => {
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
-		expect(tv.commands).toEqual(['systemctl restart sam']);
+		expect(tv.commands).toEqual([ENSURE, WATCH, 'systemctl restart sam']);
 		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'systemctl restart sam']);
 		expect(notices).toHaveLength(1);
 		expect(res.restartedSam).toBe(true);
@@ -187,7 +197,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {home: OTHER, kidsApp: 'k'}});
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE);
 		expect(tv.luna).toEqual([GET, SET({home: MINE, kidsApp: 'k'}), CLOSE(OTHER)]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.restartedSam).toBe(false);
 	});
 
@@ -195,7 +205,7 @@ describe('apply', () => {
 		const tv = fakeTV();
 		await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
-		expect(tv.commands).toEqual(['systemctl restart sam']);
+		expect(tv.commands).toEqual([ENSURE, WATCH, 'systemctl restart sam']);
 	});
 
 	test('a failed close is a warning, not an error', async () => {
@@ -217,8 +227,8 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), CLOSE(STOCK)]);
 		expect(tv.record()).toEqual({kidsApp: 'k', home: MINE});
-		expect(tv.files).toEqual([]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.needsKeyFilterBackport).toBe(true);
 	});
 
@@ -228,7 +238,7 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), SET({kidsApp: 'k', home: MINE}), CLOSE(STOCK)]);
 		expect(res.warnings[0]).toMatch(/setDefaultApp is unknown/);
-		expect(tv.commands).toEqual([]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
 
 	test('9.2.1: another setDefaultApp error is a failure', async () => {
@@ -245,16 +255,17 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(res.needsKeyFilterBackport).toBe(false);
 		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, CLOSE(STOCK)]);
-		expect(tv.files).toHaveLength(1);
-		expect(tv.files[0][0]).toBe('/var/webos-profile/override/org.webosbrew.openhouse.json');
-		expect(JSON.parse(tv.files[0][1])).toEqual({
+		expect(tv.files).toHaveLength(2);
+		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
+		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.openhouse.json');
+		expect(JSON.parse(tv.files[1][1])).toEqual({
 			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}}
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'luna:getProfiles', 'luna:setDefaultApp', 'write:org.webosbrew.openhouse.json',
-			'luna:rescan', 'luna:getProfiles', 'luna:closeByAppId'
+			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.openhouse.json',
+			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(), 'luna:closeByAppId'
 		]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
 
 	test('10.3.1: previous home is the record home, not the profile home', async () => {
@@ -282,14 +293,17 @@ describe('apply', () => {
 		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
 		expect(res.ok).toBe(false);
 		expect(res.errors[0]).toMatch(/Cannot read the defaultApps profile/);
-		expect(tv.files).toEqual([]);
+		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE]);
+		expect(tv.commands).toEqual([]);
 	});
 
 	test('the step log records calls, replies and errors', async () => {
 		const tv = fakeTV({record: {home: OTHER}});
 		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
-		expect(res.steps.map((s) => [s.kind, s.ok])).toEqual([['luna', true], ['luna', true], ['luna', true]]);
-		expect(res.steps[1]).toMatchObject({uri: SET({})[0], reply: {returnValue: true}});
+		expect(res.steps.map((s) => [s.kind, s.ok])).toEqual([
+			['luna', true], ['writeFile', true], ['luna', true], ['exec', true], ['exec', true], ['luna', true]
+		]);
+		expect(res.steps[2]).toMatchObject({uri: SET({})[0], reply: {returnValue: true}});
 	});
 });
 
@@ -306,8 +320,8 @@ describe('restoreStock', () => {
 		const res = await chooser(tv, [5, 6, 1]).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome', kidsApp: 'k'}), CLOSE(MINE)]);
-		expect(tv.files).toEqual([]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.files).toEqual([['rm', HOME_FILE]]);
+		expect(tv.commands).toEqual([STOP]);
 	});
 
 	test('5.x: falls back to com.webos.app.home when fullhome is not installed', async () => {
@@ -330,8 +344,8 @@ describe('restoreStock', () => {
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({kidsApp: 'k'}), CLOSE(MINE)]);
-		expect(tv.files).toEqual([]);
-		expect(tv.commands).toEqual([]);
+		expect(tv.files).toEqual([['rm', HOME_FILE]]);
+		expect(tv.commands).toEqual([STOP, REFRESH]);
 		expect(JSON.stringify(tv.luna)).not.toContain('"home":"com.webos.app.home"');
 	});
 
@@ -352,13 +366,100 @@ describe('restoreStock', () => {
 		const res = await chooser(tv, version).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, GETPROFILE, SET({kidsApp: 'k'}), RESCAN, GETPROFILE, CLOSE(MINE)]);
-		expect(tv.files).toEqual([['rm', OVERRIDE_PATH]]);
+		expect(tv.files).toEqual([['rm', HOME_FILE], ['rm', OVERRIDE_PATH]]);
+		expect(tv.commands).toEqual([STOP]);
 	});
 
 	test('profile-only choice: closes the custom profile home once', async () => {
 		const tv = fakeTV({record: {}, profile: profileReply(MINE)});
 		await chooser(tv, [11, 2, 0]).restoreStock();
 		expect(tv.luna).toEqual([GET, GETPROFILE, RESCAN, GETPROFILE, CLOSE(MINE)]);
+	});
+});
+
+describe('persistence', () => {
+	test('apply writes the bare id first, before any platform write', async () => {
+		const tv = fakeTV({record: {}});
+		await chooser(tv, [8, 3, 0]).apply(MINE);
+		expect(tv.calls[1]).toEqual(['write', HOME_FILE]);
+		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
+		expect(tv.files[0][1]).not.toMatch(/\s/);
+	});
+
+	test('apply: a watcher that does not start is a warning', async () => {
+		const tv = fakeTV({record: {}});
+		const inner = tv.exec;
+		tv.exec = async (c) => {
+			if (c === WATCH) throw new Error('systemd-run failed');
+			return inner(c);
+		};
+		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(res.warnings).toContain('Could not start the watcher: systemd-run failed');
+	});
+
+	test('apply: a failed choice file write stops before the platform writes', async () => {
+		const tv = fakeTV({record: {}});
+		tv.writeFile = async () => { throw new Error('read-only file system'); };
+		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
+		expect(res.ok).toBe(false);
+		expect(tv.luna).toEqual([GET]);
+		expect(tv.commands).toEqual([]);
+	});
+
+	test('restore: the watcher is stopped and the choice removed before the record changes', async () => {
+		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}});
+		await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(tv.calls.slice(0, 4).map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
+			'luna:getSystemSettings', 'exec:' + STOP.split('/').pop(), 'remove:home', 'luna:setSystemSettings'
+		]);
+	});
+
+	test('restore: a failing stop is a warning', async () => {
+		const tv = fakeTV({record: {home: MINE}});
+		const inner = tv.exec;
+		tv.exec = async (c) => {
+			if (c === STOP) throw new Error('boom');
+			return inner(c);
+		};
+		const res = await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(res.ok).toBe(true);
+		expect(res.warnings).toContain('Could not stop the watcher: boom');
+	});
+
+	test('restore on 10.x and later does not touch the key filter', async () => {
+		const tv = fakeTV({record: {home: MINE}, profile: profileReply(MINE)});
+		await chooser(tv, [11, 2, 0]).restoreStock();
+		expect(tv.commands).toEqual([STOP]);
+	});
+
+	test('the entry command links, never copies', () => {
+		const c = ensureEntryCommand();
+		expect(c).toContain(`ln -sf '${ENTRY_SCRIPT}' '/var/lib/webosbrew/init.d/openhouse'`);
+		expect(c).not.toMatch(/\bcp\b/);
+		expect(c).toContain("rm -f '/var/lib/webosbrew/init.d/openhouse-keyfilter'");
+	});
+
+	test('persistence status is parsed', async () => {
+		const tv = fakeTV({record: {}});
+		tv.exec = async (c) => ({
+			stdout: c === persistenceStatusCommand()
+				? `entry=link:${ENTRY_SCRIPT}\nactive=active\nstored=my.home\nkeyfilter=yes\n--log\nline one\nline two\n`
+				: '',
+			stderr: ''
+		});
+		const res = await chooser(tv, [8, 3, 0]).readPersistence();
+		expect(res.ok).toBe(true);
+		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']});
+	});
+
+	test.each([
+		['entry=link:/somewhere/else\nactive=inactive\nstored=\nkeyfilter=no\n--log\n', 'other'],
+		['entry=dangling:/gone\nactive=\nstored=\nkeyfilter=no\n--log\n', 'dangling'],
+		['entry=file\nactive=\nstored=\nkeyfilter=no\n--log\n', 'file'],
+		['entry=none\nactive=\nstored=\nkeyfilter=no\n--log\n', 'none']
+	])('entry state of %j is %s', (text, entry) => {
+		expect(parsePersistenceStatus(text).entry).toBe(entry);
 	});
 });
 

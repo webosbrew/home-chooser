@@ -22,10 +22,24 @@ const describeChoice = (state) => {
 
 const describeBackport = (status) => {
 	if (!status) return '';
-	const parts = [`In init.d: ${status.installed ? 'yes' : 'no'}`, `Mounted now: ${status.mounted ? 'yes' : 'no'}`];
+	const parts = [`Enabled: ${status.enabled ? 'yes' : 'no'}`, `Mounted now: ${status.mounted ? 'yes' : 'no'}`];
 	if (status.mounted) parts.push(`Set: ${status.release || 'unknown'}`);
 	else parts.push(status.match ? `Matching set: ${status.match}` : 'No set matches this firmware');
 	return 'Key filter backport. ' + parts.join('   ');
+};
+
+const ENTRY_TEXT = {
+	ok: 'yes, points at this app',
+	other: 'yes, but it points at another install',
+	dangling: 'broken (its target is gone)',
+	file: 'a regular file, not a link (apply a choice to replace it)',
+	none: 'no'
+};
+
+const describePersistence = (p) => {
+	if (!p) return '';
+	const state = p.active === 'active' ? 'running' : (p.active || 'not running');
+	return `Stored choice: ${p.stored || '(none)'}   Boot entry link: ${ENTRY_TEXT[p.entry] || p.entry}   Watcher: ${state}`;
 };
 
 const CandidateItem = ({candidate, current, disabled, onChoose}) => {
@@ -39,6 +53,7 @@ const MainPanel = (props) => {
 	const [chooser, setChooser] = useState(null);
 	const [backport, setBackport] = useState(null);
 	const [backportStatus, setBackportStatus] = useState(null);
+	const [persistence, setPersistence] = useState(null);
 	const [candidates, setCandidates] = useState([]);
 	const [state, setState] = useState(null);
 	const [fatal, setFatal] = useState(null);
@@ -51,12 +66,13 @@ const MainPanel = (props) => {
 	useEffect(() => () => { mounted.current = false; }, []);
 
 	const refresh = useCallback(async (c) => {
-		const [list, st] = await Promise.all([c.listCandidates(), c.readState()]);
+		const [list, st, per] = await Promise.all([c.listCandidates(), c.readState(), c.readPersistence()]);
 		if (!mounted.current) return;
 		setCandidates(list.candidates);
 		setState(st.state);
-		setSteps((prev) => prev.concat(list.steps, st.steps));
-		setProblems(list.errors.concat(st.errors, st.warnings));
+		setPersistence(per.persistence);
+		setSteps((prev) => prev.concat(list.steps, st.steps, per.steps));
+		setProblems(list.errors.concat(st.errors, st.warnings, per.errors));
 	}, []);
 
 	const refreshBackport = useCallback(async (b) => {
@@ -147,6 +163,8 @@ const MainPanel = (props) => {
 			<Scroller>
 				{fatal ? <BodyText>{fatal}</BodyText> : null}
 				{state ? <BodyText>{describeChoice(state)}</BodyText> : null}
+				{persistence ? <BodyText>{describePersistence(persistence)}</BodyText> : null}
+				{persistence && persistence.log.length ? <BodyText>{'Watcher log: ' + persistence.log.join(' | ')}</BodyText> : null}
 				{warnRestart ? <BodyText>The first change on this release restarts sam, so running apps may close.</BodyText> : null}
 				{notice ? <BodyText>{notice}</BodyText> : null}
 				{candidates.map((c) => (
@@ -155,8 +173,8 @@ const MainPanel = (props) => {
 				{chooser && candidates.length === 0 && !busy ? <BodyText>No installed app declares appCategory home.</BodyText> : null}
 				{backportStatus ? <BodyText>{describeBackport(backportStatus)}</BodyText> : null}
 				{backport && backportStatus ? <BodyText>Installing or removing the backport restarts the compositor, so running apps may close.</BodyText> : null}
-				{backport && backportStatus && !backportStatus.installed ? <Button disabled={busy} onClick={installBackport}>Install key filter backport</Button> : null}
-				{backport && backportStatus && backportStatus.installed ? <Button disabled={busy} onClick={removeBackport}>Remove key filter backport</Button> : null}
+				{backport && backportStatus && !backportStatus.enabled ? <Button disabled={busy} onClick={installBackport}>Install key filter backport</Button> : null}
+				{backport && backportStatus && backportStatus.enabled ? <Button disabled={busy} onClick={removeBackport}>Remove key filter backport</Button> : null}
 				{chooser ? <Button disabled={busy} onClick={restore}>Restore stock Home</Button> : null}
 				{chooser ? <Button disabled={busy} onClick={reload}>Refresh</Button> : null}
 				{problems.map((p, i) => <Item key={'p' + i}>{p}</Item>)}
