@@ -17,12 +17,13 @@ homebrew app with three parts:
   settings record, which `sam` reads on every release from webOS 5 and prefers over the system
   profile on webOS 25 and 26. The stock launcher id stays the fallback when no default is set.
 * The settings app does not call the settings and application manager services under its own
-  identity. It runs `luna-send` as root through Homebrew Channel's root exec
-  (`luna://org.webosbrew.hbchannel.service/exec`), which passes both the bus permissions and
-  settings service's per-key whitelist. A rooted TV with Homebrew Channel is a requirement.
-  On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses `exec` from
-  an ordinary app (`Denied method call`). Homebrew Channel will be updated to allow it again;
-  Open House keeps `exec` as its root path and needs that update on those releases.
+  identity. It calls Open House's own native service, `org.webosbrew.openhouse.service`, which
+  Homebrew Channel elevates to root once (`luna://org.webosbrew.hbchannel.service/elevateService`)
+  and which makes the privileged calls itself. The service only offers the narrow operations the
+  app needs and only answers the Open House app. A rooted TV with Homebrew Channel is a
+  requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
+  calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
+  again.
 * The webOS 6 to 9 key filter backport is shipped as diffs keyed by the stock file's sha256. A
   Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
   copies over the originals; a file with an unknown hash is left stock. See the study's
