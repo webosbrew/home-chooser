@@ -668,16 +668,23 @@ Why entries are lost [V, 11.2.0 `sam` and `accountmanager`; same `sam` structure
 in-memory map, sets the one category and writes the whole object with `setSystemSettings`. The
 map is filled only by `sam`'s `getSystemSettings` subscription (`OnDefaultAppsChanged`), and
 nothing makes the write wait for the first reply. `sam` has no other `defaultApps` writer.
-`accountmanager` (`PolicyManager::checkingAccountList`) calls `setDefaultApp` for
-`MembershipApp` when `/mnt/lg/cmn_data/.accountmanager` and its `data.dat` do not exist. A
-`setDefaultApp` made before `sam`'s subscription answers therefore replaces the record with
-that one entry [I]. On a TV this would be the first boot after a reset [I]; on the VM it
-happens at boots where that directory is missing. The old `home` returning is a separate
-question: the store is db8 under `/var/db/main` (`/var/luna/preferences/general` is a mirror),
-with a lazy sync of up to 1 s and a boot-time recovery from a backup database; which of these
-returned the old value is not known.
+`accountmanager` calls `setDefaultApp` for `MembershipApp` 12 to 17 s into every boot of the
+VM, although its `.accountmanager/data.dat` exists on the persistent `cmn_data` image (checked
+in the Beanjar logs and image); the static reading, which tied the call to a missing
+`data.dat`, missed the path that makes it. [V, VM] Whether that call wipes the other entries is
+a race: in one boot it was queued until settings service connected; in another the full record
+was there at 18.6 s and only `MembershipApp` at 19.4 s. [V, VM] If real sets make the same call
+at each boot, a chosen `home` can be lost at any boot on 11.2.0 [I].
 
-Open after this run: why the 11.2.0 record came back with an older `home`, and whether a
-`home` set through `setDefaultApp` and a profile override survive a reboot; T5 on the
+The old `home` returning is likely not a lost write. db8 writes are synchronous (`"sync": 1` in
+`etc/palm/db8`, the settings kind has `"sync": true`) and no boot restored from backup. [V] A
+`setSystemSettings` of `defaultApps` without `home` was followed, with no write between, by a
+read that still held `home`, so a partial write probably merges into the stored object rather
+than replacing it, while the immediate read-back shows only what was written [I]. That would
+also mean writing the object without `home` does not remove `home`.
+
+Open after this run: whether a `setSystemSettings` write merges the keys inside `defaultApps`
+and how to remove one; whether a `home` set through `setDefaultApp` and a profile override
+survive reboots on 11.2.0; T5 on the
 `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`); the IR remote's
 Super_L long-press path, which no VM injection exercises.
