@@ -20,9 +20,9 @@ homebrew app with three parts:
   identity. It runs `luna-send` as root through Homebrew Channel's root exec
   (`luna://org.webosbrew.hbchannel.service/exec`), which passes both the bus permissions and
   settings service's per-key whitelist. A rooted TV with Homebrew Channel is a requirement.
-  On webOS 11.x and 12.x (webOS 26 and later) Homebrew Channel refuses `exec` from an ordinary
-  app (`Denied method call`); how the settings app reaches root there is still open, and the
-  study's tests use root `luna-send`.
+  On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses `exec` from
+  an ordinary app (`Denied method call`). Homebrew Channel will be updated to allow it again;
+  Open House keeps `exec` as its root path and needs that update on those releases.
 * The webOS 6 to 9 key filter backport is shipped as diffs keyed by the stock file's sha256. A
   Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
   copies over the originals; a file with an unknown hash is left stock. See the study's

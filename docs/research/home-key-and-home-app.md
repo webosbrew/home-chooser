@@ -484,8 +484,8 @@ Homebrew Channel's root exec is not open to an ordinary app on 11.2.0. A develop
 `{"returnValue":false,"errorCode":-1,"errorText":"Denied method call \"exec\" for category
 \"/\""}`; the service logged `LS_REQUIRES_SECURITY` (`Service security groups don't allow method
 call.`) and the command did not run. The same call as root replied `uid=0(root)`. On 10.3.1 the
-same app's call ran and wrote the record. [V, VM] How the settings app reaches root on webOS 26
-and later is open; until then the writes are made with root `luna-send`.
+same app's call ran and wrote the record. [V, VM] Homebrew Channel is to be updated to allow
+the call again; until then the writes on webOS 26 and later are tested with root `luna-send`.
 
 ### Key filter backport, 6.6.0 - 9.2.1
 
@@ -677,7 +677,7 @@ question: the store is db8 under `/var/db/main` (`/var/luna/preferences/general`
 with a lazy sync of up to 1 s and a boot-time recovery from a backup database; which of these
 returned the old value is not known.
 
-Open after this run: why the 11.2.0 record came back with an older `home`, and whether a `home` set through
-`setDefaultApp` and a profile override survive a reboot; how the settings app reaches root on
-11.2.0; T5 on the `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`,
-`w22o-number1`); the IR remote's Super_L long-press path, which no VM injection exercises.
+Open after this run: why the 11.2.0 record came back with an older `home`, and whether a
+`home` set through `setDefaultApp` and a profile override survive a reboot; T5 on the
+`applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`); the IR remote's
+Super_L long-press path, which no VM injection exercises.
