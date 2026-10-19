@@ -1,7 +1,7 @@
 /* eslint-env node */
 import {
 	HBCHANNEL_EXEC, buildLunaSend, buildRemoveFile, buildWriteFile, createExec, createOsRelease, createRootLuna,
-	createWriteFile, parseOsRelease
+	createReadIcon, createRootUid, createWriteFile, iconMimeType, buildReadIcon, parseOsRelease, ICON_MAX_BYTES
 } from '..';
 import {shellQuote, shellWord, toBase64} from '../quote';
 import {createBridgeCall} from '../bridge';
@@ -170,5 +170,54 @@ describe('bridge', () => {
 	});
 	test('rejects without a bridge', async () => {
 		await expect(createBridgeCall(null)('luna://a/b', {})).rejects.toThrow('No webOS service bridge');
+	});
+});
+
+describe('icons and root check', () => {
+	test('mime type comes from the extension', () => {
+		expect(iconMimeType('/a/b.PNG')).toBe('image/png');
+		expect(iconMimeType('/a/b.svg')).toBe('image/svg+xml');
+		expect(iconMimeType('/a/b.bmp')).toBeNull();
+		expect(iconMimeType(null)).toBeNull();
+	});
+	test('the command reads a small file as base64 and refuses a big one', () => {
+		const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'oh-icon-'));
+		const small = dir + "/it's.png";
+		require('fs').writeFileSync(small, Buffer.from([1, 2, 3, 250]));
+		const big = dir + '/big.png';
+		require('fs').writeFileSync(big, Buffer.alloc(ICON_MAX_BYTES + 1));
+		const run = (p) => {
+			try {
+				return execFileSync('sh', ['-c', buildReadIcon(p)], {encoding: 'utf8'});
+			} catch (e) {
+				return 'FAIL';
+			}
+		};
+		expect(run(small)).toBe(Buffer.from([1, 2, 3, 250]).toString('base64'));
+		expect(run(big)).toBe('FAIL');
+		expect(run(dir + '/none.png')).toBe('FAIL');
+		require('fs').rmSync(dir, {recursive: true});
+	});
+	test('readIcon returns a data URL, caches, and falls back to null', async () => {
+		const exec = jest.fn((cmd) => (cmd.includes('good') ? Promise.resolve({stdout: 'AQID+g==\n', stderr: ''}) : Promise.reject(new Error('exit 1'))));
+		const read = createReadIcon(exec);
+		expect(await read('/x/good.png')).toBe('data:image/png;base64,AQID+g==');
+		expect(await read('/x/good.png')).toBe('data:image/png;base64,AQID+g==');
+		expect(exec).toHaveBeenCalledTimes(1);
+		expect(await read('/x/bad.png')).toBeNull();
+		expect(await read('/x/bad.png')).toBeNull();
+		expect(exec).toHaveBeenCalledTimes(2);
+		expect(await read('/x/icon.bmp')).toBeNull();
+		expect(await read(null)).toBeNull();
+		expect(exec).toHaveBeenCalledTimes(2);
+	});
+	test('garbage output is not a data URL', async () => {
+		const read = createReadIcon(jest.fn().mockResolvedValue({stdout: '<html>', stderr: ''}));
+		expect(await read('/x/a.png')).toBeNull();
+	});
+	test('rootUid parses id -u', async () => {
+		expect(await createRootUid(jest.fn().mockResolvedValue({stdout: '0\n', stderr: ''}))()).toBe(0);
+		expect(await createRootUid(jest.fn().mockResolvedValue({stdout: '1000\n', stderr: ''}))()).toBe(1000);
+		await expect(createRootUid(jest.fn().mockResolvedValue({stdout: 'x', stderr: ''}))()).rejects.toThrow('Unexpected');
 	});
 });

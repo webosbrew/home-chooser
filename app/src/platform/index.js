@@ -81,6 +81,44 @@ export const createOsRelease = (exec) => () =>
 		return parsed;
 	});
 
+// Icons of other apps are read as root and handed to the page as data: URLs. Files over the cap
+// (in bytes) are not read at all.
+export const ICON_MAX_BYTES = 262144;
+const ICON_TYPES = {png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp'};
+
+export const iconMimeType = (path) => {
+	const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
+	return (m && ICON_TYPES[m[1].toLowerCase()]) || null;
+};
+
+export const buildReadIcon = (path) =>
+	`f=${shellQuote(path)}; [ -f "$f" ] && [ "$(wc -c < "$f")" -le ${ICON_MAX_BYTES} ] && base64 "$f" | tr -d '\n\r '`;
+
+// readIcon(path) -> Promise<data: URL or null>. Never rejects; results (including misses) are
+// cached for the life of the platform object.
+export const createReadIcon = (exec) => {
+	const cache = new Map();
+	return (path) => {
+		const type = iconMimeType(path);
+		if (!path || !type) return Promise.resolve(null);
+		if (!cache.has(path)) {
+			cache.set(path, exec(buildReadIcon(path)).then(({stdout}) => {
+				const b64 = stdout.trim();
+				return /^[A-Za-z0-9+/=]+$/.test(b64) ? `data:${type};base64,${b64}` : null;
+			}, () => null));
+		}
+		return cache.get(path);
+	};
+};
+
+// rootUid() -> the uid exec runs as (0 when Homebrew Channel runs as root).
+export const createRootUid = (exec) => () =>
+	exec('id -u').then(({stdout}) => {
+		const n = parseInt(stdout.trim(), 10);
+		if (Number.isNaN(n)) throw new Error('Unexpected output from id -u: ' + stdout.trim());
+		return n;
+	});
+
 export const createPlatform = (call) => {
 	const exec = createExec(call);
 	return {
@@ -88,7 +126,9 @@ export const createPlatform = (call) => {
 		rootLuna: createRootLuna(exec),
 		writeFile: createWriteFile(exec),
 		removeFile: createRemoveFile(exec),
-		osRelease: createOsRelease(exec)
+		osRelease: createOsRelease(exec),
+		rootUid: createRootUid(exec),
+		readIcon: createReadIcon(exec)
 	};
 };
 

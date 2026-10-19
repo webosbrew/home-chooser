@@ -1,186 +1,103 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import BodyText from '@enact/sandstone/BodyText';
-import Button from '@enact/sandstone/Button';
-import Item from '@enact/sandstone/Item';
-import Scroller from '@enact/sandstone/Scroller';
-import {Header, Panel} from '@enact/sandstone/Panels';
+import {useCallback, useEffect, useState} from 'react';
+import BodyText from '@enact/moonstone/BodyText';
+import Button from '@enact/moonstone/Button';
+import Scroller from '@enact/moonstone/Scroller';
+import Spinner from '@enact/moonstone/Spinner';
+import {Header, Panel} from '@enact/moonstone/Panels';
+import Spotlight from '@enact/spotlight';
 
-import {createPlatform, errorMessage} from '../platform';
-import {createHomeChooser} from '../openhouse';
-import {createBackport} from '../backport';
-import {diagnoseExecFailure} from '../openhouse/diagnose';
-import {describeMissingChoice, formatStep} from '../openhouse/format';
+import {STOCK_HOME} from '../openhouse';
+import {ConfirmDialog, HomeItem, Toast} from './parts';
+import css from './Home.module.less';
 
-const describeChoice = (state) => {
-	if (!state) return '';
-	const lines = [`Settings record: ${state.recordHome || (state.record ? '(no home entry)' : '(not set)')}`];
-	if (state.profile || state.profileError) {
-		lines.push(`System profile: ${state.profileHome || state.profileError || '(none)'}`);
-	}
-	return lines.join('   ');
+const FATAL_TEXT = {
+	unreachable: ['Homebrew Channel is needed', 'Open House needs Homebrew Channel on a rooted TV. Install it, make sure it is running, then open Open House again.'],
+	denied: ["Homebrew Channel can't run root commands yet", "Your Homebrew Channel doesn't let apps run root commands yet. Update Homebrew Channel; Open House needs it."],
+	notRoot: ['Homebrew Channel is not running as root', 'Open House needs Homebrew Channel to run as root. Root the TV and make sure Homebrew Channel has root access, then open Open House again.'],
+	failed: ["Open House can't reach the TV's services", 'Something went wrong while talking to Homebrew Channel. Make sure it is installed and running, then open Open House again.']
 };
 
-const describeBackport = (status) => {
-	if (!status) return '';
-	const parts = [`Enabled: ${status.enabled ? 'yes' : 'no'}`, `Mounted now: ${status.mounted ? 'yes' : 'no'}`];
-	if (status.mounted) parts.push(`Set: ${status.release || 'unknown'}`);
-	else parts.push(status.match ? `Matching set: ${status.match}` : 'No set matches this firmware');
-	return 'Key filter backport. ' + parts.join('   ');
+export const Fatal = ({kind}) => {
+	const [title, body] = FATAL_TEXT[kind] || FATAL_TEXT.failed;
+	return (
+		<Panel>
+			<Header title="Open House" titleBelow="Find your TV a new home" />
+			<BodyText className={css.message}>{title + '. ' + body}</BodyText>
+		</Panel>
+	);
 };
 
-const ENTRY_TEXT = {
-	ok: 'yes, points at this app',
-	other: 'yes, but it points at another install',
-	dangling: 'broken (its target is gone)',
-	file: 'a regular file, not a link (apply a choice to replace it)',
-	none: 'no'
-};
+const MainPanel = ({model, onAbout, ...rest}) => {
+	const {phase, fatal, candidates, currentId, storedId, loadFailed, icons, busy, notice, toast, patch} = model;
+	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
-const describePersistence = (p) => {
-	if (!p) return '';
-	const state = p.active === 'active' ? 'running' : (p.active || 'not running');
-	return `Stored choice: ${p.stored || '(none)'}   Boot entry link: ${ENTRY_TEXT[p.entry] || p.entry}   Watcher: ${state}`;
-};
+	const known = candidates.some((c) => c.id === currentId);
+	const current = currentId === STOCK_HOME || known ? currentId : STOCK_HOME;
+	const removed = Boolean(storedId) && storedId !== STOCK_HOME && !candidates.some((c) => c.id === storedId);
 
-const CandidateItem = ({candidate, current, disabled, onChoose}) => {
-	const handleClick = useCallback(() => onChoose(candidate.id), [candidate.id, onChoose]);
-	const label = `${candidate.id}${candidate.stockLabel ? ' - ' + candidate.stockLabel : ''}${current ? ' - current' : ''}`;
-	return <Item disabled={disabled} onClick={handleClick} label={label}>{candidate.title}</Item>;
-};
-
-const MainPanel = (props) => {
-	const [release, setRelease] = useState(null);
-	const [chooser, setChooser] = useState(null);
-	const [backport, setBackport] = useState(null);
-	const [backportStatus, setBackportStatus] = useState(null);
-	const [persistence, setPersistence] = useState(null);
-	const [candidates, setCandidates] = useState([]);
-	const [state, setState] = useState(null);
-	const [fatal, setFatal] = useState(null);
-	const [busy, setBusy] = useState(false);
-	const [notice, setNotice] = useState('');
-	const [problems, setProblems] = useState([]);
-	const [steps, setSteps] = useState([]);
-	const mounted = useRef(true);
-
-	useEffect(() => () => { mounted.current = false; }, []);
-
-	const refresh = useCallback(async (c) => {
-		const [list, st, per] = await Promise.all([c.listCandidates(), c.readState(), c.readPersistence()]);
-		if (!mounted.current) return;
-		setCandidates(list.candidates);
-		setState(st.state);
-		setPersistence(per.persistence);
-		setSteps((prev) => prev.concat(list.steps, st.steps, per.steps));
-		setProblems(list.errors.concat(st.errors, st.warnings, per.errors));
-	}, []);
-
-	const refreshBackport = useCallback(async (b) => {
-		const res = await b.status();
-		if (!mounted.current) return;
-		setBackportStatus(res.status);
-		setSteps((prev) => prev.concat(res.steps));
-		setProblems((prev) => prev.concat(res.errors));
-	}, []);
-
+	// initial focus: the current home
 	useEffect(() => {
-		const platform = createPlatform();
-		platform.osRelease().then((parsed) => {
-			if (!mounted.current) return;
-			setRelease(parsed.version);
-			const c = createHomeChooser({
-				rootLuna: platform.rootLuna,
-				exec: platform.exec,
-				writeFile: platform.writeFile,
-				removeFile: platform.removeFile,
-				version: parsed.version
-			});
-			setChooser(c);
-			const b = createBackport({
-				rootLuna: platform.rootLuna,
-				exec: platform.exec,
-				writeFile: platform.writeFile,
-				removeFile: platform.removeFile,
-				version: parsed.version
-			});
-			if (b.applies) setBackport(b);
-			return Promise.all([refresh(c), b.applies ? refreshBackport(b) : null]);
-		}).catch((e) => {
-			if (mounted.current) setFatal(diagnoseExecFailure(errorMessage(e)));
-		});
-	}, [refresh, refreshBackport]);
-
-	const finish = useCallback(async (c, res) => {
-		setSteps(res.steps);
-		setProblems(res.errors.concat(res.warnings));
-		setNotice(res.ok ? 'Done.' + (res.needsKeyFilterBackport && !(backportStatus && backportStatus.mounted) ? ' On this release the Home key follows the choice only once the key filter backport is installed.' : '') : 'Failed. See below.');
-		await refresh(c);
-		setBusy(false);
-	}, [refresh, backportStatus]);
+		if (phase !== 'ready') return;
+		const id = current === STOCK_HOME ? 'home-stock' : 'home-' + candidates.findIndex((c) => c.id === current);
+		Spotlight.focus(id);
+	}, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const choose = useCallback((id) => {
-		if (!chooser || busy) return;
-		setBusy(true);
-		setNotice(`Making ${id} the Home app...`);
-		chooser.apply(id, {onNotice: setNotice}).then((res) => finish(chooser, res));
-	}, [chooser, busy, finish]);
+		if (busy) return;
+		setPending(id === STOCK_HOME ? {id, title: 'LG Home'} : {id, title: (candidates.find((c) => c.id === id) || {}).title || id});
+	}, [busy, candidates]);
+	const cancel = useCallback(() => setPending(null), []);
+	const confirm = useCallback(() => {
+		const item = pending;
+		setPending(null);
+		model.choose(item);
+	}, [pending, model]);
 
-	const restore = useCallback(() => {
-		if (!chooser || busy) return;
-		setBusy(true);
-		setNotice('Restoring the stock Home...');
-		chooser.restoreStock().then((res) => finish(chooser, res));
-	}, [chooser, busy, finish]);
+	if (phase === 'fatal') return <Fatal kind={fatal.kind} />;
 
-	const reload = useCallback(() => {
-		if (chooser) refresh(chooser);
-		if (backport) refreshBackport(backport);
-	}, [chooser, refresh, backport, refreshBackport]);
-
-	const runBackport = useCallback(async (action) => {
-		if (!backport || busy) return;
-		setBusy(true);
-		const installing = action === 'install';
-		setNotice(installing ? 'Installing the key filter backport...' : 'Removing the key filter backport...');
-		const res = installing ? await backport.install({onNotice: setNotice}) : await backport.remove();
-		if (!mounted.current) return;
-		setSteps(res.steps);
-		setProblems(res.errors.concat(res.warnings));
-		setNotice(res.ok ? 'Done.' : 'Failed. See below.');
-		await refreshBackport(backport);
-		if (mounted.current) setBusy(false);
-	}, [backport, busy, refreshBackport]);
-
-	const installBackport = useCallback(() => runBackport('install'), [runBackport]);
-	const removeBackport = useCallback(() => runBackport('remove'), [runBackport]);
-
-	const warnRestart = useMemo(() => Boolean(chooser && state && chooser.needsSamRestart(state)), [chooser, state]);
-	const current = state && (state.profileHome || state.recordHome);
+	const stock = pending && pending.id === STOCK_HOME;
+	const blocked = !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
+	const alreadyCurrent = pending && pending.id === current;
 
 	return (
-		<Panel {...props}>
-			<Header title="Open House" subtitle={release ? `webOS TV ${release.join('.')}` : 'Choose the app the Home button opens'} />
-			<Scroller>
-				{fatal ? <BodyText>{fatal}</BodyText> : null}
-				{state ? <BodyText>{describeChoice(state)}</BodyText> : null}
-				{persistence ? <BodyText>{describePersistence(persistence)}</BodyText> : null}
-				{persistence && describeMissingChoice(persistence.stored, candidates) ? <BodyText>{describeMissingChoice(persistence.stored, candidates)}</BodyText> : null}
-				{persistence && persistence.log.length ? <BodyText>{'Watcher log: ' + persistence.log.join(' | ')}</BodyText> : null}
-				{warnRestart ? <BodyText>The first change on this release restarts sam, so running apps may close.</BodyText> : null}
-				{notice ? <BodyText>{notice}</BodyText> : null}
-				{candidates.map((c) => (
-					<CandidateItem key={c.id} candidate={c} current={c.id === current} disabled={busy} onChoose={choose} />
-				))}
-				{chooser && candidates.length === 0 && !busy ? <BodyText>No installed app declares appCategory home.</BodyText> : null}
-				{backportStatus ? <BodyText>{describeBackport(backportStatus)}</BodyText> : null}
-				{backport && backportStatus ? <BodyText>Installing or removing the backport restarts the compositor, so running apps may close.</BodyText> : null}
-				{backport && backportStatus && !backportStatus.enabled ? <Button disabled={busy} onClick={installBackport}>Install key filter backport</Button> : null}
-				{backport && backportStatus && backportStatus.enabled ? <Button disabled={busy} onClick={removeBackport}>Remove key filter backport</Button> : null}
-				{chooser ? <Button disabled={busy} onClick={restore}>Restore stock Home</Button> : null}
-				{chooser ? <Button disabled={busy} onClick={reload}>Refresh</Button> : null}
-				{problems.map((p, i) => <Item key={'p' + i}>{p}</Item>)}
-				{steps.map((s, i) => <Item key={'s' + i}>{formatStep(s)}</Item>)}
-			</Scroller>
+		<Panel {...rest}>
+			<Header title="Open House" titleBelow="Find your TV a new home" />
+			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
+				<Scroller>
+					<HomeItem
+						name="LG Home (stock)" appId={STOCK_HOME} stock current={current === STOCK_HOME}
+						disabled={busy} spotlightId="home-stock" onChoose={choose}
+					/>
+					{candidates.map((c, i) => (
+						<HomeItem
+							key={c.id} name={c.title} appId={c.id} icon={icons[c.id]} current={c.id === current}
+							disabled={busy} spotlightId={'home-' + i} onChoose={choose}
+						/>
+					))}
+					{removed ? <BodyText className={css.note}>{'The Home app you chose was removed; using LG Home.'}</BodyText> : null}
+					{loadFailed ? <BodyText className={css.note}>{"Couldn't read everything from the TV. Try again in a moment."}</BodyText> : null}
+					{candidates.length === 0 && !loadFailed ? (
+						<BodyText className={css.note}>
+							{'No Home apps are installed. A Home app is a launcher that declares appCategory "home" in its appinfo.json. LG Home stays in use.'}
+						</BodyText>
+					) : null}
+					<Button disabled={busy} onClick={onAbout}>About</Button>
+				</Scroller>
+			)}
+			{busy ? <Spinner blockClickOn="screen">{notice}</Spinner> : null}
+			<Toast toast={toast} onDone={model.dismissToast} />
+			<ConfirmDialog
+				open={Boolean(pending)}
+				title={blocked ? "Can't change Home here" : stock ? 'Use LG Home?' : `Use ${pending ? pending.title : ''} as Home?`}
+				confirmLabel={stock ? 'Use LG Home' : 'Use as Home'}
+				onConfirm={blocked ? null : confirm}
+				onCancel={cancel}
+			>
+				{blocked ? "The Home button can't be changed on this TV's software."
+					: stock ? 'The Home button will open the LG Home again.'
+						: 'The Home button will open this app.' + (model.hasPatch && patch !== 'active' ? ' The screen will blink once while the TV loads the change.' : '')}
+				{alreadyCurrent ? ' It is already your Home.' : ''}
+			</ConfirmDialog>
 		</Panel>
 	);
 };

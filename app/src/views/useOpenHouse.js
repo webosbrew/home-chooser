@@ -1,0 +1,171 @@
+// The session controller behind the screen: loads the environment, keeps the home list and the
+// key filter patch state, and runs the apply / restore flows one at a time. Every step of every
+// operation goes to console.log with an [OpenHouse] prefix, never to the screen.
+import {useCallback, useEffect, useRef, useState} from 'react';
+
+import {errorMessage} from '../platform/errors';
+import {STOCK_HOME} from '../openhouse';
+import {formatStep} from '../openhouse/format';
+import {loadEnvironment} from '../openhouse/environment';
+
+export const LOG_PREFIX = '[OpenHouse]';
+
+export const logResult = (label, res) => {
+	/* eslint-disable no-console */
+	(res.steps || []).forEach((s) => console.log(`${LOG_PREFIX} ${label}: ${formatStep(s)}`));
+	(res.warnings || []).forEach((w) => console.log(`${LOG_PREFIX} ${label}: warning: ${w}`));
+	(res.errors || []).forEach((x) => console.log(`${LOG_PREFIX} ${label}: error: ${x}`));
+	/* eslint-enable no-console */
+};
+
+// Where the key filter patch stands (webOS 6 to 9 only; null elsewhere):
+// 'active' (mounted), 'ready' (a patch set matches this firmware), 'nomatch' (hash mismatch), 'unknown'.
+export const patchStateOf = (backport, status) => {
+	if (!backport) return null;
+	if (!status) return 'unknown';
+	if (status.mounted) return 'active';
+	return status.match ? 'ready' : 'nomatch';
+};
+
+// One plain sentence for the screen; the detail is in the log.
+export const plainFailure = (what, errors) => {
+	const text = (errors || []).join(' ');
+	const silent = /denied method call|does not exist|not running|unknown service|no webos service bridge|ServiceUnknown|timed? ?out/i.test(text);
+	return `Couldn't ${what}.` + (silent ? " Homebrew Channel didn't respond." : '');
+};
+
+export const useOpenHouse = (load = loadEnvironment) => {
+	const [phase, setPhase] = useState('loading');
+	const [fatal, setFatal] = useState(null);
+	const [env, setEnv] = useState(null);
+	const [candidates, setCandidates] = useState([]);
+	const [currentId, setCurrentId] = useState(STOCK_HOME);
+	const [storedId, setStoredId] = useState('');
+	const [patchStatus, setPatchStatus] = useState(null);
+	const [loadFailed, setLoadFailed] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [notice, setNotice] = useState('');
+	const [toast, setToast] = useState(null);
+	const [icons, setIcons] = useState({});
+	const mounted = useRef(true);
+	const iconsAsked = useRef({});
+
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
+
+	const refreshWith = useCallback(async (e) => {
+		const [list, st, per, patchRes] = await Promise.all([
+			e.chooser.listCandidates(), e.chooser.readState(), e.chooser.readPersistence(),
+			e.backport ? e.backport.status() : null
+		]);
+		[['candidates', list], ['state', st], ['persistence', per], ['patch', patchRes]].forEach(([l, r]) => r && logResult(l, r));
+		if (!mounted.current) return;
+		setLoadFailed(!list.ok || !st.ok);
+		setCandidates(list.candidates);
+		const state = st.state;
+		setCurrentId((state && (state.profileHome || state.recordHome)) || STOCK_HOME);
+		setStoredId(per.persistence ? per.persistence.stored : '');
+		setPatchStatus(patchRes ? patchRes.status : null);
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		Promise.resolve().then(() => load()).then(async (e) => {
+			if (cancelled || !mounted.current) return;
+			setEnv(e);
+			await refreshWith(e);
+			if (mounted.current && !cancelled) setPhase('ready');
+		}, (err) => {
+			if (cancelled || !mounted.current) return;
+			// eslint-disable-next-line no-console
+			console.log(`${LOG_PREFIX} startup: ${errorMessage(err)}`);
+			setFatal({kind: err.kind || 'failed'});
+			setPhase('fatal');
+		});
+		return () => { cancelled = true; };
+	}, [load, refreshWith]);
+
+	// Icons: one at a time, each read once per session (the platform caches as well).
+	useEffect(() => {
+		if (!env || !env.readIcon) return undefined;
+		let cancelled = false;
+		(async () => {
+			for (const c of candidates) {
+				if (cancelled || !c.icon || iconsAsked.current[c.id] === c.icon) continue;
+				iconsAsked.current[c.id] = c.icon;
+				let url = null;
+				try {
+					url = await env.readIcon(c.icon);
+				} catch (e) {
+					url = null;
+				}
+				if (cancelled || !mounted.current) return;
+				setIcons((prev) => Object.assign({}, prev, {[c.id]: url}));
+			}
+		})();
+		return () => { cancelled = true; };
+	}, [env, candidates]);
+
+	const patch = env ? patchStateOf(env.backport, patchStatus) : null;
+
+	const run = useCallback(async (label, work) => {
+		if (!env || busy) return;
+		setBusy(true);
+		setToast(null);
+		let outcome;
+		try {
+			outcome = await work(env);
+		} catch (e) {
+			// eslint-disable-next-line no-console
+			console.log(`${LOG_PREFIX} ${label}: ${errorMessage(e)}`);
+			outcome = {ok: false, text: `Couldn't ${label}.`};
+		}
+		try {
+			await refreshWith(env);
+		} catch (e) {
+			// the outcome stands; the list may be stale
+		}
+		if (!mounted.current) return;
+		setNotice('');
+		setToast(outcome);
+		setBusy(false);
+	}, [env, busy, refreshWith]);
+
+	const restoreWork = async (e) => {
+		setNotice('Restoring LG Home...');
+		const res = await e.chooser.restoreStock();
+		logResult('restore', res);
+		if (!res.ok) return {ok: false, text: plainFailure('restore LG Home', res.errors)};
+		// restoring stock takes the key filter patch out as well
+		if (e.backport && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
+			setNotice('Restoring LG Home... The screen will blink once.');
+			const rem = await e.backport.remove();
+			logResult('remove patch', rem);
+			if (!rem.ok) return {ok: false, text: plainFailure('restore LG Home', rem.errors)};
+		}
+		return {ok: true, text: 'Done. Press Home to try it.'};
+	};
+
+	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
+		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
+		if (e.backport && patch !== 'active') {
+			if (patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+			setNotice('Setting up. The screen will blink once.');
+			const inst = await e.backport.install();
+			logResult('install patch', inst);
+			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
+		}
+		setNotice(`Setting ${candidate.title} as Home...`);
+		const res = await e.chooser.apply(candidate.id);
+		logResult('apply', res);
+		return res.ok ? {ok: true, text: 'Done. Press Home to try it.'} : {ok: false, text: plainFailure('set the Home app', res.errors)};
+	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	return {
+		phase, fatal, version: env && env.version, hasPatch: Boolean(env && env.backport), patch,
+		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, icons,
+		busy, notice, toast, choose, dismissToast: () => setToast(null)
+	};
+};

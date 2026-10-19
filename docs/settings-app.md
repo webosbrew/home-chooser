@@ -1,9 +1,40 @@
 # The settings app
 
-`app/` is an Enact (Sandstone) web app, `org.webosbrew.openhouse`. It lists the installed apps that
+`app/` is an Enact (Moonstone) web app, `org.webosbrew.openhouse`. It lists the installed apps that
 declare `appCategory: ["home"]`, shows the current choice, and writes the choice for the running
 release. The platform facts behind every write are in the
 [study](research/home-key-and-home-app.md); this page says which write is made where.
+
+## Using it
+
+One screen, built for the remote (5-way, OK, Back); every action is reachable without a pointer.
+Open House is in English only.
+
+* **The list.** Title "Open House", subtitle "Find your TV a new home". The first row is "LG Home
+  (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
+  A check mark sits on the current home and the focus starts on it. The app id appears as small
+  text under the name of the focused row only. If no launcher is installed, a line explains
+  what a launcher is and that LG Home stays in use. If the chosen launcher was uninstalled, a line
+  under the list says "The Home app you chose was removed; using LG Home."
+* **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner
+  while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
+  one plain sentence ("Couldn't set the Home app. Homebrew Channel didn't respond."); the details
+  are in the console log. Choosing "LG Home (stock)" runs the restore.
+* **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
+  launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
+  the change, and confirming installs the backport and then applies the choice. Restoring LG Home
+  removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
+  the dialog says the Home button can't be changed on this TV's software and applies nothing.
+* **Problems.** Instead of the list, one plain screen: Homebrew Channel missing or not running;
+  Homebrew Channel refusing `exec` (webOS 26 and later: "Your Homebrew Channel doesn't let apps run
+  root commands yet. Update Homebrew Channel; Open House needs it."); Homebrew Channel not running
+  as root.
+* **About.** A button at the bottom opens a dialog with Open House's version, the webOS version,
+  "Home key patch active: yes/no" (6 to 9 only) and "Before uninstalling Open House, choose LG Home."
+* **Back** closes a dialog; with none open it leaves the app.
+* **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon
+  is read as root (`base64`, at most 256 KB, once per session) and shown as a `data:` URL; a generic
+  icon stands in when that fails.
 
 ## Root access
 
@@ -13,7 +44,7 @@ permissions do not apply (see [Permissions](research/home-key-and-home-app.md#pe
 written as root by piping base64 into `base64 -d`, which is a busybox applet on the images, so
 the content (JSON with quotes and newlines) never meets the shell's quoting. If `exec` is
 refused (`Denied method call "exec"` on webOS 26 and later with the current Homebrew Channel) or
-Homebrew Channel is absent, the panel says so and does nothing else.
+Homebrew Channel is absent, the screen says so and does nothing else (see [Using it](#using-it)).
 
 The release comes from `/etc/os-release` (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
 
@@ -42,11 +73,11 @@ The release comes from `/etc/os-release` (`VERSION_ID`, then `VERSION`, then `PR
   there is shown as a warning.
 * On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
-  The panel warns beforehand that apps may close, and `systemctl restart sam` is the last step.
+  `systemctl restart sam` is the last step.
 * On 6.x to 9.x the stock key filter launches `com.webos.app.home` by id, so the Home key follows
-  the choice only with the [key filter backport](key-filter-backport.md) installed. The result
-  carries `needsKeyFilterBackport`; the panel says so unless the backport is mounted, and offers
-  Install and Remove for it with the same step log.
+  the choice only with the [key filter backport](key-filter-backport.md) installed. The screen
+  installs it as part of choosing a launcher when it is not mounted, and removes it again when
+  LG Home is restored; there are no separate Install and Remove buttons.
 
 Before these writes `apply` stores the choice, and after them it makes sure the boot entry and the
 watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
@@ -120,9 +151,8 @@ Open House keeps its own copy of the choice and enforces it.
   ([study](research/home-key-and-home-app.md)). Everywhere the record's `home` is read, `null`,
   `""` and a missing key mean "not set": with a stored choice that is a mismatch the watcher
   repairs, without one there is nothing to do.
-* **The panel** shows the stored choice, whether the init.d link exists and points at this install
-  (or is another install's, broken, or a regular file), whether the watcher is running, and the
-  last lines of its log.
+* **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
+  (`/tmp/openhouse-home.log`).
 
 Tests: `backport/test-openhouse-home-watch.sh` (a stub `luna-send` plays a stream of replies:
 present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
@@ -174,7 +204,7 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
 `getProfiles`; 6.x to 9.x run `openhouse-keyfilter refresh`, which bakes the id back in. The
-panel shows "Chosen app ... is not installed; stock Home in use" when the stored choice is not
+screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
 Clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
@@ -265,9 +295,10 @@ The custom home is then closed; a stock home is never closed.
 ## Step log
 
 Each operation returns its steps: the Luna call and payload, file write or removal, or command,
-with the reply or the error. The panel shows them, so a failure is visible with the service's own
-text. An absent record (`There is no matched result from DB`) is treated as "not set", not as a
-failure.
+with the reply or the error. The screen does not show them; the app writes each one to
+`console.log` with an `[OpenHouse]` prefix (web inspector, device log), so a failure keeps the
+service's own text. An absent record (`There is no matched result from DB`) is treated as "not
+set", not as a failure.
 
 ## Build and test
 
@@ -284,9 +315,9 @@ limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
 directories, drops the other locale directories and the character maps, and rewrites iLib's
 manifest to the remaining files. The UI strings are English and come from the source and from
-Sandstone's own resources, which are left alone. `scripts/copy-backport.js` then copies `backport/`
+Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/copy-backport.js` then copies `backport/`
 (the three scripts at mode 755, and each release's manifest and diffs) into `dist`; the package is
-1.0 MB.
+0.97 MB.
 
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
 `app/package.json`. `backport/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,

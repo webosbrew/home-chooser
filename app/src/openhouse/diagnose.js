@@ -9,3 +9,11 @@ export const diagnoseExecFailure = (message) => {
 	}
 	return 'Root exec through Homebrew Channel failed: ' + text;
 };
+
+// 'denied' (exec refused, webOS 26+), 'unreachable' (no bridge, service missing) or 'failed'.
+export const classifyExecFailure = (message) => {
+	const text = String(message || '');
+	if (/denied method call/i.test(text)) return 'denied';
+	if (/does not exist|not running|unknown service|no webos service bridge|ServiceUnknown/i.test(text)) return 'unreachable';
+	return 'failed';
+};
