@@ -85,11 +85,10 @@ export const buildOverride = (profile, appId) => {
 	return {defaultApps: out};
 };
 
-const withoutHome = (record) => {
-	const out = Object.assign({}, record || {});
-	delete out.home;
-	return out;
-};
+// null, "" and a missing key all read as "no home set" (docs/research/home-key-and-home-app.md).
+export const homeOf = (record) => (record && typeof record.home === 'string' && record.home !== '' ? record.home : null);
+
+const withNullHome = (record) => Object.assign({}, record || {}, {home: null});
 
 // The general/defaultApps record: null when the key was never written.
 export const readDefaultApps = async (run) => {
@@ -105,11 +104,12 @@ export const readDefaultApps = async (run) => {
 export const writeDefaultApps = (run, record) =>
 	run.luna(`${SETTINGS}/setSystemSettings`, {category: 'general', settings: {defaultApps: record}});
 
-// Remove `home` from the general/defaultApps record, keeping the other entries.
-// NOT CONFIRMED on a live TV: this writes the record without `home`, but the study found that a
-// partial setSystemSettings write probably merges into the stored object, in which case `home`
-// stays. A live test has to settle how an entry is removed; this is the one place to change.
-export const removeHomeFromRecord = (run, record) => writeDefaultApps(run, withoutHome(record));
+// Clear `home` in the general/defaultApps record, keeping the other entries. Sub-keys of the record
+// can never be removed (a write that leaves `home` out only looks like a replace until the settings
+// service restarts; delete and reset are no-ops), so `home` is written as null, which reads as unset
+// and makes launchDefaultApp {"category":"home"} launch the profile's stock home
+// (docs/research/home-key-and-home-app.md, the 11.2.0 / 10.3.1 results).
+export const removeHomeFromRecord = (run, record) => writeDefaultApps(run, withNullHome(record));
 
 // A runner logs each call into `log`; a failing call is logged with its error and then rethrown.
 export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) => {
@@ -157,7 +157,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 		const {profile, error} = await readProfile(run);
 		return {
 			record,
-			recordHome: (record && record.home) || null,
+			recordHome: homeOf(record),
 			profile,
 			profileHome: (profile && profile.categories && profile.categories.home) || null,
 			profileError: error
@@ -236,6 +236,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 		},
 
 		async apply(appId, {onNotice} = {}) {
+			// the stock home is "no choice", not a choice (on 6.x to 9.x sam refuses it for lack of appCategory)
+			if (appId === STOCK_HOME) return this.restoreStock();
 			const log = [];
 			const run = runner(log);
 			const res = Object.assign(result(log), {
@@ -315,10 +317,10 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					const list = await run.luna(`${SAM}/listApps`, {});
 					const ids = ((list && list.apps) || []).map((a) => a.id);
 					const stock = ids.indexOf(STOCK_FULLHOME) >= 0 ? STOCK_FULLHOME : STOCK_HOME;
-					if (!state.record || state.record.home !== stock) {
+					if (homeOf(state.record) !== stock) {
 						await writeRecord(run, Object.assign({}, state.record || {}, {home: stock}));
 					}
-				} else if (state.record && Object.prototype.hasOwnProperty.call(state.record, 'home')) {
+				} else if (homeOf(state.record)) {
 					await removeHomeFromRecord(run, state.record);
 				}
 				if (info.usesProfile) {

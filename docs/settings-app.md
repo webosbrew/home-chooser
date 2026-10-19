@@ -111,9 +111,15 @@ Open House keeps its own copy of the choice and enforces it.
 * **Restoring stock** stops the watcher (`systemctl stop openhouse-home`), removes the choice file,
   then does the platform restore. On 6.x to 9.x it also runs `openhouse-keyfilter refresh`, which
   clears the choice from the mounted `Settings.qml` (restarting the compositor if it changed).
-  Removing `home` from the record is one function in the app, `removeHomeFromRecord()`, which still
-  writes the record without `home`; whether that removes it (a partial write probably merges) has
-  to be confirmed on a TV.
+  Clearing `home` is one function in the app, `removeHomeFromRecord()`, and `merged_write ""` in the
+  watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
+  `general/defaultApps` can never be removed (a write that leaves `home` out only looks like a
+  replace until the settings service restarts; `deleteSystemSettings` and `resetSystemSettings`
+  are no-ops), but a stored `null` reads as unset and `launchDefaultApp {"category":"home"}`
+  launches the profile's stock home, live and after a restart
+  ([study](research/home-key-and-home-app.md)). Everywhere the record's `home` is read, `null`,
+  `""` and a missing key mean "not set": with a stored choice that is a mismatch the watcher
+  repairs, without one there is nothing to do.
 * **The panel** shows the stored choice, whether the init.d link exists and points at this install
   (or is another install's, broken, or a regular file), whether the watcher is running, and the
   last lines of its log.
@@ -162,8 +168,8 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | `home` removed from the record by the merged `setSystemSettings` write (other entries kept); `openhouse-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
-| 10.x and later | override file removed, `debug/rescan`, then `home` removed from the record | the profile's `home`, which is the stock launcher |
+| 6.x to 9.x | `home` written as `null` by the merged `setSystemSettings` write (other entries kept); `openhouse-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
+| 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
@@ -171,11 +177,10 @@ On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later
 panel shows "Chosen app ... is not installed; stock Home in use" when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
-The removal of `home` is the unconfirmed write of `removeHomeFromRecord()` (see
-[Persistence](#persistence)); the watcher reads the record back and logs when `home` is still
-there, so a live test shows it. If it is, 6.x to 9.x are still fine (the backport falls back to the
-stock launcher when launching the named app fails) and 5.x and 10.x and later are the ones that
-need another way to clear an entry.
+Clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
+[Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
+The key filter backport's `Settings.qml` already takes only a non-empty string as the record's
+`home`, so `null` falls through to the baked id and then the stock launcher.
 
 ### Open House is uninstalled
 
@@ -195,7 +200,7 @@ gone it does, in order:
    stopped.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
-changes nothing: with the record already without `home`, "nothing to remove" is logged and no write
+changes nothing: with the record's `home` already unset (null, empty or missing), "nothing to remove" is logged and no write
 is made. The unit's command is a small wrapper that runs the app's copy of the watcher, else the
 runtime copy, else exits 0, so a watcher that crashes and is restarted after the app is gone still
 finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
@@ -226,12 +231,12 @@ Repair: install Open House again (the link in `init.d` is valid again, and the n
 opening the app starts the watcher, which sees the chosen app missing and reverts), or by hand on
 10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.openhouse.json`,
 `luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
-`general/defaultApps` record again without `home` (`setSystemSettings`, keeping the other
+`general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
 entries). On 5.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
 choice stored the watcher is not started, so uninstalling Open House then leaves the flag file, a
 dangling link and, until reboot, mounts that behave as stock.
 
-What only a live test settles: that `setSystemSettings` without `home` removes the entry; that
+What only a live test settles: that
 `getAppInfo` of an uninstalled id answers `returnValue:false` on every release, and that `sam`
 answers it at boot when the init.d entry runs; how `listApps` change messages arrive (only their
 arrival is used) and that `timeout` accepts `timeout 10 <command>` in the images' busybox;
@@ -245,11 +250,14 @@ an update of Open House does not look like an uninstall for 15 s.
   The record is written with `home` set to `com.webos.app.fullhome` if `listApps` shows it
   installed (the factory value on the studied 5.6.1), else `com.webos.app.home`, and the other
   entries are kept ([5.6.1](research/home-key-and-home-app.md#561-supported-through-the-default-app-record)).
-* 6.x to 9.x: the record is written again without `home` and with the other entries kept
-  (`removeHomeFromRecord()`, unconfirmed, see [Persistence](#persistence)); `setDefaultApp` cannot
+* 6.x to 9.x: the record is written again with `"home": null` and the other entries kept
+  (`removeHomeFromRecord()`, see [Persistence](#persistence)); `setDefaultApp` cannot
   remove an entry. `com.webos.app.home` is never written as `home` there:
-  the stock home has no `appCategory` and `sam` refuses it.
-* 10.x and later: the record is written without `home` (same function), the override file is removed and the
+  the stock home has no `appCategory` and `sam` refuses it. For that reason choosing
+  `com.webos.app.home` in the candidate list runs this restore instead of `apply` on every
+  release (elsewhere it is simply "stock"); other stock homes such as `seniorhome` stay ordinary
+  choices.
+* 10.x and later: the record is written with `"home": null` (same function), the override file is removed and the
   profile rescanned; the profile's `home` is the fallback.
 
 The custom home is then closed; a stock home is never closed.

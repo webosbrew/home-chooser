@@ -94,7 +94,7 @@ case "$3" in
         if [ -f $T/live ]; then
             id=$(echo "$4" | sed 's/.*"appId":"\([^"]*\)".*/\1/')
             if grep -q '"home"' $T/record; then
-                sed 's/"home":"[^"]*"/"home":"'"$id"'"/' $T/record > $T/record.new
+                sed -e 's/"home":"[^"]*"/"home":"'"$id"'"/' -e 's/"home":null/"home":"'"$id"'"/' $T/record > $T/record.new
             else
                 sed 's/"defaultApps":{/"defaultApps":{"home":"'"$id"'",/' $T/record > $T/record.new
             fi
@@ -131,7 +131,7 @@ mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form
 }
 # live <record json>: the stub keeps the record in step with what is written to it
 live() { touch "$T/live"; echo '{"returnValue":true,"settings":{"defaultApps":'"$1"'}}' > "$T/record"; }
-nohome() { ! grep -q '"home"' "$T/record"; }
+nohome() { ! grep -q '"home":"[^"]' "$T/record" && grep -q '"home":null' "$T/record"; }
 kfn() { grep -c "$1" "$T/kfcalls"; }
 # one reply per line
 reply() { printf '{"returnValue":true,"subscribed":true,"settings":{"defaultApps":%s}}\n' "$1" >> "$T/stream"; }
@@ -153,6 +153,25 @@ check "one write" test "$(writes)" = 1
 check "merged payload" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}}' "$T/calls"
 check "no setDefaultApp on 8" hasnt setDefaultApp "$T/calls"
 check "logged" has "writing 'my.home'" "$T/log"
+cleanup
+
+echo "== home null or empty reads as unset: the choice is written, replacing the null"
+for v in null '""'; do
+    setup 8 'my.home\n'
+    reply "{\"home\":$v,\"kidsApp\":\"k.app\"}"
+    run
+    check "home $v: one write" test "$(writes)" = 1
+    check "home $v: merged payload, no second home" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
+    cleanup
+done
+
+echo "== no stored choice: a null home is left alone"
+setup 8 ''
+rm -f "$T/home"
+reply '{"home":null,"kidsApp":"k.app"}'
+run
+check "exit 0" rc 0
+check "no write" test "$(writes)" = 0
 cleanup
 
 echo "== record absent entirely"
@@ -349,7 +368,7 @@ for major in 6 8; do
     echo APPS >> "$T/stream"
     run
     check "$major: exit 1 (subscription ended)" rc 1
-    check "$major: home removed, other entries kept" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"kidsApp":"k.app"}}}' "$T/calls"
+    check "$major: home written as null, other entries kept" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"home":null,"kidsApp":"k.app"}}}' "$T/calls"
     check "$major: no home written while the app is missing, then once when it is back" test "$(writes)" = 2
     check "$major: written again with home" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
     check "$major: backport refreshed to stock" test "$(kfn 'refresh stock')" = 1
@@ -395,7 +414,7 @@ echo APPS >> "$T/stream"
 echo 'INSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "removal is a setSystemSettings write" has '{"defaultApps":{"kidsApp":"k.app"}}' "$T/calls"
+check "removal is a setSystemSettings write" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
 check "return uses setDefaultApp" has 'setDefaultApp {"category":"home","appId":"my.home"}' "$T/calls"
 check "one setDefaultApp" test "$(count setDefaultApp "$T/calls")" = 1
 cleanup
@@ -414,7 +433,7 @@ for major in 10 11; do
     echo 'INSTALL my.home' >> "$T/stream"
     echo APPS >> "$T/stream"
     run
-    check "$major: removal wrote the record without home" has '{"defaultApps":{"kidsApp":"k.app"}}' "$T/calls"
+    check "$major: removal wrote home as null" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
     check "$major: rescan after removing the override" test "$(count debug/rescan "$T/calls")" -ge 2
     check "$major: override rebuilt when it came back" has '"home":"my.home"' "$T/override/o.json"
     check "$major: setDefaultApp when it came back" has 'setDefaultApp {"category":"home","appId":"my.home"}' "$T/calls"
@@ -491,7 +510,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo TIMER >> "$T/stream"
 OPENHOUSE_RECHECK=1 run
-check "reverted by the timer" has '{"defaultApps":{"kidsApp":"k.app"}}' "$T/calls"
+check "reverted by the timer" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
 check "mark says timer" has timer "$T/mark"
 cleanup
 
@@ -643,6 +662,15 @@ check "runs from the repository copy, app dir missing: exit 0" rc 0
 check "no write (nothing to remove)" test "$(writes)" = 0
 cleanup
 
+echo "== idempotent: home already null changes nothing"
+setup 8 'my.home\n'
+live '{"home":null,"kidsApp":"k.app"}'
+rm -rf "$T/app"
+$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+check "exit 0" rc 0
+check "no write (nothing to clear)" test "$(writes)" = 0
+cleanup
+
 echo "== timeout in both forms (BusyBox before 1.30 wants -t)"
 for form in new old none; do
     setup 8 'my.home\n'
@@ -653,7 +681,7 @@ for form in new old none; do
     if [ $form = none ]; then export OPENHOUSE_TIMEOUT=; else mktimeout $form "$T/bin/timeout"; export OPENHOUSE_TIMEOUT="$T/bin/timeout"; fi
     run
     unset OPENHOUSE_TIMEOUT
-    check "$form: removal still detected and reverted" has '{"defaultApps":{"kidsApp":"k.app"}}' "$T/calls"
+    check "$form: removal still detected and reverted" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
     case $form in
         new) check "new: called as timeout 10" has 'timeout 10 ' "$T/bin/timeout.log"; check "new: no -t call used" hasnt 'timeout -t 10' "$T/bin/timeout.log" ;;
         old) check "old: called as timeout -t 10" has 'timeout -t 10 ' "$T/bin/timeout.log" ;;

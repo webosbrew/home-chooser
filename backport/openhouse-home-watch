@@ -15,8 +15,8 @@
 # and every OPENHOUSE_RECHECK seconds (300) as a fallback, asks getAppInfo about the chosen app and
 # about org.webosbrew.openhouse:
 #   chosen app gone: the platform is put back to stock (webOS 5: home = the stock launcher;
-#     6 to 9: `home` removed from the record and the backport's baked id emptied; 10 and later:
-#     override file removed, rescan, `home` removed), the choice file is kept, and nothing is
+#     6 to 9: `home` written as null and the backport's baked id emptied; 10 and later:
+#     override file removed, rescan, `home` written as null), the choice file is kept, and nothing is
 #     written while the app is missing. When it is installed again the choice is applied again.
 #   Open House gone: the same revert, then the choice file, the backport flag and the init.d link
 #     are removed, the backport's bind mounts are undone (webOS 6 to 9) and the watcher exits 0.
@@ -186,7 +186,9 @@ finish() {
 }
 
 # The merged setSystemSettings write: the existing entries are read back and kept. With an empty
-# id the record is written without `home`.
+# id `home` is written as null: sub-keys of the record can never be removed (a write without
+# `home` only looks like a replace until the settings service restarts), and null reads as unset
+# (docs/research/home-key-and-home-app.md, the 11.2.0 / 10.3.1 results).
 merged_write() {
     reply=$(call "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"]}' | flatten)
     if ! rest=$(record_body "$reply"); then
@@ -196,14 +198,17 @@ merged_write() {
     rest=$(printf '%s' "$rest" |
         sed -e 's/"home"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,//' \
             -e 's/,[[:space:]]*"home"[[:space:]]*:[[:space:]]*"[^"]*"//' \
-            -e 's/^[[:space:]]*"home"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*$//')
+            -e 's/^[[:space:]]*"home"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*$//' \
+            -e 's/"home"[[:space:]]*:[[:space:]]*null[[:space:]]*,//' \
+            -e 's/,[[:space:]]*"home"[[:space:]]*:[[:space:]]*null//' \
+            -e 's/^[[:space:]]*"home"[[:space:]]*:[[:space:]]*null[[:space:]]*$//')
     rest=$(printf '%s' "$rest" | sed -e 's/^[[:space:]]*,//' -e 's/,[[:space:]]*$//')
     if [ -z "$(printf '%s' "$rest" | tr -d '[:space:]')" ]; then
-        if [ -n "$1" ]; then record="{\"home\":\"$1\"}"; else record="{}"; fi
+        if [ -n "$1" ]; then record="{\"home\":\"$1\"}"; else record="{\"home\":null}"; fi
     elif [ -n "$1" ]; then
         record="{\"home\":\"$1\",$rest}"
     else
-        record="{$rest}"
+        record="{\"home\":null,$rest}"
     fi
     out=$(call "$SETTINGS/setSystemSettings" "{\"category\":\"general\",\"settings\":{\"defaultApps\":$record}}" | flatten)
     if ok_reply "$out"; then
@@ -454,7 +459,7 @@ kf_refresh() {
     OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
 }
 
-# remove_home: take `home` out of the record, keeping the other entries.
+# remove_home: write `home` as null in the record, keeping the other entries.
 remove_home() {
     reply=$(call "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"]}' | flatten)
     if [ -z "$(home_of "$reply")" ]; then
@@ -464,10 +469,10 @@ remove_home() {
     merged_write "" || return 1
     left=$(current_home)
     if [ -n "$left" ]; then
-        log "home is still '$left' after the write without it (a partial write may merge into the stored record)"
+        log "home is still '$left' after writing it as null"
         return 1
     fi
-    log "home removed from the record"
+    log "home cleared (null) in the record"
 }
 
 # revert_platform: put the platform back to stock. Idempotent: it only writes what is not stock.

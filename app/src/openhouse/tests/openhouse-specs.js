@@ -340,11 +340,11 @@ describe('restoreStock', () => {
 		expect(tv2.luna).toEqual([GET, LIST]);
 	});
 
-	test('8.3.0: write the record without home, keep the rest, close the custom home', async () => {
+	test('8.3.0: write home as null, keep the rest, close the custom home', async () => {
 		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}});
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SET({kidsApp: 'k'}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, SET({home: null, kidsApp: 'k'}), CLOSE(MINE)]);
 		expect(tv.files).toEqual([['rm', HOME_FILE]]);
 		expect(tv.commands).toEqual([STOP, REFRESH]);
 		expect(JSON.stringify(tv.luna)).not.toContain('"home":"com.webos.app.home"');
@@ -359,16 +359,43 @@ describe('restoreStock', () => {
 	test('9.2.1 uses setSystemSettings, never setDefaultApp', async () => {
 		const tv = fakeTV({record: {home: MINE}});
 		await chooser(tv, [9, 2, 1]).restoreStock();
-		expect(tv.luna).toEqual([GET, SET({}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, SET({home: null}), CLOSE(MINE)]);
 	});
 
 	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: also removes the override and rescans', async (version) => {
 		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}, profile: profileReply(MINE)});
 		const res = await chooser(tv, version).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, GETPROFILE, SET({kidsApp: 'k'}), RESCAN, GETPROFILE, CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, SET({home: null, kidsApp: 'k'}), RESCAN, GETPROFILE, CLOSE(MINE)]);
 		expect(tv.files).toEqual([['rm', HOME_FILE], ['rm', OVERRIDE_PATH]]);
 		expect(tv.commands).toEqual([STOP]);
+	});
+
+	test.each([[null], ['']])('home %j reads as unset: nothing to clear on 8.x, the stock id written on 5.x', async (value) => {
+		const tv = fakeTV({record: {home: value, kidsApp: 'k'}});
+		const c = chooser(tv, [8, 3, 0]);
+		expect((await c.readState()).state.recordHome).toBeNull();
+		await c.restoreStock();
+		expect(tv.luna).toEqual([GET, GET]);
+		const tv5 = withApps(fakeTV({record: {home: value}}), [STOCK]);
+		await chooser(tv5, [5, 6, 1]).restoreStock();
+		expect(tv5.luna).toEqual([GET, LIST, SET({home: STOCK})]);
+	});
+
+	test.each([[[6, 6, 0]], [[9, 2, 1]], [[10, 3, 1]], [[5, 6, 1]]])('%j: choosing com.webos.app.home runs restoreStock', async (version) => {
+		const tv = withApps(fakeTV({record: {home: MINE}, profile: profileReply(MINE)}), [STOCK]);
+		const res = await chooser(tv, version).apply(STOCK);
+		expect(res.ok).toBe(true);
+		expect(tv.files[0]).toEqual(['rm', HOME_FILE]);
+		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
+		expect(tv.commands).toContain(STOP);
+	});
+
+	test('other stock homes stay ordinary choices', async () => {
+		const tv = fakeTV({record: {}});
+		await chooser(tv, [8, 3, 0]).apply('com.webos.app.seniorhome');
+		expect(tv.files[0]).toEqual([HOME_FILE, 'com.webos.app.seniorhome']);
+		expect(tv.record()).toEqual({home: 'com.webos.app.seniorhome'});
 	});
 
 	test('profile-only choice: closes the custom profile home once', async () => {
