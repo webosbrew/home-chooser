@@ -686,15 +686,17 @@ The old `home` returning is not a lost write: the stored object keeps every sub-
 written. On 10.3.1, `setSystemSettings` of `defaultApps` with an extra sub-key and then without
 it read back, and showed in `/var/luna/preferences/general`, as a replace; after `systemctl
 restart settings-service.service` the extra sub-key was back, and so was a `home` written in an
-earlier run. Writing the sub-key as `null` or `""` stores that value; `resetSystemSettings`
-for `defaultApps` changes nothing. [V, VM] So no `setSystemSettings` write removes `home`, and
-what settings service serves until its next start differs from what it stores. The service
-also has `deleteSystemSettings` (in `api-permissions.d/com.webos.settingsservice.api.json`)
-[V]; whether deleting the key and writing the wanted entries again is the way to remove one is
-being tested. db8 writes are synchronous (`"sync": 1` in `etc/palm/db8`, the settings kind has
-`"sync": true`) and no boot restored from backup [V].
+earlier run. Writing the sub-key as `null` or `""` stores that value; `resetSystemSettings` for
+`defaultApps` changes nothing. [V, VM] So no `setSystemSettings` write removes `home`, and what
+settings service serves until its next start differs from what it stores. The service also has
+`deleteSystemSettings` (in `api-permissions.d/com.webos.settingsservice.api.json`) [V]; for
+`{"category":"general","keys":["defaultApps"]}` it is a no-op: it answers `returnValue: true`
+and the key and its sub-keys stay, also after a restart. [V, VM] What does work is overwriting:
+with `"home": null` in the record, `launchDefaultApp {"category":"home"}` launched the profile's
+`com.webos.app.home` on 10.3.1, live and after a settings-service restart, the same as with no
+`home` entry. [V, VM] db8 writes are synchronous (`"sync": 1` in `etc/palm/db8`, the settings
+kind has `"sync": true`) and no boot restored from backup [V].
 
-Open after this run: how to remove one entry of `defaultApps` (`deleteSystemSettings`);
-whether a `home` set through `setDefaultApp` and a profile override survive reboots on 11.2.0;
+Open after this run: whether `"home": null` reads as unset on 11.2.0 as on 10.3.1; whether a `home` set through `setDefaultApp` and a profile override survive reboots on 11.2.0;
 T5 on the `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`); the IR
 remote's Super_L long-press path, which no VM injection exercises.
