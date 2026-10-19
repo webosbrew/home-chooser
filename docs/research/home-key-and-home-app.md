@@ -201,7 +201,9 @@ chosen through `setDefaultApp` in front, a Home press relaunched it (`launchDefa
 `com.webos.surfacemanager` on 10.3.1, `com.webos.starfish.keyfilters` on 11.2.0), which the
 key filter only does when `isHomeApp(fullscreenView.appId)` is false. On 11.2.0 a press with the
 stock `com.webos.app.home` in front launched nothing while the record named the test launcher.
-[V, VM] So the id is the system profile's `home` (here the stock id), not the record [I].
+[V, VM] The id is the system profile's `home`: with `defaultApps.categories.home` moved to the
+launcher by a profile override (T6), the compositor treated it as home on both releases, live
+after `systemprofile/debug/rescan` and with no compositor restart. [V, VM]
 
 The 10.3.1 Super_L handling also changed: the press starts the magnification timer; a release
 before it fires re-injects a synthetic Super_L (`isInternalHomeKey`), and that second pass
@@ -312,7 +314,24 @@ category map in `profile.json` is the effective one. [V]
 `/var/webos-profile/testLayer`) and applies `/var/webos-profile/override/`
 (`override_profile()`). The service API is `getProfiles`, `enableProfile`, `disableProfile`
 and `debug.rescan`, in the public `systemProfile` group; there is no method to set a key. [V]
-The override file format and whether a change is picked up without a restart are [U].
+
+The override [V on the binaries, V, VM for the `defaultApps` case]:
+
+* Every file under `/var/webos-profile/override/` is read, whatever its name; its JSON is a
+  partial profile, for example
+  `{"defaultApps":{"support":true,"categories":{"home":"<id>","aod":"com.webos.app.lifeonscreen"}}}`.
+* 10.3.1 only overrides top-level keys the profile already has, and replaces each second-level
+  value whole, so the file must carry the full `categories` object. 11.2.0 deep-merges, and
+  applies `/var/webos-profile/remote/` after `override/`.
+* `/var/webos-profile/testLayer/profile.json` is an ordinary layer applied last; it beats both
+  directories.
+* `luna://com.webos.service.systemprofile/debug/rescan '{}'` regenerates
+  `/var/webos-profile/platform/profile.json`; at start `systemprofile` skips regeneration when
+  that file exists and its selectors are unchanged. `sam` and the compositor
+  (`libStarfishServiceIntegration` on 10.3.1, `starfish-servicebridge.so` on 11.2.0) subscribe
+  to `getProfiles` and saw a rescan live.
+* Removing the file and rescanning restored the stock profile. Whether an override survives a
+  reboot without a rescan was not run.
 
 ## What makes a window "home" to the compositor
 
@@ -374,14 +393,13 @@ with no change:
    reference.
 2. Set `general/defaultApps.home` through `applicationManager/setDefaultApp` or
    `setSystemSettings`; it takes precedence over the device profile. The profile itself is
-   read-only on the rootfs; the `override` and `test` layers are writable but unmeasured.
+   read-only on the rootfs; an override file in `/var/webos-profile/override/` changes it.
 3. Handle `activateType` and `launchType` as before.
 
-`isHomeApp` does not follow the record (see [10.3.1 and 11.2.0](#1031-and-1120)), so the
-compositor treats the chosen launcher as an ordinary app: each Home press relaunches it, and
-the recents, nudge, voice and gesture sites do not see it as home. If a system profile override
-moves the profile's `home` (T6), `isHomeApp` may follow it [I]; otherwise 10.3.1 needs its QML
-`isHomeApp` sites patched, and 11.2.0, which has no compositor QML, needs a native change.
+`isHomeApp` follows the system profile, not the record (see [10.3.1 and
+11.2.0](#1031-and-1120)). With the record alone the compositor treats the chosen launcher as
+an ordinary app: each Home press relaunches it, and the recents, nudge, voice and gesture sites
+do not see it as home. A profile override that names the launcher fixes that without a patch.
 
 ## Mod map for a custom home
 
@@ -495,17 +513,21 @@ The 10.3.1 sources are `StarfishKeyFilter.qml` (`launchDefaultApp`, `isHomeApp`,
 
 ### 10.3.1 and 11.2.0
 
-A Home press with an ordinary app in front launched the launcher chosen through `setDefaultApp`
-on both releases, from the QEMU key and from `networkinput/sendSpecialKey HOME`. With that
-launcher in front, a press delivered the key to it (`_KEYS_HOME = "true"`; keydown and keyup
-1013) and also relaunched it twice with `launchType: "homeKey"`. [V, VM] An earlier 11.2.0 run
-with `_KEYS_HOME` unset logged no relaunch; why it differed was not isolated.
+No compositor patch is needed. Set the launcher in two places, both as root:
 
-The relaunch is the `isHomeApp` branch: the compositor's home id is not the record. A launcher
-can live with it by treating a `homeKey` relaunch as a Home press. Making it home to the
-compositor needs either a profile override that `isHomeApp` follows (T6) or a patch: on 10.3.1
-the `isHomeApp`/`getHomeAppId` sites in the QML tree, the same deployment as the 6.6.0 - 9.2.1
-backport; on 11.2.0 the native `getHomeAppId` in `starfish-servicebridge.so`.
+1. The settings record, through `setDefaultApp`, which `launchDefaultApp` reads first.
+2. A system profile override in `/var/webos-profile/override/` naming the same id as
+   `defaultApps.categories.home` (on 10.3.1 with the full `categories` object), followed by
+   `systemprofile/debug/rescan`. This is the id `isHomeApp` and `getHomeAppId` return.
+
+With only the record set, Home from an ordinary app launched the launcher, but with the
+launcher in front a press delivered the key (`_KEYS_HOME = "true"`; keydown and keyup 1013) and
+also relaunched it twice with `launchType: "homeKey"`; with the stock home in front, 11.2.0
+launched nothing. With the override, on both releases, a press with the launcher in front only
+delivered the key, and a press with the stock home in front launched the launcher. With the
+override alone (no `home` in the record), `launchDefaultApp` and the Home key also resolved to
+the launcher. [V, VM] Going back to stock is removing the file, a rescan and removing the
+record's `home`.
 
 ### Boot alignment (optional)
 
@@ -594,7 +616,8 @@ test launcher with `appCategory: ["home"]`. All replies are to be recorded per r
   call `systemprofile/debug/rescan` or restart `systemprofile`, and read
   `getProfiles '{"names":["defaultApps"]}'` and the `[override profile]` log lines. Then
   repeat T4: if the compositor's `isHomeApp` follows the profile, a launcher set in both
-  places is home to the compositor without a patch.
+  places is home to the compositor without a patch. (Run with the override directory; the
+  test layer was not used.)
 * **T7, card launcher on 5.6.1.** With `<id>` as a card window set as default, press Home
   with `<id>` in front and record whether it is relaunched or receives the key.
 
@@ -619,6 +642,9 @@ not run.
 | T4 Home from another app | - | - | - | chosen launcher launched | same |
 | T4 Home with launcher in front | - | - | - | key delivered and launcher relaunched | same (`_KEYS_HOME` set); no relaunch logged with it unset |
 | T4 Home with stock home in front | - | - | - | - | nothing launched |
+| T6 override, rescan | - | - | - | `getProfiles` shows the launcher | same |
+| T6 Home from another app or stock home | - | - | - | launcher launched | same |
+| T6 Home with launcher in front | - | - | - | key delivered, no relaunch (also with record set) | same |
 | T5 developer app | - | - | - | - | installs; `Access denied` from settings service; `applicationManager` replies not captured |
 | hbchannel `exec` from an app | - | - | - | ran, record written | `Denied method call "exec"`; root call works |
 | T7 card launcher | relaunched per press | - | - | - | - |
@@ -626,11 +652,18 @@ not run.
 "Refused" is `{"errorCode":1,"errorText":"no default app is set for the category"}`.
 
 An earlier 10.3.1 attempt, in which the injected key reached the compositor and nothing
-launched, did not reproduce. On the 11.2.0 VM the record read at boot twice differed from the
-value restored and read back before the previous shutdown: once with an old `home` entry back,
-once without the `kidsApp` entry (read shortly after boot). What rewrites it is not known.
+launched, did not reproduce.
 
-Open after this run: T6, now as the way to make `isHomeApp` follow the choice on 10.3.1 and
-11.2.0; T5 on the `applicationManager` methods; how the settings app reaches root on 11.2.0;
-the 11.2.0 record changing across reboots; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`);
-the IR remote's Super_L long-press path, which no VM injection exercises.
+The 11.2.0 VM's record does not survive a reboot as written. After `setSystemSettings` restored
+`{"MembershipApp":...,"kidsApp":...}` and read it back, the next boot answered with an older
+`home` entry back (11 s after start), and 60 s later with `{"MembershipApp":...}` only. In
+other boots the old `home` stayed. At boot `applicationManager` wrote `defaultApps` with only
+`MembershipApp`, and `accountmanager` called `setDefaultApp` for `MembershipApp`. The old id
+was still in the settings LevelDB (`/var/db/main/*.ldb`) after `/var/luna/preferences/general`
+had dropped it. [V, VM] That `sam` rewrites the record at boot from a map it loads from that
+store is [I]. `getDefaultAppByCategory` is an unknown method on this `43.21.89.01` VM.
+
+Open after this run: what rewrites the 11.2.0 record at boot, and whether a `home` set through
+`setDefaultApp` and a profile override survive a reboot; how the settings app reaches root on
+11.2.0; T5 on the `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`,
+`w22o-number1`); the IR remote's Super_L long-press path, which no VM injection exercises.
