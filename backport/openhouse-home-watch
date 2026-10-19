@@ -1,6 +1,7 @@
 #!/bin/sh
 # Open House home watcher. Runs as root under the transient unit openhouse-home, started by
-# the init.d entry `openhouse` (or by the app). See docs/settings-app.md, "Persistence".
+# the init.d entry `openhouse` (or by the app). See docs/settings-app.md, "Persistence" and
+# "When apps are removed".
 #
 # It keeps the stored choice (/var/lib/webosbrew/openhouse/home, the app id alone)
 # in the general/defaultApps record. It subscribes to the record and, whenever its `home` is
@@ -9,15 +10,33 @@
 #   webOS 5 to 8       setSystemSettings with the existing entries and home
 # On webOS 10 and later it also keeps the system profile override file naming the choice.
 #
+# It also watches the two apps it depends on. It subscribes to applicationManager/listApps, which
+# is only a trigger (the format of the change messages is not relied on), and on every message,
+# and every OPENHOUSE_RECHECK seconds (300) as a fallback, asks getAppInfo about the chosen app and
+# about org.webosbrew.openhouse:
+#   chosen app gone: the platform is put back to stock (webOS 5: home = the stock launcher;
+#     6 to 9: `home` removed from the record and the backport's baked id emptied; 10 and later:
+#     override file removed, rescan, `home` removed), the choice file is kept, and nothing is
+#     written while the app is missing. When it is installed again the choice is applied again.
+#   Open House gone: the same revert, then the choice file, the backport flag and the init.d link
+#     are removed, the backport's bind mounts are undone (webOS 6 to 9) and the watcher exits 0.
+# An app is taken as gone only if it is still gone OPENHOUSE_CONFIRM_DELAY seconds (15) later,
+# because an update installs by removing first.
+#
+# The app's files are deleted with the app, so at start the watcher copies itself, the key filter
+# worker and the manifests into /tmp/openhouse-runtime/ and runs from there.
+#
 # Storms: at most one write per interval (10 s); each write that follows the last one closely
 # doubles the interval, up to 5 min. Every action is logged to /tmp/openhouse-home.log.
-# It exits 0 when the choice file is gone or unusable, and 1 when the subscription ends (the
-# unit restarts it on failure).
+# It exits 0 when the choice file is gone or unusable or after the Open House restore, and 1
+# when the settings subscription ends (the unit restarts it on failure).
 #
 # Overrides, for tests: OPENHOUSE_CHOICE, OPENHOUSE_LUNA_SEND, OPENHOUSE_WATCH_LOG,
 # OPENHOUSE_OSRELEASE, OPENHOUSE_OVERRIDE, OPENHOUSE_MIN_INTERVAL, OPENHOUSE_BACKOFF_CAP,
 # OPENHOUSE_LOG_MAX, OPENHOUSE_CLOCK (command printing epoch seconds), OPENHOUSE_SLEEP,
-# OPENHOUSE_TMP.
+# OPENHOUSE_TMP, OPENHOUSE_RUNTIME, OPENHOUSE_SHELL, OPENHOUSE_APPDIR, OPENHOUSE_KEYFILTER_FLAG,
+# OPENHOUSE_INITD, OPENHOUSE_RECHECK, OPENHOUSE_TIMER_SLEEP, OPENHOUSE_CONFIRM_DELAY,
+# OPENHOUSE_TIMEOUT, OPENHOUSE_CHECK_MARK (file that gets a line after each app check).
 
 CHOICE=${OPENHOUSE_CHOICE:-/var/lib/webosbrew/openhouse/home}
 LUNA=${OPENHOUSE_LUNA_SEND:-luna-send}
@@ -30,6 +49,21 @@ LOG_MAX=${OPENHOUSE_LOG_MAX:-65536}
 CLOCK=${OPENHOUSE_CLOCK:-}
 SLEEP=${OPENHOUSE_SLEEP:-sleep}
 TMP=${OPENHOUSE_TMP:-/tmp/openhouse-home-watch.$$}
+RT=${OPENHOUSE_RUNTIME:-/tmp/openhouse-runtime}
+WSH=${OPENHOUSE_SHELL:-/bin/sh}
+APPDIR=${OPENHOUSE_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse}
+KEYFLAG=${OPENHOUSE_KEYFILTER_FLAG:-/var/lib/webosbrew/openhouse/keyfilter}
+INITD=${OPENHOUSE_INITD:-/var/lib/webosbrew/init.d/openhouse}
+OLD_INITD=$(dirname "$INITD")/openhouse-keyfilter
+RECHECK=${OPENHOUSE_RECHECK:-300}
+TIMER_SLEEP=${OPENHOUSE_TIMER_SLEEP:-sleep}
+CONFIRM_DELAY=${OPENHOUSE_CONFIRM_DELAY:-15}
+TIMEOUT=${OPENHOUSE_TIMEOUT-timeout}
+TMO_FORM=
+CHECK_MARK=${OPENHOUSE_CHECK_MARK:-}
+OH_ID=org.webosbrew.openhouse
+STOCK_HOME=com.webos.app.home
+STOCK_FULLHOME=com.webos.app.fullhome
 
 SETTINGS=luna://com.webos.settingsservice
 SAM=luna://com.webos.applicationManager
@@ -54,6 +88,25 @@ major_version() {
         if [ -n "$v" ]; then echo "$v"; return 0; fi
     done
     echo 0
+}
+
+# Copy what the removal path needs out of the app directory: this script, the key filter worker
+# and the manifests of the diff sets (which name the files the backport mounts over). Each file is
+# replaced by rename, so a copy that is running is never rewritten in place.
+stage_runtime() {
+    mkdir -p "$RT" || return 1
+    for f in openhouse-home-watch openhouse-keyfilter; do
+        if [ ! -f "$1/$f" ]; then
+            [ "$f" = openhouse-keyfilter ] && continue
+            return 1
+        fi
+        cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
+    done
+    for m in "$1"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        rel=$(basename "$(dirname "$m")")
+        mkdir -p "$RT/$rel" && cp "$m" "$RT/$rel/manifest.json" || return 1
+    done
 }
 
 # read_choice: print the stored home id. The file holds the id alone; surrounding spaces, tabs,
@@ -120,7 +173,8 @@ nap() {
 }
 
 cleanup() {
-    [ -n "$LUNA_PID" ] && kill "$LUNA_PID" 2>/dev/null
+    [ -n "$LUNA_PID" ] && kill $LUNA_PID 2>/dev/null
+    [ -n "$FEED_PIDS" ] && kill $FEED_PIDS 2>/dev/null
     [ -n "$NAP_PID" ] && kill "$NAP_PID" 2>/dev/null
     rm -rf "$TMP"
 }
@@ -131,7 +185,8 @@ finish() {
     exit "${2:-0}"
 }
 
-# The merged setSystemSettings write: the existing entries are read back and kept.
+# The merged setSystemSettings write: the existing entries are read back and kept. With an empty
+# id the record is written without `home`.
 merged_write() {
     reply=$(call "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"]}' | flatten)
     if ! rest=$(record_body "$reply"); then
@@ -142,10 +197,13 @@ merged_write() {
         sed -e 's/"home"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,//' \
             -e 's/,[[:space:]]*"home"[[:space:]]*:[[:space:]]*"[^"]*"//' \
             -e 's/^[[:space:]]*"home"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*$//')
-    if [ -n "$(printf '%s' "$rest" | tr -d '[:space:]')" ]; then
+    rest=$(printf '%s' "$rest" | sed -e 's/^[[:space:]]*,//' -e 's/,[[:space:]]*$//')
+    if [ -z "$(printf '%s' "$rest" | tr -d '[:space:]')" ]; then
+        if [ -n "$1" ]; then record="{\"home\":\"$1\"}"; else record="{}"; fi
+    elif [ -n "$1" ]; then
         record="{\"home\":\"$1\",$rest}"
     else
-        record="{\"home\":\"$1\"}"
+        record="{$rest}"
     fi
     out=$(call "$SETTINGS/setSystemSettings" "{\"category\":\"general\",\"settings\":{\"defaultApps\":$record}}" | flatten)
     if ok_reply "$out"; then
@@ -343,7 +401,165 @@ reconcile() {
     check_override "$want"
 }
 
-# handle <reply text>: one complete reply of the subscription.
+# --- Apps that come and go ---------------------------------------------------------------
+
+# detect_timeout: once, find how `timeout` is called: `timeout SECS CMD` (BusyBox 1.30 and later,
+# GNU) or `timeout -t SECS CMD` (BusyBox before 1.30, e.g. 1.29.2 on webOS 5). Sets TMO_FORM to
+# new, old or none.
+detect_timeout() {
+    [ -n "$TMO_FORM" ] && return 0
+    TMO_FORM=none
+    [ -n "$TIMEOUT" ] && command -v "$TIMEOUT" > /dev/null 2>&1 || return 0
+    if "$TIMEOUT" 1 true > /dev/null 2>&1; then
+        TMO_FORM=new
+    elif "$TIMEOUT" -t 1 true > /dev/null 2>&1; then
+        TMO_FORM=old
+    fi
+}
+
+# timed <command...>: run a command under a 10 s timeout when `timeout` works.
+timed() {
+    detect_timeout
+    case "$TMO_FORM" in
+        new) "$TIMEOUT" 10 "$@" ;;
+        old) "$TIMEOUT" -t 10 "$@" ;;
+        *) "$@" ;;
+    esac
+}
+
+# app_state <id>: yes (installed), no (getAppInfo answers returnValue false, which is what an
+# uninstalled id gets) or unknown (no answer).
+app_state() {
+    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    if ok_reply "$out"; then
+        echo yes
+    elif printf '%s' "$out" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*false'; then
+        echo no
+    else
+        echo unknown
+    fi
+}
+
+# oh_gone: Open House is not installed, by getAppInfo or by its directory.
+oh_gone() {
+    [ -d "$APPDIR" ] || return 0
+    [ "$(app_state "$OH_ID")" = no ]
+}
+
+# kf_refresh [stock]: on webOS 6 to 9, bring the id baked into the mounted Settings.qml in line
+# (the worker restarts the compositor only if the id changed, and does nothing if not mounted).
+kf_refresh() {
+    [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
+    [ -f "$KEYFILTER" ] || return 0
+    OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
+}
+
+# remove_home: take `home` out of the record, keeping the other entries.
+remove_home() {
+    reply=$(call "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"]}' | flatten)
+    if [ -z "$(home_of "$reply")" ]; then
+        log "the record has no home, nothing to remove"
+        return 0
+    fi
+    merged_write "" || return 1
+    left=$(current_home)
+    if [ -n "$left" ]; then
+        log "home is still '$left' after the write without it (a partial write may merge into the stored record)"
+        return 1
+    fi
+    log "home removed from the record"
+}
+
+# revert_platform: put the platform back to stock. Idempotent: it only writes what is not stock.
+revert_platform() {
+    log "putting the platform back to stock ($1)"
+    if [ "$MAJOR" -eq 5 ]; then
+        # 5.x: the key filter launches the record's home directly, so name a stock launcher.
+        stock=$STOCK_HOME
+        [ "$(app_state "$STOCK_FULLHOME")" = yes ] && stock=$STOCK_FULLHOME
+        found=$(current_home)
+        if [ "$found" = "$stock" ]; then
+            log "home is already $stock"
+        else
+            merged_write "$stock"
+        fi
+        return 0
+    fi
+    if [ "$MAJOR" -ge 10 ] && [ -f "$OVERRIDE" ]; then
+        rm -f "$OVERRIDE"
+        log "removed $OVERRIDE"
+        out=$(call "$PROFILE/debug/rescan" '{}' | flatten)
+        log "debug/rescan: $out"
+    fi
+    remove_home
+}
+
+# restore_all: Open House is uninstalled. Everything it did to the platform is undone, from files
+# that do not live in the app directory, and the watcher ends.
+restore_all() {
+    log "Open House is uninstalled, restoring the stock Home"
+    revert_platform "Open House uninstalled"
+    rm -f "$CHOICE" "$KEYFLAG"
+    rmdir "$(dirname "$CHOICE")" 2>/dev/null
+    for l in "$INITD" "$OLD_INITD"; do
+        if [ -L "$l" ]; then
+            rm -f "$l"
+            log "removed $l"
+        fi
+    done
+    if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] && [ -f "$KEYFILTER" ]; then
+        OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" stop >> "$LOG" 2>&1
+    fi
+    finish "stock Home restored, exiting" 0
+}
+
+# check_apps <why>: look at Open House and at the chosen app.
+check_apps() {
+    why=$1
+    if oh_gone; then
+        nap "$CONFIRM_DELAY"
+        if oh_gone; then
+            restore_all
+        fi
+        log "Open House is back, not removing anything"
+    fi
+    want=$(read_choice) || finish "choice file is gone, exiting" 0
+    [ -n "$MISSING" ] && [ "$MISSING" != "$want" ] && MISSING=
+    st=$(app_state "$want")
+    case "$st" in
+        no)
+            if [ "$MISSING" != "$want" ]; then
+                nap "$CONFIRM_DELAY"
+                if [ "$(app_state "$want")" = no ]; then
+                    log "$want is not installed, stock Home in use until it comes back"
+                    MISSING=$want
+                    revert_platform "$want not installed"
+                    kf_refresh stock
+                fi
+            fi
+            ;;
+        yes)
+            if [ -n "$MISSING" ]; then
+                log "$want is installed again, applying the choice"
+                MISSING=
+                LAST_WRITE=0
+                STREAK=0
+                if [ "$(current_home)" != "$want" ]; then apply_record "$want"; fi
+                check_override "$want"
+                kf_refresh
+            elif [ "$why" = start ]; then
+                kf_refresh
+            fi
+            ;;
+        *)
+            log "getAppInfo did not answer for $want, leaving things as they are"
+            ;;
+    esac
+    [ -n "$CHECK_MARK" ] && echo "$why" >> "$CHECK_MARK"
+    return 0
+}
+
+# handle <reply text>: one complete reply of the settings subscription.
 handle() {
     flat=$(printf '%s' "$1" | flatten)
     case "$flat" in
@@ -351,43 +567,101 @@ handle() {
         *) return 0 ;;
     esac
     want=$(read_choice) || finish "choice file is gone, exiting" 0
+    if [ -n "$MISSING" ]; then
+        if [ "$MISSING" = "$want" ]; then return 0; fi
+        # the choice was changed to another app while the old one was missing
+        MISSING=
+        kf_refresh
+    fi
     found=$(home_of "$flat")
     [ "$found" = "$want" ] && return 0
     reconcile "$want" "$found"
 }
 
+# feed <tag> <ping>: read a luna-send subscription on stdin, one line per complete reply (its
+# braces balance, so both one-line and pretty-printed output work): "<tag> <reply on one line>",
+# or just "<tag>" if ping is 1. A last "E <tag>" says the stream ended.
+feed() {
+    awk -v tag="$1" -v ping="$2" '
+        {
+            n = gsub(/[{]/, "{"); c = gsub(/[}]/, "}")
+            depth += n - c
+            buf = buf $0 " "
+            if (depth <= 0) {
+                if (ping) print tag; else print tag " " buf
+                fflush()
+                buf = ""
+                depth = 0
+            }
+        }
+        END { print "E " tag; fflush() }'
+}
+
+# The periodic fallback check: a line "T" every RECHECK seconds.
+ticker() {
+    trap 'kill "$TP" 2>/dev/null; exit 0' TERM INT HUP
+    while :; do
+        $TIMER_SLEEP "$RECHECK" &
+        TP=$!
+        wait "$TP"
+        echo T
+    done
+}
+
+# --- Start ---------------------------------------------------------------------------------
+
+# Run from the copy in the runtime directory, so that the app being removed or replaced cannot
+# pull the script out from under the shell.
+SRC=$(cd "$(dirname "$0")" && pwd)
+RTDIR=$(cd "$RT" 2>/dev/null && pwd)
+if [ "$SRC" != "$RTDIR" ]; then
+    if stage_runtime "$SRC"; then
+        exec $WSH "$RT/openhouse-home-watch"
+    fi
+    log "cannot copy the scripts to $RT, running from $SRC"
+fi
+KEYFILTER=$SRC/openhouse-keyfilter
+KF_DATA=$SRC
+
 trap 'finish "stopped by signal" 0' TERM INT HUP
 
 MAJOR=$(major_version)
+detect_timeout
 LAST_WRITE=0
 STREAK=0
 LUNA_PID=
 NAP_PID=
+MISSING=
+FEED_PIDS=
 
 want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
 log "watching, home=$want, webOS $MAJOR"
 mkdir -p "$TMP" || exit 1
-check_override "$want"
+check_apps start
+want=$(read_choice) || finish "choice file is gone, exiting" 0
+[ -n "$MISSING" ] || check_override "$want"
 
-FIFO=$TMP/sub
-mkfifo "$FIFO" || finish "cannot create $FIFO" 1
-"$LUNA" -i "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"],"subscribe":true}' > "$FIFO" 2>&1 &
+mkfifo "$TMP/settings" "$TMP/apps" "$TMP/events" || finish "cannot create the pipes in $TMP" 1
+"$LUNA" -i "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"],"subscribe":true}' > "$TMP/settings" 2>&1 &
 LUNA_PID=$!
-exec 3< "$FIFO"
+"$LUNA" -i "$SAM/listApps" '{"subscribe":true}' > "$TMP/apps" 2>&1 &
+LUNA_PID="$LUNA_PID $!"
+feed S 0 < "$TMP/settings" > "$TMP/events" &
+FEED_PIDS=$!
+feed A 1 < "$TMP/apps" > "$TMP/events" &
+FEED_PIDS="$FEED_PIDS $!"
+ticker > "$TMP/events" &
+FEED_PIDS="$FEED_PIDS $!"
+exec 3< "$TMP/events"
 
-# A reply is complete when its braces balance, so both one-line and pretty-printed output work.
-buf=
-depth=0
-while IFS= read -r line <&3; do
-    o=$(printf '%s' "$line" | tr -cd '{' | wc -c)
-    c=$(printf '%s' "$line" | tr -cd '}' | wc -c)
-    depth=$((depth + o - c))
-    buf="$buf$line "
-    if [ "$depth" -le 0 ]; then
-        handle "$buf"
-        buf=
-        depth=0
-    fi
+while IFS= read -r ev <&3; do
+    case "$ev" in
+        "S "*) handle "${ev#S }" ;;
+        A) check_apps apps ;;
+        T) check_apps timer ;;
+        "E S") finish "subscription ended" 1 ;;
+        "E A") log "apps subscription ended, relying on the periodic check" ;;
+    esac
 done
 
-finish "subscription ended" 1
+finish "event stream ended" 1

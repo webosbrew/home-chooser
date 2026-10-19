@@ -136,7 +136,7 @@ names that have one.
 | --- | --- |
 | no argument, or `apply` | Find the set, patch copies, bind-mount them, restart the compositor. |
 | `stop` | Unmount every target of every set it finds, restart the compositor. |
-| `refresh` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. |
+| `refresh [stock]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. |
 | `status` | Print `mounted=yes` and `release=<set>`, or `mounted=no` and `match=<set or none>`; `data=missing` first if the data directory is absent. |
 
 `apply`:
@@ -152,7 +152,11 @@ names that have one.
    does; the diff carries the placeholder `@OPENHOUSE_HOME@`), it substitutes the stored choice:
    `/var/lib/webosbrew/openhouse/home`, trimmed of spaces, tabs, CR and LF, and used only if it
    is made of letters, digits, `.`, `-` and `_`; an absent, empty or invalid file (logged) gives
-   an empty string. The substitution is after `patch`, so the diff stays byte-exact.
+   an empty string. The substitution is after `patch`, so the diff stays byte-exact. A stored
+   choice is baked in only if `applicationManager/getAppInfo` says the app is installed: an
+   uninstalled app, or a `sam` that has not answered after 20 s (`OPENHOUSE_SAM_WAIT`, asked every
+   2 s), bakes an empty id, which the key filter reads as the stock home, and the watcher
+   refreshes it once it can tell. `refresh` makes the same decision.
 5. It runs `mount --bind` for each copy over its original. If one mount fails it unmounts the ones
    made and exits 1.
 6. It restarts the compositor with `systemctl restart surface-manager-daemon.service`, the unit
@@ -174,7 +178,14 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
   `mount`, `umount` and `systemctl`: a matching set, one hash mismatch, a missing target, a
   failing patch, a failing mount, an existing mount, the substitution of the stored choice
   (trailing newline, CRLF, surrounding spaces, empty and invalid ids), `refresh`, `stop`,
-  `status`, no data directory and a bad argument.
+  `status`, no data directory and a bad argument, and the baked id for an installed, uninstalled
+  and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone.
+* `backport/test-real-roundtrip.sh [shell] [release=rootfs ...]` runs the worker against the
+  real stock files of 6.6.0, 7.6.0, 8.3.0 and 9.2.1 (the firmware roots listed in
+  `scratch/notes/backport-sites.md`; other roots can be given as arguments), with only `mount`,
+  `umount`, `systemctl` and `luna-send` stubbed: the set is found by hash, every target is
+  patched and mounted, the baked id follows the installed state, the patched copies reverse-patch
+  to the stock bytes, `stop` unmounts, and the stock files are unchanged.
 * `backport/test-settings-diff.sh` rebuilds a stand-in for the stock `Settings.qml` from the diff
   (the stock file is not in the repository), applies the diff of each of the four releases with
   GNU and busybox `patch`, substitutes the placeholder, reverses the patch and runs `qmllint` on

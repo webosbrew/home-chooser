@@ -12,6 +12,11 @@
 # Restart=on-failure, not always: the watcher exits 0 when the choice is removed and has to stay
 # stopped then.
 #
+# The unit runs a small wrapper rather than the script itself: if the app directory is gone when
+# the unit restarts (the app was uninstalled after a crash of the watcher), it runs the copy the
+# watcher left in /tmp/openhouse-runtime, so the restore to stock still happens; with neither,
+# it exits 0 and the unit stays stopped.
+#
 # Files, all under /var/lib/webosbrew/openhouse/: `home` is the stored choice, the app id alone;
 # `keyfilter` exists while the backport is enabled.
 #
@@ -27,6 +32,7 @@ SYSTEMCTL=${OPENHOUSE_SYSTEMCTL:-systemctl}
 SYSTEMD_RUN=${OPENHOUSE_SYSTEMD_RUN:-systemd-run}
 LOG=${OPENHOUSE_LOG:-/tmp/openhouse-boot.log}
 UNIT=openhouse-home
+RUNTIME=${OPENHOUSE_RUNTIME:-/tmp/openhouse-runtime}
 
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null
@@ -68,7 +74,8 @@ start_watcher() {
     fi
     "$SYSTEMCTL" reset-failed "$UNIT" 2>/dev/null
     if "$SYSTEMD_RUN" --unit="$UNIT" --property=Restart=on-failure --property=RestartSec=5 \
-            /bin/sh "$HERE/openhouse-home-watch" >> "$LOG" 2>&1; then
+            /bin/sh -c '[ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0' \
+            openhouse-home-watch "$HERE/openhouse-home-watch" "$RUNTIME/openhouse-home-watch" >> "$LOG" 2>&1; then
         log "started $UNIT"
     else
         log "ERROR: could not start $UNIT"

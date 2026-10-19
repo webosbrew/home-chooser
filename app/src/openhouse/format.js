@@ -20,3 +20,11 @@ export const formatStep = (step) => {
 	}
 	return `FAILED ${what} -> ${step.error}`;
 };
+
+// A stored choice that is not among the installed apps that declare appCategory home: the watcher
+// has put the platform back to stock and re-applies the choice when the app returns. Empty
+// string when there is nothing to say (no stored choice, or the app is there).
+export const describeMissingChoice = (stored, candidates) => {
+	if (!stored || (candidates || []).some((c) => c.id === stored)) return '';
+	return `Chosen app ${stored} is not installed; stock Home in use. It is applied again when the app is installed.`;
+};

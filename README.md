@@ -35,6 +35,12 @@ homebrew app with three parts:
   against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
   entry is a symlink into the installed app, never a copy. See
   [Persistence](docs/settings-app.md#persistence).
+* The stock launcher keeps working when apps are removed. The watcher notices that the chosen app
+  is uninstalled and puts the platform back to stock until it returns; when Open House itself is
+  uninstalled it undoes everything it wrote (record, override, choice, boot entry, backport
+  mounts) from a copy of its scripts in `/tmp`. See
+  [When apps are removed](docs/settings-app.md#when-apps-are-removed), including what is left if
+  the watcher was not running at the time.
 * The UI is built with Enact.
 
 ## Documents

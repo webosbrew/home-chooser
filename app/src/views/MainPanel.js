@@ -9,7 +9,7 @@ import {createPlatform, errorMessage} from '../platform';
 import {createHomeChooser} from '../openhouse';
 import {createBackport} from '../backport';
 import {diagnoseExecFailure} from '../openhouse/diagnose';
-import {formatStep} from '../openhouse/format';
+import {describeMissingChoice, formatStep} from '../openhouse/format';
 
 const describeChoice = (state) => {
 	if (!state) return '';
@@ -164,6 +164,7 @@ const MainPanel = (props) => {
 				{fatal ? <BodyText>{fatal}</BodyText> : null}
 				{state ? <BodyText>{describeChoice(state)}</BodyText> : null}
 				{persistence ? <BodyText>{describePersistence(persistence)}</BodyText> : null}
+				{persistence && describeMissingChoice(persistence.stored, candidates) ? <BodyText>{describeMissingChoice(persistence.stored, candidates)}</BodyText> : null}
 				{persistence && persistence.log.length ? <BodyText>{'Watcher log: ' + persistence.log.join(' | ')}</BodyText> : null}
 				{warnRestart ? <BodyText>The first change on this release restarts sam, so running apps may close.</BodyText> : null}
 				{notice ? <BodyText>{notice}</BodyText> : null}

@@ -14,6 +14,15 @@ check() { # check <description> <command...>
 has() { grep -qF -- "$1" "$2"; }
 hasnt() { ! grep -qF -- "$1" "$2"; }
 
+mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form, and records its use
+    if [ "$1" = new ]; then
+        printf '#!/bin/sh\necho "timeout $*" >> %s.log\n[ "$1" = -t ] && exit 125\nshift\nexec "$@"\n' "$2" > "$2"
+    else
+        printf '#!/bin/sh\necho "timeout $*" >> %s.log\n[ "$1" = -t ] || exit 125\nshift 2\nexec "$@"\n' "$2" > "$2"
+    fi
+    chmod +x "$2"
+}
+
 setup() {
     T=$(mktemp -d)
     mkdir -p "$T/root/usr/lib/qml" "$T/data/1.0" "$T/data/2.0" "$T/bin" "$T/orig"
@@ -65,7 +74,28 @@ STUB
 #!/bin/sh
 echo "systemctl \$*" >> "$T/cmds"
 STUB
+    echo my.home > "$T/installed"
+    cat > "$T/bin/luna-send" <<'STUB'
+#!/bin/sh
+T=@T@
+echo "$3 $4" >> $T/lunacalls
+[ -f $T/sam-silent ] && exit 0
+id=$(echo "$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+if grep -qxF "$id" $T/installed; then
+    echo '{"returnValue":true,"appInfo":{}}'
+else
+    echo '{"returnValue":false,"errorText":"Invalid appId specified OR Unsupported Application Type"}'
+fi
+STUB
+    sed -i "s|@T@|$T|" "$T/bin/luna-send"
+    cat > "$T/bin/sleep" <<STUB
+#!/bin/sh
+echo "sleep \$*" >> "$T/cmds"
+# sam comes up after the second sleep, if asked to
+[ -f "$T/sam-late" ] && [ "\$(grep -c '^sleep' "$T/cmds")" -ge 2 ] && rm -f "$T/sam-silent"
+STUB
     chmod +x "$T/bin/"*
+    export OPENHOUSE_LUNA_SEND="$T/bin/luna-send" OPENHOUSE_SAM_WAIT=0 OPENHOUSE_SLEEP="$T/bin/sleep"
     export OPENHOUSE_DATA="$T/data" OPENHOUSE_ROOT="$T/root" OPENHOUSE_WORK="$T/work" \
            OPENHOUSE_LOG="$T/log" OPENHOUSE_MOUNTS="$T/mounts" OPENHOUSE_MOUNT="$T/bin/mount" \
            OPENHOUSE_UMOUNT="$T/bin/umount" OPENHOUSE_SYSTEMCTL="$T/bin/systemctl" OPENHOUSE_CHOICE="$T/home"
@@ -195,6 +225,85 @@ setup
 printf 'x"y\n' > "$T/home"
 run
 check "invalid id logged" has 'invalid app id' "$T/log"
+rm -rf "${T:?}"
+
+echo "== the stored choice is baked in only if the app is installed"
+setup
+printf 'my.home\n' > "$T/home"
+run
+check "installed: id baked in" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+check "asked sam about the id" has 'getAppInfo {"id":"my.home"}' "$T/lunacalls"
+rm -rf "${T:?}"
+setup
+printf 'my.home\n' > "$T/home"
+: > "$T/installed"
+run
+check "not installed: stock id baked in" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "still mounts" has 'mounted /usr/lib/qml/a.qml' "$T/log"
+check "logged" has 'my.home is not installed' "$T/log"
+rm -rf "${T:?}"
+setup
+printf 'my.home\n' > "$T/home"
+touch "$T/sam-silent"
+run
+check "sam silent: stock id baked in" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "sam silent: still mounts and restarts" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+check "sam silent: logged" has 'sam did not answer' "$T/log"
+rm -rf "${T:?}"
+setup
+printf 'my.home\n' > "$T/home"
+touch "$T/sam-silent" "$T/sam-late"
+OPENHOUSE_SAM_WAIT=20 run
+check "sam answers after a short wait: id baked in" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+check "it slept, 2 s at a time" has 'sleep 2' "$T/cmds"
+rm -rf "${T:?}"
+setup
+printf 'my.home\n' > "$T/home"
+run
+check "sam is asked when a choice is stored" test -s "$T/lunacalls"
+rm -rf "${T:?}"
+setup
+run
+check "no choice: sam is not asked" test ! -s "$T/lunacalls"
+rm -rf "${T:?}"
+
+echo "== refresh stock, and refresh when the app is gone"
+setup
+printf 'my.home\n' > "$T/home"
+run
+: > "$T/cmds"
+run refresh stock
+check "stock refresh clears the id although the choice file is there" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+: > "$T/cmds"
+run refresh stock
+check "second stock refresh: nothing to do" test ! -s "$T/cmds"
+run refresh
+check "plain refresh brings the choice back" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+: > "$T/installed"
+: > "$T/cmds"
+run refresh
+check "plain refresh with the app gone bakes stock" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "restarted for it" has 'systemctl restart' "$T/cmds"
+: > "$T/cmds"
+run refresh stock
+check "stock refresh when already stock: no restart" test ! -s "$T/cmds"
+rm -rf "${T:?}"
+
+echo "== timeout in both forms (BusyBox before 1.30 wants -t)"
+for form in new old; do
+    setup
+    printf 'my.home\n' > "$T/home"
+    mktimeout $form "$T/bin/timeout"
+    OPENHOUSE_TIMEOUT="$T/bin/timeout" run
+    check "$form: id baked in through timeout" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+    if [ $form = new ]; then check "new: timeout 10" has 'timeout 10 ' "$T/bin/timeout.log"; else check "old: timeout -t 10" has 'timeout -t 10 ' "$T/bin/timeout.log"; fi
+    rm -rf "${T:?}"
+done
+setup
+printf 'my.home\n' > "$T/home"
+OPENHOUSE_TIMEOUT= run
+check "no timeout: still works" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 rm -rf "${T:?}"
 
 echo "== no data directory"

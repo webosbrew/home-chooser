@@ -35,7 +35,7 @@ STUB
 }
 run() { OPENHOUSE_DIR="$T/app/backport" $SH "$T/app/backport/openhouse" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
-RUN_ARGS='systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh'
+RUN_ARGS='systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c [ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0 openhouse-home-watch'
 
 echo "== webOS 5 with a choice: watcher only ($SH)"
 setup 5
@@ -139,6 +139,30 @@ $SH "$T/stray/openhouse" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "no output" test ! -s "$T/out"
 check "no commands" test ! -s "$T/cmds"
+cleanup
+
+echo "== the unit's wrapper: app copy, else the runtime copy, else nothing"
+setup 8
+printf 'my.home\n' > "$T/state/home"
+printf '#!/bin/sh\necho "app watcher" >> %s/ran\n' "$T" > "$T/app/backport/openhouse-home-watch"
+mkdir -p "$T/rt"
+printf '#!/bin/sh\necho "runtime watcher" >> %s/ran\n' "$T" > "$T/rt/openhouse-home-watch"
+# a systemd-run that runs what it is given, after the three --unit/--property options
+printf '#!/bin/sh\nshift 3\nexec "$@"\n' > "$T/bin/systemd-run"
+chmod +x "$T/bin/systemd-run"
+OPENHOUSE_RUNTIME="$T/rt" run
+check "app copy runs when the app is there" test "$(cat "$T/ran" 2>/dev/null)" = "app watcher"
+rm -f "$T/ran"
+# call the wrapper the way the unit does, with the app copy missing
+WRAP=$(sed -n "s/.*\/bin\/sh -c '\(.*\)' \\\\$/\1/p" "$SCRIPT")
+check "wrapper text found in the script" test -n "$WRAP"
+/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/openhouse-home-watch"
+check "runtime copy runs when the app copy is missing" test "$(cat "$T/ran" 2>/dev/null)" = "runtime watcher"
+rm -f "$T/ran"
+/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/gone"
+check "neither: exit 0, nothing runs" test ! -f "$T/ran"
+/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/gone"
+check "neither: exit status 0" test $? = 0
 cleanup
 
 echo "== usage"

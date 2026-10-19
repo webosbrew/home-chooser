@@ -73,13 +73,14 @@ Open House keeps its own copy of the choice and enforces it.
   anyway. The script finds its files next to its real path (`readlink -f`, else `readlink`, else the
   fixed app path) and exits 0 without output when the app directory is gone (the app was
   uninstalled and the link dangles; the link then does nothing and `apply` or an uninstall of the
-  link can clean it up). It does two things: on webOS 6 to 9, when the flag file
+  link can clean it up; see [When apps are removed](#when-apps-are-removed)). It does two things: on webOS 6 to 9, when the flag file
   `/var/lib/webosbrew/openhouse/keyfilter` exists, it runs `openhouse-keyfilter apply` (the
   [key filter backport](key-filter-backport.md)); and if the choice file exists it starts the watcher.
   `openhouse watch` does only the second, which is what the app runs after a choice.
 * **The watcher** is `backport/openhouse-home-watch`, started as a transient unit,
-  `systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh
-  <app>/backport/openhouse-home-watch`. No unit file is written and no other service's unit,
+  `systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
+  '<wrapper>' openhouse-home-watch <app>/backport/openhouse-home-watch /tmp/openhouse-runtime/openhouse-home-watch`,
+  where the wrapper runs the first script that exists and exits 0 if neither does. No unit file is written and no other service's unit,
   environment file or binary is touched. The flags are those of systemd 230 and later, which is
   what is assumed for webOS 5; the newest flag (`--collect`, 236) is not used, and a failed unit is
   cleared with `reset-failed` before the next start. It is `on-failure`, not `always`, because the
@@ -100,6 +101,10 @@ Open House keeps its own copy of the choice and enforces it.
     `/var/webos-profile/override/org.webosbrew.openhouse.json` names the choice as
     `categories.home`, and rewrites it from `getProfiles` (same rules as the app) with a
     `debug/rescan` if not.
+  * It also watches the apps it depends on; see [When apps are removed](#when-apps-are-removed).
+    It subscribes to `applicationManager/listApps {"subscribe":true}` as a trigger only, checks the
+    chosen app and `org.webosbrew.openhouse` with `getAppInfo` on every message and every 5 min,
+    and runs from a copy of itself in `/tmp/openhouse-runtime/`.
   * It logs each action with a timestamp to `/tmp/openhouse-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends.
@@ -115,10 +120,123 @@ Open House keeps its own copy of the choice and enforces it.
 
 Tests: `backport/test-openhouse-home-watch.sh` (a stub `luna-send` plays a stream of replies:
 present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
-file in each form, the override on 10.x; a fake clock and sleep check the rate limiting),
+file in each form, the override on 10.x; a fake clock and sleep check the rate limiting; markers in
+the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
+are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Open House removed with
+the full restore, both in either order, a transient absence, a silent `getAppInfo`, the periodic
+check, the restore from the runtime copy after the app directory is deleted),
 `backport/test-openhouse.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
-6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone), run as `sh` and
-`busybox sh`, and the Jest specs for `apply`, `restoreStock` and the status parsing.
+6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone, the unit's wrapper),
+`backport/test-openhouse-keyfilter.sh` and `backport/test-real-roundtrip.sh` (see the
+[backport](key-filter-backport.md#deployment)), run as `sh` and `busybox sh`, and the Jest specs
+for `apply`, `restoreStock`, the status parsing and the missing-choice message.
+
+## When apps are removed
+
+The stock launcher has to keep working when the chosen app is uninstalled, when Open House is
+uninstalled, and when the second follows the first. Both writes the platform keeps (the `home`
+entry, and on 10.x and later the profile override) name an app, and a name that is missing makes
+things worse than no name: on 10.3.1 and 11.2.0 `launchDefaultApp` fails for a record entry that
+names a missing app and does **not** fall back to the profile, and on 5.6.1 the key filter launches
+the record's `home` directly
+([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
+So the watcher notices a removal and undoes the writes itself. Nothing here relies on the format of
+`listApps` change messages.
+
+**Detection.** The watcher subscribes to `luna://com.webos.applicationManager/listApps
+{"subscribe":true}` (`luna-send -i`) and treats every message as a reason to look, nothing more. A
+look is `luna://com.webos.applicationManager/getAppInfo {"id":"..."}` for `org.webosbrew.openhouse`
+and for the chosen app; an uninstalled id answers `returnValue:false` (`Invalid appId specified OR
+Unsupported Application Type`). The same look is repeated every 5 min (`OPENHOUSE_RECHECK`) in case
+the subscription missed something, and once at start. Open House counts as gone when `getAppInfo`
+says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
+(`OPENHOUSE_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
+compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing.
+
+### The chosen app is uninstalled
+
+The platform goes back to stock, the choice file stays (it is the user's choice), the watcher logs
+it and stops writing. When the app is installed again it applies the choice again, with the same
+writes as a new choice. A new choice made while the old app is missing replaces it at once.
+
+| Release | Put back to stock | Home key while the app is missing |
+| --- | --- | --- |
+| 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
+| 6.x to 9.x | `home` removed from the record by the merged `setSystemSettings` write (other entries kept); `openhouse-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
+| 10.x and later | override file removed, `debug/rescan`, then `home` removed from the record | the profile's `home`, which is the stock launcher |
+
+On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
+(the merged write on `Unknown method`); 10.x and later also rebuild the override from
+`getProfiles`; 6.x to 9.x run `openhouse-keyfilter refresh`, which bakes the id back in. The
+panel shows "Chosen app ... is not installed; stock Home in use" when the stored choice is not
+among the installed apps that declare `appCategory: ["home"]`.
+
+The removal of `home` is the unconfirmed write of `removeHomeFromRecord()` (see
+[Persistence](#persistence)); the watcher reads the record back and logs when `home` is still
+there, so a live test shows it. If it is, 6.x to 9.x are still fine (the backport falls back to the
+stock launcher when launching the named app fails) and 5.x and 10.x and later are the ones that
+need another way to clear an entry.
+
+### Open House is uninstalled
+
+The app's files go with it, so the watcher cannot run anything from the app directory. At start it
+copies itself, `openhouse-keyfilter` and every release's `manifest.json` into
+`/tmp/openhouse-runtime/` (replacing each file by rename) and runs from there. When Open House is
+gone it does, in order:
+
+1. the platform revert of the table above (webOS 5: `home` = stock launcher; 6 to 9 and 10 and
+   later: the same steps minus the key filter refresh);
+2. removes the choice file (and its directory if empty) and the key filter flag file;
+3. removes the `init.d/openhouse` symlink (and the earlier `openhouse-keyfilter` link), only if it
+   is a symlink;
+4. on webOS 6 to 9, `openhouse-keyfilter stop` from the runtime copy: it unmounts the bind mounts
+   it finds in the manifests and restarts the compositor, and does nothing if nothing is mounted;
+5. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
+   stopped.
+
+Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
+changes nothing: with the record already without `home`, "nothing to remove" is logged and no write
+is made. The unit's command is a small wrapper that runs the app's copy of the watcher, else the
+runtime copy, else exits 0, so a watcher that crashes and is restarted after the app is gone still
+finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
+(`/tmp/openhouse-home.log`) and the runtime copy stay in `/tmp` until reboot.
+
+Both removed: Open House first (or both at once, which is checked in that order) is the full
+restore, after which the chosen app's removal finds nothing of ours. The chosen app first is the
+revert above; the later removal of Open House repeats it harmlessly and cleans up. So B followed by
+A, and A followed by B, end at the same stock state, and a removal of the chosen app after Open
+House left the platform alone breaks nothing.
+
+### What is left when the watcher is not running
+
+If either app is removed while the watcher is not running, nothing undoes the writes, because the
+init.d link of an uninstalled Open House dangles (`run-parts` runs nothing) and the unit's wrapper
+has nothing to run. This happens when the watcher was stopped by hand or never started
+(`systemd-run` failed), when it died and has not been restarted yet (the 5 s `RestartSec`, and
+after a reboot until the boot entry has run), or when Open House is removed during that window. The
+state it leaves:
+
+| Release | Left behind | Effect |
+| --- | --- | --- |
+| 5.x | record `home` names the missing app | the key filter launches it directly: the Home key launches nothing |
+| 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail |
+| 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
+
+Repair: install Open House again (the link in `init.d` is valid again, and the next boot or
+opening the app starts the watcher, which sees the chosen app missing and reverts), or by hand on
+10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.openhouse.json`,
+`luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
+`general/defaultApps` record again without `home` (`setSystemSettings`, keeping the other
+entries). On 5.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
+choice stored the watcher is not started, so uninstalling Open House then leaves the flag file, a
+dangling link and, until reboot, mounts that behave as stock.
+
+What only a live test settles: that `setSystemSettings` without `home` removes the entry; that
+`getAppInfo` of an uninstalled id answers `returnValue:false` on every release, and that `sam`
+answers it at boot when the init.d entry runs; how `listApps` change messages arrive (only their
+arrival is used) and that `timeout` accepts `timeout 10 <command>` in the images' busybox;
+and the real uninstall path through Homebrew Channel and `ares-install --remove`, including that
+an update of Open House does not look like an uninstall for 15 s.
 
 ## Restoring the stock home
 

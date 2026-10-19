@@ -7,8 +7,11 @@
 #                                files, patch copies of them in /tmp, bind-mount the copies
 #                                over the originals and restart the compositor
 #   openhouse-keyfilter stop     unmount what apply mounted and restart the compositor
-#   openhouse-keyfilter refresh  if mounted, write the stored choice into the mounted copy of
-#                                Settings.qml again and restart the compositor when it changed
+#   openhouse-keyfilter refresh [stock]
+#                                if mounted, write the stored choice into the mounted copy of
+#                                Settings.qml again and restart the compositor when it changed;
+#                                with `stock`, write an empty id whatever is stored (the watcher
+#                                does that while the chosen app is not installed)
 #   openhouse-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none
 #
 # The data directory holds one directory per release with a manifest.json and the diffs. A set
@@ -17,10 +20,13 @@
 # The patched Settings.qml carries a `configuredHomeAppId: "@OPENHOUSE_HOME@"` line. After patch
 # the script replaces the placeholder with the id stored in /var/lib/webosbrew/openhouse/home
 # (trimmed, and only if it is letters, digits, '.', '-' and '_'; otherwise an empty string), so
-# the key filter has a home id when the settings record has none. Called from the init.d entry
-# `openhouse`, which decides whether the backport is enabled.
+# the key filter has a home id when the settings record has none. The id is baked in only if
+# `applicationManager/getAppInfo` says the app is installed; an uninstalled app, or a sam that
+# does not answer within OPENHOUSE_SAM_WAIT seconds (20), bakes the empty id, which the key filter
+# reads as the stock home. The watcher (openhouse-home-watch) refreshes it later. Called from the
+# init.d entry `openhouse`, which decides whether the backport is enabled.
 #
-# Overrides, for tests: OPENHOUSE_CHOICE, OPENHOUSE_DATA, OPENHOUSE_ROOT (prefix of the target paths),
+# Overrides, for tests: OPENHOUSE_LUNA_SEND, OPENHOUSE_SAM_WAIT, OPENHOUSE_SLEEP, OPENHOUSE_TIMEOUT, OPENHOUSE_CHOICE, OPENHOUSE_DATA, OPENHOUSE_ROOT (prefix of the target paths),
 # OPENHOUSE_WORK, OPENHOUSE_LOG, OPENHOUSE_MOUNTS, OPENHOUSE_MOUNT, OPENHOUSE_UMOUNT,
 # OPENHOUSE_SYSTEMCTL, OPENHOUSE_PATCH, OPENHOUSE_SHA256, OPENHOUSE_UNIT.
 
@@ -36,6 +42,11 @@ PATCH=${OPENHOUSE_PATCH:-patch}
 SHA256=${OPENHOUSE_SHA256:-sha256sum}
 UNIT=${OPENHOUSE_UNIT:-surface-manager-daemon.service}
 CHOICE=${OPENHOUSE_CHOICE:-/var/lib/webosbrew/openhouse/home}
+LUNA=${OPENHOUSE_LUNA_SEND:-luna-send}
+SAM_WAIT=${OPENHOUSE_SAM_WAIT:-20}
+SLEEP=${OPENHOUSE_SLEEP:-sleep}
+TIMEOUT=${OPENHOUSE_TIMEOUT-timeout}
+TMO_FORM=
 
 log() {
     msg="$(date '+%Y-%m-%d %H:%M:%S') $*"
@@ -60,6 +71,60 @@ configured_id() {
         return 0
     fi
     printf '%s' "$id"
+}
+
+# detect_timeout: once, find how `timeout` is called: `timeout SECS CMD` (BusyBox 1.30 and later,
+# GNU) or `timeout -t SECS CMD` (BusyBox before 1.30, e.g. 1.29.2 on webOS 5). Sets TMO_FORM to
+# new, old or none.
+detect_timeout() {
+    [ -n "$TMO_FORM" ] && return 0
+    TMO_FORM=none
+    [ -n "$TIMEOUT" ] && command -v "$TIMEOUT" > /dev/null 2>&1 || return 0
+    if "$TIMEOUT" 1 true > /dev/null 2>&1; then
+        TMO_FORM=new
+    elif "$TIMEOUT" -t 1 true > /dev/null 2>&1; then
+        TMO_FORM=old
+    fi
+}
+
+# app_state <id>: print yes (installed), no (sam answers returnValue false) or unknown (no
+# answer). getAppInfo of an uninstalled id answers returnValue:false.
+app_state() {
+    detect_timeout
+    case "$TMO_FORM" in
+        new) set -- "$TIMEOUT" 10 "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+        old) set -- "$TIMEOUT" -t 10 "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+        *) set -- "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+    esac
+    out=$("$@" 2>&1 | tr '\n' ' ')
+    if printf '%s' "$out" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*true'; then
+        echo yes
+    elif printf '%s' "$out" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*false'; then
+        echo no
+    else
+        echo unknown
+    fi
+}
+
+# baked_id: the id to put into the patched Settings.qml: the stored choice if that app is
+# installed, else nothing (the stock home). Waits up to SAM_WAIT seconds for sam to answer.
+baked_id() {
+    bid=$(configured_id)
+    [ -n "$bid" ] || return 0
+    waited=0
+    while :; do
+        st=$(app_state "$bid")
+        case "$st" in
+            yes) printf '%s' "$bid"; return 0 ;;
+            no) log "$bid is not installed, using the stock home" >&2; return 0 ;;
+        esac
+        if [ "$waited" -ge "$SAM_WAIT" ]; then
+            log "sam did not answer for $bid in $SAM_WAIT s, using the stock home until the watcher refreshes it" >&2
+            return 0
+        fi
+        "$SLEEP" 2
+        waited=$((waited + 2))
+    done
 }
 
 # set_configured <file> <id>: put <id> into the configuredHomeAppId line, in place (same inode,
@@ -144,6 +209,7 @@ undo_mounts() {
 }
 
 do_apply() {
+    detect_timeout
     if [ ! -d "$DATA" ]; then
         log "no backport data in $DATA, nothing to do"
         return 0
@@ -182,7 +248,7 @@ do_apply() {
     done < "$WORK/entries"
 
     # Put the stored choice into the copies that carry the placeholder.
-    cid=$(configured_id)
+    cid=$(baked_id)
     while read -r p && read -r h && read -r d; do
         if has_configured "$WORK/stage$p"; then
             set_configured "$WORK/stage$p" "$cid" || {
@@ -241,8 +307,9 @@ do_stop() {
 }
 
 do_refresh() {
+    detect_timeout
     any_mounted || { log "nothing mounted, nothing to refresh"; return 0; }
-    cid=$(configured_id)
+    if [ "$1" = stock ]; then cid=; else cid=$(baked_id); fi
     changed=0
     entries "$DATA/$(cat "$WORK/release" 2>/dev/null)/manifest.json" > "$WORK/entries.tmp" 2>/dev/null
     while read -r p && read -r h && read -r d; do
@@ -272,7 +339,7 @@ do_status() {
 case "$1" in
     ""|apply) do_apply ;;
     stop)     do_stop ;;
-    refresh)  do_refresh ;;
+    refresh)  do_refresh "$2" ;;
     status)   do_status ;;
-    *)        echo "usage: $0 [apply|stop|refresh|status]" >&2; exit 2 ;;
+    *)        echo "usage: $0 [apply|stop|refresh [stock]|status]" >&2; exit 2 ;;
 esac

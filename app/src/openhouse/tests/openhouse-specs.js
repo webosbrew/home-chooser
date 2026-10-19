@@ -3,6 +3,7 @@ import {
 	OVERRIDE_PATH, buildOverride, createHomeChooser, extractDefaultAppsProfile, releaseInfo
 } from '..';
 import {diagnoseExecFailure} from '../diagnose';
+import {describeMissingChoice} from '../format';
 import {
 	HOME_FILE, KEYFILTER_SCRIPT, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
 	stopWatcherCommand, ENTRY_SCRIPT
@@ -477,5 +478,17 @@ describe('stock replies from the study', () => {
 		const tv = fakeTV({failures: {getSystemSettings: NOT_SET}});
 		const res = await chooser(tv, [6, 6, 0]).readState();
 		expect(res.errors).toEqual(['no default app is set for the category']);
+	});
+});
+
+describe('describeMissingChoice', () => {
+	const candidates = [{id: 'com.webos.app.home'}, {id: 'my.home'}];
+	test('says so when the stored choice is not an installed home app', () => {
+		expect(describeMissingChoice('gone.home', candidates)).toMatch(/gone\.home is not installed; stock Home in use/);
+	});
+	test('is silent with no stored choice or with the app present', () => {
+		expect(describeMissingChoice('', candidates)).toBe('');
+		expect(describeMissingChoice(undefined, candidates)).toBe('');
+		expect(describeMissingChoice('my.home', candidates)).toBe('');
 	});
 });
