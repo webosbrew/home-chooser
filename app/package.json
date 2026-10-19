@@ -9,7 +9,8 @@
     "clean": "enact clean",
     "lint": "enact lint src",
     "test": "enact test --watchAll=false",
-    "package": "npm run pack-p && node scripts/prune-ilib.js dist && node scripts/copy-backport.js dist && ares-package dist --outdir ../build/ipk"
+    "check-ilib": "node scripts/check-ilib.js dist",
+    "package": "npm run pack-p && node scripts/prune-ilib.js dist && node scripts/check-ilib.js dist && node scripts/copy-backport.js dist && ares-package dist --outdir ../build/ipk"
   },
   "license": "Apache-2.0",
   "private": true,
