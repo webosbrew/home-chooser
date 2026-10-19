@@ -27,6 +27,9 @@ homebrew app with three parts:
   Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
   copies over the originals; a file with an unknown hash is left stock. See the study's
   Deployment section.
+* Open House does not change other services: no edits to their environment files
+  (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
+  Homebrew Channel's `/var/lib/webosbrew/init.d`.
 * The UI is built with Enact.
 
 ## Documents
