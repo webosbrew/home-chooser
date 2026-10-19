@@ -239,7 +239,7 @@ describe('Open House screen', () => {
 	test('About shows versions and the uninstall advice; patch line only on 6 to 9', async () => {
 		const backport = {status: jest.fn(async () => ok({status: {mounted: true, enabled: true}})), install: jest.fn(), remove: jest.fn()};
 		mountApp(makeEnv({version: [8, 3, 0], backport}));
-		fireEvent.click(await screen.findByText('About'));
+		fireEvent.click(await screen.findByLabelText('About'));
 		expect(await screen.findByText('webOS TV 8.3.0')).toBeTruthy();
 		expect(screen.getByText('Home key patch active: yes')).toBeTruthy();
 		expect(screen.getByText('Before uninstalling Open House, choose LG Home.')).toBeTruthy();
@@ -247,7 +247,7 @@ describe('Open House screen', () => {
 
 	test('About on webOS 10+ has no patch line', async () => {
 		mountApp(makeEnv());
-		fireEvent.click(await screen.findByText('About'));
+		fireEvent.click(await screen.findByLabelText('About'));
 		await screen.findByText('webOS TV 11.0.0');
 		expect(screen.queryByText(/Home key patch/)).toBeNull();
 	});
@@ -262,6 +262,24 @@ describe('Open House screen', () => {
 		expect(onExit).not.toHaveBeenCalled();
 		fireEvent.keyUp(screen.getByText('Plain Launcher'), {keyCode: 27});
 		expect(onExit).toHaveBeenCalled();
+	});
+
+	test('Back via keyCode 461 (disableBackHistoryAPI) closes the dialog first, then exits', async () => {
+		const {onExit} = mountApp(makeEnv());
+		fireEvent.click(await screen.findByLabelText('About'));
+		await screen.findByText('Before uninstalling Open House, choose LG Home.');
+		fireEvent.keyUp(screen.getByText('Before uninstalling Open House, choose LG Home.'), {keyCode: 461});
+		await waitFor(() => expect(screen.queryByText('Before uninstalling Open House, choose LG Home.')).toBeNull());
+		expect(onExit).not.toHaveBeenCalled();
+		fireEvent.keyUp(screen.getByText('Plain Launcher'), {keyCode: 461});
+		expect(onExit).toHaveBeenCalledTimes(1);
+	});
+
+	test('the About button is in the header, not the list', async () => {
+		mountApp(makeEnv());
+		const about = await screen.findByLabelText('About');
+		expect(about.closest('header')).toBeTruthy();
+		expect(screen.queryByText('About')).toBeNull();
 	});
 
 	test('without an onExit prop, Back closes the window (never webOSSystem.hide)', async () => {

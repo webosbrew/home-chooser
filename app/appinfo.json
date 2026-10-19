@@ -11,5 +11,8 @@
   "largeIcon": "largeIcon.png",
   "bgColor": "#1e2a4a",
   "iconColor": "#1e2a4a",
+  "noSplashOnLaunch": true,
+  "disableBackHistoryAPI": true,
+  "spinnerOnLaunch": false,
   "uiRevision": 2
 }

@@ -23,6 +23,7 @@ Open House is in English only.
   changes colour and long names are truncated. App ids are never shown. If no launcher is installed, a line explains
   what a launcher is and that LG Home stays in use. If the chosen launcher was uninstalled, a line
   under the list says "The Home app you chose was removed; using LG Home."
+* **No launch animation.** `appinfo.json` sets `noSplashOnLaunch: true` and `spinnerOnLaunch: false`, as the stock Settings app and many stock apps do. The 6.6.0 web app manager knows no other appinfo key for launch animation (only `noSplash` and `disableBackHistoryAPI` appear in its strings).
 * **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
   one plain sentence ("Couldn't set the Home app. Homebrew Channel didn't respond."); the details
@@ -41,9 +42,9 @@ Open House is in English only.
   Homebrew Channel refusing `exec` (webOS 26 and later: "Your Homebrew Channel doesn't let apps run
   root commands yet. Update Homebrew Channel; Open House needs it."); Homebrew Channel not running
   as root.
-* **About.** A button at the bottom opens a dialog with Open House's version, the webOS version,
+* **About.** An info icon button in the panel header (reached with Up from the first row, opened with OK) opens a dialog with Open House's version, the webOS version,
   "Home key patch active: yes/no" (6 to 9 only) and "Before uninstalling Open House, choose LG Home."
-* **Back** closes a dialog; with none open it closes the panel with `window.close()` (never
+* **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon
   is read as root (`base64`, at most 256 KB, once per session) and shown as a `data:` URL; a generic

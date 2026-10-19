@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useState} from 'react';
 import BodyText from '@enact/moonstone/BodyText';
-import Button from '@enact/moonstone/Button';
+import IconButton from '@enact/moonstone/IconButton';
 import Scroller from '@enact/moonstone/Scroller';
 import Spinner from '@enact/moonstone/Spinner';
 import {Header, Panel} from '@enact/moonstone/Panels';
@@ -61,7 +61,9 @@ const MainPanel = ({model, onAbout, ...rest}) => {
 
 	return (
 		<Panel {...rest}>
-			<Header title="Open House" titleBelow="Find your TV a new home" />
+			<Header title="Open House" titleBelow="Find your TV a new home">
+				<IconButton aria-label="About" size="small" disabled={busy} onClick={onAbout}>info</IconButton>
+			</Header>
 			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					<HomeItem
@@ -81,7 +83,6 @@ const MainPanel = ({model, onAbout, ...rest}) => {
 							{'No Home apps are installed. A Home app is a launcher that declares appCategory "home" in its appinfo.json. LG Home stays in use.'}
 						</BodyText>
 					) : null}
-					<Button disabled={busy} onClick={onAbout}>About</Button>
 				</Scroller>
 			)}
 			{busy ? <Spinner blockClickOn="container">{notice}</Spinner> : null}
