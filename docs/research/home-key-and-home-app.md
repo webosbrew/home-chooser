@@ -385,6 +385,14 @@ launcher on 6.6.0, while card launchers got the same keys [V, VM]. The Beanjar m
 reading of the logs is that LG's surface-manager delivers keys only to surface items in a focus
 group or grabbed, and the floating app had `windowGroup: false` [I].
 
+A native overlay works the same way on 6.6.0, as checked by the Dock project on the same VM: an
+SDL app with appinfo `defaultWindowType: "overlay"` and `transparent: true`, and the SDL hints
+`SDL_HINT_WEBOS_WINDOW_GROUP_LAYER=dock`, `WINDOW_GROUP_OWNER=<app id>`,
+`WINDOW_LAYER_NAME=dock` and `WINDOW_GROUP_TYPE=_WEBOS_WINDOW_TYPE_OVERLAY`, showed the card
+app beneath through its transparent areas, took 5-way keys, and `getForegroundAppInfo` listed
+both the card and the overlay. Homebrew Channel's `elevateService` elevated its native
+developer service on that VM. [V, VM; reported by the Dock session, not rerun here]
+
 This is AltHome's issue #4 (`webOSSystem.hide()` on webOS 6 leaves the layer holding focus).
 AltHome's later webOS 6 path, `suspense`, is not a method on 6.6.0.
 
