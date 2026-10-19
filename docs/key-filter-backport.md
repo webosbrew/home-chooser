@@ -136,7 +136,7 @@ names that have one.
 | --- | --- |
 | no argument, or `apply` | Find the set, patch copies, bind-mount them, restart the compositor. |
 | `stop` | Unmount every target of every set it finds, restart the compositor. |
-| `refresh [stock]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. |
+| `refresh [stock] [norestart]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. With `norestart`, update the copy and leave the compositor running: the watcher does that when it sees the stored choice change (see below). |
 | `status` | Print `mounted=yes` and `release=<set>`, or `mounted=no` and `match=<set or none>`; `data=missing` first if the data directory is absent. |
 
 `apply`:
@@ -168,8 +168,13 @@ It logs to `/tmp/openhouse-backport.log`. `stop` is idempotent: with nothing mou
 nothing. The script, the manifest parser (the three keys are picked line by line, no `jq`) and the
 `patch` flags use only busybox applets, which the images ship.
 
-The configured id is read once, at boot. A choice made later reaches the compositor through the
-settings record; `refresh` is what the app runs when the stock home is restored, so the removed
+The configured id is read once, at boot, and the loaded QML keeps it until the compositor restarts.
+A choice made later reaches the compositor through the settings record, which `getHomeAppId()`
+reads first, so the baked id is only the fallback for the next start. When the watcher sees the
+stored choice change and the app is installed, it has already brought the record to the new
+choice and runs `refresh norestart`: the mounted copy gets the new id (same inode) and the
+compositor is not restarted. (Before this, the copy kept the old id until the watcher restarted.)
+`refresh` without `norestart`, and `refresh stock`, still restart on a change; `refresh` is what the app runs when the stock home is restored, so the removed
 choice does not stay in the mounted copy until the next boot.
 
 Tests (`sh` and `busybox sh`; the shell is the argument):
@@ -179,7 +184,8 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
   failing patch, a failing mount, an existing mount, the substitution of the stored choice
   (trailing newline, CRLF, surrounding spaces, empty and invalid ids), `refresh`, `stop`,
   `status`, no data directory and a bad argument, and the baked id for an installed, uninstalled
-  and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone.
+  and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone, and
+  `refresh norestart`.
 * `backport/test-real-roundtrip.sh [shell] [release=rootfs ...]` runs the worker against the
   real stock files of 6.6.0, 7.6.0, 8.3.0 and 9.2.1 (the firmware roots listed in
   `scratch/notes/backport-sites.md`; other roots can be given as arguments), with only `mount`,

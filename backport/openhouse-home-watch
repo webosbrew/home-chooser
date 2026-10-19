@@ -451,12 +451,26 @@ oh_gone() {
     [ "$(app_state "$OH_ID")" = no ]
 }
 
-# kf_refresh [stock]: on webOS 6 to 9, bring the id baked into the mounted Settings.qml in line
-# (the worker restarts the compositor only if the id changed, and does nothing if not mounted).
+# kf_refresh [stock] [norestart]: on webOS 6 to 9, bring the id baked into the mounted Settings.qml
+# in line (the worker restarts the compositor only if the id changed, unless told not to, and does
+# nothing if not mounted).
 kf_refresh() {
     [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
     [ -f "$KEYFILTER" ] || return 0
     OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
+}
+
+# sync_baked <choice>: the stored choice changed while the app is installed: write it into the
+# baked copy without restarting the compositor. The record is read first by the compositor's
+# lookup and the watcher has already put the choice there, so the baked id is only the fallback
+# for the next compositor start. A choice whose app is not installed (or whose state is unknown)
+# is left to check_apps.
+sync_baked() {
+    [ "$1" = "$BAKED" ] && return 0
+    [ "$(app_state "$1")" = yes ] || return 0
+    log "choice changed to $1, updating the baked home id"
+    kf_refresh norestart
+    BAKED=$1
 }
 
 # remove_home: write `home` as null in the record, keeping the other entries.
@@ -540,6 +554,7 @@ check_apps() {
                     MISSING=$want
                     revert_platform "$want not installed"
                     kf_refresh stock
+                    BAKED=
                 fi
             fi
             ;;
@@ -552,8 +567,12 @@ check_apps() {
                 if [ "$(current_home)" != "$want" ]; then apply_record "$want"; fi
                 check_override "$want"
                 kf_refresh
+                BAKED=$want
             elif [ "$why" = start ]; then
                 kf_refresh
+                BAKED=$want
+            else
+                sync_baked "$want"
             fi
             ;;
         *)
@@ -577,7 +596,9 @@ handle() {
         # the choice was changed to another app while the old one was missing
         MISSING=
         kf_refresh
+        BAKED=$want
     fi
+    sync_baked "$want"
     found=$(home_of "$flat")
     [ "$found" = "$want" ] && return 0
     reconcile "$want" "$found"
@@ -637,6 +658,7 @@ STREAK=0
 LUNA_PID=
 NAP_PID=
 MISSING=
+BAKED=
 FEED_PIDS=
 
 want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }

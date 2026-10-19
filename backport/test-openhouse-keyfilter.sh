@@ -290,6 +290,28 @@ run refresh stock
 check "stock refresh when already stock: no restart" test ! -s "$T/cmds"
 rm -rf "${T:?}"
 
+echo "== refresh norestart updates the copy and leaves the compositor"
+setup
+printf 'my.home\n' > "$T/home"
+run
+: > "$T/cmds"
+printf 'other.home\n' > "$T/home"
+echo 'other.home' >> "$T/installed"
+inode=$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)
+run refresh norestart
+check "exit 0" rc 0
+check "copy carries the new id" has 'configuredHomeAppId: "other.home"' "$T/work/stage/usr/lib/qml/a.qml"
+check "same inode" test "$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)" = "$inode"
+check "no restart" test ! -s "$T/cmds"
+check "log says the compositor was left" has 'compositor not restarted' "$T/log"
+: > "$T/cmds"
+run refresh norestart
+check "unchanged: nothing to do" test ! -s "$T/cmds"
+run refresh stock norestart
+check "stock with norestart clears the id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "stock with norestart: no restart" test ! -s "$T/cmds"
+rm -rf "${T:?}"
+
 echo "== timeout in both forms (BusyBox before 1.30 wants -t)"
 for form in new old; do
     setup

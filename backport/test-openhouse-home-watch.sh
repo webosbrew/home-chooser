@@ -529,6 +529,55 @@ check "two writes: the removal and the new choice" test "$(writes)" = 2
 check "backport refreshed for the new choice" test "$(kfn 'refresh data')" = 2
 cleanup
 
+echo "== choice changed while the app is installed: baked id refreshed without a restart"
+for major in 6 8 9; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    printf 'my.home\nother.home\norg.webosbrew.openhouse\n' > "$T/installed"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'CHOICE other.home' >> "$T/stream"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    reply '{"home":"other.home","kidsApp":"k.app"}'
+    run
+    check "$major: record carries the new choice" has '"home":"other.home"' "$T/record"
+    check "$major: one refresh without restart" test "$(kfn 'refresh norestart data')" = 1
+    check "$major: the start refresh restarts as before" test "$(kfn 'refresh data')" = 1
+    check "$major: the refresh ran from the runtime copy" has "refresh norestart data=$T/rt from=$T/rt/openhouse-keyfilter" "$T/kfcalls"
+    cleanup
+done
+
+echo "== unchanged choice: no refresh on later settings messages"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app","x":1}'
+run
+check "no norestart refresh" test "$(kfn 'refresh norestart')" = 0
+cleanup
+
+echo "== choice changed to an app that is not installed: left to the removal path"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo 'CHOICE ghost.app' >> "$T/stream"
+reply '{"home":"my.home","kidsApp":"k.app"}'
+run
+check "no norestart refresh for an uninstalled app" test "$(kfn 'refresh norestart')" = 0
+cleanup
+
+echo "== choice changed on webOS 5 and 10: the backport is not involved"
+for major in 5 10; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    printf 'my.home\nother.home\norg.webosbrew.openhouse\n' > "$T/installed"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'CHOICE other.home' >> "$T/stream"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    run
+    check "$major: no key filter call" test "$(kfn refresh)" = 0
+    cleanup
+done
+
 echo "== Open House uninstalled"
 for major in 6 9; do
     setup $major 'my.home\n'
