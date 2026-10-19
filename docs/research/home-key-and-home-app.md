@@ -660,10 +660,24 @@ The 11.2.0 VM's record does not survive a reboot as written. After `setSystemSet
 other boots the old `home` stayed. At boot `applicationManager` wrote `defaultApps` with only
 `MembershipApp`, and `accountmanager` called `setDefaultApp` for `MembershipApp`. The old id
 was still in the settings LevelDB (`/var/db/main/*.ldb`) after `/var/luna/preferences/general`
-had dropped it. [V, VM] That `sam` rewrites the record at boot from a map it loads from that
-store is [I]. `getDefaultAppByCategory` is an unknown method on this `43.21.89.01` VM.
+had dropped it. [V, VM] `getDefaultAppByCategory` is an unknown method on this `43.21.89.01`
+VM.
 
-Open after this run: what rewrites the 11.2.0 record at boot, and whether a `home` set through
+Why entries are lost [V, 11.2.0 `sam` and `accountmanager`; same `sam` structure on 9.2.1 and
+10.3.1]: `setDefaultApp`'s only writer, `ApplicationManager::updateDefaultApps`, copies `sam`'s
+in-memory map, sets the one category and writes the whole object with `setSystemSettings`. The
+map is filled only by `sam`'s `getSystemSettings` subscription (`OnDefaultAppsChanged`), and
+nothing makes the write wait for the first reply. `sam` has no other `defaultApps` writer.
+`accountmanager` (`PolicyManager::checkingAccountList`) calls `setDefaultApp` for
+`MembershipApp` when `/mnt/lg/cmn_data/.accountmanager` and its `data.dat` do not exist. A
+`setDefaultApp` made before `sam`'s subscription answers therefore replaces the record with
+that one entry [I]. On a TV this would be the first boot after a reset [I]; on the VM it
+happens at boots where that directory is missing. The old `home` returning is a separate
+question: the store is db8 under `/var/db/main` (`/var/luna/preferences/general` is a mirror),
+with a lazy sync of up to 1 s and a boot-time recovery from a backup database; which of these
+returned the old value is not known.
+
+Open after this run: why the 11.2.0 record came back with an older `home`, and whether a `home` set through
 `setDefaultApp` and a profile override survive a reboot; how the settings app reaches root on
 11.2.0; T5 on the `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`,
 `w22o-number1`); the IR remote's Super_L long-press path, which no VM injection exercises.
