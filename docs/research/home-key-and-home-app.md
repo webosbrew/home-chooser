@@ -1,0 +1,547 @@
+# The Home key and the home app, webOS 5 to 26
+
+Read-only study, 2026-10-19, checked claim by claim against the same roots on the same day.
+Firmware roots inspected:
+
+| Name | Firmware | `os-release` |
+| --- | --- | --- |
+| W20L | `04.63.25.01-HE_DTV_W20L_AFAAJAAA` | webOS TV 5.6.1 |
+| W21P | `03.70.25.01-HE_DTV_W21P_AFADATAA` | webOS TV 6.6.0 |
+| W22P | `04.60.90.01-HE_DTV_W22P_AFADATAA` | webOS TV 7.6.0 (webOS 22) |
+| W22H | `13.30.61.01` | 8.3.0 (webOS 23, `number1-nameri`) |
+| W22H | `23.21.20.01` | 9.2.1 (webOS 24, `ombre-okapi`) |
+| W22O | `33.31.61.01` | 10.3.1 (webOS 25, `ponytail-papikonda`) |
+| W22H | `43.22.40.01-HE_DTV_W22H_AFABJAPU` | 11.2.0 (webOS 26, `queue-qilian`) |
+
+The static reading used no VM. The tests under [Tests](#tests) were then run on emulator VMs the
+same day; their results are marked `[V, VM]`. No real TV was used. Paths are relative to each
+firmware's `rootfs/`. `[V]` marks a string, file or code path that was read directly
+(disassembly included); `[I]` marks interpretation; `[U]` marks a question that needs a
+runtime test, listed under [Tests](#tests).
+
+`usr/lib/qt5` is a symlink to `.` on every release, so `usr/lib/qt5/qml` and `usr/lib/qml` are
+one directory. `QML2_IMPORT_PATH=/usr/lib/qt5/qml` is set in
+`etc/systemd/system.conf.d/30-webos-global.conf`. [V]
+
+## Which app is the home app
+
+| Release | Home app(s) | Selection |
+| --- | --- | --- |
+| 5.6.1 | `com.webos.app.home` (native, 3.0 MB QML) and `com.webos.app.fullhome` (75 MB) | `general/defaultApps`, factory `{"home": "com.webos.app.fullhome"}` [V] |
+| 6.6.0 | `com.webos.app.home` (native, 65 MB) | hard-coded id; `defaultApps` not described [V] |
+| 7.6.0 | `com.webos.app.home` (native, 78 MB) | hard-coded id; `defaultApps` not described [V] |
+| 8.3.0, 9.2.1 | `com.webos.app.home` (native, 53 MB) | hard-coded id; `defaultApps` not described [V] |
+| 10.3.1 | `com.webos.app.home` (Flutter 3.22.2, 48 MB) | `launchDefaultApp`: settings record, then system profile [V] |
+| 11.2.0 | `com.webos.app.home` (Flutter 3.27.3, 98 MB) | as 10.3.1 [V] |
+
+The Flutter versions are `flutter_framework_version` in
+`usr/palm/applications/com.webos.app.home/data/flutter_assets/version.json`; the appinfo
+`version` is `2.0.0` on 11.2.0. [V]
+
+On 5.6.1 the two apps are the "Basic Home" and the "New Home" (FullHome). The Settings app
+(`usr/palm/applications/com.palm.app.settings/main.js`) writes the choice as an ordinary
+settings record [V]:
+
+```js
+latestHome: { category: "general", settings: { defaultApps: { home: "com.webos.app.fullhome" } } }
+basicHome:  { category: "general", settings: { defaultApps: { home: "com.webos.app.home" } } }
+```
+
+It then force-closes the outgoing home app (`closeByAppId` with `forceMode: true`). The UI path is
+*General > Home Settings > Home Style*, and the entry is only shown when
+`getSystemSettingDesc.defaultApps.ui.visible` is true. [V]
+
+On 6.6.0 through 10.3.1 the settings description (`etc/palm/description.json` and its `.bson`
+and category-key-map copies) and the factory defaults have no `defaultApps` item, and the
+settings app does not write it. On 10.3.1 the settings app only reads the system profile
+(`getProfiles {"names":["seniorMode","defaultApps","lifeOnScreen"]}`). 11.2.0 describes
+`defaultApps` again, but its factory value is `{"kidsApp": "com.webos.app.familycare"}`, with no
+`home` entry. [V]
+
+### Appinfo
+
+| Field | 5.6.1 home | 6.6.0 - 9.2.1 home | 10.3.1, 11.2.0 home |
+| --- | --- | --- | --- |
+| `type`, `main` | native, `/usr/bin/com.webos.app.home` | same | `flutter`, the package directory |
+| `appCategory` | `["home"]` | absent | `["home"]` |
+| `defaultWindowType` | `home` | `home` | absent |
+| `supportQuickStart` | `false` | `false` | `true` |
+| `handleScreenRemoteKey` | absent (fullhome: `true`) | `true` | `true` |
+| `requiredPermissions` | absent | absent | 14 groups, including `settings` and `applications.internal` |
+
+All releases also have `visible: false`, `lockable: false`, `noSplashOnLaunch: true` and
+`transparent: true`; 10.3.1 adds `class.hidden: true`. In 5.6.1 the two home apps are the only
+apps with `appCategory`. On 6.6.0 through 9.2.1 no app has `appCategory: ["home"]`, and
+`com.webos.app.home` is the only app with `defaultWindowType: "home"`. `handleScreenRemoteKey`
+is on a dozen or more other apps, so it is not a home marker. [V]
+
+The home category is not unique from 10.3.1. `com.webos.app.seniorhome` (10.3.1 and 11.2.0; same
+Flutter bundle, `defaultWindowType: "home"`) and `com.webos.app.kidshome` (11.2.0,
+`["home","kidsApp"]`) also declare it. [V]
+
+`keepAliveApps` in `etc/configd/layers/base/com.webos.applicationManager.json` contains
+`com.webos.app.home` from 5.6.1 to 10.3.1 (5.6.1 also `fullhome`; 10.3.1 also `seniorhome` and
+`tnativehome`, which has no package in that image). 11.2.0 moves the list into the system
+profile: a top-level `keepAliveApps.appIds` in each device `profile.json`, with
+`com.webos.app.home` in 123 of 133. [V]
+
+### Role and binary
+
+Through 9.2.1 the native binary has a privileged LS2 role:
+`usr/share/ls2/roles/{pub,prv}/com.webos.app.home.json`, `type: privileged`, `exeName`
+`/usr/bin/com.webos.app.home`, `allowedNames` `""`, `com.webos.app.home` and (from 6.6.0)
+`com.webos.media.client.*`. The binary hard-codes
+`/usr/palm/applications/com.webos.app.home/qml/main.qml`. [V]
+
+From 10.3.1 there is no `usr/bin/com.webos.app.home` and no `ls2/roles` file. The launcher runs
+in `usr/bin/flutter-client` under an ordinary app role,
+`usr/share/luna-service2/roles.d/com.webos.app.home.app.json` (`type: regular`, `allowedNames`
+`com.webos.app.home-*`), and its groups come from
+`client-permissions.d/com.webos.app.home.app.json`. [V]
+
+## The key path
+
+The remote's Home button never arrives as `KEY_HOME`. The LG xkb keymap maps it to Super_L [V]:
+
+```
+# usr/share/X11/xkb/keycodes/lg
+<IR_KEY_HOME>    = 781;  // Qt::Key_Super_L=0x01000053
+<IR_KEY_MYAPPS>  = 995;  // Qt::Key_Menu=0x01000055
+<IR_KEY_RECENT>  =1016;  // Qt::Key_webOS_Recent=0x01200005
+<IR_KEY_BACK>    = 420;  // Qt::Key_webOS_Back=0x01200003
+
+# usr/share/X11/xkb/symbols/lg_vndr/remotes
+key <IR_KEY_HOME>   { [ 0x01000053 ] }; // Qt::Key_Super_L
+```
+
+The values are the same on all seven releases.
+
+`etc/configd/layers/base/com.webos.surfacemanager.json` lists the key policy scripts under
+`keyFilters`; `StarfishKeyFilter.qml` loads them through `com.webos.service.config/getConfigs`.
+The Home case is the `handleSystemKeys` handler of `/usr/lib/qt5/qml/KeyFilters/systemUi.js`,
+which calls `handleHomeKeys` and then `launchHomeApp`. Device layers of the same config
+(`devicename`, `tooltype`, `tvoverlay`, and on 11.2.0 `commercial`) add filters but use the
+same script and handler. [V]
+
+The keys grouped with Home in `handleHomeKeys` changed in 7.6.0:
+
+* 5.6.1 and 6.6.0: `Qt.Key_Super_L`, `Qt.Key_Menu` (My Apps) and `WebOS.Key_webOS_Recent`;
+  `getActivateType()` maps them to `home`, `myapps` and `recent`.
+* 7.6.0 to 10.3.1: `Qt.Key_Super_L`, `Qt.Key_Meta` and `Qt.Key_Menu`. Recent has its own case
+  in `handleSystemKeys` (`runFlashBack()`), and `Qt.Key_Meta` maps to `home`. [V]
+
+`launchHomeApp()` returns early (`HOME_IGNORED`) unless `access.ribbon` and
+`overlayView.access.ribbon` are set and `settingsService.disableHome` is not. It also returns
+early during first use (`bootManager.bootFirstUse`), except in power-only mode
+(`systemPropertyService.powerOnlyMode`). [V]
+
+### 5.6.1
+
+* Press on Super_L starts a 1000 ms timer. A release while it runs cancels it and calls
+  `launchHomeApp(key, true)`, unless the home view already holds an app (`homeView.appId`).
+* Short press: `launch(settingsService.getLaunchDefaultApp.home, {"launchType": "homeKey"})`.
+  `getLaunchDefaultApp` is a subscription to `general/defaultApps` that defaults to
+  `{"home": "com.webos.app.home"}` (`StarfishViewStateController.qml`), so the
+  `launchDefaultApp` branch after it is only a fallback. No `activateType` is sent.
+* The fallback's JS call `applicationManager.launchDefaultApp("com.webos.app.home",
+  {"category":"home"})` sends only `{"category":"home"}` on the bus; the id is kept by the
+  `libwebosserviceplugin.so` wrapper.
+* Long press: if the default is `com.webos.app.fullhome`, launch the most recent app; if it is
+  `com.webos.app.home`, relaunch it with `{"activateType": "recent"}`; otherwise nothing.
+* The key is handed to the focused home window only when its `_WEBOS_ACCESS_POLICY_KEYS_HOME`
+  property says so (`access.keyFilter.home`).
+* `WebOSCompositor/views/StarfishHomeView.qml` `openHome()` calls
+  `applicationManager/launchDefaultApp {"category":"home"}`. [V]
+
+### 6.6.0 to 9.2.1
+
+* Short press launches `com.webos.app.home` with `{"activateType": getActivateType(key),
+  "launchType": "homeKey"}`. On 7.6.0, `checkLaunch` is used instead of `launch` when
+  `configdService.supportNMRM` is set. There is no default-app lookup.
+* `systemUi.js` declares `HOME_APP_ID = "com.webos.app.home"` and compares the fullscreen app
+  with it: a release does not relaunch home when home is already in front, and voice and
+  key-policy cases branch on it.
+* `StarfishHomeView.openHome()` calls `applicationManager/launch {"id":"com.webos.app.home"}`.
+* Long press: 1500 ms `runFlashBack` (switch to the most recent app) on 6.6.0, 8.3.0 and 9.2.1.
+  7.6.0 instead toggles screen magnification (`magController`, 2000 ms, or 2500 ms with zoom
+  on); the magnification code is only in the 7.6.0 and 10.3.1 trees, so this is a branch
+  difference, not a progression.
+* 7.6.0 first closes a visible special UI (`closeSpecialUI()`). [V]
+
+The literal id is not confined to the key filter. On 9.2.1 it is also compared or used in
+`WebOSCompositor/controllers/StarfishViewStateController.qml`,
+`controllers/StarfishFullscreenController.qml`, `controllers/fullscreen/StarfishRecents.qml`,
+`services/StarfishBaseLunaServiceAPI.qml`, `services/base/StarfishFocusedWindowInfoMgr.qml`,
+`services/base/StarfishOverlayPlayVideoStateMgr.qml`, `views/StarfishNudgeView.qml`,
+`views/StarfishGestureUIFeedbackView.qml`, `views/StarfishHomeView.qml` and
+`KeyFilters/appLaunch.js`; 6.6.0, 7.6.0 and 8.3.0 have most of the same sites. [V]
+
+### 10.3.1 and 11.2.0
+
+| Release | Launcher | Home key target | Long press |
+| --- | --- | --- | --- |
+| 10.3.1 (webOS 25) | Flutter, `appCategory: ["home"]` | `launchDefaultApp {"category": "home", "params": ...}` | 2000/2500 ms magnification |
+| 11.2.0 (webOS 26) | Flutter, `appCategory: ["home"]` | same payload, key filter in C++ | `magController` present; timing not read |
+
+10.3.1 is the first release where the QML no longer names the launcher. `launchHomeApp()` calls
+`applicationManager.launchDefaultApp({"category": "home", "params": {"activateType":
+getActivateType(key), "launchType": "homeKey"}})`. The wrapper,
+`StarfishViewStateController.qml` `launchDefaultApp(params)`, is a fire-and-forget
+`LS.adhoc.call`; nothing reads the reply. `StarfishHomeView.openHome()` calls the same method.
+Every literal-id site listed for 9.2.1 is replaced by `compositor.isHomeApp(appId)` or
+`compositor.getHomeAppId()`, exposed to the key filter as `global.isHomeApp` and
+`global.getHomeAppId`. [V] They are `StarfishCompositor` methods in
+`usr/lib/plugins/compositor/libstarfishcompositorplugin.so`, which forwards to a native
+interface method (`getHomeAppIdFunc`) whose implementation was not found; where the id comes
+from is [U]. On 11.2.0, `usr/lib/weston/starfish-servicebridge.so`
+(`WStarfishServiceBridge::getHomeAppId`) holds `cbSystemProfile`, `defaultApps`, `categories`
+and `com.webos.app.home`, which suggests the id is read from the system profile with the stock
+id as fallback, and not from the settings record [I].
+
+The 10.3.1 Super_L handling also changed: the press starts the magnification timer; a release
+before it fires re-injects a synthetic Super_L (`isInternalHomeKey`), and that second pass
+reaches `launchHomeApp()` when `!global.isHomeApp(fullscreenView.appId) && !homeView.appId`. If
+the home view is visible, the key goes to it when `surfaceAcceptsHomeKey(appId)` (the window's
+`_WEBOS_ACCESS_POLICY_KEYS_HOME`) is `"true"`; otherwise the home view is closed. [V]
+
+11.2.0 has no key filter scripts and no compositor QML at all. The config adds
+`keyFiltersCpp`, naming `/usr/lib/libsystemUI.so`, `libappLaunch.so` and `libpreProcess.so`,
+and the Weston module `usr/lib/weston/starfish-keyfilters.so` loads them.
+`libsystemUI.so.1.0.0` (`cpp/KeyFilters/systemUI.cpp`) exports `handleHomeKeys` and
+`launchHomeApp`. `launchHomeApp` builds
+`{"category":"home","params":{"launchType":"homeKey","activateType":...}}` and passes it to a
+virtual method of the host's key filter interface; `libsystemUI` contains neither the string
+`launchDefaultApp` nor the id `com.webos.app.home`. The gating strings (`HOME_IGNORED`,
+`disableHome`, `bootFirstUse`, the two `access.ribbon` checks) are present. [V] That the host
+method is `launchDefaultApp` is [I].
+
+Boot follows the same change. `etc/palm/bootd.json` `firstAppInNormal` is `{LAST_INPUT_APP}`
+from 5.6.1 to 9.2.1 and `com.webos.app.home` on 10.3.1 and 11.2.0. `firstAppInHome` and
+`firstAppInNmrm` (`com.webos.app.home`) exist only from 6.6.0 to 9.2.1. Through 9.2.1,
+`etc/systemd/system/snapshot-boot-components.service` and `etc/init/com.webos.app.home.conf`
+preload `com.webos.app.home` (also on 5.6.1, not fullhome); from 10.3.1 the snapshot unit starts
+only `com.webos.app.inputcommon` and the upstart job is gone. [V]
+
+### What the home app itself does with the key
+
+The QML launcher handles `activateType` in `AppInitializer/AppLifeCycleController.qml` →
+`UserInterfaceLayer/UIController.qml`. `home` and `myapps` put a hidden app into `main` mode;
+`preload` keeps it hidden. When the launcher is already visible it receives Super_L itself and
+treats release as `goBack()` (closes a sub-view or edit mode), so a second Home press walks back
+rather than relaunching. [V]
+
+## How `sam` resolves `launchDefaultApp`
+
+`com.webos.applicationManager/launchDefaultApp` exists in `usr/sbin/sam` on every release. Its
+schema, `etc/palm/schemas/sam/applicationManager.launchDefaultApp.schema`, is identical on all
+seven: `category` is required and other fields are allowed. The handler
+(`LifeCycleLunaAdapter::LaunchDefaultApp`) resolves the category to an id, writes it into the
+request as `id` and passes the request to the ordinary `launch`, so `params` reach the app as
+with `launch`. From 6.6.0 the categories `LastInputApp` and `idleApp` are special-cased to
+`LaunchLastApp`. [V]
+
+`ApplicationManager::getDefaultAppByCategory` [V]:
+
+1. Look the category up in the `general/defaultApps` settings record. `sam` subscribes to it
+   on every release (`{"key":"defaultApps"}` on 5.6.1, `{"keys":["defaultApps",
+   "lastAppHandlerPolicy"]}` from 6.6.0), whether or not the key is described.
+2. On 10.3.1 and 11.2.0 only, if the record has no entry, look it up in the system profile's
+   `defaultApps.categories`. The settings record wins when both are set, and a record entry
+   that fails step 3 does not fall back to the profile [V, VM]; the debug log says
+   `"from":"settingservice"` or `"from":"systemprofile"`.
+3. Accept the id only if that app is installed and its appinfo `appCategory` contains the
+   category [V, VM on 5.6.1 to 11.2.0]. No visibility, window-type or system-app check is made
+   there.
+
+On failure the reply is `no default app is set for the category` (errorCode 1) whether the
+category is unset, the app is missing, or the app lacks the category. `sam` never falls back to
+a built-in id; none of the seven `sam` binaries contains `com.webos.app.home`. [V]
+
+From 9.2.1 `sam` also has a setter, `applicationManager/setDefaultApp {"category", "appId"}`
+(both required), which calls `ApplicationManager::updateDefaultApps` and writes to the settings
+service (`Fail to update default apps to settings service`). Its ACG groups are `applications`
+and `applications.internal`. 11.2.0 adds `getDefaultAppByCategory`, `closeDefaultApp` and
+`pauseDefaultApp`. [V] It sets the category's entry in `general/defaultApps` and keeps the
+others (9.2.1, 10.3.1, 11.2.0). 6.6.0 answers `Unknown method "setDefaultApp"`. [V, VM]
+
+### The system profile on webOS 25 and 26
+
+`com.webos.service.systemprofile/getProfiles` publishes a `defaultApps` profile. There is no
+`etc/webos-profile` and no profile client in `sam` before 10.3.1. Each device layer in
+`etc/webos-profile/platform/layers/00-device/<device>/profile.json` carries a section such as
+[V]:
+
+```json
+"defaultApps": {
+    "_packageIncluded": true,
+    "_configuration": "defaultApps.json",
+    "support": true,
+    "categories": {
+        "home": "com.webos.app.home",
+        "aod": "com.webos.app.lifeonscreen"
+    }
+}
+```
+
+The device layers are not uniform. Of 81 device layers on 10.3.1, 72 have exactly this; the rest
+have no `aod`, `com.webos.app.atelier` as `aod`, `com.webos.app.tnativehome` or
+`com.webos.app.seniorhome` as `home`. 11.2.0 (133 layers) adds `com.webos.app.hotelhome` and
+`com.webos.app.appliancehome`, and two layers with `support: false`. The dynamic profiles
+`platform/dynamic/senior_normal` (10.3.1, 11.2.0) and `platform/dynamic/kidsMode` (11.2.0,
+`home: com.webos.app.kidshome`) also set it, so the profile's home app already changes at
+runtime through `systemprofile/enableProfile`. [V]
+
+`etc/webos-profile/platform/configuration/defaultApps.json` is an empty package manifest; the
+category map in `profile.json` is the effective one. [V]
+
+`usr/sbin/systemprofile` runs `usr/sbin/profile_generator`, which merges the layers listed in
+`etc/webos-profile/common/layers/platformLayers.json` (`00-device`, `10-broadcastCountry`,
+`20-serviceCountry`, `99-combination`, and a writable `test` layer at
+`/var/webos-profile/testLayer`) and applies `/var/webos-profile/override/`
+(`override_profile()`). The service API is `getProfiles`, `enableProfile`, `disableProfile`
+and `debug.rescan`, in the public `systemProfile` group; there is no method to set a key. [V]
+The override file format and whether a change is picked up without a restart are [U].
+
+## What makes a window "home" to the compositor
+
+`WebOSCompositor/views/StarfishHomeView.qml` registers a view for surfaces whose
+`item.type === '_WEBOS_WINDOW_TYPE_HOME'`. Only the 5.6.1 native home binaries set that type.
+From 6.6.0 to 9.2.1 `usr/bin/com.webos.app.home` sets `_WEBOS_WINDOW_TYPE_CARD`: the stock home
+is a fullscreen app, which is why the key filter compares `fullscreenView.appId` with
+`HOME_APP_ID`. All native home binaries set `_WEBOS_ACCESS_POLICY_KEYS_HOME`, `_KEYS_BACK` and
+`_KEYS_EXIT` to `"true"` from `main()`; 9.2.1 also sets `_WEBOS_WINDOW_CLASS = "1"`. [V]
+
+The compositor inverts the policy value. `StarfishAccessControlPolicy.qml` `policy_keyfilter()`
+returns `!(value === "true")`, and an unset property means filtered. A filtered key is consumed
+(`KeyPolicy.Accepted`), so `"true"` is what lets the launcher receive its own Home key. [V] The
+11.2.0 C++ policy was not read.
+
+`defaultWindowType: "home"` is still in the `ApplicationDescription` schema enum on every
+release, but WebAppMgr (`libWebAppMgrCore.so` `windowTypeFromString`) has no `home` mapping, so
+a web app cannot become a home-type window through appinfo. The compositor's
+`StarfishSystemUIManager.qml` maps `home` to `_WEBOS_SYSTEM_UI_TYPE_HOME` for in-compositor
+system UIs. `usr/bin/flutter-client` contains `home` next to `_WEBOS_WINDOW_TYPE_HOME` and
+`_WEBOS_WINDOW_TYPE_CARD`, after `defaultWindowType` in its appinfo strings; that it maps
+`defaultWindowType: "home"` to the home type and everything else to card is [I]. The Flutter
+`libapp.so` contains the three `_WEBOS_ACCESS_POLICY_KEYS_*` names; their values were not read.
+[V]
+
+## Offering an app as home
+
+### 5.6.1: supported, through the default-app record
+
+1. Declare `appCategory: ["home"]`; `launchDefaultApp` requires it.
+2. Write `general/defaultApps = {"home": "<app id>"}` through
+   `com.webos.settingsservice/setSystemSettings`, then close the previous home app
+   (`com.webos.applicationManager/closeByAppId` with `forceMode`), which is what the built-in
+   Home Style switch does. The key filter launches the record's id directly with
+   `{"launchType": "homeKey"}`.
+3. Handle `launchType: "homeKey"` and the long-press `activateType: "recent"`.
+
+### 6.6.0 to 9.2.1: no supported switch
+
+The key filter and about ten compositor files name `com.webos.app.home`, and the stock home
+window is a card. A root install has two options:
+
+1. **Replace the home package.** Keep the id `com.webos.app.home` and replace the QML under
+   `usr/palm/applications/com.webos.app.home/qml` (the binary loads `qml/main.qml`) or the whole
+   package. The privileged role, keep-alive entry, boot hooks and every id comparison then
+   apply unchanged.
+2. **Make the id configurable**, as 10.3.1 did: see the mod map below.
+
+`sam` already reads `general/defaultApps` and resolves `launchDefaultApp` through it, but the
+stock home has no `appCategory` on these releases, so `launchDefaultApp {"category":"home"}`
+fails for it.
+
+### 10.3.1 and 11.2.0: default-app lookup
+
+The platform looks the home app up by category, so the key filter needs no change if
+`isHomeApp` follows the same lookup [U]:
+
+1. Ship a launcher with `appCategory: ["home"]`. The stock app's `requiredPermissions` are the
+   reference.
+2. Set `general/defaultApps.home` through `applicationManager/setDefaultApp` or
+   `setSystemSettings`; it takes precedence over the device profile. The profile itself is
+   read-only on the rootfs; the `override` and `test` layers are writable but unmeasured.
+3. Handle `activateType` and `launchType` as before.
+
+## Mod map for a custom home
+
+Goal: a small settings app owns the choice, a launcher declares itself a home app, and the
+platform resolves the choice. On every release the choice can live in the same place, the
+`general/defaultApps` settings record, because `sam` reads it on all seven and prefers it over
+the system profile on 10.3.1 and 11.2.0.
+
+### Launcher contract (all releases)
+
+* appinfo: `appCategory: ["home"]` (required by `sam`'s lookup), `visible: false`,
+  `lockable: false`, `noSplashOnLaunch: true`, `transparent: true`.
+* Window: a fullscreen (card) window, as the stock home from 6.6.0 on, with
+  `_WEBOS_ACCESS_POLICY_KEYS_HOME = "true"` so a Home press while it is in front reaches it.
+  Do not rely on `_WEBOS_WINDOW_TYPE_HOME`: from 6.6.0 the compositor's home view is not the
+  stock home's path. [I] On 5.6.1 a card launcher is relaunched by each Home press
+  (`caller com.webos.surfacemanager`) instead of receiving it [V, VM].
+* Handle `launchType: "homeKey"` and `activateType` (`home`, `myapps`, `recent`).
+* Add the id to `keepAliveApps` if it should stay resident.
+
+### Settings app
+
+* Candidate list: `com.webos.applicationManager/listApps`, filtered on `appCategory`
+  containing `home`. More than one stock app has it from 10.3.1 (`seniorhome`, `kidshome`).
+* Writing the choice:
+
+  | Release | Write | Status |
+  | --- | --- | --- |
+  | 5.6.1 | `setSystemSettings {"category":"general","settings":{"defaultApps":{...}}}` | described key [V] |
+  | 6.6.0 - 8.3.0 | same | key not described, stored anyway on 6.6.0 [V, VM]; see the first-write caveat |
+  | 9.2.1 - 11.2.0 | `applicationManager/setDefaultApp {"category":"home","appId":"<id>"}` | adds or replaces only `home`, keeps other entries [V, VM] |
+
+  `defaultApps` is one object for all categories (11.2.0 ships `kidsApp` in it), so a
+  `setSystemSettings` write has to carry the existing entries.
+* First-write caveat (6.6.0): when the write creates `defaultApps`, `sam` does not see it;
+  `launchDefaultApp` still answers `no default app is set for the category` until `sam`
+  restarts, after which later writes reach it live. Whether a second write without a restart is
+  enough is [U] (T1b).
+* Going back to stock: on 6.6.0 to 9.2.1 the stock home lacks `appCategory`, so set no `home`
+  entry rather than `com.webos.app.home`, and let the key filter fall back.
+* After the change, close the previous home with `closeByAppId {"forceMode": true}`, as the
+  5.6.1 Home Style pane does.
+
+### Permissions
+
+The ACG groups (`usr/share/luna-service2/api-permissions.d`, `groups.d`) [V]:
+
+| Method | Groups | `public` flag of the group |
+| --- | --- | --- |
+| settingsservice `setSystemSettings`, `setSystemSettingDesc` | `settings`; also `public` in `compat.api.json` | `settings`: true |
+| settingsservice `getSystemSettings` | `settings`, `settings.read`, `public` | true |
+| applicationManager `setDefaultApp` (9.2.1+) | `applications`, `applications.internal` | `applications`: true; `.internal`: false |
+| applicationManager `launchDefaultApp` | `applications`, `applications.launch`, `applications.internal` | true / true / false |
+| applicationManager `closeByAppId`, `listApps` | `applications.internal`, `private` | false |
+
+Developer-mode callers get `devmodeGroups: ["ares.webos.cli", "public"]`
+(`usr/share/luna-service2/devmode_certificate.json`). `appinstalld` validates a developer
+app's `requiredPermissions` (`Not allowed permission is used`). Settings service also checks
+`etc/palm/settingsservice.allow`, a per-key whitelist for some callers, which has no `general`
+entry. The stock settings app (`com.palm.app.settings`) declares no `requiredPermissions`; its
+`client-permissions.d` file grants it `private` and `public`, and `private` covers
+`setSystemSettings`, `closeByAppId` and `listApps`. `allowed_groups.json` lists no `settings`
+or `applications*` group for `dev` or `oem` on any release.
+
+On 11.2.0 three developer apps declaring `settings`, `settings` + `applications` and
+`settings` + `applications.internal` installed without error, but each got
+`{"returnValue":false,"errorText":"Access denied"}` from settings service for
+`getSystemSettings {"category":"general","keys":["defaultApps"]}`: the per-key whitelist
+applies to them. [V, VM] Whether the `applicationManager` methods are granted to them is
+[U] (T5); a root caller passes both checks.
+
+### Key filter backport, 6.6.0 - 9.2.1
+
+Backport the 10.3.1 shape, which has two parts, not one:
+
+1. **A home id the whole compositor shares.** Add `getHomeAppId()` and `isHomeApp(appId)` to
+   the compositor and to the key filter's `global`. The id is `general/defaultApps.home`
+   (subscribed the way 5.6.1's `getLaunchDefaultApp` is, in `StarfishViewStateController.qml`),
+   falling back to `com.webos.app.home` when unset or not installed. Replace every literal-id
+   and `HOME_APP_ID` site listed under [6.6.0 to 9.2.1](#660-to-921) with them; a site that is
+   missed treats the custom launcher as an ordinary app (recents, nudges, voice, gestures,
+   relaunch on Home).
+2. **The launch.** In `launchHomeApp()` and `StarfishHomeView.openHome()`, either
+   * call `launchDefaultApp {"category":"home","params":{...}}` as 10.3.1 does. The 10.3.1
+     wrapper ignores the reply, so the fallback to `com.webos.app.home` needs a call with a
+     reply callback; or
+   * launch `getHomeAppId()` directly, which carries the fallback in the id itself.
+
+   Keep 7.6.0's `checkLaunch` branch for `supportNMRM`.
+
+The 10.3.1 sources are `StarfishKeyFilter.qml` (`launchDefaultApp`, `isHomeApp`,
+`getHomeAppId`), `StarfishViewStateController.qml` `launchDefaultApp(params)` and
+`systemUi.js` `launchHomeApp()`. There is one QML tree to patch.
+
+### 10.3.1 and 11.2.0
+
+On 11.2.0 a Home press with an ordinary app in front launched the launcher chosen through
+`setDefaultApp` (`caller com.webos.starfish.keyfilters`), and a second press with it in front
+did not relaunch it. [V, VM] That second press is the `isHomeApp` path, so the 11.2.0 id
+appears to follow the default app despite the profile strings in the service bridge; with the
+test launcher's `_KEYS_HOME` unset it is not proof [I]. On 10.3.1 the injected Home key reached
+the compositor but nothing launched, so `isHomeApp` there is still [U] (T4).
+
+### Boot alignment (optional)
+
+If the custom home should own boot and not only the Home key: `etc/palm/bootd.json`
+`firstAppInHome`/`firstAppInNmrm` (6.6.0 - 9.2.1) or `firstAppInNormal` (10.3.1+), the snapshot
+preload in `etc/systemd/system/snapshot-boot-components.service` and
+`etc/init/com.webos.app.home.conf` (through 9.2.1), and `keepAliveApps`.
+
+### Deployment
+
+The stock rootfs is SquashFS. Either replace the files in the packed image, or bind-mount the
+patched files over the originals before `sam` (the compositor) starts. `sam` reads the key
+filter when it starts, so a mount made after boot needs a `sam` restart.
+
+## Tests
+
+Each test runs as root on a booted firmware unless it says otherwise; `<id>` is an installed
+test launcher with `appCategory: ["home"]`. All replies are to be recorded per release.
+
+* **T1, undescribed write (6.6.0 - 8.3.0).**
+  `luna-send -n 1 -f luna://com.webos.settingsservice/setSystemSettings
+  '{"category":"general","settings":{"defaultApps":{"home":"<id>"}}}'`, then
+  `getSystemSettings '{"category":"general","keys":["defaultApps"]}'`, then the same `get`
+  with `"subscribe":true` across a second write. `returnValue: true` and the value read back
+  prove the key is stored without a description; an `errorKey` reply means
+  `setSystemSettingDesc` is needed (register the 5.6.1 record from `etc/palm/description.json`,
+  `dbtype: "G"` and `dimension: []` included, and repeat).
+* **T1b, first write on 6.6.0.** On a VM where `general/defaultApps` has never been written,
+  write `home` = `<id>`, run T3 (expect the error seen), write the same value again without
+  restarting `sam`, and run T3 again. Success shows a second write is enough; failure means
+  a writer must restart `sam` once after creating the key.
+* **T2, setter (9.2.1 - 11.2.0).** `applicationManager/setDefaultApp
+  '{"category":"home","appId":"<id>"}'`, then `getSystemSettings` as in T1. Shows what it
+  writes and whether it keeps other categories.
+* **T3, resolution.** After T1 or T2, `applicationManager/launchDefaultApp
+  '{"category":"home","params":{"launchType":"homeKey"}}'`. `<id>` in front proves the
+  lookup; repeat with an app lacking `appCategory: ["home"]` and expect
+  `no default app is set for the category`. On 10.3.1 and 11.2.0 this also confirms that the
+  settings record beats the profile.
+* **T4, Home key and isHomeApp (10.3.1, 11.2.0).** After T2, press Home (`sendkey` or the
+  test input path) from an ordinary app, then again with `<id>` in front. The first press
+  should bring `<id>`; the second should reach `<id>` (if its `_KEYS_HOME` is `"true"`) and
+  not relaunch it. A relaunch or a stock home shows that `isHomeApp` does not follow the
+  default app.
+* **T5, permissions.** Install developer apps with `requiredPermissions` of `["settings"]`,
+  `["settings","applications"]` and `["settings","applications.internal"]`. Record install
+  errors (`WRONG_PERMISSION`), then from each app call `setSystemSettings` (T1 payload),
+  `setDefaultApp`, `launchDefaultApp`, `listApps` and `closeByAppId`, each independently. A
+  `Denied method call` marks a group that is not granted; an `Access denied` from settings
+  service marks the key whitelist.
+* **T6, profile override (10.3.1, 11.2.0).** Place a `defaultApps.categories.home` override
+  under `/var/webos-profile/override/` (and separately under `/var/webos-profile/testLayer/`),
+  call `systemprofile/debug/rescan` or restart `systemprofile`, and read
+  `getProfiles '{"names":["defaultApps"]}'` and the `[override profile]` log lines. Only
+  needed if the settings record is not used.
+* **T7, card launcher on 5.6.1.** With `<id>` as a card window set as default, press Home
+  with `<id>` in front and record whether it is relaunched or receives the key.
+
+### Results, 2026-10-19
+
+Run on Beanjar VMs on the Raspberry Pi 5, one at a time, as root through the VM's root shell,
+with a web test launcher (`appCategory: ["home"]`) and a control app without the category. Home
+was injected as QEMU `send-key meta_l`. The 11.2.0 VM runs `43.21.89.01` (W22O), the other VMs
+the firmwares in the table at the top; 7.6.0 and 8.3.0 were not run.
+
+| Test | 5.6.1 | 6.6.0 | 9.2.1 | 10.3.1 | 11.2.0 |
+| --- | --- | --- | --- | --- | --- |
+| T1 write | stored (described) | stored, no description | stored; live subscribers notified | - | - |
+| T2 `setDefaultApp` | - | unknown method | `home` set, others kept | same | same |
+| T3 chosen app | launched | launched after a `sam` restart | launched | launched | launched |
+| T3 app without category | refused | refused | refused | refused | refused |
+| T3 no `home` entry | - | - | refused (no profile) | profile's `com.webos.app.home` | same |
+| T4 Home key | - | - | - | key reached compositor, no launch | launched; no relaunch on second press |
+| T5 developer app | - | - | - | - | installs; `Access denied` from settings service; `applicationManager` replies not captured |
+| T7 card launcher | relaunched per press | - | - | - | - |
+
+"Refused" is `{"errorCode":1,"errorText":"no default app is set for the category"}`. Open after
+this run: T1b; T4 on 10.3.1 and with `_KEYS_HOME` set on 11.2.0; T5 on the
+`applicationManager` methods; T6.
