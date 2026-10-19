@@ -682,15 +682,19 @@ was there at 18.6 s and only `MembershipApp` at 19.4 s. [V, VM] The call is made
 and later a chosen `home` in the record can be lost at any boot; on 10.3.1 and later the profile
 override still names it.
 
-The old `home` returning is likely not a lost write. db8 writes are synchronous (`"sync": 1` in
-`etc/palm/db8`, the settings kind has `"sync": true`) and no boot restored from backup. [V] A
-`setSystemSettings` of `defaultApps` without `home` was followed, with no write between, by a
-read that still held `home`, so a partial write probably merges into the stored object rather
-than replacing it, while the immediate read-back shows only what was written [I]. That would
-also mean writing the object without `home` does not remove `home`.
+The old `home` returning is not a lost write: the stored object keeps every sub-key ever
+written. On 10.3.1, `setSystemSettings` of `defaultApps` with an extra sub-key and then without
+it read back, and showed in `/var/luna/preferences/general`, as a replace; after `systemctl
+restart settings-service.service` the extra sub-key was back, and so was a `home` written in an
+earlier run. Writing the sub-key as `null` or `""` stores that value; `resetSystemSettings`
+for `defaultApps` changes nothing. [V, VM] So no `setSystemSettings` write removes `home`, and
+what settings service serves until its next start differs from what it stores. The service
+also has `deleteSystemSettings` (in `api-permissions.d/com.webos.settingsservice.api.json`)
+[V]; whether deleting the key and writing the wanted entries again is the way to remove one is
+being tested. db8 writes are synchronous (`"sync": 1` in `etc/palm/db8`, the settings kind has
+`"sync": true`) and no boot restored from backup [V].
 
-Open after this run: whether a `setSystemSettings` write merges the keys inside `defaultApps`
-and how to remove one; whether a `home` set through `setDefaultApp` and a profile override
-survive reboots on 11.2.0; T5 on the
-`applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`); the IR remote's
-Super_L long-press path, which no VM injection exercises.
+Open after this run: how to remove one entry of `defaultApps` (`deleteSystemSettings`);
+whether a `home` set through `setDefaultApp` and a profile override survive reboots on 11.2.0;
+T5 on the `applicationManager` methods; 7.6.0 and 8.3.0 (`w22p-mullet`, `w22o-number1`); the IR
+remote's Super_L long-press path, which no VM injection exercises.
