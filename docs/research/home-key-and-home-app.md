@@ -357,6 +357,24 @@ system UIs. `usr/bin/flutter-client` contains `home` next to `_WEBOS_WINDOW_TYPE
 `libapp.so` contains the three `_WEBOS_ACCESS_POLICY_KEYS_*` names; their values were not read.
 [V]
 
+### Floating launchers and focus (webOS 6)
+
+A web launcher with `defaultWindowType: "floating"` and `appCategory: ["home"]`, launched by
+the Home key through the backport on 6.6.0, shows over the app in front;
+`getForegroundAppInfo` keeps reporting that app. How the launcher hides itself decides where
+the keys go afterwards [V, VM]:
+
+| Hide | Keys afterwards |
+| --- | --- |
+| `webOSSystem.hide()` | still the hidden launcher (the app behind gets `blur` and nothing more) |
+| `window.close()` | the app behind, which gets `focus` |
+| launch the app behind, then `webOSSystem.hide()` | the app behind |
+| `applicationManager/suspense` | `Unknown method`; nothing changes |
+| `applicationManager/closeByAppId` from a developer app | `Denied method call`; nothing changes |
+
+This is AltHome's issue #4 (`webOSSystem.hide()` on webOS 6 leaves the layer holding focus).
+AltHome's later webOS 6 path, `suspense`, is not a method on 6.6.0.
+
 ## Offering an app as home
 
 ### 5.6.1: supported, through the default-app record
