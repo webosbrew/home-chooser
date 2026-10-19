@@ -282,6 +282,63 @@ describe('Open House screen', () => {
 		});
 	});
 
+	const rowOf = (name) => screen.getByText(name).closest('[data-spotlight-id]');
+	const focusedRow = () => document.activeElement && document.activeElement.closest('[data-spotlight-id^="home-"]');
+
+	test('no header close button', async () => {
+		mountApp(makeEnv());
+		await screen.findByText('Plain Launcher');
+		expect(screen.queryByLabelText('Exit app')).toBeNull();
+		expect(document.querySelector('[class*="close"]')).toBeNull();
+	});
+
+	test('OK on the current row keeps focus, opens no dialog, toasts, calls nothing', async () => {
+		const env = makeEnv({currentHome: 'org.fancy.launcher'});
+		mountApp(env);
+		await screen.findByText('Fancy Launcher');
+		await waitFor(() => expect(focusedRow()).toBe(rowOf('Fancy Launcher')));
+		fireEvent.click(rowOf('Fancy Launcher'));
+		expect(await screen.findByText('Fancy Launcher is already your Home.')).toBeTruthy();
+		expect(screen.queryByRole('dialog')).toBeNull();
+		expect(focusedRow()).toBe(rowOf('Fancy Launcher'));
+		expect(env.chooser.apply).not.toHaveBeenCalled();
+		expect(env.chooser.restoreStock).not.toHaveBeenCalled();
+	});
+
+	test('OK on the stock row when it is current says LG Home', async () => {
+		const env = makeEnv();
+		mountApp(env);
+		await screen.findByText('Plain Launcher');
+		fireEvent.click(rowOf('LG Home (stock)'));
+		expect(await screen.findByText('LG Home is already your Home.')).toBeTruthy();
+		expect(env.chooser.restoreStock).not.toHaveBeenCalled();
+	});
+
+	test('focus returns to the opening row after Cancel and after Back', async () => {
+		mountApp(makeEnv());
+		fireEvent.click(await screen.findByText('Plain Launcher'));
+		await screen.findByText('Use Plain Launcher as Home?');
+		fireEvent.click(screen.getByText('Cancel'));
+		await waitFor(() => expect(screen.queryByText('Use Plain Launcher as Home?')).toBeNull());
+		await waitFor(() => expect(focusedRow()).toBe(rowOf('Plain Launcher')));
+		fireEvent.click(rowOf('Fancy Launcher'));
+		await screen.findByText('Use Fancy Launcher as Home?');
+		fireEvent.keyUp(screen.getByText('Cancel'), {keyCode: 27});
+		await waitFor(() => expect(screen.queryByText('Use Fancy Launcher as Home?')).toBeNull());
+		await waitFor(() => expect(focusedRow()).toBe(rowOf('Fancy Launcher')));
+	});
+
+	test('after a successful apply, focus is on the new current row', async () => {
+		const env = makeEnv();
+		env.chooser.readState.mockImplementation(async () => ok({state: {record: null, recordHome: env.chooser.apply.mock.calls.length ? 'org.plain.launcher' : null, profile: null, profileHome: null}}));
+		mountApp(env);
+		fireEvent.click(await screen.findByText('Plain Launcher'));
+		fireEvent.click(await screen.findByText('Use as Home'));
+		await screen.findByText(/Done\. Press Home/);
+		expect(rowOf('Plain Launcher').querySelector('[aria-label="Current"]')).toBeTruthy();
+		await waitFor(() => expect(focusedRow()).toBe(rowOf('Plain Launcher')));
+	});
+
 	test('Back closes the dialog first, then exits', async () => {
 		const {onExit} = mountApp(makeEnv());
 		fireEvent.click(await screen.findByText('Plain Launcher'));

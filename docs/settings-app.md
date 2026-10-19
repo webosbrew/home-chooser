@@ -24,7 +24,8 @@ Open House is in English only.
   what a launcher is and that LG Home stays in use. If the chosen launcher was uninstalled, a line
   under the list says "The Home app you chose was removed; using LG Home."
 * **No launch animation.** `appinfo.json` sets `noSplashOnLaunch: true` and `spinnerOnLaunch: false`, as the stock Settings app and many stock apps do. The 6.6.0 web app manager knows no other appinfo key for launch animation (only `noSplash` and `disableBackHistoryAPI` appear in its strings).
-* **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner
+* **No close button.** The panel header has no close button; Back is the way to close (a dialog first, then the panel). Focus never leaves the list: it returns to the row that opened a dialog when the dialog closes, and moves to the new current row when a change finishes.
+* **Choosing.** OK on the row that is already the current home changes nothing and opens no dialog; focus stays on it and a toast says "<name> is already your Home." ("LG Home is already your Home." for the stock row). OK on any other row asks "Use <name> as Home?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
   one plain sentence ("Couldn't set the Home app. The Open House service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after

@@ -204,6 +204,6 @@ export const useOpenHouse = (load = loadEnvironment) => {
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
-		busy, notice, toast, choose, dismissToast: () => setToast(null)
+		busy, notice, toast, choose, notify: (text) => setToast({ok: true, text}), dismissToast: () => setToast(null)
 	};
 };

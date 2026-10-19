@@ -17,7 +17,7 @@ const AppBase = ({load = loadEnvironment, onExit = closeApp, ...rest}) => {
 	return (
 		<div {...rest} className={css.app}>
 			<div className={css.panel}>
-				<Panels index={0} onApplicationClose={onExit}>
+				<Panels index={0} noCloseButton onApplicationClose={onExit}>
 					<MainPanel model={model} />
 				</Panels>
 			</div>

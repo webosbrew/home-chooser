@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import BodyText from '@enact/moonstone/BodyText';
 import Scroller from '@enact/moonstone/Scroller';
 import Spinner from '@enact/moonstone/Spinner';
@@ -38,17 +38,39 @@ const MainPanel = ({model, ...rest}) => {
 	const current = currentId === STOCK_HOME || known ? currentId : STOCK_HOME;
 	const removed = Boolean(storedId) && storedId !== STOCK_HOME && !candidates.some((c) => c.id === storedId);
 
+	const rowId = (id) => (id === STOCK_HOME ? 'home-stock' : 'home-' + candidates.findIndex((c) => c.id === id));
+
 	// initial focus: the current home
 	useEffect(() => {
 		if (phase !== 'ready' || rootError) return;
-		const id = current === STOCK_HOME ? 'home-stock' : 'home-' + candidates.findIndex((c) => c.id === current);
-		Spotlight.focus(id);
+		Spotlight.focus(rowId(current));
 	}, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Focus never falls off the list: back on the row that opened a dialog when it closes, and on
+	// the (new) current row when a change finishes. Rows stay enabled while busy (the spinner
+	// blocks input), because a row that turns disabled under the focus drops it.
+	const opener = useRef(null);
+	const wasBusy = useRef(false);
+	useEffect(() => {
+		if (!pending && opener.current !== null && !busy) {
+			Spotlight.focus(rowId(opener.current));
+			opener.current = null;
+		}
+	}, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (wasBusy.current && !busy && !rootError) Spotlight.focus(rowId(current));
+		wasBusy.current = busy;
+	}, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const choose = useCallback((id) => {
 		if (busy) return;
+		if (id === current) {
+			model.notify((id === STOCK_HOME ? 'LG Home' : (candidates.find((c) => c.id === id) || {}).title || id) + ' is already your Home.');
+			return;
+		}
+		opener.current = id;
 		setPending(id === STOCK_HOME ? {id, title: 'LG Home'} : {id, title: (candidates.find((c) => c.id === id) || {}).title || id});
-	}, [busy, candidates]);
+	}, [busy, candidates, current, model]);
 	const cancel = useCallback(() => setPending(null), []);
 	const confirm = useCallback(() => {
 		const item = pending;
@@ -59,7 +81,6 @@ const MainPanel = ({model, ...rest}) => {
 	const footer = patchFooter(patch);
 	const stock = pending && pending.id === STOCK_HOME;
 	const blocked = !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
-	const alreadyCurrent = pending && pending.id === current;
 
 	return (
 		<Panel {...rest}>
@@ -69,12 +90,12 @@ const MainPanel = ({model, ...rest}) => {
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
 					<HomeItem
 						name="LG Home (stock)" appId={STOCK_HOME} stock current={!rootError && current === STOCK_HOME}
-						disabled={busy || Boolean(rootError)} spotlightId="home-stock" onChoose={choose}
+						disabled={Boolean(rootError)} spotlightId="home-stock" onChoose={choose}
 					/>
 					{candidates.map((c, i) => (
 						<HomeItem
 							key={c.id} name={c.title} appId={c.id} icon={icons[c.id]} current={c.id === current}
-							disabled={busy || Boolean(rootError)} spotlightId={'home-' + i} onChoose={choose}
+							disabled={Boolean(rootError)} spotlightId={'home-' + i} onChoose={choose}
 						/>
 					))}
 					{removed && !rootError ? <BodyText className={css.note}>{'The Home app you chose was removed; using LG Home.'}</BodyText> : null}
@@ -100,7 +121,6 @@ const MainPanel = ({model, ...rest}) => {
 				{blocked ? "The Home button can't be changed on this TV's software."
 					: stock ? 'The Home button will open the LG Home again.'
 						: 'The Home button will open this app.' + (model.hasPatch && patch !== 'active' ? ' The screen will blink once while the TV loads the change.' : '')}
-				{alreadyCurrent ? ' It is already your Home.' : ''}
 			</ConfirmDialog>
 		</Panel>
 	);
