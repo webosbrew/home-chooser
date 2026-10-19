@@ -1,0 +1,214 @@
+#!/bin/sh
+# Open House key filter backport, webOS 6.6.0 to 9.2.1.
+#
+# Installed in /var/lib/webosbrew/init.d/ and run as root by Homebrew Channel at boot.
+#
+#   openhouse-keyfilter          apply: find the diff set whose stock hashes match the live
+#                                files, patch copies of them in /tmp, bind-mount the copies
+#                                over the originals and restart the compositor
+#   openhouse-keyfilter stop     unmount what apply mounted and restart the compositor
+#   openhouse-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none
+#
+# The data directory holds one directory per release with a manifest.json and the diffs. A set
+# is applied all or nothing. Nothing on the rootfs is modified.
+#
+# Overrides, for tests: OPENHOUSE_DATA, OPENHOUSE_ROOT (prefix of the target paths),
+# OPENHOUSE_WORK, OPENHOUSE_LOG, OPENHOUSE_MOUNTS, OPENHOUSE_MOUNT, OPENHOUSE_UMOUNT,
+# OPENHOUSE_SYSTEMCTL, OPENHOUSE_PATCH, OPENHOUSE_SHA256, OPENHOUSE_UNIT.
+
+DATA=${OPENHOUSE_DATA:-/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse/backport}
+ROOT=${OPENHOUSE_ROOT:-}
+WORK=${OPENHOUSE_WORK:-/tmp/openhouse-backport}
+LOG=${OPENHOUSE_LOG:-/tmp/openhouse-backport.log}
+MOUNTS=${OPENHOUSE_MOUNTS:-/proc/mounts}
+MOUNT=${OPENHOUSE_MOUNT:-mount}
+UMOUNT=${OPENHOUSE_UMOUNT:-umount}
+SYSTEMCTL=${OPENHOUSE_SYSTEMCTL:-systemctl}
+PATCH=${OPENHOUSE_PATCH:-patch}
+SHA256=${OPENHOUSE_SHA256:-sha256sum}
+UNIT=${OPENHOUSE_UNIT:-surface-manager-daemon.service}
+
+log() {
+    msg="$(date '+%Y-%m-%d %H:%M:%S') $*"
+    echo "$msg"
+    echo "$msg" >> "$LOG" 2>/dev/null
+}
+
+# entries <manifest>: print path, sha256 and diff name of every file, one per line, in order.
+# The manifest is JSON; the three keys are picked line by line, so the layout does not matter.
+entries() {
+    tr '{},' '\n\n\n' < "$1" |
+        sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'
+}
+
+is_mounted() {
+    grep -qF " $1 " "$MOUNTS" 2>/dev/null
+}
+
+sha_of() {
+    "$SHA256" "$1" 2>/dev/null | cut -d' ' -f1
+}
+
+mkdir -p "$WORK" 2>/dev/null
+
+# any_mounted: succeed when a target of any set in the data directory is a mount point.
+any_mounted() {
+    for m in "$DATA"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        entries "$m" > "$WORK/entries.tmp"
+        while read -r p && read -r h && read -r d; do
+            if is_mounted "$ROOT$p"; then
+                rm -f "$WORK/entries.tmp"
+                return 0
+            fi
+        done < "$WORK/entries.tmp"
+    done
+    rm -f "$WORK/entries.tmp"
+    return 1
+}
+
+# find_set: print the release whose files all match their stock hash, if any.
+find_set() {
+    for m in "$DATA"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        rel=$(basename "$(dirname "$m")")
+        entries "$m" > "$WORK/entries.tmp"
+        match=1
+        count=0
+        while read -r p && read -r h && read -r d; do
+            count=$((count + 1))
+            cur=
+            [ -f "$ROOT$p" ] && cur=$(sha_of "$ROOT$p")
+            [ "$cur" = "$h" ] || match=0
+        done < "$WORK/entries.tmp"
+        rm -f "$WORK/entries.tmp"
+        if [ "$match" = 1 ] && [ "$count" -gt 0 ]; then
+            echo "$rel"
+            return 0
+        fi
+    done
+    return 1
+}
+
+restart_compositor() {
+    log "restarting $UNIT"
+    if "$SYSTEMCTL" restart "$UNIT"; then
+        log "$UNIT restarted"
+        return 0
+    fi
+    log "ERROR: could not restart $UNIT"
+    return 1
+}
+
+undo_mounts() {
+    [ -f "$WORK/mounted" ] || return 0
+    while read -r t; do
+        "$UMOUNT" "$t" 2>/dev/null || "$UMOUNT" -l "$t" 2>/dev/null
+    done < "$WORK/mounted"
+    rm -f "$WORK/mounted"
+}
+
+do_apply() {
+    if [ ! -d "$DATA" ]; then
+        log "no backport data in $DATA, nothing to do"
+        return 0
+    fi
+    if any_mounted; then
+        log "key filter backport already mounted, nothing to do"
+        return 0
+    fi
+    rel=$(find_set)
+    if [ -z "$rel" ]; then
+        log "no diff set matches the stock files, leaving them as they are"
+        return 0
+    fi
+    log "diff set $rel matches the stock files"
+    set_dir="$DATA/$rel"
+
+    rm -rf "$WORK/stage"
+    mkdir -p "$WORK/stage"
+    entries "$set_dir/manifest.json" > "$WORK/entries"
+
+    # Copy every target, then patch every copy; any failure drops the whole set.
+    while read -r p && read -r h && read -r d; do
+        mkdir -p "$WORK/stage$(dirname "$p")" && cp -p "$ROOT$p" "$WORK/stage$p" || {
+            log "ERROR: cannot copy $p, set $rel not applied"
+            rm -rf "$WORK/stage" "$WORK/entries"
+            return 1
+        }
+    done < "$WORK/entries"
+    while read -r p && read -r h && read -r d; do
+        if ! (cd "$WORK/stage" && "$PATCH" -p0 < "$set_dir/$d") >> "$LOG" 2>&1; then
+            log "ERROR: $d does not apply to $p, set $rel not applied"
+            rm -rf "$WORK/stage" "$WORK/entries"
+            return 1
+        fi
+        log "patched $p with $d"
+    done < "$WORK/entries"
+
+    # Bind-mount the copies; if one fails, undo the ones already mounted.
+    : > "$WORK/mounted"
+    while read -r p && read -r h && read -r d; do
+        if "$MOUNT" --bind "$WORK/stage$p" "$ROOT$p"; then
+            echo "$ROOT$p" >> "$WORK/mounted"
+            log "mounted $p"
+        else
+            log "ERROR: cannot mount over $p, set $rel not applied"
+            undo_mounts
+            rm -rf "$WORK/stage" "$WORK/entries"
+            return 1
+        fi
+    done < "$WORK/entries"
+    rm -f "$WORK/entries"
+    echo "$rel" > "$WORK/release"
+
+    restart_compositor
+}
+
+do_stop() {
+    unmounted=0
+    for m in "$DATA"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        entries "$m" > "$WORK/entries.tmp"
+        while read -r p && read -r h && read -r d; do
+            tries=0
+            while is_mounted "$ROOT$p" && [ "$tries" -lt 3 ]; do
+                tries=$((tries + 1))
+                if "$UMOUNT" "$ROOT$p" 2>/dev/null || "$UMOUNT" -l "$ROOT$p" 2>/dev/null; then
+                    log "unmounted $p"
+                    unmounted=1
+                else
+                    log "ERROR: cannot unmount $p"
+                    break
+                fi
+            done
+        done < "$WORK/entries.tmp"
+    done
+    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$WORK/entries" "$WORK/entries.tmp"
+    if [ "$unmounted" = 1 ]; then
+        restart_compositor
+    else
+        log "nothing mounted, nothing to do"
+    fi
+}
+
+do_status() {
+    if [ ! -d "$DATA" ]; then
+        echo "data=missing"
+    fi
+    if any_mounted; then
+        echo "mounted=yes"
+        echo "release=$(cat "$WORK/release" 2>/dev/null || echo unknown)"
+    else
+        echo "mounted=no"
+        rel=$(find_set)
+        echo "match=${rel:-none}"
+    fi
+}
+
+case "$1" in
+    ""|apply) do_apply ;;
+    stop)     do_stop ;;
+    status)   do_status ;;
+    *)        echo "usage: $0 [apply|stop|status]" >&2; exit 2 ;;
+esac

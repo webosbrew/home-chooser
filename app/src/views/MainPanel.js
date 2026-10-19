@@ -7,6 +7,7 @@ import {Header, Panel} from '@enact/sandstone/Panels';
 
 import {createPlatform, errorMessage} from '../platform';
 import {createHomeChooser} from '../openhouse';
+import {createBackport} from '../backport';
 import {diagnoseExecFailure} from '../openhouse/diagnose';
 import {formatStep} from '../openhouse/format';
 
@@ -19,6 +20,14 @@ const describeChoice = (state) => {
 	return lines.join('   ');
 };
 
+const describeBackport = (status) => {
+	if (!status) return '';
+	const parts = [`In init.d: ${status.installed ? 'yes' : 'no'}`, `Mounted now: ${status.mounted ? 'yes' : 'no'}`];
+	if (status.mounted) parts.push(`Set: ${status.release || 'unknown'}`);
+	else parts.push(status.match ? `Matching set: ${status.match}` : 'No set matches this firmware');
+	return 'Key filter backport. ' + parts.join('   ');
+};
+
 const CandidateItem = ({candidate, current, disabled, onChoose}) => {
 	const handleClick = useCallback(() => onChoose(candidate.id), [candidate.id, onChoose]);
 	const label = `${candidate.id}${candidate.stockLabel ? ' - ' + candidate.stockLabel : ''}${current ? ' - current' : ''}`;
@@ -28,6 +37,8 @@ const CandidateItem = ({candidate, current, disabled, onChoose}) => {
 const MainPanel = (props) => {
 	const [release, setRelease] = useState(null);
 	const [chooser, setChooser] = useState(null);
+	const [backport, setBackport] = useState(null);
+	const [backportStatus, setBackportStatus] = useState(null);
 	const [candidates, setCandidates] = useState([]);
 	const [state, setState] = useState(null);
 	const [fatal, setFatal] = useState(null);
@@ -48,6 +59,14 @@ const MainPanel = (props) => {
 		setProblems(list.errors.concat(st.errors, st.warnings));
 	}, []);
 
+	const refreshBackport = useCallback(async (b) => {
+		const res = await b.status();
+		if (!mounted.current) return;
+		setBackportStatus(res.status);
+		setSteps((prev) => prev.concat(res.steps));
+		setProblems((prev) => prev.concat(res.errors));
+	}, []);
+
 	useEffect(() => {
 		const platform = createPlatform();
 		platform.osRelease().then((parsed) => {
@@ -61,19 +80,27 @@ const MainPanel = (props) => {
 				version: parsed.version
 			});
 			setChooser(c);
-			return refresh(c);
+			const b = createBackport({
+				rootLuna: platform.rootLuna,
+				exec: platform.exec,
+				writeFile: platform.writeFile,
+				removeFile: platform.removeFile,
+				version: parsed.version
+			});
+			if (b.applies) setBackport(b);
+			return Promise.all([refresh(c), b.applies ? refreshBackport(b) : null]);
 		}).catch((e) => {
 			if (mounted.current) setFatal(diagnoseExecFailure(errorMessage(e)));
 		});
-	}, [refresh]);
+	}, [refresh, refreshBackport]);
 
 	const finish = useCallback(async (c, res) => {
 		setSteps(res.steps);
 		setProblems(res.errors.concat(res.warnings));
-		setNotice(res.ok ? 'Done.' + (res.needsKeyFilterBackport ? ' On this release the Home key follows the choice only once the key filter backport is installed.' : '') : 'Failed. See below.');
+		setNotice(res.ok ? 'Done.' + (res.needsKeyFilterBackport && !(backportStatus && backportStatus.mounted) ? ' On this release the Home key follows the choice only once the key filter backport is installed.' : '') : 'Failed. See below.');
 		await refresh(c);
 		setBusy(false);
-	}, [refresh]);
+	}, [refresh, backportStatus]);
 
 	const choose = useCallback((id) => {
 		if (!chooser || busy) return;
@@ -89,7 +116,27 @@ const MainPanel = (props) => {
 		chooser.restoreStock().then((res) => finish(chooser, res));
 	}, [chooser, busy, finish]);
 
-	const reload = useCallback(() => { if (chooser) refresh(chooser); }, [chooser, refresh]);
+	const reload = useCallback(() => {
+		if (chooser) refresh(chooser);
+		if (backport) refreshBackport(backport);
+	}, [chooser, refresh, backport, refreshBackport]);
+
+	const runBackport = useCallback(async (action) => {
+		if (!backport || busy) return;
+		setBusy(true);
+		const installing = action === 'install';
+		setNotice(installing ? 'Installing the key filter backport...' : 'Removing the key filter backport...');
+		const res = installing ? await backport.install({onNotice: setNotice}) : await backport.remove();
+		if (!mounted.current) return;
+		setSteps(res.steps);
+		setProblems(res.errors.concat(res.warnings));
+		setNotice(res.ok ? 'Done.' : 'Failed. See below.');
+		await refreshBackport(backport);
+		if (mounted.current) setBusy(false);
+	}, [backport, busy, refreshBackport]);
+
+	const installBackport = useCallback(() => runBackport('install'), [runBackport]);
+	const removeBackport = useCallback(() => runBackport('remove'), [runBackport]);
 
 	const warnRestart = useMemo(() => Boolean(chooser && state && chooser.needsSamRestart(state)), [chooser, state]);
 	const current = state && (state.profileHome || state.recordHome);
@@ -106,6 +153,10 @@ const MainPanel = (props) => {
 					<CandidateItem key={c.id} candidate={c} current={c.id === current} disabled={busy} onChoose={choose} />
 				))}
 				{chooser && candidates.length === 0 && !busy ? <BodyText>No installed app declares appCategory home.</BodyText> : null}
+				{backportStatus ? <BodyText>{describeBackport(backportStatus)}</BodyText> : null}
+				{backport && backportStatus ? <BodyText>Installing or removing the backport restarts the compositor, so running apps may close.</BodyText> : null}
+				{backport && backportStatus && !backportStatus.installed ? <Button disabled={busy} onClick={installBackport}>Install key filter backport</Button> : null}
+				{backport && backportStatus && backportStatus.installed ? <Button disabled={busy} onClick={removeBackport}>Remove key filter backport</Button> : null}
 				{chooser ? <Button disabled={busy} onClick={restore}>Restore stock Home</Button> : null}
 				{chooser ? <Button disabled={busy} onClick={reload}>Refresh</Button> : null}
 				{problems.map((p, i) => <Item key={'p' + i}>{p}</Item>)}

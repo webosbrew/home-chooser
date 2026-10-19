@@ -86,43 +86,49 @@ const withoutHome = (record) => {
 	return out;
 };
 
-export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, version}) => {
-	const info = releaseInfo(version);
+// The general/defaultApps record: null when the key was never written.
+export const readDefaultApps = async (run) => {
+	try {
+		const reply = await run.luna(`${SETTINGS}/getSystemSettings`, {category: 'general', keys: ['defaultApps']});
+		return parseMaybeJson(reply && reply.settings && reply.settings.defaultApps);
+	} catch (e) {
+		if (isAbsentError(e)) return null; // key never written
+		throw e;
+	}
+};
 
-	// A runner logs each call; a failing call is logged with its error and then rethrown.
-	const runner = (log) => {
-		const wrap = async (step, fn) => {
-			log.push(step);
-			try {
-				const value = await fn();
-				step.ok = true;
-				if (step.kind === 'luna') step.reply = value;
-				return value;
-			} catch (e) {
-				step.ok = false;
-				step.error = errorMessage(e);
-				if (errorReply(e)) step.reply = errorReply(e);
-				throw e;
-			}
-		};
-		return {
-			luna: (uri, payload) => wrap({kind: 'luna', uri, payload}, () => rootLuna(uri, payload)),
-			write: (path, text) => wrap({kind: 'writeFile', path, text}, () => writeFile(path, text)),
-			remove: (path) => wrap({kind: 'removeFile', path}, () => removeFile(path)),
-			run: (command) => wrap({kind: 'exec', command}, () => exec(command))
-		};
-	};
+export const writeDefaultApps = (run, record) =>
+	run.luna(`${SETTINGS}/setSystemSettings`, {category: 'general', settings: {defaultApps: record}});
 
-	const readRecord = async (run) => {
+// A runner logs each call into `log`; a failing call is logged with its error and then rethrown.
+export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) => {
+	const wrap = async (step, fn) => {
+		log.push(step);
 		try {
-			const reply = await run.luna(`${SETTINGS}/getSystemSettings`, {category: 'general', keys: ['defaultApps']});
-			const v = parseMaybeJson(reply && reply.settings && reply.settings.defaultApps);
-			return v;
+			const value = await fn();
+			step.ok = true;
+			if (step.kind === 'luna') step.reply = value;
+			return value;
 		} catch (e) {
-			if (isAbsentError(e)) return null; // key never written
+			step.ok = false;
+			step.error = errorMessage(e);
+			if (errorReply(e)) step.reply = errorReply(e);
 			throw e;
 		}
 	};
+	return {
+		luna: (uri, payload) => wrap({kind: 'luna', uri, payload}, () => rootLuna(uri, payload)),
+		write: (path, text) => wrap({kind: 'writeFile', path, text}, () => writeFile(path, text)),
+		remove: (path) => wrap({kind: 'removeFile', path}, () => removeFile(path)),
+		run: (command) => wrap({kind: 'exec', command}, () => exec(command))
+	};
+};
+
+export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, version}) => {
+	const info = releaseInfo(version);
+	const runner = createRunner({rootLuna, exec, writeFile, removeFile});
+
+	const readRecord = readDefaultApps;
 
 	const readProfile = async (run) => {
 		if (!info.usesProfile) return {profile: null, error: null};
@@ -158,8 +164,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 	// True when this write would create `defaultApps` on a release where sam misses a first write.
 	const needsSamRestart = (state) => info.major >= 6 && info.major <= 8 && state.record === null;
 
-	const writeRecord = (run, record) =>
-		run.luna(`${SETTINGS}/setSystemSettings`, {category: 'general', settings: {defaultApps: record}});
+	const writeRecord = writeDefaultApps;
 
 	const closeApp = async (run, res, id) => {
 		try {

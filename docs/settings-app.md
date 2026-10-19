@@ -44,8 +44,9 @@ The release comes from `/etc/os-release` (`VERSION_ID`, then `VERSION`, then `PR
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
   The panel warns beforehand that apps may close, and `systemctl restart sam` is the last step.
 * On 6.x to 9.x the stock key filter launches `com.webos.app.home` by id, so the Home key follows
-  the choice only with the key filter backport installed. The result carries
-  `needsKeyFilterBackport` and the panel says so.
+  the choice only with the [key filter backport](key-filter-backport.md) installed. The result
+  carries `needsKeyFilterBackport`; the panel says so unless the backport is mounted, and offers
+  Install and Remove for it with the same step log.
 
 ## Restoring the stock home
 
@@ -84,7 +85,8 @@ limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
 directories, drops the other locale directories and the character maps, and rewrites iLib's
 manifest to the remaining files. The UI strings are English and come from the source and from
-Sandstone's own resources, which are left alone; the package is 2.4 MB.
+Sandstone's own resources, which are left alone. `scripts/copy-backport.js` then copies `backport/`
+(the boot script, and each release's manifest and diffs) into `dist`; the package is 2.4 MB.
 
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
 `app/package.json`. The tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,

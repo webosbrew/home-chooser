@@ -1,0 +1,50 @@
+{
+  "release": "6.6.0",
+  "files": [
+    {
+      "path": "/usr/lib/qml/KeyFilters/systemUi.js",
+      "sha256": "3e6a31ecb65cac7a55adb38ae5c6ceed96675a13d2ae18212a825ccebc0d5743",
+      "diff": "KeyFilters_systemUi.js.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/StarfishKeyFilter.qml",
+      "sha256": "3b7450507e9633e25ef2a74c912e07366bee07f7fe26d39342e1ffe3e0009d7d",
+      "diff": "WebOSCompositor_controllers_StarfishKeyFilter.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml",
+      "sha256": "b58a24c8efa5083d6732656e76514164f114e356741f81a28aa87a94bd8d09ed",
+      "diff": "WebOSCompositor_controllers_StarfishViewStateController.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml",
+      "sha256": "2cb171d23213e99363c03a15b5db6240b537cccc8c3fb66ee27f8be5b7f610cf",
+      "diff": "WebOSCompositor_services_StarfishBaseLunaServiceAPI.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/base/StarfishFocusedWindowInfoMgr.qml",
+      "sha256": "aabdc8521ce9dfa093d9d614df74bdba0848b729d5c1a4462401e82d1475bbe3",
+      "diff": "WebOSCompositor_services_base_StarfishFocusedWindowInfoMgr.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/base/StarfishOverlayPlayVideoStateMgr.qml",
+      "sha256": "da58b653db1ab2cea33ade93a04cb81e1f734c59e79f81329b31e731538b4433",
+      "diff": "WebOSCompositor_services_base_StarfishOverlayPlayVideoStateMgr.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/views/StarfishHomeView.qml",
+      "sha256": "e21484204179a653886a4918b583bbc1828012b7e0cb6709ccd4055181620379",
+      "diff": "WebOSCompositor_views_StarfishHomeView.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/views/StarfishNudgeView.qml",
+      "sha256": "830f55228393cf2a718c9d4a5d46943ec63d309418f8cf81e415180fee5aab08",
+      "diff": "WebOSCompositor_views_StarfishNudgeView.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositorBase/global/Settings.qml",
+      "sha256": "4dafd9444ebb4e4e1a666b2a71a8e48b02b690de2e08df013bca5dc6ffb1fb78",
+      "diff": "WebOSCompositorBase_global_Settings.qml.diff"
+    }
+  ]
+}

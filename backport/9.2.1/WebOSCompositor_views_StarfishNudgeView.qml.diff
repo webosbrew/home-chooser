@@ -1,0 +1,11 @@
+--- usr/lib/qml/WebOSCompositor/views/StarfishNudgeView.qml
++++ usr/lib/qml/WebOSCompositor/views/StarfishNudgeView.qml
+@@ -55,7 +55,7 @@
+     function isSystemAllowable(params) {
+         if (params.hasOwnProperty("priority") && params.priority === "urgent") return true;
+ 
+-        return !(views.fullscreen.currentItem && views.fullscreen.currentItem.appId === "com.webos.app.home") &&
++        return !(views.fullscreen.currentItem && Settings.isHomeApp(views.fullscreen.currentItem.appId)) &&
+                !views.starfishHome.visible && !(views.notification && views.notification.advancedAlertActive) &&
+                (params.allowOnOverlay || views.starfishOverlay.state !== "open") && views.starfishOverlayGroup.state !== "open" &&
+                !views.starfishVoiceAgent.isRunning() &&

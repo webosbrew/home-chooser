@@ -1,0 +1,23 @@
+--- usr/lib/qml/WebOSCompositor/controllers/StarfishKeyFilter.qml
++++ usr/lib/qml/WebOSCompositor/controllers/StarfishKeyFilter.qml
+@@ -601,6 +601,8 @@
+ 
+             // functions
+             readonly property var closeOverlaidItems: viewState.closeOverlaidItems
++            readonly property var getHomeAppId: function() { return Settings.getHomeAppId(); }
++            readonly property var isHomeApp: function(appId) { return Settings.isHomeApp(appId); }
+             readonly property var launchAGP: root.launchAGP
+             readonly property var surfaceAcceptsBackKey: viewState.surfaceAcceptsBackKey
+             readonly property var surfaceAcceptsExitKey: viewState.surfaceAcceptsExitKey
+@@ -898,6 +900,11 @@
+ 
+         readonly property QtObject applicationManager: QtObject {
+             // functions
++            readonly property var launchHome: function(params) {
++                Settings.launchHome({"params": params, "checkUpdateOnLaunch": false,
++                                     "autoInstallation": false, "reason": "hotKey"});
++            }
++
+             readonly property var launch: function(appId, params, checkUpdateOnLaunch, autoInstallation, reason) {
+                 var launch_reason = typeof(reason) === "string" ? reason :"hotKey";
+                 viewState.launch(appId, params, checkUpdateOnLaunch, autoInstallation, launch_reason);

@@ -1,0 +1,26 @@
+--- usr/lib/qml/KeyFilters/appLaunch.js
++++ usr/lib/qml/KeyFilters/appLaunch.js
+@@ -2208,12 +2208,9 @@
+                         targetAppId = fullscreenView.primaryAppId();
+                     }
+                     pmLog.info("KEYFILTER_APPLAUNCH", {"targetAppId": targetAppId});
+-                    switch (targetAppId) {
+-                    case "com.webos.app.home":
+-                        applicationManager.launch("com.webos.app.home",
+-                                                  JSON.stringify({"activateType": "showOption"}));
+-                        break;
+-                    default:
++                    if (global.isHomeApp(targetAppId)) {
++                        applicationManager.launchHome({"activateType": "showOption"});
++                    } else {
+                         var toolbarPosition = fullscreenView.getToolbarPosition(targetAppId);
+                         if (toolbarPosition) {
+                             var screenPosition = (toolbarPosition == "toolbar_right") ? "left" : "right";
+@@ -2222,7 +2219,6 @@
+                         } else {
+                             lunaCall.send('com.webos.applicationManager', '/launch', JSON.stringify({"id":"com.webos.app.multiviewsettings","params":{"appId":targetAppId}}));
+                         }
+-                        break;
+                     }
+                     return KeyPolicy.Accepted;
+                 }

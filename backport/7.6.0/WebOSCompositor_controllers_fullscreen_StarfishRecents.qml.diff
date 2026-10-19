@@ -1,0 +1,11 @@
+--- usr/lib/qml/WebOSCompositor/controllers/fullscreen/StarfishRecents.qml
++++ usr/lib/qml/WebOSCompositor/controllers/fullscreen/StarfishRecents.qml
+@@ -43,7 +43,7 @@
+     property bool firstAppLaunched      : false
+ 
+     property bool supportNMRM: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["tv.hw.supportNMRM"]}) === true
+-    property string __lastInputApp: supportNMRM ? "com.webos.app.home" : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
++    property string __lastInputApp: supportNMRM ? Settings.getHomeAppId() : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
+ 
+     property bool __pendingToPush: false
+     property var __maxBackupCount: Settings.local.recents.maxBackupItems

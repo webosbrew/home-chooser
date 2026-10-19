@@ -1,0 +1,22 @@
+--- usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
++++ usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
+@@ -53,7 +53,9 @@
+     property bool audioGuidance: (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"option", "keys":["audioGuidance"]}) || "") === "on" // false by default
+ 
+     property bool supportNMRM: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["tv.hw.supportNMRM"]}) === true
+-    property string lastInputApp: supportNMRM ? "com.webos.app.home" : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
++    // Open House: start the home app subscription with the compositor
++    property string homeAppId: Settings.getHomeAppId()
++    property string lastInputApp: supportNMRM ? Settings.getHomeAppId() : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
+ 
+     property string autoBrowserUrl: Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"hotelMode", "keys":["autoBrowserUrl"]}) || ""
+     property bool disableAccessibilityLaunch: tvlinkOsdDisplay === "null" ? ((enableHotelMode === true) && (enableLimitedMode === true)
+@@ -595,7 +597,7 @@
+                         // this is temporarily added to avoid key focus issue. This will be removed in next MR
+                         if(views.starfishViewAdjustments.specialUIVisible)
+                             views.starfishViewAdjustments.closeSpecialUI()
+-                        if (views.starfishImageSplash && appId != null && appId != "com.webos.app.home")
++                        if (views.starfishImageSplash && appId != null && !Settings.isHomeApp(appId))
+                             views.starfishImageSplash.open(appId, splashBackground.replace("file://", ""));
+                     } else if (showSpinner) {
+                         if (!isForegroundApp(appId)) {
