@@ -1,232 +1,198 @@
-/* eslint-env node */
-import {
-	HBCHANNEL_EXEC, buildLunaSend, buildRemoveFile, buildWriteFile, createExec, createOsRelease, createRootLuna,
-	createReadIcon, createRootUid, createWriteFile, iconMimeType, buildReadIcon, parseOsRelease, ICON_MAX_BYTES
-} from '..';
-import {shellQuote, shellWord, toBase64} from '../quote';
 import {createBridgeCall} from '../bridge';
 import {ServiceError} from '../errors';
-import {execFileSync} from 'child_process';
+import {SERVICE_URI, createServiceClient, withTimeout} from '../service';
+import {createExec, createOsRelease, createPersistenceStatus, createPlatform, createReadIcon, parseOsRelease} from '..';
+import {parsePersistenceStatus} from '../../openhouse/persistence';
 
-describe('quoting', () => {
-	test('shellQuote wraps in single quotes and escapes embedded ones', () => {
-		expect(shellQuote('abc')).toBe("'abc'");
-		expect(shellQuote("it's")).toBe("'it'\\''s'");
-		expect(shellQuote("''")).toBe("''\\'''\\'''");
-		expect(shellQuote('')).toBe("''");
+const reply = (extra) => Object.assign({returnValue: true}, extra);
+
+// A fake bridge that answers by method name and records every call.
+const bridge = (handlers) => {
+	const calls = [];
+	const call = jest.fn(async (uri, payload) => {
+		calls.push([uri, payload]);
+		const method = uri.slice(SERVICE_URI.length + 1);
+		const h = handlers[method];
+		if (!h) throw new Error('unexpected ' + uri);
+		return typeof h === 'function' ? h(payload) : h;
+	});
+	return {call, calls};
+};
+
+describe('service client', () => {
+	test('every method is a call to the service with its payload', async () => {
+		const {call, calls} = bridge({
+			status: reply({root: true, uid: 0, version: '0.1.0'}), quit: reply(), readFile: reply({exists: true, text: 'x'}),
+			writeFile: reply(), removeFile: reply(), link: reply(), unlink: reply(), linkStatus: reply({entry: 'none', target: ''}),
+			run: reply({exitCode: 0, stdoutString: 'o', stderrString: 'e'}), readIcon: reply({mime: 'image/png', data: 'AA=='})
+		});
+		const s = createServiceClient(call);
+		await expect(s.status()).resolves.toMatchObject({root: true});
+		await s.quit();
+		await expect(s.readFile('/p')).resolves.toBe('x');
+		await s.writeFile('/p', 't');
+		await s.removeFile('/p');
+		await s.link();
+		await s.unlink();
+		await expect(s.linkStatus()).resolves.toMatchObject({entry: 'none'});
+		await expect(s.run('restartSam')).resolves.toEqual({stdout: 'o', stderr: 'e', exitCode: 0});
+		await expect(s.readIcon('a.b')).resolves.toEqual({mime: 'image/png', data: 'AA=='});
+		expect(calls).toEqual([
+			[SERVICE_URI + '/status', {}], [SERVICE_URI + '/quit', {}], [SERVICE_URI + '/readFile', {path: '/p'}],
+			[SERVICE_URI + '/writeFile', {path: '/p', text: 't'}], [SERVICE_URI + '/removeFile', {path: '/p'}],
+			[SERVICE_URI + '/link', {}], [SERVICE_URI + '/unlink', {}], [SERVICE_URI + '/linkStatus', {}],
+			[SERVICE_URI + '/run', {command: 'restartSam'}], [SERVICE_URI + '/readIcon', {appId: 'a.b'}]
+		]);
 	});
 
-	test('round-trips hostile text through a real shell', () => {
-		const text = "a'b\"c $HOME `id` \\ \n; rm -rf / {\"k\":\"it's\"}";
-		const out = execFileSync('/bin/sh', ['-c', 'printf %s ' + shellQuote(text)]).toString();
-		expect(out).toBe(text);
+	test('readFile resolves null for a file that is not there', async () => {
+		const s = createServiceClient(bridge({readFile: reply({exists: false})}).call);
+		await expect(s.readFile('/p')).resolves.toBeNull();
 	});
 
-	test('shellWord leaves plain URIs bare and quotes the rest', () => {
-		expect(shellWord('luna://com.webos.applicationManager/listApps')).toBe('luna://com.webos.applicationManager/listApps');
-		expect(shellWord('a b')).toBe("'a b'");
-		expect(shellWord('a;b')).toBe("'a;b'");
+	test('a false returnValue is a ServiceError with the reply', async () => {
+		const r = {returnValue: false, errorCode: 'notRoot', errorText: 'not root'};
+		const s = createServiceClient(bridge({writeFile: r, status: r}).call);
+		await expect(s.writeFile('/p', '')).rejects.toBeInstanceOf(ServiceError);
+		await expect(s.writeFile('/p', '')).rejects.toMatchObject({reply: r, message: 'not root'});
 	});
 
-	test('toBase64 is UTF-8 safe', () => {
-		expect(toBase64('{"a":"é"}')).toBe(Buffer.from('{"a":"é"}', 'utf8').toString('base64'));
+	describe('luna', () => {
+		test('forwards uri and payload and resolves the inner reply', async () => {
+			const {call, calls} = bridge({call: reply({reply: {returnValue: true, apps: [1]}})});
+			const s = createServiceClient(call);
+			await expect(s.luna('luna://com.webos.applicationManager/listApps', {properties: ['id']})).resolves.toEqual({returnValue: true, apps: [1]});
+			expect(calls).toEqual([[SERVICE_URI + '/call', {uri: 'luna://com.webos.applicationManager/listApps', payload: {properties: ['id']}}]]);
+		});
+		test('an inner returnValue false is a ServiceError carrying the inner reply', async () => {
+			const inner = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
+			const s = createServiceClient(bridge({call: reply({reply: inner})}).call);
+			await expect(s.luna('luna://x/y')).rejects.toMatchObject({reply: inner, message: 'There is no matched result from DB'});
+		});
+		test('a refusal by the service is a ServiceError with its reply', async () => {
+			const r = {returnValue: false, errorCode: 'notAllowed', errorText: 'luna://x/y is not on the list'};
+			const s = createServiceClient(bridge({call: r}).call);
+			await expect(s.luna('luna://x/y', {})).rejects.toMatchObject({reply: r});
+		});
+		test('a missing payload becomes {}', async () => {
+			const {call, calls} = bridge({call: reply({reply: {returnValue: true}})});
+			await createServiceClient(call).luna('luna://x/y');
+			expect(calls[0][1].payload).toEqual({});
+		});
+		test('a reply without an object is an error', async () => {
+			const s = createServiceClient(bridge({call: reply()}).call);
+			await expect(s.luna('luna://x/y')).rejects.toBeInstanceOf(ServiceError);
+		});
 	});
-});
 
-describe('buildLunaSend', () => {
-	test('builds the luna-send command', () => {
-		expect(buildLunaSend('luna://com.webos.applicationManager/listApps', {})).toBe(
-			"luna-send -n 1 luna://com.webos.applicationManager/listApps '{}'"
-		);
+	test('a call that never answers times out', async () => {
+		const s = createServiceClient(() => new Promise(() => {}), {timeoutMs: 20});
+		await expect(s.status()).rejects.toThrow(/timed out/);
 	});
-	test('escapes single quotes in the payload', () => {
-		expect(buildLunaSend('luna://x/y', {name: "it's"})).toBe("luna-send -n 1 luna://x/y '{\"name\":\"it'\\''s\"}'");
-	});
-	test('the payload survives a real shell', () => {
-		const payload = {a: "it's", b: '$(id)', c: '`x`'};
-		const cmd = buildLunaSend('luna://x/y', payload).replace(/^luna-send -n 1 \S+ /, 'printf %s ');
-		expect(JSON.parse(execFileSync('/bin/sh', ['-c', cmd]).toString())).toEqual(payload);
+
+	test('withTimeout passes values and errors through', async () => {
+		await expect(withTimeout(Promise.resolve(3), 50, 'x')).resolves.toBe(3);
+		await expect(withTimeout(Promise.reject(new Error('boom')), 50, 'x')).rejects.toThrow('boom');
 	});
 });
 
 describe('exec', () => {
-	test('calls hbchannel exec and resolves stdout and stderr', async () => {
-		const call = jest.fn().mockResolvedValue({returnValue: true, stdoutString: 'out', stderrString: 'err'});
-		await expect(createExec(call)('id')).resolves.toEqual({stdout: 'out', stderr: 'err'});
-		expect(call).toHaveBeenCalledWith(HBCHANNEL_EXEC, {command: 'id'});
+	test('a command name runs that command', async () => {
+		const run = jest.fn().mockResolvedValue({stdout: 'out', stderr: '', exitCode: 0});
+		await expect(createExec({run})('keyfilterApply')).resolves.toMatchObject({stdout: 'out'});
+		expect(run).toHaveBeenCalledWith('keyfilterApply');
 	});
-
-	test('rejects with the reply text on returnValue false', async () => {
-		const reply = {returnValue: false, errorCode: -1, errorText: 'Denied method call "exec" for category "/"'};
-		const err = await createExec(jest.fn().mockResolvedValue(reply))('id').catch((e) => e);
-		expect(err.message).toBe('Denied method call "exec" for category "/"');
-		expect(err.reply).toEqual(reply);
-	});
-
-	test('a failed command carries its stderr', async () => {
-		const reply = {returnValue: false, errorText: 'Command failed', stdoutString: '', stderrString: 'boom\n'};
-		const err = await createExec(jest.fn().mockResolvedValue(reply))('false').catch((e) => e);
-		expect(err.message).toBe('Command failed: boom');
+	test('linkEntry and unlinkEntry use the link methods', async () => {
+		const service = {link: jest.fn().mockResolvedValue({}), unlink: jest.fn().mockResolvedValue({}), run: jest.fn()};
+		const exec = createExec(service);
+		await expect(exec('linkEntry')).resolves.toEqual({stdout: '', stderr: ''});
+		await exec('unlinkEntry');
+		expect(service.link).toHaveBeenCalledTimes(1);
+		expect(service.unlink).toHaveBeenCalledTimes(1);
+		expect(service.run).not.toHaveBeenCalled();
 	});
 });
 
-describe('rootLuna', () => {
-	const execReturning = (stdout) => jest.fn().mockResolvedValue({stdout, stderr: ''});
+describe('persistence status', () => {
+	const service = (over) => Object.assign({
+		linkStatus: async () => ({entry: 'link', target: '/app/backport/openhouse'}),
+		run: async (c) => ({stdout: c === 'watcherActive' ? 'active\n' : 'line one\nline two\n', stderr: ''}),
+		readFile: async (p) => (p.endsWith('/home') ? 'my.home\n' : '')
+	}, over);
 
-	test('runs luna-send and parses the JSON', async () => {
-		const exec = execReturning('{"returnValue":true,"apps":[]}\n');
-		await expect(createRootLuna(exec)('luna://a/b', {x: 1})).resolves.toEqual({returnValue: true, apps: []});
-		expect(exec).toHaveBeenCalledWith("luna-send -n 1 luna://a/b '{\"x\":1}'");
+	test('assembles the text parsePersistenceStatus reads', async () => {
+		const {stdout} = await createPersistenceStatus(service())();
+		expect(parsePersistenceStatus(stdout)).toMatchObject({
+			entry: 'other', entryTarget: '/app/backport/openhouse', active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']
+		});
 	});
-
-	test('rejects on returnValue false with the reply', async () => {
-		const reply = {returnValue: false, errorCode: 1, errorText: 'no default app is set for the category'};
-		const err = await createRootLuna(execReturning(JSON.stringify(reply)))('luna://a/b', {}).catch((e) => e);
-		expect(err.message).toBe('no default app is set for the category');
-		expect(err.reply).toEqual(reply);
-	});
-
-	test('rejects when luna-send prints no JSON', async () => {
-		await expect(createRootLuna(execReturning('Error: oops'))('luna://a/b', {})).rejects.toThrow('luna-send printed no JSON');
-	});
-
-	test('non-zero exit with a luna reply on stdout rejects with the luna reply', async () => {
-		const luna = {returnValue: false, errorText: 'Unknown method "setDefaultApp" for category "/"'};
-		const execFailure = new ServiceError({returnValue: false, errorText: 'Command failed: luna-send ...', stdoutString: JSON.stringify(luna) + '\n', stderrString: ''});
-		const err = await createRootLuna(jest.fn().mockRejectedValue(execFailure))('luna://a/b', {}).catch((e) => e);
-		expect(err.message).toBe('Unknown method "setDefaultApp" for category "/"');
-		expect(err.reply).toEqual(luna);
-	});
-
-	test('non-zero exit without a luna reply keeps the exec error', async () => {
-		const execFailure = new ServiceError({returnValue: false, errorText: 'Command failed: luna-send', stdoutString: '', stderrString: 'luna-send: not found'});
-		const err = await createRootLuna(jest.fn().mockRejectedValue(execFailure))('luna://a/b', {}).catch((e) => e);
-		expect(err).toBe(execFailure);
-	});
-
-	test('maps the exec maxBuffer error to a clear error', async () => {
-		const log = jest.spyOn(console, 'log').mockImplementation(() => {});
-		const full = new ServiceError({returnValue: false, errorText: 'stdout maxBuffer exceeded', stdoutString: '{"returnValue":tr'});
-		const err = await createRootLuna(jest.fn().mockRejectedValue(full))('luna://a/b', {}).catch((e) => e);
-		expect(err.message).toMatch(/output too large/);
-		expect(log.mock.calls[0][0]).toMatch(/\[OpenHouse\].*output too large/);
-		log.mockRestore();
-	});
-
-	test('propagates an exec failure unchanged', async () => {
-		const exec = jest.fn().mockRejectedValue(new Error('Denied method call "exec"'));
-		await expect(createRootLuna(exec)('luna://a/b', {})).rejects.toThrow('Denied method call "exec"');
-	});
-});
-
-describe('files', () => {
-	test('writeFile pipes base64 through base64 -d, and the result matches', () => {
-		const text = JSON.stringify({defaultApps: {categories: {home: "x'y"}}}, null, 2);
-		const cmd = buildWriteFile('/tmp/openhouse-spec-out.json', text);
-		expect(cmd).toMatch(/^mkdir -p '\/tmp' && printf %s '[A-Za-z0-9+/=]+' \| base64 -d > '\/tmp\/openhouse-spec-out.json'$/);
-		execFileSync('/bin/sh', ['-c', cmd]);
-		expect(require('fs').readFileSync('/tmp/openhouse-spec-out.json', 'utf8')).toBe(text);
-		execFileSync('/bin/sh', ['-c', buildRemoveFile('/tmp/openhouse-spec-out.json')]);
-		expect(require('fs').existsSync('/tmp/openhouse-spec-out.json')).toBe(false);
-	});
-
-	test('removeFile quotes the path', () => {
-		expect(buildRemoveFile("/var/a b/it's.json")).toBe("rm -f '/var/a b/it'\\''s.json'");
-	});
-
-	test('writeFile goes through exec', async () => {
-		const exec = jest.fn().mockResolvedValue({stdout: '', stderr: ''});
-		await createWriteFile(exec)('/var/x/y.json', '{}');
-		expect(exec).toHaveBeenCalledWith(buildWriteFile('/var/x/y.json', '{}'));
+	test('no files, no entry', async () => {
+		const {stdout} = await createPersistenceStatus(service({
+			linkStatus: async () => ({entry: 'none', target: ''}), readFile: async () => null, run: async () => ({stdout: '', stderr: ''})
+		}))();
+		expect(parsePersistenceStatus(stdout)).toMatchObject({entry: 'none', active: '', stored: '', keyfilterEnabled: false, log: []});
 	});
 });
 
 describe('os-release', () => {
 	test('parses VERSION_ID', () => {
-		expect(parseOsRelease('NAME="webOS TV"\nVERSION_ID="6.6.0"\n').version).toEqual([6, 6, 0]);
+		expect(parseOsRelease('NAME="webOS"\nVERSION_ID="6.6.0"\n').version).toEqual([6, 6, 0]);
 	});
 	test('falls back to VERSION and PRETTY_NAME', () => {
-		expect(parseOsRelease("VERSION='5.6.1-1'\n").version).toEqual([5, 6, 1]);
+		expect(parseOsRelease('VERSION="9.2.1 (x)"\n').source).toBe('VERSION');
 		expect(parseOsRelease('PRETTY_NAME="webOS TV 11.2.0"\n').version).toEqual([11, 2, 0]);
 	});
-	test('pads short versions and handles 6.5.2', () => {
-		expect(parseOsRelease('VERSION_ID=10.3\n').version).toEqual([10, 3, 0]);
-		expect(parseOsRelease('VERSION_ID=6.5.2\n').version).toEqual([6, 5, 2]);
+	test('pads short versions', () => {
+		expect(parseOsRelease('VERSION_ID=6.5\n').version).toEqual([6, 5, 0]);
 	});
-	test('no version yields null, and osRelease rejects', async () => {
-		expect(parseOsRelease('NAME=x\n').version).toBeNull();
-		const exec = jest.fn().mockResolvedValue({stdout: 'NAME=x\n', stderr: ''});
-		await expect(createOsRelease(exec)()).rejects.toThrow('No version');
-	});
-	test('osRelease cats the file', async () => {
-		const exec = jest.fn().mockResolvedValue({stdout: 'VERSION_ID="8.3.0"\n', stderr: ''});
-		expect((await createOsRelease(exec)()).version).toEqual([8, 3, 0]);
-		expect(exec).toHaveBeenCalledWith('cat /etc/os-release');
+	test('osRelease reads the file through the service, and rejects without a version', async () => {
+		const readFile = jest.fn().mockResolvedValueOnce('VERSION_ID="8.3.0"\n').mockResolvedValueOnce('NAME=x\n').mockResolvedValueOnce(null);
+		const osRelease = createOsRelease({readFile});
+		await expect(osRelease()).resolves.toMatchObject({version: [8, 3, 0]});
+		expect(readFile).toHaveBeenCalledWith('/etc/os-release');
+		await expect(osRelease()).rejects.toThrow(/No version/);
+		await expect(osRelease()).rejects.toThrow(/No version/);
 	});
 });
 
 describe('bridge', () => {
 	test('resolves the parsed reply and sends JSON', async () => {
 		let sent;
-		class Fake {
-			call(uri, json) {
-				sent = [uri, json];
-				setTimeout(() => this.onservicecallback('{"returnValue":false,"errorText":"x"}'), 0);
-			}
+		class Bridge {
+			call(uri, payload) { sent = [uri, payload]; setTimeout(() => this.onservicecallback('{"returnValue":true}'), 0); }
+			cancel() {}
 		}
-		await expect(createBridgeCall(Fake)('luna://a/b', {k: 1})).resolves.toEqual({returnValue: false, errorText: 'x'});
-		expect(sent).toEqual(['luna://a/b', '{"k":1}']);
+		await expect(createBridgeCall(Bridge)('luna://x/y', {a: 1})).resolves.toEqual({returnValue: true});
+		expect(sent).toEqual(['luna://x/y', '{"a":1}']);
 	});
 	test('rejects without a bridge', async () => {
-		await expect(createBridgeCall(null)('luna://a/b', {})).rejects.toThrow('No webOS service bridge');
+		await expect(createBridgeCall(null)('luna://x/y', {})).rejects.toThrow(/No webOS service bridge/);
 	});
 });
 
-describe('icons and root check', () => {
-	test('mime type comes from the extension', () => {
-		expect(iconMimeType('/a/b.PNG')).toBe('image/png');
-		expect(iconMimeType('/a/b.svg')).toBe('image/svg+xml');
-		expect(iconMimeType('/a/b.bmp')).toBeNull();
-		expect(iconMimeType(null)).toBeNull();
+describe('icons', () => {
+	test('returns a data URL, caches, and falls back to null', async () => {
+		const readIcon = jest.fn().mockResolvedValue({mime: 'image/png', data: 'AAEC'});
+		const read = createReadIcon({readIcon});
+		await expect(read('a.b', '/x/icon.png')).resolves.toBe('data:image/png;base64,AAEC');
+		await read('a.b', '/x/icon.png');
+		expect(readIcon).toHaveBeenCalledTimes(1);
+		expect(readIcon).toHaveBeenCalledWith('a.b');
+		await expect(read('a.b', '/x/icon.txt')).resolves.toBeNull();
+		await expect(read('a.b', null)).resolves.toBeNull();
+		await expect(createReadIcon({readIcon: jest.fn().mockRejectedValue(new Error('x'))})('a', 'i.png')).resolves.toBeNull();
+		await expect(createReadIcon({readIcon: jest.fn().mockResolvedValue({mime: 'image/png', data: 'not base64!'})})('a', 'i.png')).resolves.toBeNull();
 	});
-	test('the command reads a small file as base64 and refuses a big one', () => {
-		const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'oh-icon-'));
-		const small = dir + "/it's.png";
-		require('fs').writeFileSync(small, Buffer.from([1, 2, 3, 250]));
-		const big = dir + '/big.png';
-		require('fs').writeFileSync(big, Buffer.alloc(ICON_MAX_BYTES + 1));
-		const run = (p) => {
-			try {
-				return execFileSync('sh', ['-c', buildReadIcon(p)], {encoding: 'utf8'});
-			} catch (e) {
-				return 'FAIL';
-			}
-		};
-		expect(run(small)).toBe(Buffer.from([1, 2, 3, 250]).toString('base64'));
-		expect(run(big)).toBe('FAIL');
-		expect(run(dir + '/none.png')).toBe('FAIL');
-		require('fs').rmSync(dir, {recursive: true});
-	});
-	test('readIcon returns a data URL, caches, and falls back to null', async () => {
-		const exec = jest.fn((cmd) => (cmd.includes('good') ? Promise.resolve({stdout: 'AQID+g==\n', stderr: ''}) : Promise.reject(new Error('exit 1'))));
-		const read = createReadIcon(exec);
-		expect(await read('/x/good.png')).toBe('data:image/png;base64,AQID+g==');
-		expect(await read('/x/good.png')).toBe('data:image/png;base64,AQID+g==');
-		expect(exec).toHaveBeenCalledTimes(1);
-		expect(await read('/x/bad.png')).toBeNull();
-		expect(await read('/x/bad.png')).toBeNull();
-		expect(exec).toHaveBeenCalledTimes(2);
-		expect(await read('/x/icon.bmp')).toBeNull();
-		expect(await read(null)).toBeNull();
-		expect(exec).toHaveBeenCalledTimes(2);
-	});
-	test('garbage output is not a data URL', async () => {
-		const read = createReadIcon(jest.fn().mockResolvedValue({stdout: '<html>', stderr: ''}));
-		expect(await read('/x/a.png')).toBeNull();
-	});
-	test('rootUid parses id -u', async () => {
-		expect(await createRootUid(jest.fn().mockResolvedValue({stdout: '0\n', stderr: ''}))()).toBe(0);
-		expect(await createRootUid(jest.fn().mockResolvedValue({stdout: '1000\n', stderr: ''}))()).toBe(1000);
-		await expect(createRootUid(jest.fn().mockResolvedValue({stdout: 'x', stderr: ''}))()).rejects.toThrow('Unexpected');
+});
+
+describe('createPlatform', () => {
+	test('wires the logic layer to the service', async () => {
+		const {call, calls} = bridge({call: reply({reply: {returnValue: true}}), writeFile: reply(), run: reply({exitCode: 0})});
+		const p = createPlatform(call);
+		await p.rootLuna('luna://x/y', {});
+		await p.writeFile('/p', 't');
+		await p.exec('restartSam');
+		expect(calls.map((c) => c[0].slice(SERVICE_URI.length))).toEqual(['/call', '/writeFile', '/run']);
+		expect(typeof p.ensureRoot).toBe('function');
 	});
 });

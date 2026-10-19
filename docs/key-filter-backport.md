@@ -205,7 +205,7 @@ that is mounted or the one that matches the live files (from `status`). The rele
 major version; the set is chosen by hash. The package carries `backport/` (`app/scripts/copy-backport.js`
 runs between the build and `ares-package`).
 
-Install, as root through Homebrew Channel's exec, each step in the step log:
+Install, as root through Open House's service ([service](service.md)), each step in the step log:
 
 1. `status`. It stops here, changing nothing, if the data is missing or no set matches the live
    files and nothing is mounted.

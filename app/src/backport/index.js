@@ -1,9 +1,8 @@
 // The key filter backport for webOS 6 to 9: status, install and remove. Pure over injected
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/key-filter-backport.md.
 import {errorMessage} from '../platform/errors';
-import {shellQuote} from '../platform/quote';
 import {
-	KEYFILTER_FLAG, KEYFILTER_SCRIPT, STATE_DIR, ensureEntryCommand, parsePersistenceStatus,
+	KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
 	persistenceStatusCommand
 } from '../openhouse/persistence';
 import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../openhouse';
@@ -35,7 +34,7 @@ export const parseStatus = (text) => {
 
 export const createBackport = ({rootLuna, exec, writeFile, removeFile, version}) => {
 	const runner = createRunner({rootLuna, exec, writeFile, removeFile});
-	const script = (arg) => `sh ${shellQuote(SCRIPT_PATH)}${arg ? ' ' + arg : ''}`;
+	const script = keyfilterCommand;
 
 	// `enabled`: the flag file the boot entry checks; `entry`: the state of the init.d link.
 	const readStatus = async (run) => {
@@ -85,7 +84,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 					res.createdKey = true;
 				}
 
-				await run.run(`mkdir -p ${shellQuote(STATE_DIR)} && touch ${shellQuote(KEYFILTER_FLAG)}`);
+				await run.write(KEYFILTER_FLAG, '');
 				await run.run(ensureEntryCommand());
 
 				if (onNotice) onNotice('Applying the backport and restarting the compositor; running apps may close.');
@@ -93,7 +92,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 
 				if (res.createdKey) {
 					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
-					await run.run('systemctl restart sam');
+					await run.run('restartSam');
 				}
 
 				res.status = await readStatus(run);

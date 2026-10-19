@@ -1,0 +1,12 @@
+{
+  "id": "org.webosbrew.openhouse.service",
+  "description": "Open House root service",
+  "engine": "native",
+  "executable": "openhouse-service",
+  "services": [
+    {
+      "name": "org.webosbrew.openhouse.service",
+      "description": "Open House root service"
+    }
+  ]
+}

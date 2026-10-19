@@ -1,9 +1,9 @@
-// Home-choice logic. Pure over injected {rootLuna, exec, writeFile, removeFile, version}.
+// Home-choice logic. Pure over injected {rootLuna, exec, writeFile, removeFile, version}; exec takes
+// a command name (see persistence.js), not shell text.
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
-import {shellQuote} from '../platform/quote';
 import {
-	HOME_FILE, KEYFILTER_SCRIPT, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand,
+	HOME_FILE, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus, persistenceStatusCommand,
 	startWatcherCommand, stopWatcherCommand
 } from './persistence';
 
@@ -294,7 +294,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
 				if (needsSamRestart(state)) {
 					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
-					await run.run('systemctl restart sam');
+					await run.run('restartSam');
 					res.restartedSam = true;
 				}
 			} catch (e) {
@@ -335,7 +335,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				if (info.needsKeyFilterBackport) {
 					// the patched Settings.qml carries the stored choice as its fallback; clear it if mounted
 					try {
-						await run.run(`sh ${shellQuote(KEYFILTER_SCRIPT)} refresh`);
+						await run.run(keyfilterCommand('refresh'));
 					} catch (e) {
 						res.warnings.push(`Could not refresh the key filter backport: ${errorMessage(e)}`);
 					}

@@ -49,5 +49,6 @@ homebrew app with three parts:
 * [The Home key and the home app, webOS 5 to 26](docs/research/home-key-and-home-app.md): how
   each release picks and launches the home app, verified against the firmware and on emulator
   VMs, with the mod map and the remaining tests.
+* [The root service](docs/service.md): `org.webosbrew.openhouse.service`, its methods, allow-lists, sender check, elevation and logs.
 * [The key filter backport, webOS 6.6.0 to 9.2.1](docs/key-filter-backport.md): the home id the
   compositor shares, the sites patched per release, the boot script and the install sequence.

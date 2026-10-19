@@ -26,7 +26,7 @@ Open House is in English only.
 * **No launch animation.** `appinfo.json` sets `noSplashOnLaunch: true` and `spinnerOnLaunch: false`, as the stock Settings app and many stock apps do. The 6.6.0 web app manager knows no other appinfo key for launch animation (only `noSplash` and `disableBackHistoryAPI` appear in its strings).
 * **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
-  one plain sentence ("Couldn't set the Home app. Homebrew Channel didn't respond."); the details
+  one plain sentence ("Couldn't set the Home app. The Open House service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
   a success; Back closes it.
 * **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
@@ -40,9 +40,9 @@ Open House is in English only.
   the dialog says the Home button can't be changed on this TV's software and applies nothing.
 * **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
 * **Before uninstalling Open House, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
-* **Problems (no root).** Homebrew Channel missing or not running, refusing `exec` (webOS 26 and later:
-  "Your Homebrew Channel doesn't let apps run root commands yet. Update Homebrew Channel; Open House
-  needs it."), or not running as root: the panel keeps its layout. A plain one-line reason is at the
+* **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
+  "Your Homebrew Channel doesn't let apps elevate Open House's service yet. Update Homebrew Channel; Open House
+  needs it."), or the service not coming up as root ("Open House's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the
   top of the list area and the list is disabled (Moonstone `disabled`: rows are dimmed, cannot be
   focused or clicked, no confirmation opens), with nothing focused; Back still closes the panel. Without
   root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs
@@ -51,20 +51,32 @@ Open House is in English only.
 * **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon
-  is read as root (`base64`, at most 256 KB, once per session) and shown as a `data:` URL; a generic
+  is read by the service (`readIcon`, at most 256 KB, once per session) and shown as a `data:` URL; a generic
   icon stands in when that fails.
 
 ## Root access
 
-The app runs `luna-send -n 1 -f <uri> '<json>'` as root through Homebrew Channel's
-`luna://org.webosbrew.hbchannel.service/exec`, so the settings service whitelist and the bus
-permissions do not apply (see [Permissions](research/home-key-and-home-app.md#permissions)). Files are
-written as root by piping base64 into `base64 -d`, which is a busybox applet on the images, so
-the content (JSON with quotes and newlines) never meets the shell's quoting. If `exec` is
-refused (`Denied method call "exec"` on webOS 26 and later with the current Homebrew Channel) or
-Homebrew Channel is absent, the screen says so and does nothing else (see [Using it](#using-it)).
+The app does not call the settings service, `sam` or the system profile under its own identity,
+and it does not run shell commands. It calls Open House's own native service,
+`org.webosbrew.openhouse.service`, which runs as root and makes the privileged calls itself, so the
+settings service whitelist and the bus permissions do not apply (see
+[Permissions](research/home-key-and-home-app.md#permissions)). The service offers a fixed set of
+narrow operations and answers only this app; see [the service](service.md) for the methods, the
+allow-lists and the logs.
 
-The release comes from `/etc/os-release` (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
+At startup the app makes sure the service is root (`[OpenHouse]` lines in the console log):
+`status`; if the service is not root, Homebrew Channel's
+`luna://org.webosbrew.hbchannel.service/elevateService {"id":"org.webosbrew.openhouse.service"}`
+(which rewrites the service's launch line so it is no longer jailed and runs as root); `quit`, so
+the next call starts the elevated binary; `status` again, retried a few times. Every step has a
+timeout. The failures map to the problem screens: Homebrew Channel absent (`unreachable`),
+`elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
+Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
+(`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
+content never meets a shell. The shell scripts (`backport/openhouse`, the watcher, the key filter
+worker) are unchanged; the service runs them with a fixed argv.
+
+The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
 
 ## What is written
 

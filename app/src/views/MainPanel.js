@@ -11,9 +11,9 @@ import css from './Home.module.less';
 
 const FATAL_TEXT = {
 	unreachable: ['Homebrew Channel is needed', 'Open House needs Homebrew Channel on a rooted TV. Install it, make sure it is running, then open Open House again.'],
-	denied: ["Homebrew Channel can't run root commands yet", "Your Homebrew Channel doesn't let apps run root commands yet. Update Homebrew Channel; Open House needs it."],
-	notRoot: ['Homebrew Channel is not running as root', 'Open House needs Homebrew Channel to run as root. Root the TV and make sure Homebrew Channel has root access, then open Open House again.'],
-	failed: ["Open House can't reach the TV's services", 'Something went wrong while talking to Homebrew Channel. Make sure it is installed and running, then open Open House again.']
+	denied: ["Homebrew Channel can't set up root access yet", "Your Homebrew Channel doesn't let apps elevate Open House's service yet. Update Homebrew Channel; Open House needs it."],
+	notRoot: ['Open House has no root access', "Open House's service did not start as root. Root the TV and make sure Homebrew Channel has root access, then open Open House again."],
+	failed: ["Open House can't reach the TV's services", "Something went wrong while setting up Open House's service. Make sure Homebrew Channel is installed and running, then open Open House again."]
 };
 
 // Why the list is disabled; one plain line at the top of the list area.

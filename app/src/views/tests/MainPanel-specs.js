@@ -23,7 +23,7 @@ const makeEnv = ({version = [11, 0, 0], candidates, currentHome = null, stored =
 		version,
 		chooser,
 		backport,
-		readIcon: jest.fn(async (p) => (p.includes('fancy') ? 'data:image/png;base64,AAAA' : null))
+		readIcon: jest.fn(async (id, p) => (p.includes('fancy') ? 'data:image/png;base64,AAAA' : null))
 	};
 };
 
@@ -53,8 +53,8 @@ describe('Open House screen', () => {
 
 	test.each([
 		['unreachable', /needs Homebrew Channel on a rooted TV/],
-		['denied', /doesn't let apps run root commands yet\. Update Homebrew Channel; Open House needs it\./],
-		['notRoot', /not running as root/],
+		['denied', /doesn't let apps elevate Open House's service yet\. Update Homebrew Channel; Open House needs it\./],
+		['notRoot', /service did not start as root/],
 		['failed', /can't reach the TV's services/]
 	])('no root (%s): the reason on top and a disabled list, same layout', async (kind, text) => {
 		const onExit = jest.fn();
@@ -93,8 +93,8 @@ describe('Open House screen', () => {
 		mountApp(env);
 		await screen.findByText('Fancy Launcher');
 		await waitFor(() => expect(document.querySelector('img[src="data:image/png;base64,AAAA"]')).toBeTruthy());
-		expect(env.readIcon).toHaveBeenCalledWith('/apps/fancy/icon.png');
-		expect(env.readIcon).toHaveBeenCalledWith('/apps/plain/icon.png');
+		expect(env.readIcon).toHaveBeenCalledWith('org.fancy.launcher', '/apps/fancy/icon.png');
+		expect(env.readIcon).toHaveBeenCalledWith('org.plain.launcher', '/apps/plain/icon.png');
 		expect(document.querySelectorAll('img')).toHaveLength(1);
 	});
 
@@ -150,11 +150,11 @@ describe('Open House screen', () => {
 	});
 
 	test('failure is one plain sentence and details go to the console', async () => {
-		const apply = jest.fn(async () => ok({ok: false, steps: [{kind: 'exec', command: 'x', ok: false, error: 'Denied method call "exec"'}], errors: ['Denied method call "exec"']}));
+		const apply = jest.fn(async () => ok({ok: false, steps: [{kind: 'exec', command: 'x', ok: false, error: 'Service does not exist: org.webosbrew.openhouse.service'}], errors: ['Service does not exist: org.webosbrew.openhouse.service']}));
 		mountApp(makeEnv({apply}));
 		fireEvent.click(await screen.findByText('Plain Launcher'));
 		fireEvent.click(await screen.findByText('Use as Home'));
-		expect(await screen.findByText("Couldn't set the Home app. Homebrew Channel didn't respond.")).toBeTruthy();
+		expect(await screen.findByText("Couldn't set the Home app. The Open House service didn't respond.")).toBeTruthy();
 		expect(screen.queryByText(/Denied/)).toBeNull();
 		expect(log.mock.calls.some((c) => /^\[OpenHouse\] apply: FAILED/.test(c[0]))).toBe(true);
 	});

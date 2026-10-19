@@ -33,8 +33,8 @@ export const patchStateOf = (backport, status) => {
 // One plain sentence for the screen; the detail is in the log.
 export const plainFailure = (what, errors) => {
 	const text = (errors || []).join(' ');
-	const silent = /denied method call|does not exist|not running|unknown service|no webos service bridge|ServiceUnknown|timed? ?out/i.test(text);
-	return `Couldn't ${what}.` + (silent ? " Homebrew Channel didn't respond." : '');
+	const silent = /does not exist|not running|unknown service|no webos service bridge|ServiceUnknown|timed? ?out/i.test(text);
+	return `Couldn't ${what}.` + (silent ? " The Open House service didn't respond." : '');
 };
 
 export const useOpenHouse = (load = loadEnvironment) => {
@@ -128,7 +128,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 				iconsAsked.current[c.id] = c.icon;
 				let url = null;
 				try {
-					url = await env.readIcon(c.icon);
+					url = await env.readIcon(c.id, c.icon);
 				} catch (e) {
 					url = null;
 				}

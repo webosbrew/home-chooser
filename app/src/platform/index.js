@@ -1,66 +1,16 @@
+// What the logic layer gets from the TV: one object, built on the service client.
+//   rootLuna(uri, payload)  an allow-listed luna call, made by the root service
+//   writeFile / removeFile  the files the service allows
+//   exec(name)              a named command (see COMMANDS in service/src/policy.c, plus the
+//                           composite names handled here); resolves {stdout, stderr}
+//   osRelease()             {version: [major, minor, patch], ...} from /etc/os-release
+//   readIcon(appId, icon)   a data: URL or null
+//   ensureRoot()            elevation (startup)
 import {ServiceError, errorMessage} from './errors';
-import {shellQuote, shellWord, toBase64} from './quote';
 import {createBridgeCall} from './bridge';
-
-export const HBCHANNEL_EXEC = 'luna://org.webosbrew.hbchannel.service/exec';
-
-const dirname = (path) => {
-	const i = path.lastIndexOf('/');
-	return i > 0 ? path.slice(0, i) : '/';
-};
-
-// exec(command) -> {stdout, stderr}. Rejects with a ServiceError (reply in `.reply`) when
-// returnValue is false, e.g. `Denied method call "exec" ...` or a non-zero exit status.
-export const createExec = (call = createBridgeCall()) => (command) =>
-	call(HBCHANNEL_EXEC, {command}).then((reply) => {
-		if (!reply || reply.returnValue === false) throw new ServiceError(reply);
-		return {stdout: reply.stdoutString || '', stderr: reply.stderrString || ''};
-	});
-
-export const buildLunaSend = (uri, payload) =>
-	'luna-send -n 1 ' + shellWord(uri) + ' ' + shellQuote(JSON.stringify(payload === undefined ? {} : payload));
-
-// rootLuna(uri, payload) -> parsed reply. Runs luna-send as root through exec.
-const parseLunaReply = (text) => {
-	try {
-		const v = JSON.parse(String(text).trim());
-		return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
-	} catch (e) {
-		return null;
-	}
-};
-
-// rootLuna(uri, payload) -> parsed reply. Runs luna-send as root through exec. When exec itself
-// fails (a non-zero exit of luna-send), a luna reply in its stdoutString is the error to report.
-export const createRootLuna = (exec) => (uri, payload) =>
-	exec(buildLunaSend(uri, payload)).then(({stdout, stderr}) => {
-		const reply = parseLunaReply(stdout);
-		if (!reply) {
-			throw new ServiceError({returnValue: false, errorText: 'luna-send printed no JSON', stderrString: stderr || stdout});
-		}
-		if (reply.returnValue === false) throw new ServiceError(reply);
-		return reply;
-	}, (e) => {
-		if (e && e.reply && /maxBuffer exceeded/i.test(String(e.reply.errorText || ''))) {
-			// eslint-disable-next-line no-console
-			console.log(`[OpenHouse] luna-send ${uri}: output too large for exec (stdout maxBuffer exceeded)`);
-			throw new ServiceError({returnValue: false, errorText: 'The reply from ' + uri + ' was too large to read (output too large).'});
-		}
-		const reply = e && e.reply && parseLunaReply(e.reply.stdoutString || '');
-		if (reply) {
-			if (reply.returnValue === false) throw new ServiceError(reply);
-			return reply;
-		}
-		throw e;
-	});
-
-export const buildWriteFile = (path, text) =>
-	'mkdir -p ' + shellQuote(dirname(path)) + ' && printf %s ' + shellQuote(toBase64(text)) + ' | base64 -d > ' + shellQuote(path);
-
-export const buildRemoveFile = (path) => 'rm -f ' + shellQuote(path);
-
-export const createWriteFile = (exec) => (path, text) => exec(buildWriteFile(path, text));
-export const createRemoveFile = (exec) => (path) => exec(buildRemoveFile(path));
+import {createServiceClient} from './service';
+import {ensureRoot, FatalError} from './elevate';
+import {HOME_FILE, KEYFILTER_FLAG} from '../openhouse/persistence';
 
 // Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
 export const parseOsRelease = (text) => {
@@ -79,62 +29,72 @@ export const parseOsRelease = (text) => {
 	return {version: null, source: null, fields};
 };
 
-export const createOsRelease = (exec) => () =>
-	exec('cat /etc/os-release').then(({stdout}) => {
-		const parsed = parseOsRelease(stdout);
+const ICON_TYPES = /\.(png|jpe?g|gif|svg|webp)$/i;
+
+export const createOsRelease = (service) => () =>
+	service.readFile('/etc/os-release').then((text) => {
+		const parsed = parseOsRelease(text || '');
 		if (!parsed.version) throw new Error('No version in /etc/os-release');
 		return parsed;
 	});
 
-// Icons of other apps are read as root and handed to the page as data: URLs. Files over the cap
-// (in bytes) are not read at all.
-export const ICON_MAX_BYTES = 262144;
-const ICON_TYPES = {png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp'};
-
-export const iconMimeType = (path) => {
-	const m = /\.([A-Za-z0-9]+)$/.exec(String(path || ''));
-	return (m && ICON_TYPES[m[1].toLowerCase()]) || null;
-};
-
-export const buildReadIcon = (path) =>
-	`f=${shellQuote(path)}; [ -f "$f" ] && [ "$(wc -c < "$f")" -le ${ICON_MAX_BYTES} ] && base64 "$f" | tr -d '\n\r '`;
-
-// readIcon(path) -> Promise<data: URL or null>. Never rejects; results (including misses) are
-// cached for the life of the platform object.
-export const createReadIcon = (exec) => {
+// readIcon(appId, iconPath) -> Promise<data: URL or null>. Never rejects; results (including
+// misses) are cached for the life of the platform object.
+export const createReadIcon = (service) => {
 	const cache = new Map();
-	return (path) => {
-		const type = iconMimeType(path);
-		if (!path || !type) return Promise.resolve(null);
-		if (!cache.has(path)) {
-			cache.set(path, exec(buildReadIcon(path)).then(({stdout}) => {
-				const b64 = stdout.trim();
-				return /^[A-Za-z0-9+/=]+$/.test(b64) ? `data:${type};base64,${b64}` : null;
-			}, () => null));
+	return (appId, icon) => {
+		if (!appId || !icon || !ICON_TYPES.test(icon)) return Promise.resolve(null);
+		const key = appId + '\n' + icon;
+		if (!cache.has(key)) {
+			cache.set(key, service.readIcon(appId).then(
+				({mime, data}) => (mime && /^[A-Za-z0-9+/=]+$/.test(data || '') ? `data:${mime};base64,${data}` : null),
+				() => null
+			));
 		}
-		return cache.get(path);
+		return cache.get(key);
 	};
 };
 
-// rootUid() -> the uid exec runs as (0 when Homebrew Channel runs as root).
-export const createRootUid = (exec) => () =>
-	exec('id -u').then(({stdout}) => {
-		const n = parseInt(stdout.trim(), 10);
-		if (Number.isNaN(n)) throw new Error('Unexpected output from id -u: ' + stdout.trim());
-		return n;
-	});
+// The text parsePersistenceStatus reads: the boot entry link, the watcher, the stored choice,
+// the key filter flag, and the tail of the watcher's log.
+export const createPersistenceStatus = (service) => async () => {
+	const lines = [];
+	const link = await service.linkStatus();
+	lines.push(link.entry === 'link' || link.entry === 'dangling' ? `entry=${link.entry}:${link.target}` : `entry=${link.entry}`);
+	const active = await service.run('watcherActive');
+	lines.push(`active=${active.stdout.trim()}`);
+	const stored = await service.readFile(HOME_FILE);
+	lines.push(`stored=${stored === null ? '' : stored.trim()}`);
+	lines.push(`keyfilter=${(await service.readFile(KEYFILTER_FLAG)) === null ? 'no' : 'yes'}`);
+	lines.push('--log');
+	const log = await service.run('watchLog');
+	return {stdout: lines.join('\n') + '\n' + log.stdout, stderr: ''};
+};
 
-export const createPlatform = (call) => {
-	const exec = createExec(call);
+export const createExec = (service) => {
+	const persistenceStatus = createPersistenceStatus(service);
+	return (name) => {
+		switch (name) {
+			case 'persistenceStatus': return persistenceStatus();
+			case 'linkEntry': return service.link().then(() => ({stdout: '', stderr: ''}));
+			case 'unlinkEntry': return service.unlink().then(() => ({stdout: '', stderr: ''}));
+			default: return service.run(name);
+		}
+	};
+};
+
+export const createPlatform = (call = createBridgeCall()) => {
+	const service = createServiceClient(call);
 	return {
-		exec,
-		rootLuna: createRootLuna(exec),
-		writeFile: createWriteFile(exec),
-		removeFile: createRemoveFile(exec),
-		osRelease: createOsRelease(exec),
-		rootUid: createRootUid(exec),
-		readIcon: createReadIcon(exec)
+		service,
+		rootLuna: service.luna,
+		writeFile: service.writeFile,
+		removeFile: service.removeFile,
+		exec: createExec(service),
+		osRelease: createOsRelease(service),
+		readIcon: createReadIcon(service),
+		ensureRoot: () => ensureRoot({service, call})
 	};
 };
 
-export {ServiceError, errorMessage, shellQuote, shellWord, toBase64, createBridgeCall};
+export {ServiceError, FatalError, errorMessage, createBridgeCall, createServiceClient, ensureRoot};

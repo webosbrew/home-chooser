@@ -1,11 +1,8 @@
 import {ServiceError} from '../../platform/errors';
-import {
-	SCRIPT_PATH, backportApplies, createBackport, parseStatus
-} from '..';
-import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, persistenceStatusCommand} from '../../openhouse/persistence';
+import {backportApplies, createBackport, parseStatus} from '..';
+import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../openhouse/persistence';
 
-const RUN_WORKER = `sh '${SCRIPT_PATH}' apply`;
-const ENABLE = `mkdir -p '/var/lib/webosbrew/openhouse' && touch '${KEYFILTER_FLAG}'`;
+const RUN_WORKER = 'keyfilterApply';
 const ENSURE = ensureEntryCommand();
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
@@ -41,11 +38,7 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 			const entry = tv.entry === 'ok' ? `link:${ENTRY_SCRIPT}` : tv.entry;
 			return {stdout: `entry=${entry}\nactive=\nstored=\nkeyfilter=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
-		if (command.endsWith(' status')) return {stdout: statusText(), stderr: ''};
-		if (command === ENABLE) {
-			tv.installed = true;
-			return {stdout: '', stderr: ''};
-		}
+		if (command === keyfilterCommand('status')) return {stdout: statusText(), stderr: ''};
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
@@ -57,15 +50,19 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 			}
 			return {stdout: '', stderr: ''};
 		}
-		if (command.endsWith(' stop')) {
+		if (command === keyfilterCommand('stop')) {
 			if (stopFails) throw new ServiceError({returnValue: false, errorText: 'exit 1', stderrString: 'umount: busy'});
 			tv.mounted = false;
 			return {stdout: '', stderr: ''};
 		}
-		if (command === 'systemctl restart sam') return {stdout: '', stderr: ''};
+		if (command === 'restartSam') return {stdout: '', stderr: ''};
 		throw new Error('unexpected command ' + command);
 	};
-	const writeFile = async () => { throw new Error('unexpected writeFile'); };
+	const writeFile = async (path, text) => {
+		calls.push(['write', path, text]);
+		if (path !== KEYFILTER_FLAG) throw new Error('unexpected writeFile ' + path);
+		tv.installed = true;
+	};
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
 		if (path === KEYFILTER_FLAG) tv.installed = false;
@@ -77,7 +74,7 @@ const backport = (tv, version = [6, 6, 0]) => createBackport({
 	rootLuna: tv.rootLuna, exec: tv.exec, writeFile: tv.writeFile, removeFile: tv.removeFile, version
 });
 
-const kinds = (tv) => tv.calls.map((c) => c[0] === 'luna' ? c[1].split('/').pop() : c[0] === 'exec' ? c[1] : 'rm ' + c[1]);
+const kinds = (tv) => tv.calls.map((c) => c[0] === 'luna' ? c[1].split('/').pop() : c[0] === 'exec' ? c[1] : (c[0] === 'write' ? 'write ' : 'rm ') + c[1]);
 
 describe('backportApplies', () => {
 	test.each([[5, false], [6, true], [7, true], [9, true], [10, false], [11, false]])('webOS TV %i', (major, applies) => {
@@ -120,11 +117,11 @@ describe('install', () => {
 		const seq = kinds(tv);
 		const at = (s) => seq.findIndex((x) => x === s || (x.startsWith && x.startsWith(s)));
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
-		expect(at('setSystemSettings')).toBeLessThan(at(ENABLE));
-		expect(at(ENABLE)).toBeLessThan(at(ENSURE));
+		expect(at('setSystemSettings')).toBeLessThan(at('write ' + KEYFILTER_FLAG));
+		expect(at('write ' + KEYFILTER_FLAG)).toBeLessThan(at(ENSURE));
 		expect(at(ENSURE)).toBeLessThan(at(RUN_WORKER));
-		expect(at(RUN_WORKER)).toBeLessThan(at('systemctl restart sam'));
-		expect(seq.filter((x) => x === 'systemctl restart sam')).toHaveLength(1);
+		expect(at(RUN_WORKER)).toBeLessThan(at('restartSam'));
+		expect(seq.filter((x) => x === 'restartSam')).toHaveLength(1);
 		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
 		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: true, release: '9.2.1'});
 		expect(notices).toHaveLength(2);
@@ -137,7 +134,7 @@ describe('install', () => {
 		expect(res.createdKey).toBe(false);
 		expect(tv.record()).toEqual({home: 'x.y', kidsApp: 'k'});
 		expect(kinds(tv)).not.toContain('setSystemSettings');
-		expect(kinds(tv)).not.toContain('systemctl restart sam');
+		expect(kinds(tv)).not.toContain('restartSam');
 	});
 
 	test('no matching set: fails before changing anything', async () => {
@@ -195,7 +192,7 @@ describe('remove', () => {
 		expect(res.ok).toBe(true);
 		const seq = kinds(tv);
 		expect(seq[0]).toBe('rm ' + KEYFILTER_FLAG);
-		expect(seq[1]).toMatch(/ stop$/);
+		expect(seq[1]).toBe('keyfilterStop');
 		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + KEYFILTER_FLAG]);
 		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: false});
 	});

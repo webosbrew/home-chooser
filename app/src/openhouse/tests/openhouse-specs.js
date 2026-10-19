@@ -5,7 +5,7 @@ import {
 import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
 import {
-	HOME_FILE, KEYFILTER_SCRIPT, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
+	HOME_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
 	stopWatcherCommand, ENTRY_SCRIPT
 } from '../persistence';
 
@@ -15,7 +15,7 @@ const STOCK = 'com.webos.app.home';
 const ENSURE = ensureEntryCommand();
 const WATCH = startWatcherCommand();
 const STOP = stopWatcherCommand();
-const REFRESH = `sh '${KEYFILTER_SCRIPT}' refresh`;
+const REFRESH = 'keyfilterRefresh';
 
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const UNKNOWN = {returnValue: false, errorText: 'Unknown method "setDefaultApp" for category "/"'};
@@ -187,8 +187,8 @@ describe('apply', () => {
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
-		expect(tv.commands).toEqual([ENSURE, WATCH, 'systemctl restart sam']);
-		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'systemctl restart sam']);
+		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
+		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'restartSam']);
 		expect(notices).toHaveLength(1);
 		expect(res.restartedSam).toBe(true);
 		expect(res.needsKeyFilterBackport).toBe(true);
@@ -206,7 +206,7 @@ describe('apply', () => {
 		const tv = fakeTV();
 		await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
-		expect(tv.commands).toEqual([ENSURE, WATCH, 'systemctl restart sam']);
+		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
 	});
 
 	test('a failed close is a warning, not an error', async () => {
@@ -461,11 +461,11 @@ describe('persistence', () => {
 		expect(tv.commands).toEqual([STOP]);
 	});
 
-	test('the entry command links, never copies', () => {
-		const c = ensureEntryCommand();
-		expect(c).toContain(`ln -sf '${ENTRY_SCRIPT}' '/var/lib/webosbrew/init.d/openhouse'`);
-		expect(c).not.toMatch(/\bcp\b/);
-		expect(c).toContain("rm -f '/var/lib/webosbrew/init.d/openhouse-keyfilter'");
+	test('the entry is a named operation of the service, never a shell command', () => {
+		expect(ensureEntryCommand()).toBe('linkEntry');
+		expect(startWatcherCommand()).toBe('watch');
+		expect(STOP).toBe('stopWatcher');
+		[ensureEntryCommand(), startWatcherCommand(), STOP, persistenceStatusCommand()].forEach((c) => expect(c).toMatch(/^[A-Za-z]+$/));
 	});
 
 	test('persistence status is parsed', async () => {

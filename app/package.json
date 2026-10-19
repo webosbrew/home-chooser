@@ -10,7 +10,7 @@
 		"lint": "enact lint src",
 		"test": "enact test --watchAll=false",
 		"check-ilib": "node scripts/check-ilib.js dist",
-		"package": "npm run pack-p && node scripts/prune-ilib.js dist && node scripts/check-ilib.js dist && node scripts/copy-backport.js dist && ares-package dist --outdir ../build/ipk"
+		"package": "npm run pack-p && node scripts/prune-ilib.js dist && node scripts/check-ilib.js dist && node scripts/copy-backport.js dist && make -C ../service && node scripts/stage-service.js ../build/service-pkg && rm -f ../build/ipk/*.ipk && ares-package dist ../build/service-pkg --outdir ../build/ipk"
 	},
 	"license": "Apache-2.0",
 	"private": true,

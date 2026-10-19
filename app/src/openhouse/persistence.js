@@ -1,6 +1,5 @@
 // Where Open House keeps its choice and boot entry on the TV, and the shell commands that
 // manage them. See docs/settings-app.md ("Persistence").
-import {shellQuote} from '../platform/quote';
 
 export const APP_DIR = '/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse';
 export const BACKPORT_DIR = `${APP_DIR}/backport`;
@@ -23,32 +22,27 @@ export const KEYFILTER_FLAG = `${STATE_DIR}/keyfilter`;
 export const WATCH_UNIT = 'openhouse-home';
 export const WATCH_LOG = '/tmp/openhouse-home.log';
 
-const q = shellQuote;
-
-// Make init.d/openhouse a symlink to the script in the app (a regular file from an earlier
-// install is replaced; the earlier openhouse-keyfilter entry is removed). The scripts keep
+// The "commands" the logic layer hands to platform.exec. They are names, not shell text: the
+// service runs a fixed argv for each (service/src/policy.c) and nothing else.
+//
+// linkEntry: make init.d/openhouse a symlink to the script in the app (a regular file from an
+// earlier install is replaced; the earlier openhouse-keyfilter entry is removed). The scripts keep
 // their executable bit: run-parts follows the link but needs the target executable.
-export const ensureEntryCommand = () =>
-	`mkdir -p ${q(INIT_DIR)} && rm -f ${q(OLD_INIT_PATH)} && ` +
-	`chmod 755 ${q(ENTRY_SCRIPT)} ${q(KEYFILTER_SCRIPT)} ${q(WATCH_SCRIPT)} && ` +
-	`{ [ -L ${q(INIT_PATH)} ] || rm -f ${q(INIT_PATH)}; } && ln -sf ${q(ENTRY_SCRIPT)} ${q(INIT_PATH)}`;
+export const ensureEntryCommand = () => 'linkEntry';
 
-export const removeEntryCommand = () => `rm -f ${q(INIT_PATH)} ${q(OLD_INIT_PATH)}`;
+export const removeEntryCommand = () => 'unlinkEntry';
 
 // Start the watcher unless it is running (the entry script runs systemctl is-active, else systemd-run).
-export const startWatcherCommand = () => `sh ${q(ENTRY_SCRIPT)} watch`;
+export const startWatcherCommand = () => 'watch';
 
-export const stopWatcherCommand = () => `systemctl stop ${WATCH_UNIT} || true`;
+export const stopWatcherCommand = () => 'stopWatcher';
 
-// Prints entry=link:<target> | dangling:<target> | file | none, and the watcher state.
-export const persistenceStatusCommand = () =>
-	`if [ -L ${q(INIT_PATH)} ]; then t=$(readlink ${q(INIT_PATH)}); ` +
-	`if [ -e ${q(INIT_PATH)} ]; then echo "entry=link:$t"; else echo "entry=dangling:$t"; fi; ` +
-	`elif [ -e ${q(INIT_PATH)} ]; then echo entry=file; else echo entry=none; fi; ` +
-	`echo "active=$(systemctl is-active ${WATCH_UNIT} 2>/dev/null)"; ` +
-	`echo "stored=$(cat ${q(HOME_FILE)} 2>/dev/null)"; ` +
-	`echo "keyfilter=$([ -f ${q(KEYFILTER_FLAG)} ] && echo yes || echo no)"; ` +
-	`echo --log; tail -n 5 ${q(WATCH_LOG)} 2>/dev/null; true`;
+export const keyfilterCommand = (arg) => 'keyfilter' + arg[0].toUpperCase() + arg.slice(1);
+
+// Reads: the entry link (entry=link:<target> | dangling:<target> | file | none), the watcher state,
+// the stored choice, the key filter flag and the tail of the watcher log, as the lines
+// parsePersistenceStatus reads. The platform assembles them from the service's methods.
+export const persistenceStatusCommand = () => 'persistenceStatus';
 
 export const parsePersistenceStatus = (text) => {
 	const out = {entry: 'none', entryTarget: null, active: '', stored: '', keyfilterEnabled: false, log: []};
