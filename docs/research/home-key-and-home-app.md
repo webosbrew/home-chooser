@@ -673,8 +673,14 @@ VM, although its `.accountmanager/data.dat` exists on the persistent `cmn_data` 
 in the Beanjar logs and image); the static reading, which tied the call to a missing
 `data.dat`, missed the path that makes it. [V, VM] Whether that call wipes the other entries is
 a race: in one boot it was queued until settings service connected; in another the full record
-was there at 18.6 s and only `MembershipApp` at 19.4 s. [V, VM] If real sets make the same call
-at each boot, a chosen `home` can be lost at any boot on 11.2.0 [I].
+was there at 18.6 s and only `MembershipApp` at 19.4 s. [V, VM] The call is made at every start of
+`accountmanager` on 9.2.1, 10.3.1 and 11.2.0: `LsHandler::start` calls
+`PolicyManager::checkingAccountList`, which with an existing account database still ends in
+`setDefaultApp {"category":"MembershipApp","appId":...}` (`com.webos.app.overlaymembership` when
+`multipleLoginList` is non-empty, else `com.webos.app.membership`); 9.2.1 makes it synchronously.
+5.6.1 to 8.3.0 have no `setDefaultApp` caller (and no `setDefaultApp` in `sam`). [V] So on 9.2.1
+and later a chosen `home` in the record can be lost at any boot; on 10.3.1 and later the profile
+override still names it.
 
 The old `home` returning is likely not a lost write. db8 writes are synchronous (`"sync": 1` in
 `etc/palm/db8`, the settings kind has `"sync": true`) and no boot restored from backup. [V] A
