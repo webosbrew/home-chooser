@@ -372,6 +372,13 @@ the keys go afterwards [V, VM]:
 | `applicationManager/suspense` | `Unknown method`; nothing changes |
 | `applicationManager/closeByAppId` from a developer app | `Denied method call`; nothing changes |
 
+With the Open House backport on 6.6.0, a card launcher chosen as home was launched by Home
+from another app (`caller com.webos.surfacemanager`, `launchType: "homeKey"`), received the
+remote's keys, and with `_WEBOS_ACCESS_POLICY_KEYS_HOME = "true"` received a second Home press
+as a key instead of being relaunched: the backport's `isHomeApp` follows the choice. On the
+1.5 GB VM each card launch made `sam` kill the app in front (`memoryReclaim`) and relaunch it
+later (`autoReload`). [V, VM]
+
 This is AltHome's issue #4 (`webOSSystem.hide()` on webOS 6 leaves the layer holding focus).
 AltHome's later webOS 6 path, `suspense`, is not a method on 6.6.0.
 
