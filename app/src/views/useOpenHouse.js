@@ -7,6 +7,9 @@ import {errorMessage} from '../platform/errors';
 import {STOCK_HOME} from '../openhouse';
 import {formatStep} from '../openhouse/format';
 import {loadEnvironment} from '../openhouse/environment';
+import {clearPending, readPending, writePending} from './pending';
+
+const DONE_TEXT = 'Done. Press Home to try it.';
 
 export const LOG_PREFIX = '[OpenHouse]';
 
@@ -68,6 +71,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		setCurrentId((state && (state.profileHome || state.recordHome)) || STOCK_HOME);
 		setStoredId(per.persistence ? per.persistence.stored : '');
 		setPatchStatus(patchRes ? patchRes.status : null);
+		return {home: (state && (state.profileHome || state.recordHome)) || STOCK_HOME};
 	}, []);
 
 	useEffect(() => {
@@ -75,8 +79,18 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		Promise.resolve().then(() => load()).then(async (e) => {
 			if (cancelled || !mounted.current) return;
 			setEnv(e);
-			await refreshWith(e);
-			if (mounted.current && !cancelled) setPhase('ready');
+			const state = await refreshWith(e);
+			if (cancelled || !mounted.current) return;
+			// a result left by a run the restart cut short: judge it by the actual state, once
+			const left = readPending();
+			if (left) {
+				clearPending();
+				const done = state && state.home === left.id;
+				// eslint-disable-next-line no-console
+				console.log(`${LOG_PREFIX} pending: ${left.id} -> ${state ? state.home : 'unknown'} (${done ? 'done' : 'not applied'})`);
+				setToast(done ? {ok: true, text: DONE_TEXT} : {ok: false, text: "Couldn't set the Home app."});
+			}
+			setPhase('ready');
 		}, (err) => {
 			if (cancelled || !mounted.current) return;
 			// eslint-disable-next-line no-console
@@ -127,6 +141,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		} catch (e) {
 			// the outcome stands; the list may be stale
 		}
+		clearPending(); // the run finished in this window; no restart cut it short
 		if (!mounted.current) return;
 		setNotice('');
 		setToast(outcome);
@@ -141,26 +156,32 @@ export const useOpenHouse = (load = loadEnvironment) => {
 		// restoring stock takes the key filter patch out as well
 		if (e.backport && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
 			setNotice('Restoring LG Home... The screen will blink once.');
+			writePending(STOCK_HOME, 'LG Home');
 			const rem = await e.backport.remove();
 			logResult('remove patch', rem);
 			if (!rem.ok) return {ok: false, text: plainFailure('restore LG Home', rem.errors)};
 		}
-		return {ok: true, text: 'Done. Press Home to try it.'};
+		return {ok: true, text: DONE_TEXT};
 	};
 
 	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
 		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
-		if (e.backport && patch !== 'active') {
-			if (patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+		const needPatch = Boolean(e.backport) && patch !== 'active';
+		if (needPatch && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+		// The choice is applied first; installing the patch restarts the compositor and may close
+		// this window, so nothing of the choice may depend on code that runs after it.
+		setNotice(`Setting ${candidate.title} as Home...`);
+		const res = await e.chooser.apply(candidate.id);
+		logResult('apply', res);
+		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
+		if (needPatch) {
 			setNotice('Setting up. The screen will blink once.');
+			writePending(candidate.id, candidate.title);
 			const inst = await e.backport.install();
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
 		}
-		setNotice(`Setting ${candidate.title} as Home...`);
-		const res = await e.chooser.apply(candidate.id);
-		logResult('apply', res);
-		return res.ok ? {ok: true, text: 'Done. Press Home to try it.'} : {ok: false, text: plainFailure('set the Home app', res.errors)};
+		return {ok: true, text: DONE_TEXT};
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	return {

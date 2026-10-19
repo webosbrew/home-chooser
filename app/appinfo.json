@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "vendor": "webosbrew",
   "type": "web",
+  "defaultWindowType": "overlay",
+  "transparent": true,
   "main": "index.html",
   "title": "Open House",
   "icon": "icon.png",

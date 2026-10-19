@@ -10,6 +10,12 @@ release. The platform facts behind every write are in the
 One screen, built for the remote (5-way, OK, Back); every action is reachable without a pointer.
 Open House is in English only.
 
+* **A side panel.** Like the stock Settings app (`com.palm.app.settings`: `"type": "web"`,
+  `"defaultWindowType": "overlay"`, `"transparent": true`), Open House is a transparent overlay
+  window with an opaque panel, 800 px wide at 1080p, docked at the right edge and full height. The
+  list, the dialogs, the spinner, the toast and the problem messages all draw inside the panel;
+  the rest of the screen stays clear and shows what is underneath.
+
 * **The list.** Title "Open House", subtitle "Find your TV a new home". The first row is "LG Home
   (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
   A check mark sits on the current home and the focus starts on it. The app id appears as small
@@ -19,10 +25,15 @@ Open House is in English only.
 * **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
   one plain sentence ("Couldn't set the Home app. Homebrew Channel didn't respond."); the details
-  are in the console log. Choosing "LG Home (stock)" runs the restore.
+  are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
+  a success; Back closes it.
 * **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
   launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
-  the change, and confirming installs the backport and then applies the choice. Restoring LG Home
+  the change, and confirming applies the choice first and installs the backport last (the restart is the last step, so nothing of the choice depends on code that runs after it). That restart may
+  close the panel. Before it, the app writes a small marker to `localStorage` (`openhouse.pending`,
+  the id being chosen); on the next launch it reads the actual current home, shows the result toast
+  once ("Done. Press Home to try it." if the home is the one chosen, otherwise "Couldn't set the Home
+  app.") and clears the marker. A run that finishes in the same window clears the marker itself. Restoring LG Home
   removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
   the dialog says the Home button can't be changed on this TV's software and applies nothing.
 * **Problems.** Instead of the list, one plain screen: Homebrew Channel missing or not running;
@@ -31,7 +42,8 @@ Open House is in English only.
   as root.
 * **About.** A button at the bottom opens a dialog with Open House's version, the webOS version,
   "Home key patch active: yes/no" (6 to 9 only) and "Before uninstalling Open House, choose LG Home."
-* **Back** closes a dialog; with none open it leaves the app.
+* **Back** closes a dialog; with none open it closes the panel with `window.close()` (never
+  `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon
   is read as root (`base64`, at most 256 KB, once per session) and shown as a `data:` URL; a generic
   icon stands in when that fails.

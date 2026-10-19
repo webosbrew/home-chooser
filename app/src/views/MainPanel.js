@@ -84,7 +84,7 @@ const MainPanel = ({model, onAbout, ...rest}) => {
 					<Button disabled={busy} onClick={onAbout}>About</Button>
 				</Scroller>
 			)}
-			{busy ? <Spinner blockClickOn="screen">{notice}</Spinner> : null}
+			{busy ? <Spinner blockClickOn="container">{notice}</Spinner> : null}
 			<Toast toast={toast} onDone={model.dismissToast} />
 			<ConfirmDialog
 				open={Boolean(pending)}

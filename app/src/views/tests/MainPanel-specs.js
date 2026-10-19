@@ -2,6 +2,7 @@ import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
 import App from '../../App';
 import {FatalError} from '../../openhouse/environment';
+import {PENDING_KEY} from '../pending';
 
 const ok = (extra) => Object.assign({ok: true, steps: [], warnings: [], errors: []}, extra);
 
@@ -37,7 +38,7 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 describe('Open House screen', () => {
 	let log;
 	beforeEach(() => { log = jest.spyOn(console, 'log').mockImplementation(() => {}); });
-	afterEach(() => log.mockRestore());
+	afterEach(() => { log.mockRestore(); window.localStorage.clear(); });
 
 	test.each([
 		['unreachable', /needs Homebrew Channel on a rooted TV/],
@@ -157,7 +158,7 @@ describe('Open House screen', () => {
 			remove: jest.fn(async () => ok())
 		});
 
-		test('patch not active: the dialog mentions the blink and the flow installs then applies', async () => {
+		test('patch not active: the dialog mentions the blink and the flow applies first and installs the patch last', async () => {
 			const backport = backportOf({mounted: false, enabled: false, match: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], backport});
 			mountApp(env);
@@ -166,10 +167,10 @@ describe('Open House screen', () => {
 			fireEvent.click(screen.getByText('Use as Home'));
 			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
 			expect(backport.install).toHaveBeenCalled();
-			expect(backport.install.mock.invocationCallOrder[0]).toBeLessThan(env.chooser.apply.mock.invocationCallOrder[0]);
+			expect(backport.install.mock.invocationCallOrder[0]).toBeGreaterThan(env.chooser.apply.mock.invocationCallOrder[0]);
 		});
 
-		test('install failure stops before applying', async () => {
+		test('install failure is reported after the choice was applied', async () => {
 			const backport = backportOf({mounted: false, match: '8.3.0'});
 			backport.install = jest.fn(async () => ok({ok: false, errors: ['boom']}));
 			const env = makeEnv({version: [8, 3, 0], backport});
@@ -177,7 +178,17 @@ describe('Open House screen', () => {
 			fireEvent.click(await screen.findByText('Plain Launcher'));
 			fireEvent.click(await screen.findByText('Use as Home'));
 			expect(await screen.findByText("Couldn't set the Home app.")).toBeTruthy();
-			expect(env.chooser.apply).not.toHaveBeenCalled();
+			expect(env.chooser.apply).toHaveBeenCalled();
+		});
+
+		test('apply failure never installs the patch', async () => {
+			const backport = backportOf({mounted: false, match: '8.3.0'});
+			const apply = jest.fn(async () => ok({ok: false, errors: ['boom']}));
+			mountApp(makeEnv({version: [8, 3, 0], backport, apply}));
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			expect(await screen.findByText("Couldn't set the Home app.")).toBeTruthy();
+			expect(backport.install).not.toHaveBeenCalled();
 		});
 
 		test('patch active: no blink sentence, no install', async () => {
@@ -243,5 +254,82 @@ describe('Open House screen', () => {
 		expect(onExit).not.toHaveBeenCalled();
 		fireEvent.keyUp(screen.getByText('Plain Launcher'), {keyCode: 27});
 		expect(onExit).toHaveBeenCalled();
+	});
+
+	test('without an onExit prop, Back closes the window (never webOSSystem.hide)', async () => {
+		const close = jest.spyOn(window, 'close').mockImplementation(() => {});
+		window.webOSSystem = {hide: jest.fn()};
+		render(<App load={async () => makeEnv()} />);
+		fireEvent.keyUp(await screen.findByText('Plain Launcher'), {keyCode: 27});
+		expect(close).toHaveBeenCalledTimes(1);
+		expect(window.webOSSystem.hide).not.toHaveBeenCalled();
+		delete window.webOSSystem;
+		close.mockRestore();
+	});
+
+	test('after a successful apply the panel stays open with the toast', async () => {
+		const {onExit} = mountApp(makeEnv());
+		fireEvent.click(await screen.findByText('Plain Launcher'));
+		fireEvent.click(await screen.findByText('Use as Home'));
+		expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+		expect(onExit).not.toHaveBeenCalled();
+		expect(screen.getByText('Fancy Launcher')).toBeTruthy();
+	});
+
+	describe('pending result marker (webOS 6 to 9)', () => {
+		const backportOf = (status) => ({
+			status: jest.fn(async () => ok({status})),
+			install: jest.fn(async () => ok()),
+			remove: jest.fn(async () => ok())
+		});
+		const pending = (id) => window.localStorage.setItem(PENDING_KEY, JSON.stringify({id, title: id, at: 1}));
+
+		test('written before the patch install, cleared when the run finishes', async () => {
+			const backport = backportOf({mounted: false, match: '8.3.0'});
+			let seen;
+			backport.install = jest.fn(async () => { seen = window.localStorage.getItem(PENDING_KEY); return ok(); });
+			mountApp(makeEnv({version: [8, 3, 0], backport}));
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await screen.findByText('Done. Press Home to try it.');
+			expect(JSON.parse(seen).id).toBe('org.plain.launcher');
+			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('no marker when the patch is already active', async () => {
+			const backport = backportOf({mounted: true, enabled: true});
+			const apply = jest.fn(async () => { expect(window.localStorage.getItem(PENDING_KEY)).toBeNull(); return ok(); });
+			mountApp(makeEnv({version: [8, 3, 0], backport, apply}));
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await screen.findByText('Done. Press Home to try it.');
+			expect(apply).toHaveBeenCalled();
+		});
+
+		test('next launch: the marker matches the current home, so the success toast shows once and the marker clears', async () => {
+			pending('org.plain.launcher');
+			mountApp(makeEnv({currentHome: 'org.plain.launcher'}));
+			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('next launch: the marker does not match, so the failure toast shows', async () => {
+			pending('org.plain.launcher');
+			mountApp(makeEnv({currentHome: 'org.fancy.launcher'}));
+			expect(await screen.findByText("Couldn't set the Home app.")).toBeTruthy();
+			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('next launch after a restore: stock home is the success', async () => {
+			pending('com.webos.app.home');
+			mountApp(makeEnv({currentHome: null}));
+			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+		});
+
+		test('no marker, no toast', async () => {
+			mountApp(makeEnv());
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByRole('status')).toBeNull();
+		});
 	});
 });

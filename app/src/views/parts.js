@@ -1,8 +1,10 @@
 import {useCallback, useEffect, useState} from 'react';
 import Button from '@enact/moonstone/Button';
-import Dialog from '@enact/moonstone/Dialog';
 import Icon from '@enact/moonstone/Icon';
 import SlotItem from '@enact/moonstone/SlotItem';
+import Spotlight from '@enact/spotlight';
+import SpotlightContainerDecorator from '@enact/spotlight/SpotlightContainerDecorator';
+import Cancelable from '@enact/ui/Cancelable';
 
 import css from './Home.module.less';
 
@@ -34,20 +36,41 @@ export const HomeItem = ({name, appId, icon, stock, current, disabled, spotlight
 	);
 };
 
-export const ConfirmDialog = ({open, title, children, confirmLabel, onConfirm, onCancel}) => (
-	<Dialog
-		open={open}
-		onClose={onCancel}
-		title={title}
-		noAnimation
-		buttons={[
-			onConfirm ? <Button key="ok" onClick={onConfirm}>{confirmLabel}</Button> : null,
-			<Button key="cancel" onClick={onCancel}>{onConfirm ? 'Cancel' : 'OK'}</Button>
-		].filter(Boolean)}
-	>
-		{children}
-	</Dialog>
+const DIALOG_ID = 'openhouse-dialog';
+
+const DialogBox = SpotlightContainerDecorator(
+	{enterTo: 'default-element', defaultElement: 'button', spotlightRestrict: 'self-only'},
+	({children, ...rest}) => <div {...rest}>{children}</div>
 );
+
+// Back closes the dialog before anything behind it sees the key.
+const CancelableBox = Cancelable({
+	modal: true,
+	onCancel: (ev, props) => {
+		props.onClose();
+		ev.stopPropagation();
+	}
+}, DialogBox);
+
+// A dialog drawn inside the panel (Moonstone's Dialog and Popup cover the whole screen).
+export const ConfirmDialog = ({open, title, children, confirmLabel, onConfirm, onCancel}) => {
+	useEffect(() => {
+		if (open) Spotlight.focus(DIALOG_ID);
+	}, [open]);
+	if (!open) return null;
+	return (
+		<div className={css.scrim}>
+			<CancelableBox className={css.dialog} role="dialog" aria-label={title} spotlightId={DIALOG_ID} onClose={onCancel}>
+				<h2 className={css.dialogTitle}>{title}</h2>
+				<div className={css.dialogBody}>{children}</div>
+				<div className={css.buttons}>
+					{onConfirm ? <Button onClick={onConfirm}>{confirmLabel}</Button> : null}
+					<Button onClick={onCancel}>{onConfirm ? 'Cancel' : 'OK'}</Button>
+				</div>
+			</CancelableBox>
+		</div>
+	);
+};
 
 export const Toast = ({toast, onDone}) => {
 	useEffect(() => {
