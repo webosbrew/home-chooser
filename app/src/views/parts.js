@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect} from 'react';
 import Button from '@enact/moonstone/Button';
 import Icon from '@enact/moonstone/Icon';
 import SlotItem from '@enact/moonstone/SlotItem';
@@ -8,30 +8,37 @@ import Cancelable from '@enact/ui/Cancelable';
 
 import css from './Home.module.less';
 
+// The icon box is the same size for every row and is there before the image loads.
 export const AppIcon = ({src, stock}) => (
-	src ?
-		<img className={css.icon} src={src} alt="" /> :
-		<Icon className={css.icon}>{stock ? 'home' : 'plug'}</Icon>
+	<span className={css.iconBox} data-testid="icon-box">
+		{src ?
+			<img className={css.icon} src={src} alt="" /> :
+			<Icon className={css.fallback}>{stock ? 'home' : 'plug'}</Icon>}
+	</span>
 );
 
-// One row of the home list. The app id shows as small text on the focused row only.
-export const HomeItem = ({name, appId, icon, stock, current, disabled, spotlightId, onChoose}) => {
-	const [focused, setFocused] = useState(false);
+// One row of the home list. Every row has the same height and structure whatever its state:
+// focus changes colour only (Moonstone's own styling), and the check slot is always reserved.
+// The name is a single truncated line (Marquee only scrolls it on focus when it overflows).
+export const HomeItem = ({name, icon, stock, current, disabled, spotlightId, onChoose, appId}) => {
 	const handleClick = useCallback(() => onChoose(appId), [onChoose, appId]);
-	const handleFocus = useCallback(() => setFocused(true), []);
-	const handleBlur = useCallback(() => setFocused(false), []);
 	return (
 		<SlotItem
+			className={css.row}
+			inline={false}
+			autoHide={null}
+			marqueeOn="focus"
 			disabled={disabled}
 			onClick={handleClick}
-			onFocus={handleFocus}
-			onBlur={handleBlur}
 			spotlightId={spotlightId}
 			slotBefore={<AppIcon src={icon} stock={stock} />}
-			slotAfter={current ? <Icon className={css.check} aria-label="Current">check</Icon> : null}
+			slotAfter={
+				<span className={css.checkSlot}>
+					<Icon className={current ? css.check : css.checkHidden} aria-label={current ? 'Current' : undefined} aria-hidden={current ? undefined : 'true'}>check</Icon>
+				</span>
+			}
 		>
-			<span className={css.name}>{name}</span>
-			{focused ? <span className={css.sub}>{appId}</span> : null}
+			{name}
 		</SlotItem>
 	);
 };

@@ -18,8 +18,9 @@ Open House is in English only.
 
 * **The list.** Title "Open House", subtitle "Find your TV a new home". The first row is "LG Home
   (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
-  A check mark sits on the current home and the focus starts on it. The app id appears as small
-  text under the name of the focused row only. If no launcher is installed, a line explains
+  A check mark sits on the current home and the focus starts on it. Every row has the same height,
+  icon box (one fixed size, before and after the icon loads) and reserved check slot; focus only
+  changes colour and long names are truncated. App ids are never shown. If no launcher is installed, a line explains
   what a launcher is and that LG Home stays in use. If the chosen launcher was uninstalled, a line
   under the list says "The Home app you chose was removed; using LG Home."
 * **Choosing.** OK on a row asks "Use <name> as Home?". Confirming blocks input behind a spinner

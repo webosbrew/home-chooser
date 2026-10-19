@@ -75,14 +75,22 @@ describe('Open House screen', () => {
 		expect(document.querySelectorAll('img')).toHaveLength(1);
 	});
 
-	test('the app id shows only on the focused item', async () => {
+	test('rows keep one structure in every state and show no app id', async () => {
 		mountApp(makeEnv());
 		const item = (await screen.findByText('Plain Launcher')).closest('[data-spotlight-id]');
-		expect(screen.queryByText('org.plain.launcher')).toBeNull();
+		const shape = (el) => el.innerHTML.replace(/<img[^>]*>/g, '<img>');
+		const rows = () => Array.from(document.querySelectorAll('[data-spotlight-id^="home-"]'));
+		// the icon box exists in every row, before any icon has loaded
+		expect(rows()).toHaveLength(3);
+		rows().forEach((r) => expect(r.querySelectorAll('[data-testid="icon-box"]')).toHaveLength(1));
+		const before = shape(item);
 		fireEvent.focus(item);
-		expect(await screen.findByText('org.plain.launcher')).toBeTruthy();
+		expect(shape(item)).toBe(before);
 		fireEvent.blur(item);
-		await waitFor(() => expect(screen.queryByText('org.plain.launcher')).toBeNull());
+		expect(shape(item)).toBe(before);
+		['org.plain.launcher', 'org.fancy.launcher', 'com.webos.app.home'].forEach((id) => expect(screen.queryByText(id)).toBeNull());
+		// the check slot is reserved in rows that are not current
+		rows().forEach((r) => expect(r.querySelectorAll('i,[class*="checkSlot"]').length).toBeGreaterThan(0));
 	});
 
 	test('empty list explains launchers', async () => {
