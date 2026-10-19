@@ -130,7 +130,27 @@
 }
 
 .message {
-	margin: 60px 24px;
+	margin: 12px 24px 24px;
+}
+
+// A fixed one-line footer at the bottom of the panel; the list leaves room for it.
+.footer {
+	position: absolute;
+	left: 24px;
+	right: 24px;
+	bottom: 12px;
+	height: 40px;
+	line-height: 40px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: 24px;
+	opacity: 0.7;
+	pointer-events: none;
+}
+
+.footerSpace {
+	height: 64px;
 }
 
 .toast {

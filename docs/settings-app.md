@@ -38,12 +38,16 @@ Open House is in English only.
   app.") and clears the marker. A run that finishes in the same window clears the marker itself. Restoring LG Home
   removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
   the dialog says the Home button can't be changed on this TV's software and applies nothing.
-* **Problems.** Instead of the list, one plain screen: Homebrew Channel missing or not running;
-  Homebrew Channel refusing `exec` (webOS 26 and later: "Your Homebrew Channel doesn't let apps run
-  root commands yet. Update Homebrew Channel; Open House needs it."); Homebrew Channel not running
-  as root.
-* **About.** An info icon button in the panel header (reached with Up from the first row, opened with OK) opens a dialog with Open House's version, the webOS version,
-  "Home key patch active: yes/no" (6 to 9 only) and "Before uninstalling Open House, choose LG Home."
+* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
+* **Before uninstalling Open House, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
+* **Problems (no root).** Homebrew Channel missing or not running, refusing `exec` (webOS 26 and later:
+  "Your Homebrew Channel doesn't let apps run root commands yet. Update Homebrew Channel; Open House
+  needs it."), or not running as root: the panel keeps its layout. A plain one-line reason is at the
+  top of the list area and the list is disabled (Moonstone `disabled`: rows are dimmed, cannot be
+  focused or clicked, no confirmation opens), with nothing focused; Back still closes the panel. Without
+  root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs
+  root; the public `listLaunchPoints` does not carry `appCategory`), so only the "LG Home (stock)"
+  row is shown, with no check mark and no footer.
 * **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon

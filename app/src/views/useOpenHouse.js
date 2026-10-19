@@ -39,7 +39,7 @@ export const plainFailure = (what, errors) => {
 
 export const useOpenHouse = (load = loadEnvironment) => {
 	const [phase, setPhase] = useState('loading');
-	const [fatal, setFatal] = useState(null);
+	const [rootError, setRootError] = useState(null); // why root is unavailable, or null
 	const [env, setEnv] = useState(null);
 	const [candidates, setCandidates] = useState([]);
 	const [currentId, setCurrentId] = useState(STOCK_HOME);
@@ -95,8 +95,9 @@ export const useOpenHouse = (load = loadEnvironment) => {
 			if (cancelled || !mounted.current) return;
 			// eslint-disable-next-line no-console
 			console.log(`${LOG_PREFIX} startup: ${errorMessage(err)}`);
-			setFatal({kind: err.kind || 'failed'});
-			setPhase('fatal');
+			// no root: the screen stays, with the list disabled and the reason on top
+			setRootError(err.kind || 'failed');
+			setPhase('ready');
 		});
 		return () => { cancelled = true; };
 	}, [load, refreshWith]);
@@ -185,7 +186,7 @@ export const useOpenHouse = (load = loadEnvironment) => {
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	return {
-		phase, fatal, version: env && env.version, hasPatch: Boolean(env && env.backport), patch,
+		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, icons,
 		busy, notice, toast, choose, dismissToast: () => setToast(null)
 	};

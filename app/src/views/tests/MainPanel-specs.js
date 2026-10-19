@@ -43,12 +43,24 @@ describe('Open House screen', () => {
 	test.each([
 		['unreachable', /needs Homebrew Channel on a rooted TV/],
 		['denied', /doesn't let apps run root commands yet\. Update Homebrew Channel; Open House needs it\./],
-		['notRoot', /not running as root/]
-	])('fatal state %s replaces the list', async (kind, text) => {
-		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} />);
+		['notRoot', /not running as root/],
+		['failed', /can't reach the TV's services/]
+	])('no root (%s): the reason on top and a disabled list, same layout', async (kind, text) => {
+		const onExit = jest.fn();
+		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} onExit={onExit} />);
 		expect(await screen.findByText(text)).toBeTruthy();
-		expect(screen.queryByText('LG Home (stock)')).toBeNull();
 		expect(screen.getByText('Find your TV a new home')).toBeTruthy();
+		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
+		expect(row.getAttribute('aria-disabled')).toBe('true');
+		expect(row.querySelectorAll('[data-testid="icon-box"]')).toHaveLength(1);
+		expect(screen.queryByLabelText('Current')).toBeNull();
+		expect(screen.queryByTestId('footer')).toBeNull();
+		fireEvent.click(screen.getByText('LG Home (stock)'));
+		await flush();
+		expect(screen.queryByText('Use LG Home?')).toBeNull();
+		expect(document.activeElement.closest('[data-spotlight-id^="home-"]')).toBeNull();
+		fireEvent.keyUp(screen.getByText('LG Home (stock)'), {keyCode: 27});
+		expect(onExit).toHaveBeenCalledTimes(1);
 	});
 
 	test('lists the stock home first, then launchers with names only; check mark on current', async () => {
@@ -236,20 +248,27 @@ describe('Open House screen', () => {
 		});
 	});
 
-	test('About shows versions and the uninstall advice; patch line only on 6 to 9', async () => {
-		const backport = {status: jest.fn(async () => ok({status: {mounted: true, enabled: true}})), install: jest.fn(), remove: jest.fn()};
-		mountApp(makeEnv({version: [8, 3, 0], backport}));
-		fireEvent.click(await screen.findByLabelText('About'));
-		expect(await screen.findByText('webOS TV 8.3.0')).toBeTruthy();
-		expect(screen.getByText('Home key patch active: yes')).toBeTruthy();
-		expect(screen.getByText('Before uninstalling Open House, choose LG Home.')).toBeTruthy();
-	});
-
-	test('About on webOS 10+ has no patch line', async () => {
-		mountApp(makeEnv());
-		fireEvent.click(await screen.findByLabelText('About'));
-		await screen.findByText('webOS TV 11.0.0');
-		expect(screen.queryByText(/Home key patch/)).toBeNull();
+	describe('footer', () => {
+		const withStatus = (version, status) => makeEnv({
+			version,
+			backport: status === undefined ? null : {status: jest.fn(async () => ok({status})), install: jest.fn(), remove: jest.fn()}
+		});
+		test.each([
+			['active', {mounted: true, enabled: true}, 'Home key patch: active'],
+			['not active', {mounted: false, enabled: false, match: '8.3.0'}, 'Home key patch: not active'],
+			['no match', {mounted: false, enabled: false, match: null}, "Home key patch: not available for this TV's software"]
+		])('webOS 8: %s', async (name, status, text) => {
+			mountApp(withStatus([8, 3, 0], status));
+			expect((await screen.findByTestId('footer')).textContent).toBe(text);
+			expect(screen.getByTestId('footer').matches('button,a,[tabindex],[data-spotlight-id]')).toBe(false);
+		});
+		test.each([[[5, 6, 1]], [[10, 3, 1]], [[11, 0, 0]]])('webOS %j: no footer, no About', async (version) => {
+			mountApp(withStatus(version));
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByTestId('footer')).toBeNull();
+			expect(screen.queryByLabelText('About')).toBeNull();
+			expect(screen.queryByText(/Home key patch/)).toBeNull();
+		});
 	});
 
 	test('Back closes the dialog first, then exits', async () => {
@@ -266,20 +285,13 @@ describe('Open House screen', () => {
 
 	test('Back via keyCode 461 (disableBackHistoryAPI) closes the dialog first, then exits', async () => {
 		const {onExit} = mountApp(makeEnv());
-		fireEvent.click(await screen.findByLabelText('About'));
-		await screen.findByText('Before uninstalling Open House, choose LG Home.');
-		fireEvent.keyUp(screen.getByText('Before uninstalling Open House, choose LG Home.'), {keyCode: 461});
-		await waitFor(() => expect(screen.queryByText('Before uninstalling Open House, choose LG Home.')).toBeNull());
+		fireEvent.click(await screen.findByText('Plain Launcher'));
+		await screen.findByText('Use Plain Launcher as Home?');
+		fireEvent.keyUp(screen.getByText('Cancel'), {keyCode: 461});
+		await waitFor(() => expect(screen.queryByText('Use Plain Launcher as Home?')).toBeNull());
 		expect(onExit).not.toHaveBeenCalled();
 		fireEvent.keyUp(screen.getByText('Plain Launcher'), {keyCode: 461});
 		expect(onExit).toHaveBeenCalledTimes(1);
-	});
-
-	test('the About button is in the header, not the list', async () => {
-		mountApp(makeEnv());
-		const about = await screen.findByLabelText('About');
-		expect(about.closest('header')).toBeTruthy();
-		expect(screen.queryByText('About')).toBeNull();
 	});
 
 	test('without an onExit prop, Back closes the window (never webOSSystem.hide)', async () => {
