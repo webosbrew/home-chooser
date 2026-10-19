@@ -379,6 +379,12 @@ as a key instead of being relaunched: the backport's `isHomeApp` follows the cho
 1.5 GB VM each card launch made `sam` kill the app in front (`memoryReclaim`) and relaunch it
 later (`autoReload`). [V, VM]
 
+Keys sent while such a floating window is up can reach no window at all: surface-manager logged
+`keyPressEvent ... Focused none-group nor grabbed item` for arrows and Back sent to a floating
+launcher on 6.6.0, while card launchers got the same keys [V, VM]. The Beanjar maintainers'
+reading of the logs is that LG's surface-manager delivers keys only to surface items in a focus
+group or grabbed, and the floating app had `windowGroup: false` [I].
+
 This is AltHome's issue #4 (`webOSSystem.hide()` on webOS 6 leaves the layer holding focus).
 AltHome's later webOS 6 path, `suspense`, is not a method on 6.6.0.
 
