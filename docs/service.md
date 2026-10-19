@@ -77,7 +77,11 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/openhouse/home`, `/var/lib/webosbrew/openhouse/keyfilter`,
   `/var/webos-profile/override/org.webosbrew.openhouse.json`. `readFile` also reads
-  `/etc/os-release`, because a web app cannot read it and the app needs the release.
+  `/etc/os-release`, because a web app cannot read it and the app needs the release. The
+  writable files are opened with `O_NOFOLLOW`. `/etc/os-release` is a symlink to
+  `../usr/lib/os-release` (webOS 5.6 to 26 roots checked: W20L, W20H, W21P, W22L, W22P, W22H 43.x), so
+  it is resolved with `realpath()` and read only when the result is `/etc/os-release` or
+  `/usr/lib/os-release`; any other target is `notAllowed`.
 * **Icons**: `readIcon` asks `getAppInfo` for the app's `folderPath` and `icon`, joins them (no
   `..`), requires an image extension (png, jpg, jpeg, gif, svg, webp), resolves symlinks and
   requires the result to lie inside the real `folderPath`, then returns the file if it is a regular

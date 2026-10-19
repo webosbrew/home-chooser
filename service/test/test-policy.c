@@ -38,6 +38,13 @@ static void test_files(void)
 	CHECK(!oh_file_readable("/etc/shadow"));
 	CHECK(!oh_file_readable("/etc/os-release2"));
 	CHECK(!oh_file_readable(NULL));
+	CHECK(oh_osrelease_target_ok("/usr/lib/os-release"));
+	CHECK(oh_osrelease_target_ok("/etc/os-release"));
+	CHECK(!oh_osrelease_target_ok("/etc/shadow"));
+	CHECK(!oh_osrelease_target_ok("/usr/lib/os-release2"));
+	CHECK(!oh_osrelease_target_ok("/tmp/os-release"));
+	CHECK(!oh_osrelease_target_ok("../usr/lib/os-release"));
+	CHECK(!oh_osrelease_target_ok(NULL));
 }
 
 static void test_calls(void)

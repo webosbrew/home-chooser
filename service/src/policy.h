@@ -21,6 +21,8 @@
 #define OH_ENTRY_SCRIPT OH_APP_DIR "/backport/openhouse"
 #define OH_KEYFILTER_SCRIPT OH_APP_DIR "/backport/openhouse-keyfilter"
 #define OH_WATCH_SCRIPT OH_APP_DIR "/backport/openhouse-home-watch"
+#define OH_OSRELEASE "/etc/os-release"
+#define OH_OSRELEASE_REAL "/usr/lib/os-release"
 #define OH_WATCH_LOG "/tmp/openhouse-home.log"
 
 /* Sender: the Open House app, as luna-service2 reports its application id. The id may carry an
@@ -31,6 +33,9 @@ bool oh_sender_ok(const char *app_id);
 bool oh_file_allowed(const char *path);
 /* readFile also reads /etc/os-release (the app needs the release; a web app cannot read it). */
 bool oh_file_readable(const char *path);
+/* /etc/os-release is a symlink to ../usr/lib/os-release on webOS 6 and later. The service resolves
+ * it with realpath() and reads it only when the result (a path with no symlinks) is one of the two. */
+bool oh_osrelease_target_ok(const char *resolved);
 
 /* How a forwarded call is checked beyond its URI. */
 typedef enum {

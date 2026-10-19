@@ -26,7 +26,12 @@ bool oh_file_allowed(const char *path)
 
 bool oh_file_readable(const char *path)
 {
-	return oh_file_allowed(path) || (path && strcmp(path, "/etc/os-release") == 0);
+	return oh_file_allowed(path) || (path && strcmp(path, OH_OSRELEASE) == 0);
+}
+
+bool oh_osrelease_target_ok(const char *resolved)
+{
+	return resolved && (strcmp(resolved, OH_OSRELEASE) == 0 || strcmp(resolved, OH_OSRELEASE_REAL) == 0);
 }
 
 static const struct {

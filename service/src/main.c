@@ -355,7 +355,28 @@ static bool on_read_file(LSHandle *sh, LSMessage *msg, void *ctx)
 	char *path = req ? request_path(msg, req, "readFile", true) : NULL;
 	if (req && path) {
 		char *buf = NULL;
-		ssize_t n = slurp(path, 65536, &buf, NULL);
+		const char *open_path = path;
+		char real[PATH_MAX];
+		ssize_t n;
+		if (strcmp(path, OH_OSRELEASE) == 0) {
+			/* Read-only and a symlink on webOS 6+: resolve it, accept two known targets, and open
+			 * the resolved path (no symlinks left, so O_NOFOLLOW still holds). */
+			if (!realpath(path, real)) {
+				n = -1;
+			} else if (!oh_osrelease_target_ok(real)) {
+				LOGE("PATH_DENIED", "readFile %s resolves to %s", path, real);
+				send_error(msg, "notAllowed", "%s resolves outside the allowed targets", path);
+				g_free(path);
+				j_release(&req);
+				return true;
+			} else {
+				open_path = real;
+				n = 0;
+			}
+		} else {
+			n = 0;
+		}
+		if (n == 0) n = slurp(open_path, 65536, &buf, NULL);
 		if (n < 0 && errno == ENOENT) {
 			jvalue_ref o = jobject_create();
 			put_bool(o, "returnValue", true);
