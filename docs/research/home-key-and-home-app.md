@@ -400,8 +400,11 @@ item (`nextZOrderedSurfaceGroupItem` 0x42024 / `nextKeyOrderedSurfaceGroupItem` 
 no self, visited or depth check. The group's z list gets the owner from `setRootItem` and
 again from `attach` (no dedupe), so an owner that also attaches its own surface to one of its
 group's layers sits in the list twice and forwards to itself until the stack runs out. SDL's
-`Wayland_CreateWindow` does that when an owner window also sets
-`SDL_HINT_WEBOS_WINDOW_LAYER_NAME`; this matches four surface-manager crashes on the 6.6.0 VM,
+`Wayland_CreateWindow` (6.6.0 `libSDL2`) attaches the window to the group unless
+`SDL_HINT_WEBOS_WINDOW_GROUP_OWNER` is the string `"false"` (`strncmp` at 0x75df4 skips
+`get_surface_group`/`attach`), whether or not `SDL_HINT_WEBOS_WINDOW_LAYER_NAME` is set; its
+`..._KEYMASK` hint is parsed with `atoi` (decimal, `-1` for all) [V, read by the Dock project];
+this matches four surface-manager crashes on the 6.6.0 VM,
 each after a burst of `investigates next z ordered item` lines for such an overlay on Home and
 Back. A web app owning a group through appinfo `windowGroup` is not attached to a layer
 (`WebAppWayland::setupWindowGroup` 0x56ae0 calls `CreateWindowGroup` only), so it appears once
