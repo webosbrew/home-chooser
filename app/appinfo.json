@@ -14,18 +14,5 @@
   "noSplashOnLaunch": true,
   "disableBackHistoryAPI": true,
   "spinnerOnLaunch": false,
-  "uiRevision": 2,
-  "windowGroup": {
-    "name": "org.webosbrew.openhouse",
-    "owner": true,
-    "ownerInfo": {
-      "allowAnonymous": false,
-      "layers": [
-        {
-          "name": "layer1",
-          "z": 1
-        }
-      ]
-    }
-  }
+  "uiRevision": 2
 }
