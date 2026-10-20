@@ -393,6 +393,21 @@ app beneath through its transparent areas, took 5-way keys, and `getForegroundAp
 both the card and the overlay. Homebrew Channel's `elevateService` elevated its native
 developer service on that VM. [V, VM; reported by the Dock session, not rerun here]
 
+Window groups have a compositor trap on 6.6.0 [V, `libWebOSCoreCompositor.so.0.0.1`]: when a
+group member does not accept a key (`acceptsKeyEvent`: `keyMask() & keyMaskFromQt(key)`),
+`WebOSSurfaceItem::keyPressEvent` (0x39046) forwards it to the group's next key- or z-ordered
+item (`nextZOrderedSurfaceGroupItem` 0x42024 / `nextKeyOrderedSurfaceGroupItem` 0x425a0) with
+no self, visited or depth check. The group's z list gets the owner from `setRootItem` and
+again from `attach` (no dedupe), so an owner that also attaches its own surface to one of its
+group's layers sits in the list twice and forwards to itself until the stack runs out. SDL's
+`Wayland_CreateWindow` does that when an owner window also sets
+`SDL_HINT_WEBOS_WINDOW_LAYER_NAME`; this matches four surface-manager crashes on the 6.6.0 VM,
+each after a burst of `investigates next z ordered item` lines for such an overlay on Home and
+Back. A web app owning a group through appinfo `windowGroup` is not attached to a layer
+(`WebAppWayland::setupWindowGroup` 0x56ae0 calls `CreateWindowGroup` only), so it appears once
+and a rejected key ends after at most one forward. [V; the duplicate entries being adjacent
+after sorting is I]
+
 This is AltHome's issue #4 (`webOSSystem.hide()` on webOS 6 leaves the layer holding focus).
 AltHome's later webOS 6 path, `suspense`, is not a method on 6.6.0.
 
