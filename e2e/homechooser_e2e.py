@@ -1,0 +1,948 @@
+#!/usr/bin/env python3
+"""End-to-end test of Home Chooser on a Beanjar VM.  See e2e/README.md.
+
+Python 3 standard library only.  The device is reached with the ares-* tools only (by device
+name); the VM host (Beanjar) through the BeanjarHost class below, locally or through
+`ares-shell -d raspberrypi -r`.
+"""
+import argparse
+import base64
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+APP_ID = 'org.webosbrew.homechooser'
+SVC_ID = APP_ID + '.service'
+STOCK = 'com.webos.app.home'
+CHOICE = '/var/lib/webosbrew/homechooser/home'
+FLAG = '/var/lib/webosbrew/homechooser/keyfilter'
+INITD = '/var/lib/webosbrew/init.d/homechooser'
+OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
+APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
+HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
+
+# ---------------------------------------------------------------------------------------------
+# The matrix: one table.  "sure" says how far the VM/release pairing was checked.
+#   verified  = booted and os-release read by a run of this runner
+#   docs      = the firmware is named for that release in docs/research/home-key-and-home-app.md
+#   listing   = only `beanjar list` (platform column, firmware string); os-release not read
+# elevation: luna = Homebrew Channel's luna elevateService (the app does it); root-shell = the
+# runner runs Homebrew Channel's elevate-service helper as root (webOS 11.x/12.x, where
+# Homebrew Channel refuses `elevateService` from apps: README.md "Decisions").
+# ---------------------------------------------------------------------------------------------
+MATRIX = [
+    # release, vm, elevation, sure, note
+    ('5.x', 'w20l-jhericurl', 'luna', 'docs', 'W20L 04.63.25.01 = 5.6.1 (study table); w20h-jhericurl is also webOS 5'),
+    ('6.x', 'w21p-kisscurl', 'luna', 'docs', "W21P 03.70.25.01 = 6.6.0; owned by the Dock project: ask before use; end state keeps Dock selected"),
+    ('7.x', 'w22p-mullet', 'luna', 'docs', 'W22P 04.60.90.01 = 7.6.0 (study table)'),
+    ('8.x', 'w22o-number1', 'luna', 'listing', 'webOS 23 (13.30.56.01); the study names this VM as the 8.3.0 one but its os-release was not read'),
+    ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
+    ('10.x', 'w22o-ponytail-us', 'luna', 'docs', 'W22O 33.31.61.01 = 10.3.1 (study table)'),
+    ('11.x', 'w22o-queue-us', 'root-shell', 'docs', 'W22O 43.21.89.01 = 11.2.0 (study results); w22o-queue and w22o-queue-jp run the same firmware'),
+    ('12.x', 'w24g-spacebuns', 'root-shell', 'UNSURE', "the only VM beanjar lists as 'webOS 12' (02.68.80.01, W24G); no os-release read, no doc names it. If it is not 12.x, there is no 12.x VM"),
+]
+KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
+
+
+def entry(release_or_vm):
+    for m in MATRIX:
+        if release_or_vm in (m[0], m[1]):
+            return m
+    raise SystemExit('unknown VM/release %r; see the matrix in e2e/README.md' % release_or_vm)
+
+
+# ---------------------------------------------------------------------------------------------
+# Running things
+# ---------------------------------------------------------------------------------------------
+def run(argv, timeout=120, input=None):
+    """(rc, stdout+stderr) of a local process."""
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+                           input=input)
+        return p.returncode, p.stdout.decode('utf-8', 'replace')
+    except subprocess.TimeoutExpired as e:
+        return 124, (e.stdout or b'').decode('utf-8', 'replace') + '\n[timeout]'
+
+
+class BeanjarHost:
+    """Every operation on the machine that runs Beanjar goes through here.
+
+    local mode: beanjar and friends run as local commands.  remote mode: each command line is
+    run with `ares-shell -d <device> -r`.  The rest of the runner never quotes for the remote.
+    """
+
+    def __init__(self, mode='auto', device='raspberrypi'):
+        if mode == 'auto':
+            mode = 'local' if shutil.which('beanjar') else 'remote'
+        self.mode, self.device = mode, device
+
+    # -- plumbing
+    def sh(self, cmd, timeout=120):
+        if self.mode == 'local':
+            return run(['sh', '-c', cmd], timeout)
+        return run(['ares-shell', '-d', self.device, '-r', cmd], timeout)
+
+    def _q(self, *words):
+        return ' '.join(shlex.quote(str(w)) for w in words)
+
+    def fetch(self, remote_path, local_path):
+        """Copy a host file to the machine running the runner."""
+        if self.mode == 'local':
+            shutil.copyfile(remote_path, local_path)
+            return True
+        rc, _ = run(['ares-pull', '-d', self.device, remote_path, local_path])
+        return rc == 0
+
+    def beanjar(self, *args, timeout=300):
+        return self.sh('beanjar ' + self._q(*args), timeout)
+
+    # -- Beanjar
+    def vm_table(self):
+        rc, out = self.beanjar('list')
+        rows = {}
+        for line in out.splitlines()[1:]:
+            f = line.split()
+            if len(f) >= 3:
+                rows[f[0]] = {'state': f[1], 'line': line}
+        return rows
+
+    def running_vms(self):
+        return [n for n, r in self.vm_table().items() if r['state'] not in ('Off', 'off')]
+
+    def info(self, vm):
+        rc, out = self.beanjar('info', vm)
+        d = {}
+        for line in out.splitlines():
+            if ': ' in line:
+                k, v = line.split(': ', 1)
+                d.setdefault(k.strip(), v.strip())
+        return d
+
+    def settings(self, vm):
+        rc, out = self.beanjar('settings', vm, 'show')
+        return dict(l.split(': ', 1) for l in out.splitlines() if ': ' in l)
+
+    def set_settings(self, vm, **kv):
+        return self.beanjar('settings', vm, 'set', *['%s=%s' % i for i in kv.items()])
+
+    def start(self, vm):
+        return self.beanjar('start', vm, timeout=600)
+
+    def stop(self, vm):
+        return self.beanjar('stop', vm, timeout=300)
+
+    # -- input and capture
+    def sendkey(self, vm, key):
+        sock = '$HOME/.local/share/beanjar/vms/%s/run/qmp.sock' % vm
+        cmd = ('(echo \'{"execute":"qmp_capabilities"}\'; echo \'{"execute":"human-monitor-command",'
+               '"arguments":{"command-line":"sendkey %s"}}\'; sleep 0.5) | socat - UNIX-CONNECT:%s | tail -1'
+               % (key, sock))
+        return self.sh(cmd, 30)
+
+    def screenshot(self, local_path):
+        """The VM viewer as the Pi shows it (whole Wayland output; no crop geometry)."""
+        tmp = '/tmp/e2e-shot-%d.png' % os.getpid()
+        rc, out = self.sh('export XDG_RUNTIME_DIR=/run/user/$(id -u) WAYLAND_DISPLAY=wayland-0; '
+                          'grim %s' % tmp, 30)
+        ok = rc == 0 and self.fetch(tmp, local_path)
+        self.sh('rm -f ' + tmp)
+        return ok, out
+
+
+# ---------------------------------------------------------------------------------------------
+# Device access (ares-* only)
+# ---------------------------------------------------------------------------------------------
+class Device:
+    def __init__(self, vm):
+        self.vm, self.root = vm, vm + '-root'
+
+    def exec(self, cmd, timeout=60):
+        return run(['ares-do', '--timeout', str(timeout * 1000), 'exec', '-d', self.root, cmd], timeout + 10)
+
+    def sh(self, cmd, timeout=60):
+        """Root shell command; (rc, output).  ares-shell -r is not used for stdout fidelity."""
+        return run(['ares-shell', '-d', self.root, '-r', cmd], timeout)
+
+    def luna(self, uri, payload='{}'):
+        rc, out = run(['ares-do', 'luna', '-d', self.root, '--allow-false', uri, payload], 60)
+        return out.strip()
+
+    def install(self, ipk):
+        return run(['ares-install', '-d', self.vm, ipk], 300)
+
+    def remove(self, appid):
+        return run(['ares-install', '-d', self.vm, '--remove', appid], 300)
+
+    def installed(self):
+        rc, out = run(['ares-install', '-d', self.vm, '-l'], 60)
+        return out.split()
+
+    def launch(self, appid):
+        return run(['ares-launch', '-d', self.vm, appid], 60)
+
+    def close(self, appid):
+        return run(['ares-launch', '-d', self.vm, '-c', appid], 60)
+
+    def key(self, *keys):
+        return run(['ares-do', 'key', '-d', self.root, '--delay', '300'] + list(keys), 60)
+
+    def screenshot(self, path):
+        return run(['ares-do', 'screenshot', '-d', self.root, path], 60)
+
+    def foreground(self):
+        out = self.luna('luna://com.webos.applicationManager/getForegroundAppInfo')
+        try:
+            return json.loads(out).get('appId', ''), out
+        except ValueError:
+            return None, out
+
+    def record_home(self):
+        out = self.luna('luna://com.webos.settingsservice/getSystemSettings',
+                        '{"category":"general","keys":["defaultApps"]}')
+        try:
+            d = json.loads(out)['settings']['defaultApps']
+            if isinstance(d, str):
+                d = json.loads(d)
+            return d.get('home'), out
+        except (ValueError, KeyError, AttributeError, TypeError):
+            return '<unreadable>', out
+
+    def release(self):
+        rc, out = self.sh('. /usr/lib/os-release; echo "$VERSION_ID|$VERSION|$PRETTY_NAME"')
+        m = re.search(r'(\d+)\.(\d+)', out)
+        return (int(m.group(1)) if m else 0), out.strip()
+
+    def mounts(self):
+        rc, out = self.sh("awk '$2 ~ /^\\/usr\\/lib\\/qml\\// {print $2}' /proc/mounts")
+        return [l for l in out.split() if l.startswith('/usr/lib/qml/')]
+
+    def service_root(self):
+        rc, out = self.sh("ps -eo user,args | grep '[h]omechooser-service'")
+        return out.strip()
+
+
+# ---------------------------------------------------------------------------------------------
+# Elevation strategies
+# ---------------------------------------------------------------------------------------------
+class Elevation:
+    name = '?'
+
+    def prepare(self, dev, rec):
+        """Before the app starts."""
+
+    def verify(self, dev, rec, wait=90):
+        """The service runs as root: by ps (the service answers only the app)."""
+        end = time.time() + wait
+        out = ''
+        while time.time() < end:
+            out = dev.service_root()
+            if out.startswith('root') and 'homechooser-service' in out and 'jailer' not in out:
+                break
+            time.sleep(3)
+        rec.check('elevation (%s): service runs as root' % self.name,
+                  out.startswith('root') and 'jailer' not in out, 'ps: ' + (out or '(not running)'))
+
+
+class LunaElevation(Elevation):
+    """The app asks Homebrew Channel itself (luna://org.webosbrew.hbchannel.service/elevateService);
+    the runner only checks the outcome."""
+    name = 'luna'
+
+
+class RootShellElevation(Elevation):
+    """Test-harness substitute for the missing luna path on 11.x/12.x: run Homebrew Channel's own
+    elevate-service helper as root (service.ts: elevate-service <service id>), then `quit` the
+    service so the hub starts the rewritten, root instance (what the app does after elevating)."""
+    name = 'root-shell'
+
+    def prepare(self, dev, rec):
+        rc, out = dev.sh('%s %s; echo rc=$?' % (HB_ELEVATE, SVC_ID), 90)
+        rec.note('elevate-service ' + SVC_ID, out.strip())
+        # the (jailed) instance is started on demand by any call; call it, then make it quit
+        dev.luna('luna://%s/status' % SVC_ID)
+        dev.luna('luna://%s/quit' % SVC_ID)
+        time.sleep(2)
+        dev.luna('luna://%s/status' % SVC_ID)
+
+
+ELEVATIONS = {'luna': LunaElevation, 'root-shell': RootShellElevation}
+
+
+# ---------------------------------------------------------------------------------------------
+# Inspector (CDP over a websocket, forwarded with ares-novacom)
+# ---------------------------------------------------------------------------------------------
+class Inspector:
+    def __init__(self, vm):
+        s = socket.socket()
+        s.bind(('127.0.0.1', 0))
+        self.port = s.getsockname()[1]
+        s.close()
+        self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     start_new_session=True)
+        time.sleep(2)
+
+    def close(self):
+        try:
+            os.killpg(self.proc.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+    def _page(self):
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:%d/json' % self.port, timeout=5) as r:
+                pages = json.loads(r.read().decode())
+        except Exception:
+            return None
+        for p in pages:
+            if APP_ID in p.get('url', ''):
+                return p
+        return None
+
+    def evaluate(self, expr):
+        """Runtime.evaluate in the Home Chooser page; None if it is not there."""
+        page = self._page()
+        if not page:
+            return None
+        try:
+            s = socket.create_connection(('127.0.0.1', self.port), timeout=8)
+            key = base64.b64encode(os.urandom(16)).decode()
+            s.sendall(('GET /devtools/page/%s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nUpgrade: websocket\r\n'
+                       'Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n'
+                       % (page['id'], self.port, key)).encode())
+            buf = b''
+            while b'\r\n\r\n' not in buf:
+                buf += s.recv(4096)
+            buf = buf.split(b'\r\n\r\n', 1)[1]
+            msg = json.dumps({'id': 1, 'method': 'Runtime.evaluate',
+                              'params': {'expression': expr, 'returnByValue': True}}).encode()
+            mask = os.urandom(4)
+            hdr = bytes([0x81])
+            if len(msg) < 126:
+                hdr += bytes([0x80 | len(msg)])
+            elif len(msg) < 65536:
+                hdr += bytes([0x80 | 126]) + struct.pack('>H', len(msg))
+            else:
+                hdr += bytes([0x80 | 127]) + struct.pack('>Q', len(msg))
+            s.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(msg)))
+            while True:
+                frame, buf = self._frame(s, buf)
+                if frame is None:
+                    return None
+                try:
+                    d = json.loads(frame.decode('utf-8', 'replace'))
+                except ValueError:
+                    continue
+                if d.get('id') == 1:
+                    return d.get('result', {}).get('result', {}).get('value')
+        except (OSError, ValueError):
+            return None
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _frame(s, buf):
+        def need(n):
+            nonlocal buf
+            while len(buf) < n:
+                chunk = s.recv(65536)
+                if not chunk:
+                    raise OSError('closed')
+                buf += chunk
+        need(2)
+        ln = buf[1] & 0x7f
+        off = 2
+        if ln == 126:
+            need(4)
+            ln, off = struct.unpack('>H', buf[2:4])[0], 4
+        elif ln == 127:
+            need(10)
+            ln, off = struct.unpack('>Q', buf[2:10])[0], 10
+        need(off + ln)
+        data, buf = buf[off:off + ln], buf[off + ln:]
+        return data, buf
+
+
+FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.closest('[data-app-id]');"
+            "return JSON.stringify({row:r?r.getAttribute('data-app-id'):null,"
+            "text:e?(e.textContent||'').trim().slice(0,80):null,"
+            "dialog:(function(){var d=document.querySelector('[role=dialog]');return d?d.getAttribute('aria-label'):null})(),"
+            "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
+            "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
+
+
+# ---------------------------------------------------------------------------------------------
+# Recording
+# ---------------------------------------------------------------------------------------------
+class Recorder:
+    def __init__(self, outdir):
+        self.outdir = outdir
+        self.results = []
+        self.step = ''
+        self.log = open(os.path.join(outdir, 'run.log'), 'w')
+
+    def say(self, text):
+        line = '%s %s' % (time.strftime('%H:%M:%S'), text)
+        print(line, flush=True)
+        self.log.write(line + '\n')
+        self.log.flush()
+
+    def begin(self, step):
+        self.step = step
+        self.say('== ' + step)
+
+    def note(self, what, evidence=''):
+        self.say('note: %s\n    %s' % (what, str(evidence).replace('\n', '\n    ')))
+
+    def check(self, name, ok, evidence='', expected=None):
+        """expected: text citing the documented limitation; a failing check then records XFAIL."""
+        status = 'PASS' if ok else ('XFAIL' if expected else 'FAIL')
+        self.results.append({'step': self.step, 'name': name, 'status': status,
+                             'evidence': str(evidence), 'expected': expected})
+        self.say('%s  %s\n    %s%s' % (status, name, str(evidence).replace('\n', '\n    '),
+                                      '\n    expected: ' + expected if expected and not ok else ''))
+        return ok
+
+    def finish(self):
+        with open(os.path.join(self.outdir, 'results.json'), 'w') as f:
+            json.dump(self.results, f, indent=2)
+        counts = {}
+        for r in self.results:
+            counts[r['status']] = counts.get(r['status'], 0) + 1
+        self.say('summary: %s' % counts)
+        self.log.close()
+        return counts
+
+
+# ---------------------------------------------------------------------------------------------
+# The scenario
+# ---------------------------------------------------------------------------------------------
+class Scenario:
+    def __init__(self, args, host, rec, row):
+        self.a, self.host, self.rec = args, host, rec
+        self.release, self.vm, self.strategy_name, self.sure, self.note = row
+        self.dev = Device(self.vm)
+        self.launcher = args.launcher
+        self.shot_n = 0
+        self.insp = None
+        self.major = 0  # webOS TV release, 5..12
+
+    # -- helpers
+    def shot(self, label):
+        self.shot_n += 1
+        path = os.path.join(self.rec.outdir, '%02d-%s.png' % (self.shot_n, label))
+        rc, out = self.dev.screenshot(path)
+        self.rec.say('screenshot %s (%s)' % (os.path.basename(path), 'ok' if rc == 0 else out.strip()))
+        if self.a.viewer_shots:
+            ok, out = self.host.screenshot(path.replace('.png', '-viewer.png'))
+            self.rec.say('viewer screenshot: %s' % ('ok' if ok else out.strip()))
+        return path
+
+    def press(self, *keys):
+        for k in keys:
+            if self.a.input == 'qmp':
+                qk = {'DOWN': 'down', 'UP': 'up', 'OK': 'ret', 'HOME': 'meta_l', 'BACK': 'esc'}[k]
+                self.host.sendkey(self.vm, qk)
+            else:
+                ak = {'DOWN': 'DOWN', 'UP': 'UP', 'OK': 'ENTER', 'HOME': 'LEFTMETA', 'BACK': 'ESC'}[k]
+                self.dev.key(ak)
+            time.sleep(0.8)
+
+    def ui(self):
+        v = self.insp.evaluate(FOCUS_JS) if self.insp else None
+        try:
+            return json.loads(v) if v else None
+        except ValueError:
+            return None
+
+    def wait(self, cond, timeout, every=3):
+        end = time.time() + timeout
+        v = None
+        while time.time() < end:
+            v = cond()
+            if v:
+                return v
+            time.sleep(every)
+        return v
+
+    def watcher_active(self):
+        rc, out = self.dev.sh('systemctl is-active homechooser-home')
+        return out.strip()
+
+    def state(self):
+        """A snapshot of everything Home Chooser writes."""
+        d = self.dev
+        s = {}
+        rc, s['choice'] = d.sh('cat %s 2>&1' % CHOICE)
+        s['choice'] = s['choice'].strip()
+        s['record_home'], s['record_raw'] = d.record_home()
+        s['watcher'] = self.watcher_active()
+        rc, s['initd'] = d.sh('readlink %s 2>&1 || ls -la %s 2>&1' % (INITD, INITD))
+        s['initd'] = s['initd'].strip()
+        rc, s['flag'] = d.sh('test -e %s && echo yes || echo no' % FLAG)
+        s['flag'] = s['flag'].strip()
+        rc, s['override'] = d.sh('test -e %s && echo yes || echo no' % OVERRIDE)
+        s['override'] = s['override'].strip()
+        s['mounts'] = d.mounts()
+        return s
+
+    def uses_backport(self):
+        return 6 <= self.major <= 9
+
+    def uses_override(self):
+        return self.major >= 10
+
+    def stock_record_ok(self, home):
+        if self.major == 5:
+            return home in ('com.webos.app.fullhome', STOCK)
+        return home in (None, '', 'null')
+
+    def residency(self, point):
+        """Observation only: are the previous (stock) and the new home app running, pids and RSS."""
+        d = self.dev
+        out = d.luna('luna://com.webos.applicationManager/running')
+        lines = []
+        try:
+            running = {a['id']: a for a in json.loads(out)['running']}
+        except (ValueError, KeyError, TypeError):
+            running = None
+        if running is None:
+            lines.append('running: unreadable: ' + out[:200])
+        else:
+            for label, aid in (('previous home', STOCK), ('chosen launcher', self.launcher)):
+                a = running.get(aid)
+                if not a:
+                    lines.append('%-15s %-28s not running' % (label, aid))
+                    continue
+                pid = a.get('processid') or ''
+                rss = ''
+                if pid.isdigit():
+                    rss = d.sh("grep VmRSS /proc/%s/status 2>&1" % pid)[1].strip()
+                lines.append('%-15s %-28s running pid=%s webprocessid=%s %s'
+                             % (label, aid, pid, a.get('webprocessid'), rss))
+            lines.append('all running: ' + ', '.join('%s(%s)' % (k, v.get('processid')) for k, v in running.items()))
+        self.rec.say('home-app residency [%s]\n    %s' % (point, '\n    '.join(lines)))
+
+    def baked_id(self):
+        rc, out = self.dev.sh("grep -h configuredHomeAppId /usr/lib/qml/WebOSCompositorBase/global/Settings.qml | head -2")
+        return out.strip()
+
+    def assert_stock(self, label, s, mounts_stay=False):
+        r = self.rec
+        r.check(label + ': record home is stock/unset', self.stock_record_ok(s['record_home']), s['record_raw'])
+        if self.uses_override():
+            r.check(label + ': profile override absent', s['override'] == 'no', 'override exists: ' + s['override'])
+        if self.uses_backport() and mounts_stay:
+            r.check(label + ': backport stays mounted (docs: "the backport stays mounted until reboot")',
+                    bool(s['mounts']), 'mounts: %s' % s['mounts'])
+            baked = self.baked_id()
+            r.check(label + ': baked id in the mounted Settings.qml is emptied (refresh stock)',
+                    '""' in baked and self.launcher not in baked, baked)
+        elif self.uses_backport():
+            r.check(label + ': no backport mounts', not s['mounts'], 'mounts: %s' % s['mounts'])
+
+    def front_app(self, appid='org.webosbrew.hbchannel'):
+        """An ordinary app in front, as docs T4 presses Home from.  (With the stock home in front
+        the key is passed to the home view and nothing is launched: see step 3.)"""
+        self.dev.launch(appid)
+        fg = self.wait(lambda: (lambda x: x if x[0] == appid else None)(self.dev.foreground()), 30, 2)
+        self.rec.say('front app %s: %s' % (appid, fg))
+        time.sleep(3)
+
+    def running_ids(self):
+        try:
+            return [x['id'] for x in json.loads(self.dev.luna('luna://com.webos.applicationManager/running'))['running']]
+        except (ValueError, KeyError, TypeError):
+            return []
+
+    def home_press(self, expect, label, from_app=True):
+        """Press Home from an ordinary app.  The stock home must be in the foreground afterwards;
+        a launcher counts when it is running (it was closed first) or in the foreground: a
+        launcher bar such as Dock is an overlay window, so the app underneath stays "foreground"."""
+        r = self.rec
+        if expect != STOCK:
+            self.dev.close(expect)
+            time.sleep(3)
+            r.say('%s: %s running before the press: %s' % (label, expect, expect in self.running_ids()))
+        if from_app:
+            self.front_app()
+        self.press('HOME')
+        time.sleep(6)
+
+        def seen():
+            fg = self.dev.foreground()
+            if fg[0] == expect or (expect != STOCK and expect in self.running_ids()):
+                return fg
+            return None
+        fg = self.wait(seen, 20, 3)
+        ok = bool(fg)
+        fg = fg or self.dev.foreground()
+        self.shot(label)
+        r.check('%s: Home opens %s (foreground, or for a launcher: running after being closed first)'
+                % (label, expect), ok,
+                'getForegroundAppInfo: %s; running: %s' % (fg[1], self.running_ids()))
+        return ok
+
+    # -- steps
+    def run(self):
+        r, d = self.rec, self.dev
+        strat = ELEVATIONS[self.a.elevation or self.strategy_name]()
+        r.say('run: vm=%s release=%s elevation=%s (matrix default %s) input=%s host=%s launcher=%s'
+              % (self.vm, self.release, strat.name, self.strategy_name, self.a.input, self.host.mode,
+                 self.launcher))
+        r.say('matrix confidence: %s -- %s' % (self.sure, self.note))
+        self.major, osr = d.release()
+        r.begin('0 baseline')
+        r.check('device release matches the matrix (%s)' % self.release,
+                '%d.' % self.major == self.release[:-1], 'os-release: ' + osr)
+        base = self.state()
+        r.note('baseline state (a stale record home is image state, not ours)', json.dumps(base))
+        r.check('baseline: nothing of Home Chooser is installed',
+                APP_ID not in d.installed() and 'No such' in base['choice'],
+                'installed: %s; choice: %s' % (d.installed(), base['choice']))
+        r.check('baseline: Homebrew Channel is installed', 'org.webosbrew.hbchannel' in d.installed(),
+                str(d.installed()))
+        df = d.sh('df -h /media/developer | tail -1')[1].strip()
+        r.note('df /media/developer', df)
+
+        steps = [self.step1, self.step2, self.step3, self.step4, self.step5]
+        try:
+            for i, fn in enumerate(steps, 1):
+                if i > self.a.until:
+                    break
+                fn(strat) if i == 1 else fn()
+        finally:
+            if self.a.until >= 5:
+                self.step6()
+            else:
+                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+
+    def step1(self, strat):
+        r, d = self.rec, self.dev
+        r.begin('1 install')
+        ipks = sorted(f for f in os.listdir(os.path.join(REPO, 'build/ipk')) if f.endswith('.ipk'))
+        hc = os.path.join(REPO, 'build/ipk', ipks[-1]) if ipks else None
+        if self.a.build or not hc:
+            r.say('building Home Chooser: npm run package')
+            rc, out = run(['sh', '-c', 'cd %s/app && npm run package' % REPO], 900)
+            r.check('npm run package', rc == 0, out[-300:])
+            hc = os.path.join(REPO, 'build/ipk', sorted(os.listdir(os.path.join(REPO, 'build/ipk')))[-1])
+        rc, out = d.install(hc)
+        r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
+        rc, out = d.install(self.a.launcher_ipk)
+        r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
+        r.check('both apps are listed', APP_ID in d.installed() and self.launcher in d.installed(),
+                str(d.installed()))
+        strat.prepare(d, r)
+        self.strat = strat
+
+    def step2(self):
+        r, d = self.rec, self.dev
+        r.begin('2 choose the launcher through the UI')
+        self.residency('before selecting')
+        self.insp = Inspector(self.vm)
+        d.launch(APP_ID)
+        ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
+        self.strat.verify(d, r)
+        self.shot('app-open')
+        r.check('the list shows the launcher row (data-app-id)', bool(ui), 'DOM: %s' % json.dumps(ui))
+        if not ui:
+            raise RuntimeError('UI never listed the launcher; cannot continue')
+        r.say('UI driven: initial focus on %s' % ui.get('row'))
+        rows = ui['rows']
+        # move focus to the launcher's row
+        for _ in range(len(rows) + 2):
+            ui = self.ui() or {}
+            if ui.get('row') == self.launcher:
+                break
+            cur, tgt = rows.index(ui['row']) if ui.get('row') in rows else 0, rows.index(self.launcher)
+            self.press('DOWN' if tgt > cur else 'UP')
+        ui = self.ui() or {}
+        r.check('focus is on the launcher row', ui.get('row') == self.launcher, json.dumps(ui))
+        self.shot('row-focused')
+        self.press('OK')
+        ui = self.wait(lambda: (lambda u: u if u and u.get('dialog') else None)(self.ui()), 15, 1) or {}
+        r.check('the confirmation dialog opened ("Use <name> as Home?")',
+                bool(ui.get('dialog')) and ui['dialog'].startswith('Use '), json.dumps(ui))
+        r.say('UI driven: dialog "%s", focus "%s"' % (ui.get('dialog'), ui.get('text')))
+        self.shot('dialog')
+        if ui.get('text') != 'Use as Home':
+            self.press('UP')
+            ui = self.ui() or {}
+        r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
+        self.press('OK')
+        # the choice is applied; on 6-9 the compositor restart may close the panel
+        self.wait(lambda: self.state()['choice'] == self.launcher, 90)
+        time.sleep(10)
+        toast = (self.ui() or {}).get('toast')
+        self.shot('after-confirm')
+        r.note('toast after confirming (None if the panel was restarted/closed)', toast)
+        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or self.dev.mounts()), 90)
+        self.residency('right after "Use as Home" (settled)')
+        s = self.state()
+        r.note('state after choosing', json.dumps(s))
+        r.check('choice file holds the launcher id', s['choice'] == self.launcher, repr(s['choice']))
+        r.check('general/defaultApps record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
+        r.check('watcher unit homechooser-home is active', s['watcher'] == 'active', s['watcher'])
+        r.check('init.d entry is a symlink into the installed app',
+                s['initd'] == APPDIR + '/backport/homechooser', s['initd'])
+        if self.uses_backport():
+            r.check('backport mounts are present (webOS 6-9)', len(s['mounts']) >= 9, 'mounts: %s' % s['mounts'])
+            r.check('backport flag file exists', s['flag'] == 'yes', s['flag'])
+        else:
+            r.check('no backport on this release', not s['mounts'] and s['flag'] == 'no',
+                    'mounts: %s flag: %s' % (s['mounts'], s['flag']))
+        if self.uses_override():
+            r.check('profile override exists (webOS 10+)', s['override'] == 'yes', s['override'])
+            r.note('override', d.sh('cat %s' % OVERRIDE)[1])
+        r.check('the toast said Done (or the panel restarted)', toast in (None, 'Done. Press Home to try it.'),
+                repr(toast))
+        d.close(APP_ID)
+        if self.insp:
+            self.insp.close()
+            self.insp = None
+
+    def step3(self):
+        self.rec.begin('3 Home opens the launcher')
+        # Observation, not an assertion: Home with the stock home already in front.
+        fg0 = self.dev.foreground()
+        self.press('HOME')
+        time.sleep(6)
+        fg1 = self.dev.foreground()
+        self.shot('3-home-from-stock-home')
+        self.rec.note('Home pressed with the stock home in front (observation only): before %s, after %s'
+                      % (fg0[0], fg1[0]), 'see screenshot 3-home-from-stock-home')
+        self.home_press(self.launcher, '3-home')
+        self.residency('after the Home press')
+        r, d = self.rec, self.dev
+        rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
+        r.note('processes mentioning the launcher id', out.strip())
+
+    def step4(self):
+        r, d = self.rec, self.dev
+        r.begin('4 sudden launcher uninstall')
+        rc, out = d.remove(self.launcher)
+        r.check('ares-install --remove launcher', rc == 0, out.strip())
+        s = {}
+        self.wait(lambda: self.stock_record_ok(d.record_home()[0]), 120, 5)
+        s = self.state()
+        r.note('state after the launcher was removed', json.dumps(s))
+        self.residency('after the launcher uninstall')
+        self.assert_stock('after removal', s, mounts_stay=True)
+        r.check('choice file is kept (the user\'s choice)', s['choice'] == self.launcher, repr(s['choice']))
+        r.check('watcher still active', s['watcher'] == 'active', s['watcher'])
+        rc, out = d.sh('tail -n 8 /tmp/homechooser-home.log')
+        r.note('watcher log', out)
+        self.home_press(STOCK, '4-home-stock')
+        # reinstall
+        rc, out = d.install(self.a.launcher_ipk)
+        r.check('reinstall launcher', rc == 0 and 'Installed package' in out, out.strip())
+        self.wait(lambda: d.record_home()[0] == self.launcher, 120, 5)
+        s = self.state()
+        r.note('state after the launcher returned', json.dumps(s))
+        r.check('on return the watcher applies the choice again (record home)', s['record_home'] == self.launcher,
+                s['record_raw'])
+        if self.uses_override():
+            r.check('on return the override is rebuilt', s['override'] == 'yes', s['override'])
+        if self.uses_backport():
+            r.check('on return the backport is still mounted', bool(s['mounts']), 'mounts: %s' % s['mounts'])
+            baked = self.baked_id()
+            r.check('on return the id is baked into the mounted Settings.qml again',
+                    self.launcher in baked, baked)
+        self.home_press(self.launcher, '4-home-launcher-back')
+
+    def step5(self):
+        r, d = self.rec, self.dev
+        r.begin('5 uninstall Home Chooser')
+        rc, out = d.remove(APP_ID)
+        r.check('ares-install --remove Home Chooser', rc == 0, out.strip())
+        self.wait(lambda: self.watcher_active() != 'active' and self.stock_record_ok(d.record_home()[0]), 150, 5)
+        time.sleep(5)
+        s = self.state()
+        r.note('state after uninstall', json.dumps(s))
+        self.residency('after the Home Chooser uninstall')
+        r.check('choice file removed', 'No such file' in s['choice'], repr(s['choice']))
+        self.assert_stock('after uninstall', s)
+        r.check('init.d entry removed', 'No such file' in s['initd'] or s['initd'] == '', repr(s['initd']))
+        r.check('backport flag removed', s['flag'] == 'no', s['flag'])
+        r.check('watcher unit stopped', s['watcher'] != 'active', s['watcher'])
+        rc, out = d.sh('tail -n 12 /tmp/homechooser-home.log')
+        r.note('watcher log', out)
+        self.home_press(STOCK, '5-home-stock')
+
+    def step6(self):
+        r, d = self.rec, self.dev
+        r.begin('6 cleanup')
+        if self.insp:
+            self.insp.close()
+        if self.vm in KEEP_LAUNCHER_VMS:
+            r.note('this VM keeps Dock installed and selected: restore by hand (Home Chooser must be '
+                   'installed and Dock chosen through its UI); the runner does not do that yet', '')
+        else:
+            for app in (self.launcher, APP_ID):
+                if app in d.installed():
+                    rc, out = d.remove(app)
+                    r.say('removed %s: %s' % (app, out.strip()))
+            r.check('no test apps left installed', not ({self.launcher, APP_ID} & set(d.installed())),
+                    str(d.installed()))
+        r.note('df /media/developer', d.sh('df -h /media/developer | tail -1')[1])
+
+
+# ---------------------------------------------------------------------------------------------
+# VM preparation: layers, LAN, devices
+# ---------------------------------------------------------------------------------------------
+def ensure_devices(host, vm, rec):
+    """A device entry `<vm>-root` (root, 6622) with the VM's root key, and `<vm>` (devmode)."""
+    info = host.info(vm)
+    addr = info.get('lan_address') or ''
+    if not addr or addr == '-':
+        raise SystemExit('VM %s has no LAN address (is it running with link=lan?)' % vm)
+    p = os.path.expanduser('~/.webos/ose/novacom-devices.json')
+    devs = json.load(open(p))
+    byname = {x['name']: x for x in devs}
+    changed = False
+    keyname = 'beanjar-%s-root' % vm
+    keypath = os.path.expanduser('~/.ssh/' + keyname)
+    if not os.path.exists(keypath):
+        src = '%s/identity/id_ed25519' % info['dir']
+        if not host.fetch(src, keypath):
+            raise SystemExit('could not fetch the root key of %s' % vm)
+        os.chmod(keypath, 0o600)
+        rec.say('fetched the root key of %s to ~/.ssh/%s' % (vm, keyname))
+    want = {vm + '-root': (6622, 'root', {'openSsh': keyname})}
+    for name, (port, user, key) in want.items():
+        e = byname.get(name)
+        if e is None:
+            devs.append({'profile': 'ose', 'name': name, 'host': addr, 'port': port, 'username': user,
+                         'privateKey': key, 'files': 'sftp'})
+            changed = True
+            rec.say('added ares device %s -> %s:%d' % (name, addr, port))
+        elif e.get('host') != addr:
+            rec.say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
+            e['host'] = addr
+            changed = True
+    dv = byname.get(vm)
+    if dv is not None and dv.get('host') != addr:
+        rec.say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
+        dv['host'] = addr
+        changed = True
+    if dv is None:
+        raise SystemExit('no ares device %s (use ares-setup-device with the devmode key)' % vm)
+    if changed:
+        json.dump(devs, open(p, 'w'), indent=2)
+
+
+def prepare_vm(host, vm, rec):
+    running = host.running_vms()
+    if running:
+        raise SystemExit('VMs already running, not touching anything: %s' % running)
+    s = host.settings(vm)
+    layers = (s.get('layers') or '').split(',')
+    want = {}
+    if 'hbchannel' not in layers:
+        want['layers'] = ','.join(layers + ['hbchannel'])
+    if s.get('link') != 'lan':
+        want['link'] = 'lan'
+    if want:
+        rec.say('VM %s is off; settings %s' % (vm, want))
+        rc, out = host.set_settings(vm, **want)
+        rec.say(out.strip()[-300:])
+    rc, out = host.start(vm)
+    rec.say('beanjar start: %s' % out.strip()[-200:])
+
+
+def wait_for_device(vm, rec, timeout=300):
+    dev = Device(vm)
+    end = time.time() + timeout
+    while time.time() < end:
+        rc, out = dev.sh('echo up', 20)
+        if out.strip().endswith('up'):
+            apps = dev.installed()
+            if 'org.webosbrew.hbchannel' in apps:
+                return True
+        time.sleep(5)
+    return False
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Home Chooser end-to-end test on one Beanjar VM')
+    ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
+    ap.add_argument('--launcher', default='org.webosbrew.dock')
+    ap.add_argument('--launcher-ipk', default='/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk')
+    ap.add_argument('--host-mode', choices=['auto', 'local', 'remote'], default='auto',
+                    help='where beanjar runs: local if on PATH, else through ares-shell (default auto)')
+    ap.add_argument('--host-device', default='raspberrypi', help='ares device of the Beanjar host in remote mode')
+    ap.add_argument('--elevation', choices=sorted(ELEVATIONS), default=None,
+                    help="override the matrix's elevation strategy")
+    ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',
+                    help='remote-key path: QEMU sendkey on the host (default) or ares-do key')
+    ap.add_argument('--build', action='store_true', help='run npm run package first')
+    ap.add_argument('--viewer-shots', action='store_true', help='also grab the Pi viewer with grim')
+    ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
+    ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
+    ap.add_argument('--list', action='store_true', help='print the matrix and exit')
+    args = ap.parse_args()
+    if args.list:
+        for m in MATRIX:
+            print('%-5s %-18s %-10s %-9s %s' % m)
+        return 0
+    if not args.vm:
+        ap.error('--vm is required')
+    row = entry(args.vm)
+    vm = row[1]
+    host = BeanjarHost(args.host_mode, args.host_device)
+    outdir = os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
+    os.makedirs(outdir)
+    rec = Recorder(outdir)
+    rec.say('artefacts: ' + outdir)
+    started = False
+    scenario = None
+    try:
+        if not shutil.which('ares-do'):
+            raise SystemExit('ares-do not on PATH')
+        prepare_vm(host, vm, rec)
+        started = True
+        rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
+        end = time.time() + 120
+        while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
+            time.sleep(3)
+        ensure_devices(host, vm, rec)
+        if not wait_for_device(vm, rec):
+            raise SystemExit('the VM did not come up with Homebrew Channel')
+        scenario = Scenario(args, host, rec, row)
+        scenario.run()
+    except SystemExit as e:
+        rec.say('abort: %s' % e)
+        rec.check('runner setup', False, str(e))
+    except Exception as e:  # keep the artefacts
+        import traceback
+        rec.say('runner error:\n' + traceback.format_exc())
+        rec.check('scenario ran to the end', False, repr(e))
+    finally:
+        if scenario and scenario.insp:
+            scenario.insp.close()
+        if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
+            rc, out = host.stop(vm)
+            rec.say('beanjar stop: %s' % out.strip()[-200:])
+        elif started and vm in KEEP_LAUNCHER_VMS:
+            rec.say('%s is left running for the manual restore of its end state' % vm)
+        counts = rec.finish()
+    return 1 if counts.get('FAIL') else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -88,6 +88,13 @@ describe('Home Chooser screen', () => {
 		expect(screen.getByLabelText('Current').closest('[data-spotlight-id]').textContent).toContain('Fancy Launcher');
 	});
 
+	test('rows carry their app id as data-app-id for the e2e runner (not as text)', async () => {
+		mountApp(makeEnv());
+		await screen.findByText('Plain Launcher');
+		const ids = Array.from(document.querySelectorAll('[data-spotlight-id^="home-"]')).map((r) => r.getAttribute('data-app-id'));
+		expect(ids).toEqual(['com.webos.app.home', 'org.fancy.launcher', 'org.plain.launcher']);
+	});
+
 	test('icons are loaded as data URLs, with a fallback', async () => {
 		const env = makeEnv();
 		mountApp(env);

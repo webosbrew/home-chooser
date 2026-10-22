@@ -31,6 +31,7 @@ export const HomeItem = ({name, icon, stock, current, disabled, spotlightId, onC
 			disabled={disabled}
 			onClick={handleClick}
 			spotlightId={spotlightId}
+			data-app-id={appId}
 			slotBefore={<AppIcon src={icon} stock={stock} />}
 			slotAfter={
 				<span className={css.checkSlot}>
