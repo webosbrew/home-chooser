@@ -3,20 +3,20 @@
 #include <string.h>
 #include <strings.h>
 
-bool oh_sender_ok(const char *app_id)
+bool hc_sender_ok(const char *app_id)
 {
-#ifdef OH_ALLOW_ANY_SENDER /* dev build only, see the Makefile */
+#ifdef HC_ALLOW_ANY_SENDER /* dev build only, see the Makefile */
 	(void)app_id;
 	return true;
 #endif
-	size_t n = strlen(OH_APP_ID);
-	if (!app_id || strncmp(app_id, OH_APP_ID, n) != 0) return false;
+	size_t n = strlen(HC_APP_ID);
+	if (!app_id || strncmp(app_id, HC_APP_ID, n) != 0) return false;
 	return app_id[n] == '\0' || app_id[n] == ' ';
 }
 
-static const char *const FILES[] = {OH_HOME_FILE, OH_KEYFILTER_FLAG, OH_OVERRIDE_FILE, NULL};
+static const char *const FILES[] = {HC_HOME_FILE, HC_KEYFILTER_FLAG, HC_OVERRIDE_FILE, NULL};
 
-bool oh_file_allowed(const char *path)
+bool hc_file_allowed(const char *path)
 {
 	if (!path) return false;
 	for (int i = 0; FILES[i]; i++)
@@ -24,61 +24,61 @@ bool oh_file_allowed(const char *path)
 	return false;
 }
 
-bool oh_file_readable(const char *path)
+bool hc_file_readable(const char *path)
 {
-	return oh_file_allowed(path) || (path && strcmp(path, OH_OSRELEASE) == 0);
+	return hc_file_allowed(path) || (path && strcmp(path, HC_OSRELEASE) == 0);
 }
 
-bool oh_osrelease_target_ok(const char *resolved)
+bool hc_osrelease_target_ok(const char *resolved)
 {
-	return resolved && (strcmp(resolved, OH_OSRELEASE) == 0 || strcmp(resolved, OH_OSRELEASE_REAL) == 0);
+	return resolved && (strcmp(resolved, HC_OSRELEASE) == 0 || strcmp(resolved, HC_OSRELEASE_REAL) == 0);
 }
 
 static const struct {
 	const char *uri;
-	oh_call_kind kind;
+	hc_call_kind kind;
 } CALLS[] = {
-	{"luna://com.webos.applicationManager/listApps", OH_CALL_PLAIN},
-	{"luna://com.webos.applicationManager/getAppInfo", OH_CALL_PLAIN},
-	{"luna://com.webos.applicationManager/setDefaultApp", OH_CALL_PLAIN},
-	{"luna://com.webos.applicationManager/launchDefaultApp", OH_CALL_PLAIN},
-	{"luna://com.webos.applicationManager/closeByAppId", OH_CALL_PLAIN},
-	{"luna://com.webos.settingsservice/getSystemSettings", OH_CALL_SETTINGS_GET},
-	{"luna://com.webos.settingsservice/setSystemSettings", OH_CALL_SETTINGS_SET},
-	{"luna://com.webos.service.systemprofile/getProfiles", OH_CALL_PLAIN},
-	{"luna://com.webos.service.systemprofile/debug/rescan", OH_CALL_PLAIN},
-	{NULL, OH_CALL_DENIED}
+	{"luna://com.webos.applicationManager/listApps", HC_CALL_PLAIN},
+	{"luna://com.webos.applicationManager/getAppInfo", HC_CALL_PLAIN},
+	{"luna://com.webos.applicationManager/setDefaultApp", HC_CALL_PLAIN},
+	{"luna://com.webos.applicationManager/launchDefaultApp", HC_CALL_PLAIN},
+	{"luna://com.webos.applicationManager/closeByAppId", HC_CALL_PLAIN},
+	{"luna://com.webos.settingsservice/getSystemSettings", HC_CALL_SETTINGS_GET},
+	{"luna://com.webos.settingsservice/setSystemSettings", HC_CALL_SETTINGS_SET},
+	{"luna://com.webos.service.systemprofile/getProfiles", HC_CALL_PLAIN},
+	{"luna://com.webos.service.systemprofile/debug/rescan", HC_CALL_PLAIN},
+	{NULL, HC_CALL_DENIED}
 };
 
-oh_call_kind oh_call_lookup(const char *uri)
+hc_call_kind hc_call_lookup(const char *uri)
 {
-	if (!uri) return OH_CALL_DENIED;
+	if (!uri) return HC_CALL_DENIED;
 	for (int i = 0; CALLS[i].uri; i++)
 		if (strcmp(uri, CALLS[i].uri) == 0) return CALLS[i].kind;
-	return OH_CALL_DENIED;
+	return HC_CALL_DENIED;
 }
 
-bool oh_settings_ok(const char *category, const char *const *keys, size_t nkeys)
+bool hc_settings_ok(const char *category, const char *const *keys, size_t nkeys)
 {
 	if (!category || strcmp(category, "general") != 0) return false;
 	if (nkeys != 1 || !keys || !keys[0]) return false;
 	return strcmp(keys[0], "defaultApps") == 0;
 }
 
-static const oh_command COMMANDS[] = {
+static const hc_command COMMANDS[] = {
 	{"restartSam", {"/bin/systemctl", "restart", "sam", NULL}, 60, false, false},
-	{"watch", {"/bin/sh", OH_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
-	{"keyfilterStatus", {"/bin/sh", OH_KEYFILTER_SCRIPT, "status", NULL}, 20, false, false},
-	{"keyfilterApply", {"/bin/sh", OH_KEYFILTER_SCRIPT, "apply", NULL}, 90, false, false},
-	{"keyfilterStop", {"/bin/sh", OH_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
-	{"keyfilterRefresh", {"/bin/sh", OH_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
-	{"stopWatcher", {"/bin/systemctl", "stop", "openhouse-home", NULL}, 20, true, false},
-	{"watcherActive", {"/bin/systemctl", "is-active", "openhouse-home", NULL}, 10, true, false},
+	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
+	{"keyfilterStatus", {"/bin/sh", HC_KEYFILTER_SCRIPT, "status", NULL}, 20, false, false},
+	{"keyfilterApply", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", NULL}, 90, false, false},
+	{"keyfilterStop", {"/bin/sh", HC_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
+	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
+	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
+	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
 	{"watchLog", {NULL}, 0, true, true},
 	{NULL, {NULL}, 0, false, false}
 };
 
-const oh_command *oh_command_lookup(const char *name)
+const hc_command *hc_command_lookup(const char *name)
 {
 	if (!name) return NULL;
 	for (int i = 0; COMMANDS[i].name; i++)
@@ -100,7 +100,7 @@ static bool has_dotdot(const char *s)
 	return false;
 }
 
-bool oh_icon_path(const char *folder, const char *icon, char *out, size_t outlen)
+bool hc_icon_path(const char *folder, const char *icon, char *out, size_t outlen)
 {
 	if (!folder || !icon || !out || folder[0] != '/' || !icon[0]) return false;
 	if (has_dotdot(folder) || has_dotdot(icon)) return false;
@@ -121,7 +121,7 @@ bool oh_icon_path(const char *folder, const char *icon, char *out, size_t outlen
 	return true;
 }
 
-bool oh_path_within(const char *path, const char *dir)
+bool hc_path_within(const char *path, const char *dir)
 {
 	if (!path || !dir) return false;
 	size_t dl = strlen(dir);
@@ -131,7 +131,7 @@ bool oh_path_within(const char *path, const char *dir)
 	return path[dl] == '/' || path[dl] == '\0';
 }
 
-const char *oh_icon_mime(const char *path)
+const char *hc_icon_mime(const char *path)
 {
 	static const struct { const char *ext, *mime; } T[] = {
 		{"png", "image/png"}, {"jpg", "image/jpeg"}, {"jpeg", "image/jpeg"}, {"gif", "image/gif"},
@@ -144,7 +144,7 @@ const char *oh_icon_mime(const char *path)
 	return NULL;
 }
 
-bool oh_base64(const unsigned char *in, size_t len, char *out, size_t outlen)
+bool hc_base64(const unsigned char *in, size_t len, char *out, size_t outlen)
 {
 	static const char A[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	if (outlen < 4 * ((len + 2) / 3) + 1) return false;
@@ -162,7 +162,7 @@ bool oh_base64(const unsigned char *in, size_t len, char *out, size_t outlen)
 	return true;
 }
 
-size_t oh_last_lines(const char *buf, size_t len, int n)
+size_t hc_last_lines(const char *buf, size_t len, int n)
 {
 	if (n <= 0) return len;
 	size_t end = len;

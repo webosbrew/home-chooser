@@ -12,10 +12,10 @@
          return systemSettings.subscribeOnDemand(type, method, key, returnRaw);
      }
  
-+    // Open House: the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.
++    // Home Chooser: the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.
 +    readonly property string stockHomeAppId: "com.webos.app.home"
-+    // Set at boot by openhouse-keyfilter from /var/lib/webosbrew/openhouse/home; empty when no choice is stored.
-+    readonly property string configuredHomeAppId: "@OPENHOUSE_HOME@"
++    // Set at boot by homechooser-keyfilter from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.
++    readonly property string configuredHomeAppId: "@HOMECHOOSER_HOME@"
 +
 +    function getHomeAppId() {
 +        var apps = root.subscribe("com.webos.settingsservice", "getSystemSettings",

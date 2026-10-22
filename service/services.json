@@ -1,12 +1,12 @@
 {
-  "id": "org.webosbrew.openhouse.service",
-  "description": "Open House root service",
+  "id": "org.webosbrew.homechooser.service",
+  "description": "Home Chooser root service",
   "engine": "native",
-  "executable": "openhouse-service",
+  "executable": "homechooser-service",
   "services": [
     {
-      "name": "org.webosbrew.openhouse.service",
-      "description": "Open House root service"
+      "name": "org.webosbrew.homechooser.service",
+      "description": "Home Chooser root service"
     }
   ]
 }

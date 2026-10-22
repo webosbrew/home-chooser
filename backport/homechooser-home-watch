@@ -1,9 +1,9 @@
 #!/bin/sh
-# Open House home watcher. Runs as root under the transient unit openhouse-home, started by
-# the init.d entry `openhouse` (or by the app). See docs/settings-app.md, "Persistence" and
+# Home Chooser home watcher. Runs as root under the transient unit homechooser-home, started by
+# the init.d entry `homechooser` (or by the app). See docs/settings-app.md, "Persistence" and
 # "When apps are removed".
 #
-# It keeps the stored choice (/var/lib/webosbrew/openhouse/home, the app id alone)
+# It keeps the stored choice (/var/lib/webosbrew/homechooser/home, the app id alone)
 # in the general/defaultApps record. It subscribes to the record and, whenever its `home` is
 # missing or differs from the choice, writes the choice again:
 #   webOS 9 and later  applicationManager/setDefaultApp (setSystemSettings if the method is unknown)
@@ -12,56 +12,56 @@
 #
 # It also watches the two apps it depends on. It subscribes to applicationManager/listApps, which
 # is only a trigger (the format of the change messages is not relied on), and on every message,
-# and every OPENHOUSE_RECHECK seconds (300) as a fallback, asks getAppInfo about the chosen app and
-# about org.webosbrew.openhouse:
+# and every HOMECHOOSER_RECHECK seconds (300) as a fallback, asks getAppInfo about the chosen app and
+# about org.webosbrew.homechooser:
 #   chosen app gone: the platform is put back to stock (webOS 5: home = the stock launcher;
 #     6 to 9: `home` written as null and the backport's baked id emptied; 10 and later:
 #     override file removed, rescan, `home` written as null), the choice file is kept, and nothing is
 #     written while the app is missing. When it is installed again the choice is applied again.
-#   Open House gone: the same revert, then the choice file, the backport flag and the init.d link
+#   Home Chooser gone: the same revert, then the choice file, the backport flag and the init.d link
 #     are removed, the backport's bind mounts are undone (webOS 6 to 9) and the watcher exits 0.
-# An app is taken as gone only if it is still gone OPENHOUSE_CONFIRM_DELAY seconds (15) later,
+# An app is taken as gone only if it is still gone HOMECHOOSER_CONFIRM_DELAY seconds (15) later,
 # because an update installs by removing first.
 #
 # The app's files are deleted with the app, so at start the watcher copies itself, the key filter
-# worker and the manifests into /tmp/openhouse-runtime/ and runs from there.
+# worker and the manifests into /tmp/homechooser-runtime/ and runs from there.
 #
 # Storms: at most one write per interval (10 s); each write that follows the last one closely
-# doubles the interval, up to 5 min. Every action is logged to /tmp/openhouse-home.log.
-# It exits 0 when the choice file is gone or unusable or after the Open House restore, and 1
+# doubles the interval, up to 5 min. Every action is logged to /tmp/homechooser-home.log.
+# It exits 0 when the choice file is gone or unusable or after the Home Chooser restore, and 1
 # when the settings subscription ends (the unit restarts it on failure).
 #
-# Overrides, for tests: OPENHOUSE_CHOICE, OPENHOUSE_LUNA_SEND, OPENHOUSE_WATCH_LOG,
-# OPENHOUSE_OSRELEASE, OPENHOUSE_OVERRIDE, OPENHOUSE_MIN_INTERVAL, OPENHOUSE_BACKOFF_CAP,
-# OPENHOUSE_LOG_MAX, OPENHOUSE_CLOCK (command printing epoch seconds), OPENHOUSE_SLEEP,
-# OPENHOUSE_TMP, OPENHOUSE_RUNTIME, OPENHOUSE_SHELL, OPENHOUSE_APPDIR, OPENHOUSE_KEYFILTER_FLAG,
-# OPENHOUSE_INITD, OPENHOUSE_RECHECK, OPENHOUSE_TIMER_SLEEP, OPENHOUSE_CONFIRM_DELAY,
-# OPENHOUSE_TIMEOUT, OPENHOUSE_CHECK_MARK (file that gets a line after each app check).
+# Overrides, for tests: HOMECHOOSER_CHOICE, HOMECHOOSER_LUNA_SEND, HOMECHOOSER_WATCH_LOG,
+# HOMECHOOSER_OSRELEASE, HOMECHOOSER_OVERRIDE, HOMECHOOSER_MIN_INTERVAL, HOMECHOOSER_BACKOFF_CAP,
+# HOMECHOOSER_LOG_MAX, HOMECHOOSER_CLOCK (command printing epoch seconds), HOMECHOOSER_SLEEP,
+# HOMECHOOSER_TMP, HOMECHOOSER_RUNTIME, HOMECHOOSER_SHELL, HOMECHOOSER_APPDIR, HOMECHOOSER_KEYFILTER_FLAG,
+# HOMECHOOSER_INITD, HOMECHOOSER_RECHECK, HOMECHOOSER_TIMER_SLEEP, HOMECHOOSER_CONFIRM_DELAY,
+# HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check).
 
-CHOICE=${OPENHOUSE_CHOICE:-/var/lib/webosbrew/openhouse/home}
-LUNA=${OPENHOUSE_LUNA_SEND:-luna-send}
-LOG=${OPENHOUSE_WATCH_LOG:-/tmp/openhouse-home.log}
-OSRELEASE=${OPENHOUSE_OSRELEASE:-/etc/os-release}
-OVERRIDE=${OPENHOUSE_OVERRIDE:-/var/webos-profile/override/org.webosbrew.openhouse.json}
-MIN_INTERVAL=${OPENHOUSE_MIN_INTERVAL:-10}
-BACKOFF_CAP=${OPENHOUSE_BACKOFF_CAP:-300}
-LOG_MAX=${OPENHOUSE_LOG_MAX:-65536}
-CLOCK=${OPENHOUSE_CLOCK:-}
-SLEEP=${OPENHOUSE_SLEEP:-sleep}
-TMP=${OPENHOUSE_TMP:-/tmp/openhouse-home-watch.$$}
-RT=${OPENHOUSE_RUNTIME:-/tmp/openhouse-runtime}
-WSH=${OPENHOUSE_SHELL:-/bin/sh}
-APPDIR=${OPENHOUSE_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse}
-KEYFLAG=${OPENHOUSE_KEYFILTER_FLAG:-/var/lib/webosbrew/openhouse/keyfilter}
-INITD=${OPENHOUSE_INITD:-/var/lib/webosbrew/init.d/openhouse}
-OLD_INITD=$(dirname "$INITD")/openhouse-keyfilter
-RECHECK=${OPENHOUSE_RECHECK:-300}
-TIMER_SLEEP=${OPENHOUSE_TIMER_SLEEP:-sleep}
-CONFIRM_DELAY=${OPENHOUSE_CONFIRM_DELAY:-15}
-TIMEOUT=${OPENHOUSE_TIMEOUT-timeout}
+CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
+LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
+LOG=${HOMECHOOSER_WATCH_LOG:-/tmp/homechooser-home.log}
+OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
+OVERRIDE=${HOMECHOOSER_OVERRIDE:-/var/webos-profile/override/org.webosbrew.homechooser.json}
+MIN_INTERVAL=${HOMECHOOSER_MIN_INTERVAL:-10}
+BACKOFF_CAP=${HOMECHOOSER_BACKOFF_CAP:-300}
+LOG_MAX=${HOMECHOOSER_LOG_MAX:-65536}
+CLOCK=${HOMECHOOSER_CLOCK:-}
+SLEEP=${HOMECHOOSER_SLEEP:-sleep}
+TMP=${HOMECHOOSER_TMP:-/tmp/homechooser-home-watch.$$}
+RT=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
+WSH=${HOMECHOOSER_SHELL:-/bin/sh}
+APPDIR=${HOMECHOOSER_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser}
+KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
+INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
+OLD_INITD=$(dirname "$INITD")/homechooser-keyfilter
+RECHECK=${HOMECHOOSER_RECHECK:-300}
+TIMER_SLEEP=${HOMECHOOSER_TIMER_SLEEP:-sleep}
+CONFIRM_DELAY=${HOMECHOOSER_CONFIRM_DELAY:-15}
+TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 TMO_FORM=
-CHECK_MARK=${OPENHOUSE_CHECK_MARK:-}
-OH_ID=org.webosbrew.openhouse
+CHECK_MARK=${HOMECHOOSER_CHECK_MARK:-}
+HC_ID=org.webosbrew.homechooser
 STOCK_HOME=com.webos.app.home
 STOCK_FULLHOME=com.webos.app.fullhome
 
@@ -95,9 +95,9 @@ major_version() {
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
-    for f in openhouse-home-watch openhouse-keyfilter; do
+    for f in homechooser-home-watch homechooser-keyfilter; do
         if [ ! -f "$1/$f" ]; then
-            [ "$f" = openhouse-keyfilter ] && continue
+            [ "$f" = homechooser-keyfilter ] && continue
             return 1
         fi
         cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
@@ -445,10 +445,10 @@ app_state() {
     fi
 }
 
-# oh_gone: Open House is not installed, by getAppInfo or by its directory.
-oh_gone() {
+# hc_gone: Home Chooser is not installed, by getAppInfo or by its directory.
+hc_gone() {
     [ -d "$APPDIR" ] || return 0
-    [ "$(app_state "$OH_ID")" = no ]
+    [ "$(app_state "$HC_ID")" = no ]
 }
 
 # kf_refresh [stock] [norestart]: on webOS 6 to 9, bring the id baked into the mounted Settings.qml
@@ -457,7 +457,7 @@ oh_gone() {
 kf_refresh() {
     [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
     [ -f "$KEYFILTER" ] || return 0
-    OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
+    HOMECHOOSER_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
 }
 
 # sync_baked <choice>: the stored choice changed while the app is installed: write it into the
@@ -513,11 +513,11 @@ revert_platform() {
     remove_home
 }
 
-# restore_all: Open House is uninstalled. Everything it did to the platform is undone, from files
+# restore_all: Home Chooser is uninstalled. Everything it did to the platform is undone, from files
 # that do not live in the app directory, and the watcher ends.
 restore_all() {
-    log "Open House is uninstalled, restoring the stock Home"
-    revert_platform "Open House uninstalled"
+    log "Home Chooser is uninstalled, restoring the stock Home"
+    revert_platform "Home Chooser uninstalled"
     rm -f "$CHOICE" "$KEYFLAG"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
     for l in "$INITD" "$OLD_INITD"; do
@@ -527,20 +527,20 @@ restore_all() {
         fi
     done
     if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] && [ -f "$KEYFILTER" ]; then
-        OPENHOUSE_DATA=$KF_DATA $WSH "$KEYFILTER" stop >> "$LOG" 2>&1
+        HOMECHOOSER_DATA=$KF_DATA $WSH "$KEYFILTER" stop >> "$LOG" 2>&1
     fi
     finish "stock Home restored, exiting" 0
 }
 
-# check_apps <why>: look at Open House and at the chosen app.
+# check_apps <why>: look at Home Chooser and at the chosen app.
 check_apps() {
     why=$1
-    if oh_gone; then
+    if hc_gone; then
         nap "$CONFIRM_DELAY"
-        if oh_gone; then
+        if hc_gone; then
             restore_all
         fi
-        log "Open House is back, not removing anything"
+        log "Home Chooser is back, not removing anything"
     fi
     want=$(read_choice) || finish "choice file is gone, exiting" 0
     [ -n "$MISSING" ] && [ "$MISSING" != "$want" ] && MISSING=
@@ -642,11 +642,11 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 RTDIR=$(cd "$RT" 2>/dev/null && pwd)
 if [ "$SRC" != "$RTDIR" ]; then
     if stage_runtime "$SRC"; then
-        exec $WSH "$RT/openhouse-home-watch"
+        exec $WSH "$RT/homechooser-home-watch"
     fi
     log "cannot copy the scripts to $RT, running from $SRC"
 fi
-KEYFILTER=$SRC/openhouse-keyfilter
+KEYFILTER=$SRC/homechooser-keyfilter
 KF_DATA=$SRC
 
 trap 'finish "stopped by signal" 0' TERM INT HUP

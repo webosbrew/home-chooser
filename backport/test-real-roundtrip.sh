@@ -1,6 +1,6 @@
 #!/bin/sh
 # Round trip of the key filter backport against the REAL stock files of each release, with the
-# worker (openhouse-keyfilter) run for real and only mount, umount, systemctl and luna-send
+# worker (homechooser-keyfilter) run for real and only mount, umount, systemctl and luna-send
 # stubbed. For each release it checks that status finds the set by hash; that apply patches
 # copies and mounts them over every target; that the id baked into Settings.qml follows the
 # installed state of the stored choice (installed, not installed); that refresh and refresh stock
@@ -60,13 +60,13 @@ id=\$(echo "\$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
 if grep -qxF "\$id" "$T/installed"; then echo '{"returnValue":true}'; else echo '{"returnValue":false}'; fi
 STUB
     chmod +x "$T/bin/"*
-    export OPENHOUSE_DATA="$T/data" OPENHOUSE_ROOT="$root" OPENHOUSE_WORK="$T/work" OPENHOUSE_LOG="$T/log" \
-           OPENHOUSE_MOUNTS="$T/mounts" OPENHOUSE_MOUNT="$T/bin/mount" OPENHOUSE_UMOUNT="$T/bin/umount" \
-           OPENHOUSE_SYSTEMCTL="$T/bin/systemctl" OPENHOUSE_CHOICE="$T/home" OPENHOUSE_LUNA_SEND="$T/bin/luna-send" \
-           OPENHOUSE_SAM_WAIT=0
+    export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$root" HOMECHOOSER_WORK="$T/work" HOMECHOOSER_LOG="$T/log" \
+           HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" HOMECHOOSER_UMOUNT="$T/bin/umount" \
+           HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" \
+           HOMECHOOSER_SAM_WAIT=0
     SETTINGS=/usr/lib/qml/WebOSCompositorBase/global/Settings.qml
     stage=$T/work/stage$SETTINGS
-    w() { $SH "$HERE/openhouse-keyfilter" "$@" > "$T/out" 2>&1; }
+    w() { $SH "$HERE/homechooser-keyfilter" "$@" > "$T/out" 2>&1; }
 
     w status
     check "$rel: status finds the set by hash" has "match=$rel" "$T/out"
@@ -77,7 +77,7 @@ STUB
     # reverse-patch the staged copies (placeholder back in) and compare with the real stock bytes
     mkdir -p "$T/rev"
     rm -rf "$T/rev"; cp -r "$T/work/stage" "$T/rev"
-    sed -i 's|configuredHomeAppId: "[^"]*"|configuredHomeAppId: "@OPENHOUSE_HOME@"|' "$T/rev$SETTINGS"
+    sed -i 's|configuredHomeAppId: "[^"]*"|configuredHomeAppId: "@HOMECHOOSER_HOME@"|' "$T/rev$SETTINGS"
     ok=1
     while read -r p && read -r h && read -r d; do
         (cd "$T/rev" && patch -R -p0 < "$T/data/$rel/$d" > /dev/null) || ok=0

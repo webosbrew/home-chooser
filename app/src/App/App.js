@@ -6,14 +6,14 @@ import Cancelable from '@enact/ui/Cancelable';
 import css from '../views/Home.module.less';
 
 import MainPanel from '../views/MainPanel';
-import {useOpenHouse} from '../views/useOpenHouse';
-import {loadEnvironment} from '../openhouse/environment';
+import {useHomeChooser} from '../views/useHomeChooser';
+import {loadEnvironment} from '../homechooser/environment';
 
 // Always close the window (never webOSSystem.hide()): focus goes back to the app underneath.
 const closeApp = () => window.close();
 
 const AppBase = ({load = loadEnvironment, onExit = closeApp, ...rest}) => {
-	const model = useOpenHouse(load);
+	const model = useHomeChooser(load);
 	return (
 		<div {...rest} className={css.app}>
 			<div className={css.panel}>

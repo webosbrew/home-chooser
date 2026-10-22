@@ -1,6 +1,6 @@
 # The settings app
 
-`app/` is an Enact (Moonstone) web app, `org.webosbrew.openhouse`. It lists the installed apps that
+`app/` is an Enact (Moonstone) web app, `org.webosbrew.homechooser`. It lists the installed apps that
 declare `appCategory: ["home"]`, shows the current choice, and writes the choice for the running
 release. The platform facts behind every write are in the
 [study](research/home-key-and-home-app.md); this page says which write is made where.
@@ -8,15 +8,15 @@ release. The platform facts behind every write are in the
 ## Using it
 
 One screen, built for the remote (5-way, OK, Back); every action is reachable without a pointer.
-Open House is in English only.
+Home Chooser is in English only.
 
 * **A side panel.** Like the stock Settings app (`com.palm.app.settings`: `"type": "web"`,
-  `"defaultWindowType": "overlay"`, `"transparent": true`), Open House is a transparent overlay
+  `"defaultWindowType": "overlay"`, `"transparent": true`), Home Chooser is a transparent overlay
   window with an opaque panel, 800 px wide at 1080p, docked at the right edge and full height. The
   list, the dialogs, the spinner, the toast and the problem messages all draw inside the panel;
   the rest of the screen stays clear and shows what is underneath.
 
-* **The list.** Title "Open House", subtitle "Find your TV a new home". The first row is "LG Home
+* **The list.** Title "Home Chooser", subtitle "Choose the app your Home button opens". The first row is "LG Home
   (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
   A check mark sits on the current home and the focus starts on it. Every row has the same height,
   icon box (one fixed size, before and after the icon loads) and reserved check slot; focus only
@@ -27,23 +27,23 @@ Open House is in English only.
 * **No close button.** The panel header has no close button; Back is the way to close (a dialog first, then the panel). Focus never leaves the list: it returns to the row that opened a dialog when the dialog closes, and moves to the new current row when a change finishes.
 * **Choosing.** OK on the row that is already the current home changes nothing and opens no dialog; focus stays on it and a toast says "<name> is already your Home." ("LG Home is already your Home." for the stock row). OK on any other row asks "Use <name> as Home?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
-  one plain sentence ("Couldn't set the Home app. The Open House service didn't respond."); the details
+  one plain sentence ("Couldn't set the Home app. The Home Chooser service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
   a success; Back closes it.
 * **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
   launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
   the change, and confirming applies the choice first and installs the backport last (the restart is the last step, so nothing of the choice depends on code that runs after it). That restart may
-  close the panel. Before it, the app writes a small marker to `localStorage` (`openhouse.pending`,
+  close the panel. Before it, the app writes a small marker to `localStorage` (`homechooser.pending`,
   the id being chosen); on the next launch it reads the actual current home, shows the result toast
   once ("Done. Press Home to try it." if the home is the one chosen, otherwise "Couldn't set the Home
   app.") and clears the marker. A run that finishes in the same window clears the marker itself. Restoring LG Home
   removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
   the dialog says the Home button can't be changed on this TV's software and applies nothing.
 * **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
-* **Before uninstalling Open House, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
+* **Before uninstalling Home Chooser, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
-  "Your Homebrew Channel doesn't let apps elevate Open House's service yet. Update Homebrew Channel; Open House
-  needs it."), or the service not coming up as root ("Open House's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the
+  "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
+  needs it."), or the service not coming up as root ("Home Chooser's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the
   top of the list area and the list is disabled (Moonstone `disabled`: rows are dimmed, cannot be
   focused or clicked, no confirmation opens), with nothing focused; Back still closes the panel. Without
   root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs
@@ -58,23 +58,23 @@ Open House is in English only.
 ## Root access
 
 The app does not call the settings service, `sam` or the system profile under its own identity,
-and it does not run shell commands. It calls Open House's own native service,
-`org.webosbrew.openhouse.service`, which runs as root and makes the privileged calls itself, so the
+and it does not run shell commands. It calls Home Chooser's own native service,
+`org.webosbrew.homechooser.service`, which runs as root and makes the privileged calls itself, so the
 settings service whitelist and the bus permissions do not apply (see
 [Permissions](research/home-key-and-home-app.md#permissions)). The service offers a fixed set of
 narrow operations and answers only this app; see [the service](service.md) for the methods, the
 allow-lists and the logs.
 
-At startup the app makes sure the service is root (`[OpenHouse]` lines in the console log):
+At startup the app makes sure the service is root (`[HomeChooser]` lines in the console log):
 `status`; if the service is not root, Homebrew Channel's
-`luna://org.webosbrew.hbchannel.service/elevateService {"id":"org.webosbrew.openhouse.service"}`
+`luna://org.webosbrew.hbchannel.service/elevateService {"id":"org.webosbrew.homechooser.service"}`
 (which rewrites the service's launch line so it is no longer jailed and runs as root); `quit`, so
 the next call starts the elevated binary; `status` again, retried a few times. Every step has a
 timeout. The failures map to the problem screens: Homebrew Channel absent (`unreachable`),
 `elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
 Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
-content never meets a shell. The shell scripts (`backport/openhouse`, the watcher, the key filter
+content never meets a shell. The shell scripts (`backport/homechooser`, the watcher, the key filter
 worker) are unchanged; the service runs them with a fixed argv.
 
 The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
@@ -91,7 +91,7 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 * `setSystemSettings` replaces the whole `defaultApps` object, so the other entries (11.2.0 ships
   `kidsApp` in it) are read first and written back. `setDefaultApp` changes only `home`
   ([Settings app](research/home-key-and-home-app.md#settings-app)).
-* The profile override is `/var/webos-profile/override/org.webosbrew.openhouse.json`, holding the
+* The profile override is `/var/webos-profile/override/org.webosbrew.homechooser.json`, holding the
   current `defaultApps` profile with `categories.home` set to the chosen id, the other keys and
   categories kept and the `_`-prefixed keys dropped. 10.3.1 replaces the second-level object
   wholesale, so the full `categories` has to be there. The compositor's home id is the profile's,
@@ -112,7 +112,7 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 
 Before these writes `apply` stores the choice, and after them it makes sure the boot entry and the
 watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
-`/var/lib/webosbrew/openhouse/home`, the platform writes, link the init.d entry and start the
+`/var/lib/webosbrew/homechooser/home`, the platform writes, link the init.d entry and start the
 watcher, close the previous home, and `systemctl restart sam` last if it applies.
 
 ## Persistence
@@ -120,28 +120,28 @@ watcher, close the previous home, and `systemctl restart sam` last if it applies
 On 11.2.0 the record's `home` can be lost at any boot: `accountmanager` calls `setDefaultApp` for
 another category 12 to 17 s into every boot and, racing `sam`, the write can drop the other entries
 ([study](research/home-key-and-home-app.md#results-2026-10-19)). A write made once is not enough, so
-Open House keeps its own copy of the choice and enforces it.
+Home Chooser keeps its own copy of the choice and enforces it.
 
-* **The stored choice** is `/var/lib/webosbrew/openhouse/home`, a plain text file holding the app
+* **The stored choice** is `/var/lib/webosbrew/homechooser/home`, a plain text file holding the app
   id and nothing else, written as root by the app. An absent file means stock: nothing is
   enforced. Every reader (the watcher, the boot entry, the key filter worker) trims spaces, tabs,
   CR and LF, treats an empty result as no choice, and accepts only letters, digits, `.`, `-` and
   `_`; anything else is logged and ignored, never put into a luna payload or into QML.
-* **The boot entry** is `/var/lib/webosbrew/init.d/openhouse`, a symlink (never a copy) to
-  `backport/openhouse` in the installed app, which the app creates (`ln -sf`; a regular file from an
-  earlier install is replaced, and the earlier `openhouse-keyfilter` entry is removed). Homebrew
+* **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`, a symlink (never a copy) to
+  `backport/homechooser` in the installed app, which the app creates (`ln -sf`; a regular file from an
+  earlier install is replaced, and the earlier `homechooser-keyfilter` entry is removed). Homebrew
   Channel's `run-parts` runs it as root once per boot. The package keeps the scripts executable
   (`ares-package` keeps mode 755, checked in the ipk), and `apply` runs `chmod 755` on them
   anyway. The script finds its files next to its real path (`readlink -f`, else `readlink`, else the
   fixed app path) and exits 0 without output when the app directory is gone (the app was
   uninstalled and the link dangles; the link then does nothing and `apply` or an uninstall of the
   link can clean it up; see [When apps are removed](#when-apps-are-removed)). It does two things: on webOS 6 to 9, when the flag file
-  `/var/lib/webosbrew/openhouse/keyfilter` exists, it runs `openhouse-keyfilter apply` (the
+  `/var/lib/webosbrew/homechooser/keyfilter` exists, it runs `homechooser-keyfilter apply` (the
   [key filter backport](key-filter-backport.md)); and if the choice file exists it starts the watcher.
-  `openhouse watch` does only the second, which is what the app runs after a choice.
-* **The watcher** is `backport/openhouse-home-watch`, started as a transient unit,
-  `systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
-  '<wrapper>' openhouse-home-watch <app>/backport/openhouse-home-watch /tmp/openhouse-runtime/openhouse-home-watch`,
+  `homechooser watch` does only the second, which is what the app runs after a choice.
+* **The watcher** is `backport/homechooser-home-watch`, started as a transient unit,
+  `systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
+  '<wrapper>' homechooser-home-watch <app>/backport/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
   where the wrapper runs the first script that exists and exits 0 if neither does. No unit file is written and no other service's unit,
   environment file or binary is touched. The flags are those of systemd 230 and later, which is
   what is assumed for webOS 5; the newest flag (`--collect`, 236) is not used, and a failed unit is
@@ -160,18 +160,18 @@ Open House keeps its own copy of the choice and enforces it.
     again (the subscription may show a stale reply), then waits out the rest and reads once more
     before writing.
   * On 10.x and later it checks at start and after each write that
-    `/var/webos-profile/override/org.webosbrew.openhouse.json` names the choice as
+    `/var/webos-profile/override/org.webosbrew.homechooser.json` names the choice as
     `categories.home`, and rewrites it from `getProfiles` (same rules as the app) with a
     `debug/rescan` if not.
   * It also watches the apps it depends on; see [When apps are removed](#when-apps-are-removed).
     It subscribes to `applicationManager/listApps {"subscribe":true}` as a trigger only, checks the
-    chosen app and `org.webosbrew.openhouse` with `getAppInfo` on every message and every 5 min,
-    and runs from a copy of itself in `/tmp/openhouse-runtime/`.
-  * It logs each action with a timestamp to `/tmp/openhouse-home.log` (trimmed to its last 200
+    chosen app and `org.webosbrew.homechooser` with `getAppInfo` on every message and every 5 min,
+    and runs from a copy of itself in `/tmp/homechooser-runtime/`.
+  * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends.
-* **Restoring stock** stops the watcher (`systemctl stop openhouse-home`), removes the choice file,
-  then does the platform restore. On 6.x to 9.x it also runs `openhouse-keyfilter refresh`, which
+* **Restoring stock** stops the watcher (`systemctl stop homechooser-home`), removes the choice file,
+  then does the platform restore. On 6.x to 9.x it also runs `homechooser-keyfilter refresh`, which
   clears the choice from the mounted `Settings.qml` (restarting the compositor if it changed).
   Clearing `home` is one function in the app, `removeHomeFromRecord()`, and `merged_write ""` in the
   watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
@@ -183,24 +183,24 @@ Open House keeps its own copy of the choice and enforces it.
   `""` and a missing key mean "not set": with a stored choice that is a mismatch the watcher
   repairs, without one there is nothing to do.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
-  (`/tmp/openhouse-home.log`).
+  (`/tmp/homechooser-home.log`).
 
-Tests: `backport/test-openhouse-home-watch.sh` (a stub `luna-send` plays a stream of replies:
+Tests: `backport/test-homechooser-home-watch.sh` (a stub `luna-send` plays a stream of replies:
 present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
 file in each form, the override on 10.x; a fake clock and sleep check the rate limiting; markers in
 the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
-are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Open House removed with
+are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Home Chooser removed with
 the full restore, both in either order, a transient absence, a silent `getAppInfo`, the periodic
 check, the restore from the runtime copy after the app directory is deleted),
-`backport/test-openhouse.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
+`backport/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
 6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone, the unit's wrapper),
-`backport/test-openhouse-keyfilter.sh` and `backport/test-real-roundtrip.sh` (see the
+`backport/test-homechooser-keyfilter.sh` and `backport/test-real-roundtrip.sh` (see the
 [backport](key-filter-backport.md#deployment)), run as `sh` and `busybox sh`, and the Jest specs
 for `apply`, `restoreStock`, the status parsing and the missing-choice message.
 
 ## When apps are removed
 
-The stock launcher has to keep working when the chosen app is uninstalled, when Open House is
+The stock launcher has to keep working when the chosen app is uninstalled, when Home Chooser is
 uninstalled, and when the second follows the first. Both writes the platform keeps (the `home`
 entry, and on 10.x and later the profile override) name an app, and a name that is missing makes
 things worse than no name: on 10.3.1 and 11.2.0 `launchDefaultApp` fails for a record entry that
@@ -212,12 +212,12 @@ So the watcher notices a removal and undoes the writes itself. Nothing here reli
 
 **Detection.** The watcher subscribes to `luna://com.webos.applicationManager/listApps
 {"subscribe":true}` (`luna-send -i`) and treats every message as a reason to look, nothing more. A
-look is `luna://com.webos.applicationManager/getAppInfo {"id":"..."}` for `org.webosbrew.openhouse`
+look is `luna://com.webos.applicationManager/getAppInfo {"id":"..."}` for `org.webosbrew.homechooser`
 and for the chosen app; an uninstalled id answers `returnValue:false` (`Invalid appId specified OR
-Unsupported Application Type`). The same look is repeated every 5 min (`OPENHOUSE_RECHECK`) in case
-the subscription missed something, and once at start. Open House counts as gone when `getAppInfo`
+Unsupported Application Type`). The same look is repeated every 5 min (`HOMECHOOSER_RECHECK`) in case
+the subscription missed something, and once at start. Home Chooser counts as gone when `getAppInfo`
 says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
-(`OPENHOUSE_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
+(`HOMECHOOSER_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
 compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing.
 
 ### The chosen app is uninstalled
@@ -229,12 +229,12 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | `home` written as `null` by the merged `setSystemSettings` write (other entries kept); `openhouse-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
+| 6.x to 9.x | `home` written as `null` by the merged `setSystemSettings` write (other entries kept); `homechooser-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
-`getProfiles`; 6.x to 9.x run `openhouse-keyfilter refresh`, which bakes the id back in. The
+`getProfiles`; 6.x to 9.x run `homechooser-keyfilter refresh`, which bakes the id back in. The
 screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
@@ -243,19 +243,19 @@ Clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 The key filter backport's `Settings.qml` already takes only a non-empty string as the record's
 `home`, so `null` falls through to the baked id and then the stock launcher.
 
-### Open House is uninstalled
+### Home Chooser is uninstalled
 
 The app's files go with it, so the watcher cannot run anything from the app directory. At start it
-copies itself, `openhouse-keyfilter` and every release's `manifest.json` into
-`/tmp/openhouse-runtime/` (replacing each file by rename) and runs from there. When Open House is
+copies itself, `homechooser-keyfilter` and every release's `manifest.json` into
+`/tmp/homechooser-runtime/` (replacing each file by rename) and runs from there. When Home Chooser is
 gone it does, in order:
 
 1. the platform revert of the table above (webOS 5: `home` = stock launcher; 6 to 9 and 10 and
    later: the same steps minus the key filter refresh);
 2. removes the choice file (and its directory if empty) and the key filter flag file;
-3. removes the `init.d/openhouse` symlink (and the earlier `openhouse-keyfilter` link), only if it
+3. removes the `init.d/homechooser` symlink (and the earlier `homechooser-keyfilter` link), only if it
    is a symlink;
-4. on webOS 6 to 9, `openhouse-keyfilter stop` from the runtime copy: it unmounts the bind mounts
+4. on webOS 6 to 9, `homechooser-keyfilter stop` from the runtime copy: it unmounts the bind mounts
    it finds in the manifests and restarts the compositor, and does nothing if nothing is mounted;
 5. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
    stopped.
@@ -265,21 +265,21 @@ changes nothing: with the record's `home` already unset (null, empty or missing)
 is made. The unit's command is a small wrapper that runs the app's copy of the watcher, else the
 runtime copy, else exits 0, so a watcher that crashes and is restarted after the app is gone still
 finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
-(`/tmp/openhouse-home.log`) and the runtime copy stay in `/tmp` until reboot.
+(`/tmp/homechooser-home.log`) and the runtime copy stay in `/tmp` until reboot.
 
-Both removed: Open House first (or both at once, which is checked in that order) is the full
+Both removed: Home Chooser first (or both at once, which is checked in that order) is the full
 restore, after which the chosen app's removal finds nothing of ours. The chosen app first is the
-revert above; the later removal of Open House repeats it harmlessly and cleans up. So B followed by
+revert above; the later removal of Home Chooser repeats it harmlessly and cleans up. So B followed by
 A, and A followed by B, end at the same stock state, and a removal of the chosen app after Open
 House left the platform alone breaks nothing.
 
 ### What is left when the watcher is not running
 
 If either app is removed while the watcher is not running, nothing undoes the writes, because the
-init.d link of an uninstalled Open House dangles (`run-parts` runs nothing) and the unit's wrapper
+init.d link of an uninstalled Home Chooser dangles (`run-parts` runs nothing) and the unit's wrapper
 has nothing to run. This happens when the watcher was stopped by hand or never started
 (`systemd-run` failed), when it died and has not been restarted yet (the 5 s `RestartSec`, and
-after a reboot until the boot entry has run), or when Open House is removed during that window. The
+after a reboot until the boot entry has run), or when Home Chooser is removed during that window. The
 state it leaves:
 
 | Release | Left behind | Effect |
@@ -288,13 +288,13 @@ state it leaves:
 | 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail |
 | 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
 
-Repair: install Open House again (the link in `init.d` is valid again, and the next boot or
+Repair: install Home Chooser again (the link in `init.d` is valid again, and the next boot or
 opening the app starts the watcher, which sees the chosen app missing and reverts), or by hand on
-10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.openhouse.json`,
+10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.homechooser.json`,
 `luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
 `general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
 entries). On 5.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
-choice stored the watcher is not started, so uninstalling Open House then leaves the flag file, a
+choice stored the watcher is not started, so uninstalling Home Chooser then leaves the flag file, a
 dangling link and, until reboot, mounts that behave as stock.
 
 What only a live test settles: that
@@ -302,7 +302,7 @@ What only a live test settles: that
 answers it at boot when the init.d entry runs; how `listApps` change messages arrive (only their
 arrival is used) and that `timeout` accepts `timeout 10 <command>` in the images' busybox;
 and the real uninstall path through Homebrew Channel and `ares-install --remove`, including that
-an update of Open House does not look like an uninstall for 15 s.
+an update of Home Chooser does not look like an uninstall for 15 s.
 
 ## Restoring the stock home
 
@@ -327,7 +327,7 @@ The custom home is then closed; a stock home is never closed.
 
 Each operation returns its steps: the Luna call and payload, file write or removal, or command,
 with the reply or the error. The screen does not show them; the app writes each one to
-`console.log` with an `[OpenHouse]` prefix (web inspector, device log), so a failure keeps the
+`console.log` with an `[HomeChooser]` prefix (web inspector, device log), so a failure keeps the
 service's own text. An absent record (`There is no matched result from DB`) is treated as "not
 set", not as a failure.
 

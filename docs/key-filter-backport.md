@@ -9,7 +9,7 @@ scripts with them. The facts behind it are in the
 built. Paths are relative to each firmware's `rootfs/`.
 
 The patch is shipped as diffs in [`backport/`](../backport), one directory per release, and applied
-at boot by `backport/openhouse-keyfilter`, which the init.d entry `backport/openhouse` runs (see
+at boot by `backport/homechooser-keyfilter`, which the init.d entry `backport/homechooser` runs (see
 [Deployment](#deployment) and [Persistence](settings-app.md#persistence)).
 
 ## The home id
@@ -27,7 +27,7 @@ other singleton, does not exist on 6.6.0.
   nothing else is needed. It returns `defaultApps.home` when that is a non-empty string, else
   `configuredHomeAppId` when that is not empty, else `com.webos.app.home` (the constant
   `stockHomeAppId`). `configuredHomeAppId` is the stored choice
-  (`/var/lib/webosbrew/openhouse/home`) as the boot worker wrote it into the patched copy, so the
+  (`/var/lib/webosbrew/homechooser/home`) as the boot worker wrote it into the patched copy, so the
   Home key keeps the choice at a boot where the settings record has lost its `home` (see the
   study's 11.2.0 findings) until the watcher has put it back. A binding that calls it re-evaluates when
   the record changes, so a later choice reaches the compositor live.
@@ -126,10 +126,10 @@ both header lines and no timestamps, so `patch -p0` run in a directory that hold
 files applies them. The `sha256` is the stock file's. A set is applied all or nothing, and the set
 is chosen by hash, not by version: 6.6.0 is nine files, 7.6.0 and 8.3.0 eleven, 9.2.1 thirteen.
 
-`backport/openhouse-keyfilter` is a busybox `sh` script, the worker. It is not in init.d itself:
-the entry `/var/lib/webosbrew/init.d/openhouse`, a symlink to `backport/openhouse` in the installed
+`backport/homechooser-keyfilter` is a busybox `sh` script, the worker. It is not in init.d itself:
+the entry `/var/lib/webosbrew/init.d/homechooser`, a symlink to `backport/homechooser` in the installed
 app, runs it at boot on webOS 6 to 9 when the backport is enabled (the flag file
-`/var/lib/webosbrew/openhouse/keyfilter` exists). The names have no dot because `run-parts` skips
+`/var/lib/webosbrew/homechooser/keyfilter` exists). The names have no dot because `run-parts` skips
 names that have one.
 
 | Command | Effect |
@@ -141,20 +141,20 @@ names that have one.
 
 `apply`:
 
-1. It reads its data from `/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse/backport`
-   (`OPENHOUSE_DATA` overrides it). With no directory it logs and exits 0.
+1. It reads its data from `/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/backport`
+   (`HOMECHOOSER_DATA` overrides it). With no directory it logs and exits 0.
 2. If any target of any set is already a mount point in `/proc/mounts`, it logs and exits 0.
 3. It hashes the live files with `sha256sum` and takes the first set in which every file matches.
    No set, or a missing file, means it logs, leaves the stock files and exits 0.
-4. It copies the targets to `/tmp/openhouse-backport/stage/<path>` and runs `patch -p0` on each
+4. It copies the targets to `/tmp/homechooser-backport/stage/<path>` and runs `patch -p0` on each
    diff there. The first copy or patch failure drops the whole set: nothing is mounted, exit 1.
    Then, in each staged file that has a `configuredHomeAppId: "..."` line (only `Settings.qml`
-   does; the diff carries the placeholder `@OPENHOUSE_HOME@`), it substitutes the stored choice:
-   `/var/lib/webosbrew/openhouse/home`, trimmed of spaces, tabs, CR and LF, and used only if it
+   does; the diff carries the placeholder `@HOMECHOOSER_HOME@`), it substitutes the stored choice:
+   `/var/lib/webosbrew/homechooser/home`, trimmed of spaces, tabs, CR and LF, and used only if it
    is made of letters, digits, `.`, `-` and `_`; an absent, empty or invalid file (logged) gives
    an empty string. The substitution is after `patch`, so the diff stays byte-exact. A stored
    choice is baked in only if `applicationManager/getAppInfo` says the app is installed: an
-   uninstalled app, or a `sam` that has not answered after 20 s (`OPENHOUSE_SAM_WAIT`, asked every
+   uninstalled app, or a `sam` that has not answered after 20 s (`HOMECHOOSER_SAM_WAIT`, asked every
    2 s), bakes an empty id, which the key filter reads as the stock home, and the watcher
    refreshes it once it can tell. `refresh` makes the same decision.
 5. It runs `mount --bind` for each copy over its original. If one mount fails it unmounts the ones
@@ -164,7 +164,7 @@ names that have one.
    oneshot wrapper that starts it). The compositor reads the QML and the key filter scripts again at
    start; there is no QML cache (`QML_DISABLE_DISK_CACHE=1`).
 
-It logs to `/tmp/openhouse-backport.log`. `stop` is idempotent: with nothing mounted it does
+It logs to `/tmp/homechooser-backport.log`. `stop` is idempotent: with nothing mounted it does
 nothing. The script, the manifest parser (the three keys are picked line by line, no `jq`) and the
 `patch` flags use only busybox applets, which the images ship.
 
@@ -179,7 +179,7 @@ choice does not stay in the mounted copy until the next boot.
 
 Tests (`sh` and `busybox sh`; the shell is the argument):
 
-* `backport/test-openhouse-keyfilter.sh [shell]` runs the worker against a fake root with stubbed
+* `backport/test-homechooser-keyfilter.sh [shell]` runs the worker against a fake root with stubbed
   `mount`, `umount` and `systemctl`: a matching set, one hash mismatch, a missing target, a
   failing patch, a failing mount, an existing mount, the substitution of the stored choice
   (trailing newline, CRLF, surrounding spaces, empty and invalid ids), `refresh`, `stop`,
@@ -205,16 +205,16 @@ that is mounted or the one that matches the live files (from `status`). The rele
 major version; the set is chosen by hash. The package carries `backport/` (`app/scripts/copy-backport.js`
 runs between the build and `ares-package`).
 
-Install, as root through Open House's service ([service](service.md)), each step in the step log:
+Install, as root through Home Chooser's service ([service](service.md)), each step in the step log:
 
 1. `status`. It stops here, changing nothing, if the data is missing or no set matches the live
    files and nothing is mounted.
 2. Read `general/defaultApps`. If the key is absent, write the empty record with
    `setSystemSettings`. Subscriptions that start on an absent key miss its creation (see the study's
    first-write caveat), and the compositor's subscription is of the same kind as `sam`'s.
-3. Create the flag file and make `/var/lib/webosbrew/init.d/openhouse` a symlink to the entry in
+3. Create the flag file and make `/var/lib/webosbrew/init.d/homechooser` a symlink to the entry in
    the app (see [Persistence](settings-app.md#persistence)).
-4. Run `openhouse-keyfilter apply` once. The compositor restarts, so running apps may close.
+4. Run `homechooser-keyfilter apply` once. The compositor restarts, so running apps may close.
 5. `systemctl restart sam` if step 2 created the key.
 6. `status` again; the install fails if the targets are not mounted.
 

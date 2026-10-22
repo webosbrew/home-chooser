@@ -9,7 +9,7 @@ import {
 	stopWatcherCommand, ENTRY_SCRIPT
 } from '../persistence';
 
-const MINE = 'org.webosbrew.openhouse.launcher';
+const MINE = 'org.webosbrew.homechooser.launcher';
 const OTHER = 'com.example.otherhome';
 const STOCK = 'com.webos.app.home';
 const ENSURE = ensureEntryCommand();
@@ -258,12 +258,12 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, CLOSE(STOCK)]);
 		expect(tv.files).toHaveLength(2);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
-		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.openhouse.json');
+		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
 		expect(JSON.parse(tv.files[1][1])).toEqual({
 			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}}
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.openhouse.json',
+			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.homechooser.json',
 			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(), 'luna:closeByAppId'
 		]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);

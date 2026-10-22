@@ -25,7 +25,7 @@ for r in 6.6.0 7.6.0 8.3.0 9.2.1; do
         /^[ -]/ { line[n++] = substr($0, 2); if (n > max) max = n }
         END { for (i = 1; i <= max + 2; i++) print (i in line) ? line[i] : "// filler " i }
     ' "$d" > "$w/stock/$REL"
-    check "$r: the diff has the placeholder line" grep -qF 'readonly property string configuredHomeAppId: "@OPENHOUSE_HOME@"' "$d"
+    check "$r: the diff has the placeholder line" grep -qF 'readonly property string configuredHomeAppId: "@HOMECHOOSER_HOME@"' "$d"
     check "$r: the diff is the same as 6.6.0's" cmp -s "$d" "$HERE/6.6.0/$DIFFNAME"
     # the stand-in is not valid QML (its context cuts functions short), so lint what the diff adds
     if command -v qmllint > /dev/null 2>&1; then
@@ -39,11 +39,11 @@ for r in 6.6.0 7.6.0 8.3.0 9.2.1; do
         cp "$w/stock/$REL" "$t/$REL"
         check "$r: $tool applies" sh -c "cd '$t' && $tool -p0 < '$d' > /dev/null"
         check "$r: $tool leaves no reject" test ! -e "$t/$REL.rej"
-        check "$r: $tool: placeholder present after patch" grep -qF 'configuredHomeAppId: "@OPENHOUSE_HOME@"' "$t/$REL"
+        check "$r: $tool: placeholder present after patch" grep -qF 'configuredHomeAppId: "@HOMECHOOSER_HOME@"' "$t/$REL"
         # the substitution the worker makes
         sed 's|configuredHomeAppId: "[^"]*"|configuredHomeAppId: "my.home-1_x"|' "$t/$REL" > "$t/new"
         check "$r: $tool: substituted" grep -qF 'configuredHomeAppId: "my.home-1_x"' "$t/new"
-        check "$r: $tool: placeholder gone" sh -c "! grep -qF @OPENHOUSE_HOME@ '$t/new'"
+        check "$r: $tool: placeholder gone" sh -c "! grep -qF @HOMECHOOSER_HOME@ '$t/new'"
         check "$r: $tool: only the placeholder line changed" test "$(diff "$t/$REL" "$t/new" | grep -c '^<')" = 1
         check "$r: $tool -R restores the stand-in" sh -c "cd '$t' && cp '$REL' x.qml && $tool -p0 -R < '$d' > /dev/null && cmp -s '$REL' '$w/stock/$REL'"
     done

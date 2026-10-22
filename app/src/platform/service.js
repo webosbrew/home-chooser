@@ -1,9 +1,9 @@
-// Client for Open House's native root service, org.webosbrew.openhouse.service (docs/service.md).
+// Client for Home Chooser's native root service, org.webosbrew.homechooser.service (docs/service.md).
 // Every method answers {returnValue, ...}; a false returnValue becomes a ServiceError whose
 // `reply` is the service reply (errorCode: forbidden, notRoot, notAllowed, ...).
 import {ServiceError} from './errors';
 
-export const SERVICE_ID = 'org.webosbrew.openhouse.service';
+export const SERVICE_ID = 'org.webosbrew.homechooser.service';
 export const SERVICE_URI = `luna://${SERVICE_ID}`;
 
 export const CALL_TIMEOUT_MS = 30000;

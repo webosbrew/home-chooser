@@ -1,11 +1,11 @@
-// Startup elevation: make sure Open House's service runs as root.
+// Startup elevation: make sure Home Chooser's service runs as root.
 //   status -> if not root: Homebrew Channel elevateService -> quit -> status again.
 // Failures are FatalErrors whose `kind` the screen maps to a message:
 //   'unreachable' Homebrew Channel is not installed / not running
 //   'denied'      Homebrew Channel refuses the call from an app (webOS 26 and later)
 //   'notRoot'     the service answered after elevation but is still not root
 //   'failed'      anything else
-import {classifyExecFailure} from '../openhouse/diagnose';
+import {classifyExecFailure} from '../homechooser/diagnose';
 import {errorMessage} from './errors';
 import {SERVICE_ID, withTimeout} from './service';
 
@@ -20,7 +20,7 @@ export class FatalError extends Error {
 	}
 }
 
-const defaultLog = (text) => console.log(`[OpenHouse] ${text}`); // eslint-disable-line no-console
+const defaultLog = (text) => console.log(`[HomeChooser] ${text}`); // eslint-disable-line no-console
 
 export const ELEVATION = {
 	statusTimeoutMs: 5000,

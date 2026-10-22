@@ -1,9 +1,9 @@
 #!/bin/sh
-# Tests for openhouse-keyfilter against a fake root with stubbed mount, umount and systemctl.
-# usage: test-openhouse-keyfilter.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
+# Tests for homechooser-keyfilter against a fake root with stubbed mount, umount and systemctl.
+# usage: test-homechooser-keyfilter.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=$HERE/openhouse-keyfilter
+SCRIPT=$HERE/homechooser-keyfilter
 PASS=0
 FAIL=0
 
@@ -29,7 +29,7 @@ setup() {
     printf 'one\ntwo\nthree\nhome = "com.webos.app.home"\nfive\n' > "$T/root/usr/lib/qml/a.qml"
     printf 'alpha\nbeta\nHOME_APP_ID\ngamma\n' > "$T/root/usr/lib/qml/b.js"
     cp "$T/root/usr/lib/qml/a.qml" "$T/root/usr/lib/qml/b.js" "$T/orig/"
-    printf 'one\ntwo\nthree\nhome = Settings.getHomeAppId()\nproperty string configuredHomeAppId: "@OPENHOUSE_HOME@"\nfive\n' > "$T/new-a"
+    printf 'one\ntwo\nthree\nhome = Settings.getHomeAppId()\nproperty string configuredHomeAppId: "@HOMECHOOSER_HOME@"\nfive\n' > "$T/new-a"
     printf 'alpha\nbeta\nglobal.isHomeApp(x)\ngamma\n' > "$T/new-b"
     for f in a:a.qml b:b.js; do
         k=${f%%:*}; n=${f##*:}
@@ -95,10 +95,10 @@ echo "sleep \$*" >> "$T/cmds"
 [ -f "$T/sam-late" ] && [ "\$(grep -c '^sleep' "$T/cmds")" -ge 2 ] && rm -f "$T/sam-silent"
 STUB
     chmod +x "$T/bin/"*
-    export OPENHOUSE_LUNA_SEND="$T/bin/luna-send" OPENHOUSE_SAM_WAIT=0 OPENHOUSE_SLEEP="$T/bin/sleep"
-    export OPENHOUSE_DATA="$T/data" OPENHOUSE_ROOT="$T/root" OPENHOUSE_WORK="$T/work" \
-           OPENHOUSE_LOG="$T/log" OPENHOUSE_MOUNTS="$T/mounts" OPENHOUSE_MOUNT="$T/bin/mount" \
-           OPENHOUSE_UMOUNT="$T/bin/umount" OPENHOUSE_SYSTEMCTL="$T/bin/systemctl" OPENHOUSE_CHOICE="$T/home"
+    export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
+    export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
+           HOMECHOOSER_LOG="$T/log" HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" \
+           HOMECHOOSER_UMOUNT="$T/bin/umount" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home"
 }
 
 run() { $SH "$SCRIPT" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
@@ -117,7 +117,7 @@ check "bind mount of the stage over the original" has "mount --bind $T/work/stag
 check "compositor restarted once" test "$(grep -c '^systemctl restart surface-manager-daemon.service$' "$T/cmds")" = 1
 check "log names the set" has 'diff set 1.0 matches' "$T/log"
 check "no choice: placeholder replaced by an empty id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
-check "placeholder gone" hasnt '@OPENHOUSE_HOME@' "$T/work/stage/usr/lib/qml/a.qml"
+check "placeholder gone" hasnt '@HOMECHOOSER_HOME@' "$T/work/stage/usr/lib/qml/a.qml"
 check "stock a.qml has no placeholder" hasnt configuredHomeAppId "$T/root/usr/lib/qml/a.qml"
 run status
 check "status mounted" has 'mounted=yes' "$T/out"
@@ -253,7 +253,7 @@ rm -rf "${T:?}"
 setup
 printf 'my.home\n' > "$T/home"
 touch "$T/sam-silent" "$T/sam-late"
-OPENHOUSE_SAM_WAIT=20 run
+HOMECHOOSER_SAM_WAIT=20 run
 check "sam answers after a short wait: id baked in" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 check "it slept, 2 s at a time" has 'sleep 2' "$T/cmds"
 rm -rf "${T:?}"
@@ -317,14 +317,14 @@ for form in new old; do
     setup
     printf 'my.home\n' > "$T/home"
     mktimeout $form "$T/bin/timeout"
-    OPENHOUSE_TIMEOUT="$T/bin/timeout" run
+    HOMECHOOSER_TIMEOUT="$T/bin/timeout" run
     check "$form: id baked in through timeout" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
     if [ $form = new ]; then check "new: timeout 10" has 'timeout 10 ' "$T/bin/timeout.log"; else check "old: timeout -t 10" has 'timeout -t 10 ' "$T/bin/timeout.log"; fi
     rm -rf "${T:?}"
 done
 setup
 printf 'my.home\n' > "$T/home"
-OPENHOUSE_TIMEOUT= run
+HOMECHOOSER_TIMEOUT= run
 check "no timeout: still works" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 rm -rf "${T:?}"
 

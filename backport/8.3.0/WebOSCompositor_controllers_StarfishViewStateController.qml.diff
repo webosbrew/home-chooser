@@ -5,7 +5,7 @@
  
      property bool supportNMRM: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["tv.hw.supportNMRM"]}) === true
 -    property string lastInputApp: supportNMRM ? "com.webos.app.home" : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
-+    // Open House: start the home app subscription with the compositor
++    // Home Chooser: start the home app subscription with the compositor
 +    property string homeAppId: Settings.getHomeAppId()
 +    property string lastInputApp: supportNMRM ? Settings.getHomeAppId() : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
  

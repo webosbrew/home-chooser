@@ -43,7 +43,7 @@ export const HomeItem = ({name, icon, stock, current, disabled, spotlightId, onC
 	);
 };
 
-const DIALOG_ID = 'openhouse-dialog';
+const DIALOG_ID = 'homechooser-dialog';
 
 const DialogBox = SpotlightContainerDecorator(
 	{enterTo: 'default-element', defaultElement: 'button', spotlightRestrict: 'self-only'},

@@ -2,7 +2,7 @@ import {createBridgeCall} from '../bridge';
 import {ServiceError} from '../errors';
 import {SERVICE_URI, createServiceClient, withTimeout} from '../service';
 import {createExec, createOsRelease, createPersistenceStatus, createPlatform, createReadIcon, parseOsRelease} from '..';
-import {parsePersistenceStatus} from '../../openhouse/persistence';
+import {parsePersistenceStatus} from '../../homechooser/persistence';
 
 const reply = (extra) => Object.assign({returnValue: true}, extra);
 
@@ -115,7 +115,7 @@ describe('exec', () => {
 
 describe('persistence status', () => {
 	const service = (over) => Object.assign({
-		linkStatus: async () => ({entry: 'link', target: '/app/backport/openhouse'}),
+		linkStatus: async () => ({entry: 'link', target: '/app/backport/homechooser'}),
 		run: async (c) => ({stdout: c === 'watcherActive' ? 'active\n' : 'line one\nline two\n', stderr: ''}),
 		readFile: async (p) => (p.endsWith('/home') ? 'my.home\n' : '')
 	}, over);
@@ -123,7 +123,7 @@ describe('persistence status', () => {
 	test('assembles the text parsePersistenceStatus reads', async () => {
 		const {stdout} = await createPersistenceStatus(service())();
 		expect(parsePersistenceStatus(stdout)).toMatchObject({
-			entry: 'other', entryTarget: '/app/backport/openhouse', active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']
+			entry: 'other', entryTarget: '/app/backport/homechooser', active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']
 		});
 	});
 	test('no files, no entry', async () => {

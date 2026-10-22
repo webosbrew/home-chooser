@@ -5,15 +5,15 @@ import Spinner from '@enact/moonstone/Spinner';
 import {Header, Panel} from '@enact/moonstone/Panels';
 import Spotlight from '@enact/spotlight';
 
-import {STOCK_HOME} from '../openhouse';
+import {STOCK_HOME} from '../homechooser';
 import {ConfirmDialog, HomeItem, Toast} from './parts';
 import css from './Home.module.less';
 
 const FATAL_TEXT = {
-	unreachable: ['Homebrew Channel is needed', 'Open House needs Homebrew Channel on a rooted TV. Install it, make sure it is running, then open Open House again.'],
-	denied: ["Homebrew Channel can't set up root access yet", "Your Homebrew Channel doesn't let apps elevate Open House's service yet. Update Homebrew Channel; Open House needs it."],
-	notRoot: ['Open House has no root access', "Open House's service did not start as root. Root the TV and make sure Homebrew Channel has root access, then open Open House again."],
-	failed: ["Open House can't reach the TV's services", "Something went wrong while setting up Open House's service. Make sure Homebrew Channel is installed and running, then open Open House again."]
+	unreachable: ['Homebrew Channel is needed', 'Home Chooser needs Homebrew Channel on a rooted TV. Install it, make sure it is running, then open Home Chooser again.'],
+	denied: ["Homebrew Channel can't set up root access yet", "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser needs it."],
+	notRoot: ['Home Chooser has no root access', "Home Chooser's service did not start as root. Root the TV and make sure Homebrew Channel has root access, then open Home Chooser again."],
+	failed: ["Home Chooser can't reach the TV's services", "Something went wrong while setting up Home Chooser's service. Make sure Homebrew Channel is installed and running, then open Home Chooser again."]
 };
 
 // Why the list is disabled; one plain line at the top of the list area.
@@ -84,7 +84,7 @@ const MainPanel = ({model, ...rest}) => {
 
 	return (
 		<Panel {...rest}>
-			<Header title="Open House" titleBelow="Find your TV a new home" />
+			<Header title="Home Chooser" titleBelow="Choose the app your Home button opens." />
 			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}

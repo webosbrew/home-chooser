@@ -2,7 +2,7 @@
 // restarts the compositor so the patch loads, and that may close this overlay before the result
 // is known. The marker says what was being set; the next launch reads the real state, shows the
 // result once and clears it.
-export const PENDING_KEY = 'openhouse.pending';
+export const PENDING_KEY = 'homechooser.pending';
 
 const store = () => {
 	try {

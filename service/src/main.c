@@ -1,4 +1,4 @@
-/* org.webosbrew.openhouse.service: the narrow root service behind the Open House app.
+/* org.webosbrew.homechooser.service: the narrow root service behind the Home Chooser app.
  * See docs/service.md. All decisions live in policy.c; this file is luna-service2, pbnjson and
  * the system calls around them. */
 #define _GNU_SOURCE
@@ -22,8 +22,8 @@
 
 #include "policy.h"
 
-#ifndef OH_VERSION
-#define OH_VERSION "0.1.0"
+#ifndef HC_VERSION
+#define HC_VERSION "0.1.0"
 #endif
 
 #define CALL_TIMEOUT_S 20
@@ -34,10 +34,10 @@
 
 static GMainLoop *g_loop;
 static LSHandle *g_handle;
-static PmLogContext oh_log;
+static PmLogContext hc_log;
 
-#define LOGI(id, ...) PmLogInfo(oh_log, id, 0, __VA_ARGS__)
-#define LOGE(id, ...) PmLogError(oh_log, id, 0, __VA_ARGS__)
+#define LOGI(id, ...) PmLogInfo(hc_log, id, 0, __VA_ARGS__)
+#define LOGE(id, ...) PmLogError(hc_log, id, 0, __VA_ARGS__)
 
 /* ---- JSON helpers (pbnjson) ---- */
 
@@ -103,10 +103,10 @@ static void send_ok(LSMessage *msg)
 static bool gate(LSMessage *msg, const char *method, bool need_root)
 {
 	const char *app = LSMessageGetApplicationID(msg);
-	if (!oh_sender_ok(app)) {
+	if (!hc_sender_ok(app)) {
 		const char *svc = LSMessageGetSenderServiceName(msg);
 		LOGE("REFUSED", "%s from application id '%s', service name '%s'", method, app ? app : "(none)", svc ? svc : "(none)");
-		send_error(msg, "forbidden", "Only the Open House app may call this service");
+		send_error(msg, "forbidden", "Only the Home Chooser app may call this service");
 		return false;
 	}
 	if (need_root && geteuid() != 0) {
@@ -128,7 +128,7 @@ static bool on_status(LSHandle *sh, LSMessage *msg, void *ctx)
 	put_bool(o, "returnValue", true);
 	put_bool(o, "root", geteuid() == 0);
 	put_int(o, "uid", (int)geteuid());
-	put_str(o, "version", OH_VERSION);
+	put_str(o, "version", HC_VERSION);
 	send_reply(msg, o);
 	return true;
 }
@@ -240,13 +240,13 @@ static int collect_keys(jvalue_ref v, bool names, char **out, int max)
 	return n;
 }
 
-static bool settings_payload_ok(oh_call_kind kind, jvalue_ref payload)
+static bool settings_payload_ok(hc_call_kind kind, jvalue_ref payload)
 {
 	char *category = get_string(payload, "category");
 	char *keys[8] = {0};
-	jvalue_ref list = jobject_get(payload, key_buf(kind == OH_CALL_SETTINGS_GET ? "keys" : "settings"));
-	int n = jis_valid(list) ? collect_keys(list, kind == OH_CALL_SETTINGS_SET, keys, 8) : -1;
-	bool ok = n >= 0 && oh_settings_ok(category, (const char *const *)keys, (size_t)n);
+	jvalue_ref list = jobject_get(payload, key_buf(kind == HC_CALL_SETTINGS_GET ? "keys" : "settings"));
+	int n = jis_valid(list) ? collect_keys(list, kind == HC_CALL_SETTINGS_SET, keys, 8) : -1;
+	bool ok = n >= 0 && hc_settings_ok(category, (const char *const *)keys, (size_t)n);
 	for (int i = 0; i < 8; i++) g_free(keys[i]);
 	g_free(category);
 	return ok;
@@ -263,15 +263,15 @@ static bool on_call(LSHandle *sh, LSMessage *msg, void *ctx)
 		j_release(&req);
 		return true;
 	}
-	oh_call_kind kind = oh_call_lookup(uri);
+	hc_call_kind kind = hc_call_lookup(uri);
 	jvalue_ref inner = jobject_get(req, key_buf("payload"));
 	if (!jis_valid(inner) || jis_null(inner)) inner = NULL;
-	if (kind == OH_CALL_DENIED) {
+	if (kind == HC_CALL_DENIED) {
 		LOGE("CALL_DENIED", "%s", uri);
 		send_error(msg, "notAllowed", "%s is not on the list of calls this service makes", uri);
 	} else if (inner && !jis_object(inner)) {
 		send_error(msg, "badRequest", "payload must be an object");
-	} else if ((kind == OH_CALL_SETTINGS_GET || kind == OH_CALL_SETTINGS_SET) && (!inner || !settings_payload_ok(kind, inner))) {
+	} else if ((kind == HC_CALL_SETTINGS_GET || kind == HC_CALL_SETTINGS_SET) && (!inner || !settings_payload_ok(kind, inner))) {
 		LOGE("CALL_DENIED", "%s with a payload outside general/defaultApps", uri);
 		send_error(msg, "notAllowed", "%s is limited to category general, key defaultApps", uri);
 	} else {
@@ -338,7 +338,7 @@ static ssize_t slurp(const char *path, size_t max, char **out, bool *too_big)
 static char *request_path(LSMessage *msg, jvalue_ref req, const char *method, bool reading)
 {
 	char *path = get_string(req, "path");
-	if (!(reading ? oh_file_readable(path) : oh_file_allowed(path))) {
+	if (!(reading ? hc_file_readable(path) : hc_file_allowed(path))) {
 		LOGE("PATH_DENIED", "%s %s", method, path ? path : "(none)");
 		send_error(msg, "notAllowed", "%s is not a path this service touches", path ? path : "(none)");
 		g_free(path);
@@ -358,12 +358,12 @@ static bool on_read_file(LSHandle *sh, LSMessage *msg, void *ctx)
 		const char *open_path = path;
 		char real[PATH_MAX];
 		ssize_t n;
-		if (strcmp(path, OH_OSRELEASE) == 0) {
+		if (strcmp(path, HC_OSRELEASE) == 0) {
 			/* Read-only and a symlink on webOS 6+: resolve it, accept two known targets, and open
 			 * the resolved path (no symlinks left, so O_NOFOLLOW still holds). */
 			if (!realpath(path, real)) {
 				n = -1;
-			} else if (!oh_osrelease_target_ok(real)) {
+			} else if (!hc_osrelease_target_ok(real)) {
 				LOGE("PATH_DENIED", "readFile %s resolves to %s", path, real);
 				send_error(msg, "notAllowed", "%s resolves outside the allowed targets", path);
 				g_free(path);
@@ -488,12 +488,12 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	if (!gate(msg, "link", true)) return true;
-	static const char *const scripts[] = {OH_ENTRY_SCRIPT, OH_KEYFILTER_SCRIPT, OH_WATCH_SCRIPT, NULL};
-	if (!mkdir_p(OH_INIT_DIR)) {
-		send_error(msg, "linkFailed", "Could not create %s: %s", OH_INIT_DIR, strerror(errno));
+	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_KEYFILTER_SCRIPT, HC_WATCH_SCRIPT, NULL};
+	if (!mkdir_p(HC_INIT_DIR)) {
+		send_error(msg, "linkFailed", "Could not create %s: %s", HC_INIT_DIR, strerror(errno));
 		return true;
 	}
-	unlink(OH_OLD_INIT_LINK);
+	unlink(HC_OLD_INIT_LINK);
 	for (int i = 0; scripts[i]; i++) {
 		if (chmod(scripts[i], 0755) != 0) {
 			send_error(msg, "linkFailed", "Could not make %s executable: %s", scripts[i], strerror(errno));
@@ -501,15 +501,15 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 		}
 	}
 	/* a link is replaced, a regular file from an earlier install too */
-	if (unlink(OH_INIT_LINK) != 0 && errno != ENOENT) {
-		send_error(msg, "linkFailed", "Could not replace %s: %s", OH_INIT_LINK, strerror(errno));
+	if (unlink(HC_INIT_LINK) != 0 && errno != ENOENT) {
+		send_error(msg, "linkFailed", "Could not replace %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	if (symlink(OH_ENTRY_SCRIPT, OH_INIT_LINK) != 0) {
-		send_error(msg, "linkFailed", "Could not link %s: %s", OH_INIT_LINK, strerror(errno));
+	if (symlink(HC_ENTRY_SCRIPT, HC_INIT_LINK) != 0) {
+		send_error(msg, "linkFailed", "Could not link %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	LOGI("LINKED", "%s -> %s", OH_INIT_LINK, OH_ENTRY_SCRIPT);
+	LOGI("LINKED", "%s -> %s", HC_INIT_LINK, HC_ENTRY_SCRIPT);
 	send_ok(msg);
 	return true;
 }
@@ -519,13 +519,13 @@ static bool on_unlink(LSHandle *sh, LSMessage *msg, void *ctx)
 	(void)sh; (void)ctx;
 	if (!gate(msg, "unlink", true)) return true;
 	bool ok = true;
-	if (unlink(OH_INIT_LINK) != 0 && errno != ENOENT) ok = false;
-	if (unlink(OH_OLD_INIT_LINK) != 0 && errno != ENOENT) ok = false;
+	if (unlink(HC_INIT_LINK) != 0 && errno != ENOENT) ok = false;
+	if (unlink(HC_OLD_INIT_LINK) != 0 && errno != ENOENT) ok = false;
 	if (!ok) {
 		send_error(msg, "unlinkFailed", "Could not remove the boot entry: %s", strerror(errno));
 		return true;
 	}
-	LOGI("UNLINKED", "%s", OH_INIT_LINK);
+	LOGI("UNLINKED", "%s", HC_INIT_LINK);
 	send_ok(msg);
 	return true;
 }
@@ -538,11 +538,11 @@ static bool on_link_status(LSHandle *sh, LSMessage *msg, void *ctx)
 	struct stat st;
 	char target[512] = "";
 	const char *entry = "none";
-	if (lstat(OH_INIT_LINK, &st) == 0) {
+	if (lstat(HC_INIT_LINK, &st) == 0) {
 		if (S_ISLNK(st.st_mode)) {
-			ssize_t n = readlink(OH_INIT_LINK, target, sizeof target - 1);
+			ssize_t n = readlink(HC_INIT_LINK, target, sizeof target - 1);
 			target[n > 0 ? n : 0] = '\0';
-			entry = stat(OH_INIT_LINK, &st) == 0 ? "link" : "dangling";
+			entry = stat(HC_INIT_LINK, &st) == 0 ? "link" : "dangling";
 		} else {
 			entry = "file";
 		}
@@ -635,7 +635,7 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 	if (!gate(msg, "run", true)) return true;
 	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
 	char *name = req ? get_string(req, "command") : NULL;
-	const oh_command *cmd = oh_command_lookup(name);
+	const hc_command *cmd = hc_command_lookup(name);
 	if (!cmd) {
 		LOGE("RUN_DENIED", "%s", name ? name : "(none)");
 		send_error(msg, "notAllowed", "%s is not a command this service runs", name ? name : "(none)");
@@ -644,9 +644,9 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 		int code = 0;
 		if (cmd->native_tail) {
 			char *buf = NULL;
-			ssize_t n = slurp(OH_WATCH_LOG, FILE_MAX_BYTES, &buf, NULL);
+			ssize_t n = slurp(HC_WATCH_LOG, FILE_MAX_BYTES, &buf, NULL);
 			if (n > 0) {
-				size_t from = oh_last_lines(buf, (size_t)n, LOG_LINES);
+				size_t from = hc_last_lines(buf, (size_t)n, LOG_LINES);
 				g_string_append_len(out, buf + from, (gssize)((size_t)n - from));
 			}
 			g_free(buf);
@@ -713,8 +713,8 @@ static bool icon_reply(LSHandle *sh, LSMessage *reply, void *ctx)
 	char *icon = src ? get_string(src, "icon") : NULL;
 	char path[1024], real_icon[PATH_MAX], real_dir[PATH_MAX];
 	const char *mime = NULL;
-	if (!folder || !icon || !oh_icon_path(folder, icon, path, sizeof path) || !(mime = oh_icon_mime(path))
-		|| !realpath(path, real_icon) || !realpath(folder, real_dir) || !oh_path_within(real_icon, real_dir)) {
+	if (!folder || !icon || !hc_icon_path(folder, icon, path, sizeof path) || !(mime = hc_icon_mime(path))
+		|| !realpath(path, real_icon) || !realpath(folder, real_dir) || !hc_path_within(real_icon, real_dir)) {
 		LOGI("ICON_NONE", "%s", p->icon_app);
 		send_error(p->msg, "noIcon", "No readable icon for %s", p->icon_app);
 	} else {
@@ -726,7 +726,7 @@ static bool icon_reply(LSHandle *sh, LSMessage *reply, void *ctx)
 		} else {
 			size_t outlen = 4 * (((size_t)n + 2) / 3) + 1;
 			char *b64 = g_malloc(outlen);
-			oh_base64((const unsigned char *)buf, (size_t)n, b64, outlen);
+			hc_base64((const unsigned char *)buf, (size_t)n, b64, outlen);
 			jvalue_ref o = jobject_create();
 			put_bool(o, "returnValue", true);
 			put_str(o, "mime", mime);
@@ -788,13 +788,13 @@ static LSMethod methods[] = {
 int main(void)
 {
 	signal(SIGPIPE, SIG_IGN);
-	PmLogGetContext("OpenHouse", &oh_log);
-	LOGI("START", "version %s, uid %d", OH_VERSION, (int)geteuid());
+	PmLogGetContext("HomeChooser", &hc_log);
+	LOGI("START", "version %s, uid %d", HC_VERSION, (int)geteuid());
 
 	g_loop = g_main_loop_new(NULL, FALSE);
 	LSError e;
 	LSErrorInit(&e);
-	if (!LSRegister(OH_SERVICE_ID, &g_handle, &e)
+	if (!LSRegister(HC_SERVICE_ID, &g_handle, &e)
 		|| !LSRegisterCategory(g_handle, "/", methods, NULL, NULL, &e)
 		|| !LSGmainAttach(g_handle, g_loop, &e)) {
 		LOGE("REGISTER_FAILED", "%s", e.message ? e.message : "?");

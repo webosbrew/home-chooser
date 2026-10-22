@@ -9,7 +9,7 @@ import {
 
 export const STOCK_HOME = 'com.webos.app.home';
 export const STOCK_FULLHOME = 'com.webos.app.fullhome';
-export const OVERRIDE_PATH = '/var/webos-profile/override/org.webosbrew.openhouse.json';
+export const OVERRIDE_PATH = '/var/webos-profile/override/org.webosbrew.homechooser.json';
 
 const SETTINGS = 'luna://com.webos.settingsservice';
 const SAM = 'luna://com.webos.applicationManager';

@@ -1,32 +1,32 @@
-// Where Open House keeps its choice and boot entry on the TV, and the shell commands that
+// Where Home Chooser keeps its choice and boot entry on the TV, and the shell commands that
 // manage them. See docs/settings-app.md ("Persistence").
 
-export const APP_DIR = '/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse';
+export const APP_DIR = '/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser';
 export const BACKPORT_DIR = `${APP_DIR}/backport`;
 // The scripts inside the installed app. The init.d entry is a symlink to ENTRY_SCRIPT.
-export const ENTRY_SCRIPT = `${BACKPORT_DIR}/openhouse`;
-export const KEYFILTER_SCRIPT = `${BACKPORT_DIR}/openhouse-keyfilter`;
-export const WATCH_SCRIPT = `${BACKPORT_DIR}/openhouse-home-watch`;
+export const ENTRY_SCRIPT = `${BACKPORT_DIR}/homechooser`;
+export const KEYFILTER_SCRIPT = `${BACKPORT_DIR}/homechooser-keyfilter`;
+export const WATCH_SCRIPT = `${BACKPORT_DIR}/homechooser-home-watch`;
 
 export const INIT_DIR = '/var/lib/webosbrew/init.d';
-export const INIT_PATH = `${INIT_DIR}/openhouse`;
+export const INIT_PATH = `${INIT_DIR}/homechooser`;
 // Earlier design: a copy of the key filter script. There is only the one entry now.
-export const OLD_INIT_PATH = `${INIT_DIR}/openhouse-keyfilter`;
+export const OLD_INIT_PATH = `${INIT_DIR}/homechooser-keyfilter`;
 
-export const STATE_DIR = '/var/lib/webosbrew/openhouse';
+export const STATE_DIR = '/var/lib/webosbrew/homechooser';
 // The stored choice: the app id alone, nothing else.
 export const HOME_FILE = `${STATE_DIR}/home`;
 // Exists while the key filter backport is enabled (webOS 6 to 9).
 export const KEYFILTER_FLAG = `${STATE_DIR}/keyfilter`;
 
-export const WATCH_UNIT = 'openhouse-home';
-export const WATCH_LOG = '/tmp/openhouse-home.log';
+export const WATCH_UNIT = 'homechooser-home';
+export const WATCH_LOG = '/tmp/homechooser-home.log';
 
 // The "commands" the logic layer hands to platform.exec. They are names, not shell text: the
 // service runs a fixed argv for each (service/src/policy.c) and nothing else.
 //
-// linkEntry: make init.d/openhouse a symlink to the script in the app (a regular file from an
-// earlier install is replaced; the earlier openhouse-keyfilter entry is removed). The scripts keep
+// linkEntry: make init.d/homechooser a symlink to the script in the app (a regular file from an
+// earlier install is replaced; the earlier homechooser-keyfilter entry is removed). The scripts keep
 // their executable bit: run-parts follows the link but needs the target executable.
 export const ensureEntryCommand = () => 'linkEntry';
 

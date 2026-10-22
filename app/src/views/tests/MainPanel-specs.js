@@ -1,7 +1,7 @@
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
 import App from '../../App';
-import {FatalError} from '../../openhouse/environment';
+import {FatalError} from '../../homechooser/environment';
 import {PENDING_KEY} from '../pending';
 
 const ok = (extra) => Object.assign({ok: true, steps: [], warnings: [], errors: []}, extra);
@@ -35,7 +35,7 @@ const mountApp = (env, onExit = jest.fn()) => {
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
-describe('Open House screen', () => {
+describe('Home Chooser screen', () => {
 	let log;
 	beforeEach(() => { log = jest.spyOn(console, 'log').mockImplementation(() => {}); });
 	afterEach(() => { log.mockRestore(); window.localStorage.clear(); });
@@ -46,21 +46,21 @@ describe('Open House screen', () => {
 		mountApp(env);
 		expect(await screen.findByText("Couldn't read the installed apps.")).toBeTruthy();
 		expect(screen.queryByText(/No Home apps are installed/)).toBeNull();
-		expect(log).toHaveBeenCalledWith(expect.stringContaining('[OpenHouse] refresh: boom'));
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('[HomeChooser] refresh: boom'));
 		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
 		expect(row.getAttribute('aria-disabled')).not.toBe('true');
 	});
 
 	test.each([
 		['unreachable', /needs Homebrew Channel on a rooted TV/],
-		['denied', /doesn't let apps elevate Open House's service yet\. Update Homebrew Channel; Open House needs it\./],
+		['denied', /doesn't let apps elevate Home Chooser's service yet\. Update Homebrew Channel; Home Chooser needs it\./],
 		['notRoot', /service did not start as root/],
 		['failed', /can't reach the TV's services/]
 	])('no root (%s): the reason on top and a disabled list, same layout', async (kind, text) => {
 		const onExit = jest.fn();
 		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} onExit={onExit} />);
 		expect(await screen.findByText(text)).toBeTruthy();
-		expect(screen.getByText('Find your TV a new home')).toBeTruthy();
+		expect(screen.getByText('Choose the app your Home button opens.')).toBeTruthy();
 		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
 		expect(row.getAttribute('aria-disabled')).toBe('true');
 		expect(row.querySelectorAll('[data-testid="icon-box"]')).toHaveLength(1);
@@ -150,13 +150,13 @@ describe('Open House screen', () => {
 	});
 
 	test('failure is one plain sentence and details go to the console', async () => {
-		const apply = jest.fn(async () => ok({ok: false, steps: [{kind: 'exec', command: 'x', ok: false, error: 'Service does not exist: org.webosbrew.openhouse.service'}], errors: ['Service does not exist: org.webosbrew.openhouse.service']}));
+		const apply = jest.fn(async () => ok({ok: false, steps: [{kind: 'exec', command: 'x', ok: false, error: 'Service does not exist: org.webosbrew.homechooser.service'}], errors: ['Service does not exist: org.webosbrew.homechooser.service']}));
 		mountApp(makeEnv({apply}));
 		fireEvent.click(await screen.findByText('Plain Launcher'));
 		fireEvent.click(await screen.findByText('Use as Home'));
-		expect(await screen.findByText("Couldn't set the Home app. The Open House service didn't respond.")).toBeTruthy();
+		expect(await screen.findByText("Couldn't set the Home app. The Home Chooser service didn't respond.")).toBeTruthy();
 		expect(screen.queryByText(/Denied/)).toBeNull();
-		expect(log.mock.calls.some((c) => /^\[OpenHouse\] apply: FAILED/.test(c[0]))).toBe(true);
+		expect(log.mock.calls.some((c) => /^\[HomeChooser\] apply: FAILED/.test(c[0]))).toBe(true);
 	});
 
 	test('input is blocked while busy', async () => {

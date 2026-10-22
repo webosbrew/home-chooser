@@ -1,17 +1,17 @@
 // The session controller behind the screen: loads the environment, keeps the home list and the
 // key filter patch state, and runs the apply / restore flows one at a time. Every step of every
-// operation goes to console.log with an [OpenHouse] prefix, never to the screen.
+// operation goes to console.log with an [HomeChooser] prefix, never to the screen.
 import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {errorMessage} from '../platform/errors';
-import {STOCK_HOME} from '../openhouse';
-import {formatStep} from '../openhouse/format';
-import {loadEnvironment} from '../openhouse/environment';
+import {STOCK_HOME} from '../homechooser';
+import {formatStep} from '../homechooser/format';
+import {loadEnvironment} from '../homechooser/environment';
 import {clearPending, readPending, writePending} from './pending';
 
 const DONE_TEXT = 'Done. Press Home to try it.';
 
-export const LOG_PREFIX = '[OpenHouse]';
+export const LOG_PREFIX = '[HomeChooser]';
 
 export const logResult = (label, res) => {
 	/* eslint-disable no-console */
@@ -34,10 +34,10 @@ export const patchStateOf = (backport, status) => {
 export const plainFailure = (what, errors) => {
 	const text = (errors || []).join(' ');
 	const silent = /does not exist|not running|unknown service|no webos service bridge|ServiceUnknown|timed? ?out/i.test(text);
-	return `Couldn't ${what}.` + (silent ? " The Open House service didn't respond." : '');
+	return `Couldn't ${what}.` + (silent ? " The Home Chooser service didn't respond." : '');
 };
 
-export const useOpenHouse = (load = loadEnvironment) => {
+export const useHomeChooser = (load = loadEnvironment) => {
 	const [phase, setPhase] = useState('loading');
 	const [rootError, setRootError] = useState(null); // why root is unavailable, or null
 	const [env, setEnv] = useState(null);

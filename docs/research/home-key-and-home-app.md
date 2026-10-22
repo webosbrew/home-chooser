@@ -372,7 +372,7 @@ the keys go afterwards [V, VM]:
 | `applicationManager/suspense` | `Unknown method`; nothing changes |
 | `applicationManager/closeByAppId` from a developer app | `Denied method call`; nothing changes |
 
-With the Open House backport on 6.6.0, a card launcher chosen as home was launched by Home
+With the Home Chooser backport on 6.6.0, a card launcher chosen as home was launched by Home
 from another app (`caller com.webos.surfacemanager`, `launchType: "homeKey"`), received the
 remote's keys, and with `_WEBOS_ACCESS_POLICY_KEYS_HOME = "true"` received a second Home press
 as a key instead of being relaunched: the backport's `isHomeApp` follows the choice. On the
@@ -598,7 +598,7 @@ preload in `etc/systemd/system/snapshot-boot-components.service` and
 The stock rootfs is SquashFS. Decided: the patch is applied at boot to copies of the stock
 files and the copies are bind-mounted over the originals; the packed image is not modified.
 
-* Open House ships diffs, not patched files, so no LG file is redistributed. Each diff is
+* Home Chooser ships diffs, not patched files, so no LG file is redistributed. Each diff is
   stored with the sha256 of the stock file it applies to.
 * A boot script in Homebrew Channel's `/var/lib/webosbrew/init.d` hashes each target file,
   copies the files whose hash it knows, applies the diffs to the copies and bind-mounts each

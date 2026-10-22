@@ -1,6 +1,6 @@
 import {ServiceError} from '../../platform/errors';
 import {backportApplies, createBackport, parseStatus} from '..';
-import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../openhouse/persistence';
+import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
 const RUN_WORKER = 'keyfilterApply';
 const ENSURE = ensureEntryCommand();

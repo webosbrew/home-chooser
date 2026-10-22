@@ -1,6 +1,6 @@
 // Copies the boot scripts and the key filter backport (../backport) into the packaged app: the
-// scripts (openhouse, openhouse-keyfilter, openhouse-home-watch, mode 755: the init.d entry is a
-// symlink to openhouse in the installed app, and run-parts needs its target executable) and, for
+// scripts (homechooser, homechooser-keyfilter, homechooser-home-watch, mode 755: the init.d entry is a
+// symlink to homechooser in the installed app, and run-parts needs its target executable) and, for
 // each release directory, its manifest.json and diffs. The tests are not shipped.
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +11,7 @@ const dest = path.join(dist, 'backport');
 
 fs.rmSync(dest, {recursive: true, force: true});
 fs.mkdirSync(dest, {recursive: true});
-['openhouse', 'openhouse-keyfilter', 'openhouse-home-watch'].forEach((name) => {
+['homechooser', 'homechooser-keyfilter', 'homechooser-home-watch'].forEach((name) => {
 	fs.copyFileSync(path.join(src, name), path.join(dest, name));
 	fs.chmodSync(path.join(dest, name), 0o755);
 });

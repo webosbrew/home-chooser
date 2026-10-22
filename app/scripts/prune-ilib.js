@@ -1,5 +1,5 @@
 // Enact copies all of iLib's locale data (about 83 MB) into dist/node_modules/ilib/locale and the
-// CLI has no switch to limit it for a non-isomorphic build. Open House's UI is English-only and
+// CLI has no switch to limit it for a non-isomorphic build. Home Chooser's UI is English-only and
 // shows no dates, times, numbers or time zones, so the only iLib data it can request is what
 // LocaleInfo (script and direction of the system locale), ScriptInfo and ResBundle ask for:
 //

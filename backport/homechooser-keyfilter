@@ -1,13 +1,13 @@
 #!/bin/sh
-# Open House key filter backport, webOS 6.6.0 to 9.2.1.
+# Home Chooser key filter backport, webOS 6.6.0 to 9.2.1.
 #
 # Installed in /var/lib/webosbrew/init.d/ and run as root by Homebrew Channel at boot.
 #
-#   openhouse-keyfilter          apply: find the diff set whose stock hashes match the live
+#   homechooser-keyfilter          apply: find the diff set whose stock hashes match the live
 #                                files, patch copies of them in /tmp, bind-mount the copies
 #                                over the originals and restart the compositor
-#   openhouse-keyfilter stop     unmount what apply mounted and restart the compositor
-#   openhouse-keyfilter refresh [stock] [norestart]
+#   homechooser-keyfilter stop     unmount what apply mounted and restart the compositor
+#   homechooser-keyfilter refresh [stock] [norestart]
 #                                if mounted, write the stored choice into the mounted copy of
 #                                Settings.qml again and restart the compositor when it changed;
 #                                with `stock`, write an empty id whatever is stored (the watcher
@@ -17,40 +17,40 @@
 #                                keeps its old value, but getHomeAppId reads the settings record
 #                                first, which the watcher has already brought to the new choice,
 #                                so the baked id is only the fallback for the next start)
-#   openhouse-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none
+#   homechooser-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none
 #
 # The data directory holds one directory per release with a manifest.json and the diffs. A set
 # is applied all or nothing. Nothing on the rootfs is modified.
 #
-# The patched Settings.qml carries a `configuredHomeAppId: "@OPENHOUSE_HOME@"` line. After patch
-# the script replaces the placeholder with the id stored in /var/lib/webosbrew/openhouse/home
+# The patched Settings.qml carries a `configuredHomeAppId: "@HOMECHOOSER_HOME@"` line. After patch
+# the script replaces the placeholder with the id stored in /var/lib/webosbrew/homechooser/home
 # (trimmed, and only if it is letters, digits, '.', '-' and '_'; otherwise an empty string), so
 # the key filter has a home id when the settings record has none. The id is baked in only if
 # `applicationManager/getAppInfo` says the app is installed; an uninstalled app, or a sam that
-# does not answer within OPENHOUSE_SAM_WAIT seconds (20), bakes the empty id, which the key filter
-# reads as the stock home. The watcher (openhouse-home-watch) refreshes it later. Called from the
-# init.d entry `openhouse`, which decides whether the backport is enabled.
+# does not answer within HOMECHOOSER_SAM_WAIT seconds (20), bakes the empty id, which the key filter
+# reads as the stock home. The watcher (homechooser-home-watch) refreshes it later. Called from the
+# init.d entry `homechooser`, which decides whether the backport is enabled.
 #
-# Overrides, for tests: OPENHOUSE_LUNA_SEND, OPENHOUSE_SAM_WAIT, OPENHOUSE_SLEEP, OPENHOUSE_TIMEOUT, OPENHOUSE_CHOICE, OPENHOUSE_DATA, OPENHOUSE_ROOT (prefix of the target paths),
-# OPENHOUSE_WORK, OPENHOUSE_LOG, OPENHOUSE_MOUNTS, OPENHOUSE_MOUNT, OPENHOUSE_UMOUNT,
-# OPENHOUSE_SYSTEMCTL, OPENHOUSE_PATCH, OPENHOUSE_SHA256, OPENHOUSE_UNIT.
+# Overrides, for tests: HOMECHOOSER_LUNA_SEND, HOMECHOOSER_SAM_WAIT, HOMECHOOSER_SLEEP, HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHOICE, HOMECHOOSER_DATA, HOMECHOOSER_ROOT (prefix of the target paths),
+# HOMECHOOSER_WORK, HOMECHOOSER_LOG, HOMECHOOSER_MOUNTS, HOMECHOOSER_MOUNT, HOMECHOOSER_UMOUNT,
+# HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_PATCH, HOMECHOOSER_SHA256, HOMECHOOSER_UNIT.
 
-DATA=${OPENHOUSE_DATA:-/media/developer/apps/usr/palm/applications/org.webosbrew.openhouse/backport}
-ROOT=${OPENHOUSE_ROOT:-}
-WORK=${OPENHOUSE_WORK:-/tmp/openhouse-backport}
-LOG=${OPENHOUSE_LOG:-/tmp/openhouse-backport.log}
-MOUNTS=${OPENHOUSE_MOUNTS:-/proc/mounts}
-MOUNT=${OPENHOUSE_MOUNT:-mount}
-UMOUNT=${OPENHOUSE_UMOUNT:-umount}
-SYSTEMCTL=${OPENHOUSE_SYSTEMCTL:-systemctl}
-PATCH=${OPENHOUSE_PATCH:-patch}
-SHA256=${OPENHOUSE_SHA256:-sha256sum}
-UNIT=${OPENHOUSE_UNIT:-surface-manager-daemon.service}
-CHOICE=${OPENHOUSE_CHOICE:-/var/lib/webosbrew/openhouse/home}
-LUNA=${OPENHOUSE_LUNA_SEND:-luna-send}
-SAM_WAIT=${OPENHOUSE_SAM_WAIT:-20}
-SLEEP=${OPENHOUSE_SLEEP:-sleep}
-TIMEOUT=${OPENHOUSE_TIMEOUT-timeout}
+DATA=${HOMECHOOSER_DATA:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/backport}
+ROOT=${HOMECHOOSER_ROOT:-}
+WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-backport}
+LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-backport.log}
+MOUNTS=${HOMECHOOSER_MOUNTS:-/proc/mounts}
+MOUNT=${HOMECHOOSER_MOUNT:-mount}
+UMOUNT=${HOMECHOOSER_UMOUNT:-umount}
+SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
+PATCH=${HOMECHOOSER_PATCH:-patch}
+SHA256=${HOMECHOOSER_SHA256:-sha256sum}
+UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
+CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
+LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
+SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
+SLEEP=${HOMECHOOSER_SLEEP:-sleep}
+TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 TMO_FORM=
 
 log() {

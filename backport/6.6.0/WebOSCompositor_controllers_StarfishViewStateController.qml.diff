@@ -4,7 +4,7 @@
      property var unifiedAppLifeCycleSupport: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["com.webos.surfacemanager.unifiedAppLifeCycleSupport"]}) || {"relaunch": true}
  
      property bool audioGuidance: (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"option", "keys":["audioGuidance"]}) || "") === "on" // false by default
-+    // Open House: start the home app subscription with the compositor
++    // Home Chooser: start the home app subscription with the compositor
 +    property string homeAppId: Settings.getHomeAppId()
      property string lastInputApp: Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv"
  

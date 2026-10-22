@@ -10,7 +10,7 @@ import {ServiceError, errorMessage} from './errors';
 import {createBridgeCall} from './bridge';
 import {createServiceClient} from './service';
 import {ensureRoot, FatalError} from './elevate';
-import {HOME_FILE, KEYFILTER_FLAG} from '../openhouse/persistence';
+import {HOME_FILE, KEYFILTER_FLAG} from '../homechooser/persistence';
 
 // Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
 export const parseOsRelease = (text) => {

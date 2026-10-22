@@ -1,9 +1,9 @@
 #!/bin/sh
-# Tests for the init.d entry `openhouse` with stubbed systemd-run, systemctl and key filter worker.
-# usage: test-openhouse.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
+# Tests for the init.d entry `homechooser` with stubbed systemd-run, systemctl and key filter worker.
+# usage: test-homechooser.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=$HERE/openhouse
+SCRIPT=$HERE/homechooser
 PASS=0
 FAIL=0
 
@@ -16,9 +16,9 @@ cleanup() { rm -rf "${T:?}"; }
 setup() {
     T=$(mktemp -d)
     mkdir -p "$T/app/backport" "$T/bin" "$T/state" "$T/init.d"
-    cp "$SCRIPT" "$T/app/backport/openhouse"
-    printf '#!/bin/sh\necho "keyfilter $* data=$OPENHOUSE_DATA" >> %s/cmds\n' "$T" > "$T/app/backport/openhouse-keyfilter"
-    printf '#!/bin/sh\n' > "$T/app/backport/openhouse-home-watch"
+    cp "$SCRIPT" "$T/app/backport/homechooser"
+    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA" >> %s/cmds\n' "$T" > "$T/app/backport/homechooser-keyfilter"
+    printf '#!/bin/sh\n' > "$T/app/backport/homechooser-home-watch"
     printf '#!/bin/sh\necho "systemd-run $*" >> %s/cmds\n' "$T" > "$T/bin/systemd-run"
     cat > "$T/bin/systemctl" <<STUB
 #!/bin/sh
@@ -28,14 +28,14 @@ STUB
     chmod +x "$T/app/backport/"* "$T/bin/"*
     printf 'VERSION_ID="%s.0.0"\n' "$1" > "$T/os-release"
     : > "$T/cmds"
-    export OPENHOUSE_CHOICE="$T/state/home" OPENHOUSE_KEYFILTER_FLAG="$T/state/keyfilter" \
-           OPENHOUSE_OSRELEASE="$T/os-release" OPENHOUSE_SYSTEMCTL="$T/bin/systemctl" \
-           OPENHOUSE_SYSTEMD_RUN="$T/bin/systemd-run" OPENHOUSE_LOG="$T/log"
-    unset OPENHOUSE_DIR
+    export HOMECHOOSER_CHOICE="$T/state/home" HOMECHOOSER_KEYFILTER_FLAG="$T/state/keyfilter" \
+           HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" \
+           HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" HOMECHOOSER_LOG="$T/log"
+    unset HOMECHOOSER_DIR
 }
-run() { OPENHOUSE_DIR="$T/app/backport" $SH "$T/app/backport/openhouse" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
+run() { HOMECHOOSER_DIR="$T/app/backport" $SH "$T/app/backport/homechooser" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
-RUN_ARGS='systemd-run --unit=openhouse-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c [ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0 openhouse-home-watch'
+RUN_ARGS='systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c [ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0 homechooser-home-watch'
 
 echo "== webOS 5 with a choice: watcher only ($SH)"
 setup 5
@@ -44,8 +44,8 @@ touch "$T/state/keyfilter"
 run
 check "exit 0" rc 0
 check "no key filter on 5" hasnt keyfilter "$T/cmds"
-check "systemd-run with the watcher" has "$RUN_ARGS $T/app/backport/openhouse-home-watch" "$T/cmds"
-check "checked the unit first" has 'systemctl is-active --quiet openhouse-home' "$T/cmds"
+check "systemd-run with the watcher" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
+check "checked the unit first" has 'systemctl is-active --quiet homechooser-home' "$T/cmds"
 cleanup
 
 echo "== no choice: nothing is started"
@@ -123,10 +123,10 @@ cleanup
 echo "== run through the init.d symlink"
 setup 8
 printf 'my.home\n' > "$T/state/home"
-ln -s "$T/app/backport/openhouse" "$T/init.d/openhouse"
-$SH -c "\"$T/init.d/openhouse\"" > "$T/out" 2>&1; echo $? > "$T/rc"
+ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
+$SH -c "\"$T/init.d/homechooser\"" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
-check "data found next to the real script" has "$RUN_ARGS $T/app/backport/openhouse-home-watch" "$T/cmds"
+check "data found next to the real script" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
 cleanup
 
 echo "== app directory gone: quiet exit"
@@ -134,8 +134,8 @@ setup 8
 printf 'my.home\n' > "$T/state/home"
 touch "$T/state/keyfilter"
 mkdir -p "$T/stray"
-cp "$SCRIPT" "$T/stray/openhouse"
-$SH "$T/stray/openhouse" > "$T/out" 2>&1; echo $? > "$T/rc"
+cp "$SCRIPT" "$T/stray/homechooser"
+$SH "$T/stray/homechooser" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "no output" test ! -s "$T/out"
 check "no commands" test ! -s "$T/cmds"
@@ -144,24 +144,24 @@ cleanup
 echo "== the unit's wrapper: app copy, else the runtime copy, else nothing"
 setup 8
 printf 'my.home\n' > "$T/state/home"
-printf '#!/bin/sh\necho "app watcher" >> %s/ran\n' "$T" > "$T/app/backport/openhouse-home-watch"
+printf '#!/bin/sh\necho "app watcher" >> %s/ran\n' "$T" > "$T/app/backport/homechooser-home-watch"
 mkdir -p "$T/rt"
-printf '#!/bin/sh\necho "runtime watcher" >> %s/ran\n' "$T" > "$T/rt/openhouse-home-watch"
+printf '#!/bin/sh\necho "runtime watcher" >> %s/ran\n' "$T" > "$T/rt/homechooser-home-watch"
 # a systemd-run that runs what it is given, after the three --unit/--property options
 printf '#!/bin/sh\nshift 3\nexec "$@"\n' > "$T/bin/systemd-run"
 chmod +x "$T/bin/systemd-run"
-OPENHOUSE_RUNTIME="$T/rt" run
+HOMECHOOSER_RUNTIME="$T/rt" run
 check "app copy runs when the app is there" test "$(cat "$T/ran" 2>/dev/null)" = "app watcher"
 rm -f "$T/ran"
 # call the wrapper the way the unit does, with the app copy missing
 WRAP=$(sed -n "s/.*\/bin\/sh -c '\(.*\)' \\\\$/\1/p" "$SCRIPT")
 check "wrapper text found in the script" test -n "$WRAP"
-/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/openhouse-home-watch"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/homechooser-home-watch"
 check "runtime copy runs when the app copy is missing" test "$(cat "$T/ran" 2>/dev/null)" = "runtime watcher"
 rm -f "$T/ran"
-/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/gone"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/gone"
 check "neither: exit 0, nothing runs" test ! -f "$T/ran"
-/bin/sh -c "$WRAP" openhouse-home-watch "$T/app/backport/gone" "$T/rt/gone"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/gone"
 check "neither: exit status 0" test $? = 0
 cleanup
 

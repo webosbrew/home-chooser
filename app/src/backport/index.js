@@ -4,12 +4,12 @@ import {errorMessage} from '../platform/errors';
 import {
 	KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
 	persistenceStatusCommand
-} from '../openhouse/persistence';
-import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../openhouse';
+} from '../homechooser/persistence';
+import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
 
-export {APP_DIR, INIT_PATH} from '../openhouse/persistence';
+export {APP_DIR, INIT_PATH} from '../homechooser/persistence';
 export const SCRIPT_PATH = KEYFILTER_SCRIPT;
-export const LOG_PATH = '/tmp/openhouse-backport.log';
+export const LOG_PATH = '/tmp/homechooser-backport.log';
 
 // The release gate is the major version; which diff set applies is decided by the script, by hash.
 export const backportApplies = (version) => {
@@ -17,7 +17,7 @@ export const backportApplies = (version) => {
 	return major >= 6 && major <= 9;
 };
 
-// Parse the `key=value` lines of `openhouse-keyfilter status`.
+// Parse the `key=value` lines of `homechooser-keyfilter status`.
 export const parseStatus = (text) => {
 	const out = {};
 	String(text || '').split('\n').forEach((line) => {

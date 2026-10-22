@@ -1,10 +1,10 @@
 #!/bin/sh
-# Tests for openhouse-home-watch with a stub luna-send that plays a scripted subscription stream
+# Tests for homechooser-home-watch with a stub luna-send that plays a scripted subscription stream
 # and records the calls, a fake clock and a fake sleep.
-# usage: test-openhouse-home-watch.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
+# usage: test-homechooser-home-watch.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=$HERE/openhouse-home-watch
+SCRIPT=$HERE/homechooser-home-watch
 PASS=0
 FAIL=0
 
@@ -21,18 +21,18 @@ setup() {
     printf "VERSION_ID=\"$1.0.0\"\n" > "$T/os-release"
     printf "$2" > "$T/home"
     echo 1000 > "$T/clock"
-    printf 'my.home\norg.webosbrew.openhouse\ncom.webos.app.home\n' > "$T/installed"
+    printf 'my.home\norg.webosbrew.homechooser\ncom.webos.app.home\n' > "$T/installed"
     : > "$T/mark"
     : > "$T/kfcalls"
     mkfifo "$T/appsfeed"
     mkdir -p "$T/app/backport/1.0" "$T/init.d"
-    cp "$SCRIPT" "$T/app/backport/openhouse-home-watch"
-    printf '#!/bin/sh\necho "keyfilter $* data=$OPENHOUSE_DATA from=$0" >> %s/kfcalls\n' "$T" > "$T/app/backport/openhouse-keyfilter"
+    cp "$SCRIPT" "$T/app/backport/homechooser-home-watch"
+    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA from=$0" >> %s/kfcalls\n' "$T" > "$T/app/backport/homechooser-keyfilter"
     echo '{"release":"1.0","files":[]}' > "$T/app/backport/1.0/manifest.json"
     echo ' diff' > "$T/app/backport/1.0/x.diff"
-    printf '#!/bin/sh\n' > "$T/app/backport/openhouse"
+    printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
     touch "$T/flag"
-    ln -s "$T/app/backport/openhouse" "$T/init.d/openhouse"
+    ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
     : > "$T/calls"
     : > "$T/stream"
     echo '{"returnValue":true}' > "$T/r-setdefault"
@@ -53,7 +53,7 @@ if [ "$1" = -i ]; then
             "UNINSTALL "*)
                 id=${l#UNINSTALL }
                 grep -vxF "$id" $T/installed > $T/installed.new; mv $T/installed.new $T/installed
-                [ "$id" = org.webosbrew.openhouse ] && rm -rf $T/app ;;
+                [ "$id" = org.webosbrew.homechooser ] && rm -rf $T/app ;;
             "INSTALL "*) echo "${l#INSTALL }" >> $T/installed ;;
             "CHOICE "*) echo "${l#CHOICE }" > $T/home ;;
             "FLAP "*) set=${l#FLAP }; echo "${set#* }" > "$T/flap-${set% *}" ;;
@@ -111,14 +111,14 @@ STUB
     printf '#!/bin/sh\ncat %s/clock\n' "$T" > "$T/bin/clock"
     printf '#!/bin/sh\necho "SLEEP $1" >> %s/calls\nc=$(cat %s/clock); echo $((c + $1)) > %s/clock\n' "$T" "$T" "$T" > "$T/bin/sleep"
     chmod +x "$T/bin/"*
-    export OPENHOUSE_CHOICE="$T/home" OPENHOUSE_LUNA_SEND="$T/bin/luna-send" OPENHOUSE_WATCH_LOG="$T/log" \
-           OPENHOUSE_OSRELEASE="$T/os-release" OPENHOUSE_OVERRIDE="$T/override/o.json" \
-           OPENHOUSE_CLOCK="$T/bin/clock" OPENHOUSE_SLEEP="$T/bin/sleep" OPENHOUSE_TMP="$T/run" \
-           OPENHOUSE_RUNTIME="$T/rt" OPENHOUSE_SHELL="$SH" OPENHOUSE_APPDIR="$T/app" \
-           OPENHOUSE_KEYFILTER_FLAG="$T/flag" OPENHOUSE_INITD="$T/init.d/openhouse" \
-           OPENHOUSE_RECHECK=100000 OPENHOUSE_CONFIRM_DELAY=0 OPENHOUSE_CHECK_MARK="$T/mark"
+    export HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_WATCH_LOG="$T/log" \
+           HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
+           HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
+           HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
+           HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
+           HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark"
 }
-run() { $SH "$T/app/backport/openhouse-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
+run() { $SH "$T/app/backport/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
 writes() { grep -c ' CALL .*/set\(DefaultApp\|SystemSettings\)' "$T/calls"; }
 mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form, and records its use
@@ -352,7 +352,7 @@ echo "== log is capped"
 setup 8 'my.home\n'
 reply '{"home":"my.home"}'
 i=0; while [ $i -lt 400 ]; do echo "old line $i padding padding padding" >> "$T/log"; i=$((i + 1)); done
-OPENHOUSE_LOG_MAX=2000 run
+HOMECHOOSER_LOG_MAX=2000 run
 check "log trimmed" test "$(wc -l < "$T/log")" -lt 300
 cleanup
 
@@ -383,7 +383,7 @@ done
 echo "== chosen app uninstalled and installed again, webOS 5"
 setup 5 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
-printf 'my.home\norg.webosbrew.openhouse\ncom.webos.app.home\ncom.webos.app.fullhome\n' > "$T/installed"
+printf 'my.home\norg.webosbrew.homechooser\ncom.webos.app.home\ncom.webos.app.fullhome\n' > "$T/installed"
 reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
@@ -482,12 +482,12 @@ cleanup
 setup 8 'my.home\n'
 live '{"home":"my.home"}'
 reply '{"home":"my.home"}'
-echo 'FLAP org.webosbrew.openhouse 1' >> "$T/stream"
+echo 'FLAP org.webosbrew.homechooser 1' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "Open House answered again: no restore" has 'Open House is back' "$T/log"
+check "Home Chooser answered again: no restore" has 'Home Chooser is back' "$T/log"
 check "choice file kept" test -f "$T/home"
-check "link kept" test -L "$T/init.d/openhouse"
+check "link kept" test -L "$T/init.d/homechooser"
 check "no write" test "$(writes)" = 0
 cleanup
 
@@ -509,7 +509,7 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo TIMER >> "$T/stream"
-OPENHOUSE_RECHECK=1 run
+HOMECHOOSER_RECHECK=1 run
 check "reverted by the timer" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
 check "mark says timer" has timer "$T/mark"
 cleanup
@@ -517,7 +517,7 @@ cleanup
 echo "== choice changed while the old one is missing"
 setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
-printf 'my.home\nother.home\norg.webosbrew.openhouse\n' > "$T/installed"
+printf 'my.home\nother.home\norg.webosbrew.homechooser\n' > "$T/installed"
 reply '{"home":"my.home"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
@@ -533,7 +533,7 @@ echo "== choice changed while the app is installed: baked id refreshed without a
 for major in 6 8 9; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
-    printf 'my.home\nother.home\norg.webosbrew.openhouse\n' > "$T/installed"
+    printf 'my.home\nother.home\norg.webosbrew.homechooser\n' > "$T/installed"
     reply '{"home":"my.home","kidsApp":"k.app"}'
     echo 'CHOICE other.home' >> "$T/stream"
     reply '{"home":"my.home","kidsApp":"k.app"}'
@@ -542,7 +542,7 @@ for major in 6 8 9; do
     check "$major: record carries the new choice" has '"home":"other.home"' "$T/record"
     check "$major: one refresh without restart" test "$(kfn 'refresh norestart data')" = 1
     check "$major: the start refresh restarts as before" test "$(kfn 'refresh data')" = 1
-    check "$major: the refresh ran from the runtime copy" has "refresh norestart data=$T/rt from=$T/rt/openhouse-keyfilter" "$T/kfcalls"
+    check "$major: the refresh ran from the runtime copy" has "refresh norestart data=$T/rt from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
     cleanup
 done
 
@@ -569,7 +569,7 @@ echo "== choice changed on webOS 5 and 10: the backport is not involved"
 for major in 5 10; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
-    printf 'my.home\nother.home\norg.webosbrew.openhouse\n' > "$T/installed"
+    printf 'my.home\nother.home\norg.webosbrew.homechooser\n' > "$T/installed"
     reply '{"home":"my.home","kidsApp":"k.app"}'
     echo 'CHOICE other.home' >> "$T/stream"
     reply '{"home":"my.home","kidsApp":"k.app"}'
@@ -578,12 +578,12 @@ for major in 5 10; do
     cleanup
 done
 
-echo "== Open House uninstalled"
+echo "== Home Chooser uninstalled"
 for major in 6 9; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
     reply '{"home":"my.home","kidsApp":"k.app"}'
-    echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+    echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
     echo APPS >> "$T/stream"
     reply '{"home":"other"}'
     run
@@ -592,56 +592,56 @@ for major in 6 9; do
     check "$major: other entries kept" has 'kidsApp' "$T/record"
     check "$major: choice file removed" test ! -f "$T/home"
     check "$major: backport flag removed" test ! -f "$T/flag"
-    check "$major: init.d link removed" test ! -L "$T/init.d/openhouse"
+    check "$major: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$major: app directory is gone" test ! -d "$T/app"
     check "$major: key filter stop ran" has "stop data=$T/rt" "$T/kfcalls"
-    check "$major: from the runtime copy" has "from=$T/rt/openhouse-keyfilter" "$T/kfcalls"
+    check "$major: from the runtime copy" has "from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
     check "$major: manifest copied to the runtime" test -f "$T/rt/1.0/manifest.json"
-    check "$major: the watcher itself ran from the runtime" test -f "$T/rt/openhouse-home-watch"
+    check "$major: the watcher itself ran from the runtime" test -f "$T/rt/homechooser-home-watch"
     check "$major: logged" has 'stock Home restored' "$T/log"
     check "$major: nothing written after the restore" test "$(writes)" = 1
     cleanup
 done
 setup 8 'my.home\n'
-printf '#!/bin/sh\n' > "$T/init.d/openhouse-keyfilter-x"
-ln -s "$T/app/backport/openhouse" "$T/init.d/openhouse-keyfilter"
+printf '#!/bin/sh\n' > "$T/init.d/homechooser-keyfilter-x"
+ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser-keyfilter"
 live '{"home":"my.home"}'
 reply '{"home":"my.home"}'
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "the older keyfilter link goes too" test ! -L "$T/init.d/openhouse-keyfilter"
-check "a regular file in init.d is left alone" test -f "$T/init.d/openhouse-keyfilter-x"
+check "the older keyfilter link goes too" test ! -L "$T/init.d/homechooser-keyfilter"
+check "a regular file in init.d is left alone" test -f "$T/init.d/homechooser-keyfilter-x"
 cleanup
 
-echo "== Open House uninstalled, webOS 5"
+echo "== Home Chooser uninstalled, webOS 5"
 setup 5 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "exit 0" rc 0
 check "home names the stock launcher" has '"home":"com.webos.app.home"' "$T/record"
 check "choice removed" test ! -f "$T/home"
-check "link removed" test ! -L "$T/init.d/openhouse"
+check "link removed" test ! -L "$T/init.d/homechooser"
 check "no key filter on 5" test ! -s "$T/kfcalls"
 cleanup
 
-echo "== Open House uninstalled, webOS 10 and later"
+echo "== Home Chooser uninstalled, webOS 10 and later"
 setup 11 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
 mkdir -p "$T/override"
 echo '{"defaultApps":{"categories":{"home":"my.home"}}}' > "$T/override/o.json"
 reply '{"home":"my.home","kidsApp":"k.app"}'
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "exit 0" rc 0
 check "override removed" test ! -f "$T/override/o.json"
 check "rescanned" has debug/rescan "$T/calls"
 check "home removed" nohome
-check "choice, flag and link removed" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/openhouse"
+check "choice, flag and link removed" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 check "no key filter on 11" test ! -s "$T/kfcalls"
 cleanup
 
@@ -651,37 +651,37 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "chosen first: exit 0" rc 0
 check "chosen first: one write in all" test "$(writes)" = 1
 check "chosen first: no home" nohome
 check "chosen first: second revert found nothing to do" has 'nothing to remove' "$T/log"
-check "chosen first: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/openhouse"
+check "chosen first: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 cleanup
 setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "both at once: exit 0" rc 0
 check "both at once: one write" test "$(writes)" = 1
 check "both at once: stock state, nothing left for a later removal to break" nohome
-check "both at once: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/openhouse"
+check "both at once: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 check "both at once: stop ran" has stop "$T/kfcalls"
 cleanup
 setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
-echo 'UNINSTALL org.webosbrew.openhouse' >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "Open House first: exit 0, then my.home may go any time" rc 0
-check "Open House first: record is stock" nohome
-check "Open House first: no choice for anything to enforce" test ! -f "$T/home"
+check "Home Chooser first: exit 0, then my.home may go any time" rc 0
+check "Home Chooser first: record is stock" nohome
+check "Home Chooser first: no choice for anything to enforce" test ! -f "$T/home"
 cleanup
 
 echo "== the restore runs from the runtime copy after the app is gone (unit restart)"
@@ -689,17 +689,17 @@ setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
-check "first run staged the copies" test -f "$T/rt/openhouse-home-watch"
+check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
 touch "$T/flag"
 : > "$T/stream"
-$SH "$T/rt/openhouse-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "record is stock" nohome
 check "choice removed" test ! -f "$T/home"
-check "link removed" test ! -L "$T/init.d/openhouse"
-check "stop from the runtime copy" has "from=$T/rt/openhouse-keyfilter" "$T/kfcalls"
+check "link removed" test ! -L "$T/init.d/homechooser"
+check "stop from the runtime copy" has "from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
 cleanup
 
 echo "== idempotent: a second restore changes nothing"
@@ -727,9 +727,9 @@ for form in new old none; do
     reply '{"home":"my.home","kidsApp":"k.app"}'
     echo 'UNINSTALL my.home' >> "$T/stream"
     echo APPS >> "$T/stream"
-    if [ $form = none ]; then export OPENHOUSE_TIMEOUT=; else mktimeout $form "$T/bin/timeout"; export OPENHOUSE_TIMEOUT="$T/bin/timeout"; fi
+    if [ $form = none ]; then export HOMECHOOSER_TIMEOUT=; else mktimeout $form "$T/bin/timeout"; export HOMECHOOSER_TIMEOUT="$T/bin/timeout"; fi
     run
-    unset OPENHOUSE_TIMEOUT
+    unset HOMECHOOSER_TIMEOUT
     check "$form: removal still detected and reverted" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
     case $form in
         new) check "new: called as timeout 10" has 'timeout 10 ' "$T/bin/timeout.log"; check "new: no -t call used" hasnt 'timeout -t 10' "$T/bin/timeout.log" ;;
@@ -744,7 +744,7 @@ printf '#!/bin/sh\nexit 125\n' > "$T/bin/timeout"; chmod +x "$T/bin/timeout"
 reply '{"home":"my.home"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
-OPENHOUSE_TIMEOUT="$T/bin/timeout" run
+HOMECHOOSER_TIMEOUT="$T/bin/timeout" run
 check "a timeout that works in neither form is not used" test "$(writes)" = 1
 cleanup
 

@@ -1,5 +1,5 @@
 {
-	"name": "org.webosbrew.openhouse",
+	"name": "org.webosbrew.homechooser",
 	"version": "0.1.0",
 	"description": "Choose which app the Home button opens on a rooted LG webOS TV.",
 	"main": "src/index.js",
