@@ -43,14 +43,14 @@ HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.se
 # ---------------------------------------------------------------------------------------------
 MATRIX = [
     # release, vm, elevation, sure, note
-    ('5.x', 'w20l-jhericurl', 'luna', 'docs', 'W20L 04.63.25.01 = 5.6.1 (study table); w20h-jhericurl is also webOS 5'),
+    ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
     ('6.x', 'w21p-kisscurl', 'luna', 'docs', "W21P 03.70.25.01 = 6.6.0; owned by the Dock project: ask before use; end state keeps Dock selected"),
-    ('7.x', 'w22p-mullet', 'luna', 'docs', 'W22P 04.60.90.01 = 7.6.0 (study table)'),
-    ('8.x', 'w22o-number1', 'luna', 'listing', 'webOS 23 (13.30.56.01); the study names this VM as the 8.3.0 one but its os-release was not read'),
+    ('7.x', 'w22p-mullet', 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
+    ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
     ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
-    ('10.x', 'w22o-ponytail-us', 'luna', 'docs', 'W22O 33.31.61.01 = 10.3.1 (study table)'),
-    ('11.x', 'w22o-queue-us', 'root-shell', 'docs', 'W22O 43.21.89.01 = 11.2.0 (study results); w22o-queue and w22o-queue-jp run the same firmware'),
-    ('12.x', 'w24g-spacebuns', 'root-shell', 'UNSURE', "the only VM beanjar lists as 'webOS 12' (02.68.80.01, W24G); no os-release read, no doc names it. If it is not 12.x, there is no 12.x VM"),
+    ('10.x', 'w22o-ponytail-us', 'luna', 'verified', 'W22O 33.31.61.01 = 10.3.1; os-release read 2026-10-22'),
+    ('11.x', 'w22o-queue-us', 'root-shell', 'verified', 'W22O 43.21.89.01 = 11.2.0; os-release read 2026-10-22; w22o-queue and w22o-queue-jp run the same firmware'),
+    ('12.x', 'w24g-spacebuns', 'root-shell', 'verified', 'W24G 02.68.80.01 = 12.0.0; os-release read 2026-10-22'),
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
@@ -150,8 +150,14 @@ class BeanjarHost:
                % (key, sock))
         return self.sh(cmd, 30)
 
+    def viewer_open(self, vm):
+        return self.beanjar('viewer', 'open', vm, timeout=60)
+
+    def viewer_close(self, vm):
+        return self.beanjar('viewer', 'close', vm, timeout=60)
+
     def screenshot(self, local_path):
-        """The VM viewer as the Pi shows it (whole Wayland output; no crop geometry)."""
+        """The Pi desktop (whole Wayland output; no crop geometry, so the viewer window may sit anywhere on it)."""
         tmp = '/tmp/e2e-shot-%d.png' % os.getpid()
         rc, out = self.sh('export XDG_RUNTIME_DIR=/run/user/$(id -u) WAYLAND_DISPLAY=wayland-0; '
                           'grim %s' % tmp, 30)
@@ -446,17 +452,24 @@ class Scenario:
         self.launcher = args.launcher
         self.shot_n = 0
         self.insp = None
+        self.capture_broken = False
         self.major = 0  # webOS TV release, 5..12
 
     # -- helpers
     def shot(self, label):
+        """A guest screenshot (ares-do screenshot) and, always, the Pi desktop with the viewer window.
+        com.webos.service.capture fails on webOS 5 (timeout) and 10.x (ERROR_INTERNAL); after the
+        first failure it is not tried again, and the viewer shot is the only view of the TV."""
         self.shot_n += 1
         path = os.path.join(self.rec.outdir, '%02d-%s.png' % (self.shot_n, label))
-        rc, out = self.dev.screenshot(path)
-        self.rec.say('screenshot %s (%s)' % (os.path.basename(path), 'ok' if rc == 0 else out.strip()))
-        if self.a.viewer_shots:
-            ok, out = self.host.screenshot(path.replace('.png', '-viewer.png'))
-            self.rec.say('viewer screenshot: %s' % ('ok' if ok else out.strip()))
+        if not self.capture_broken:
+            rc, out = self.dev.screenshot(path)
+            self.rec.say('screenshot %s (%s)' % (os.path.basename(path), 'ok' if rc == 0 else out.strip()))
+            if rc != 0:
+                self.capture_broken = True
+        ok, out = self.host.screenshot(path.replace('.png', '-viewer.png'))
+        self.rec.say('viewer screenshot %s: %s' % (os.path.basename(path).replace('.png', '-viewer.png'),
+                                                   'ok' if ok else out.strip()))
         return path
 
     def press(self, *keys):
@@ -485,6 +498,44 @@ class Scenario:
                 return v
             time.sleep(every)
         return v
+
+    def ensure_key_focus(self, rows):
+        """Remote keys must reach Home Chooser.  A system popup (seen on w22o-ponytail-us 10.3.1 right
+        after every boot: the OLED "screen restoration" popup of com.webos.app.factorywin, buttons
+        Start Now (focused by default) and Cancel; BACK does not dismiss it) takes key focus and
+        the list never moves.  The runner does NOT press OK on a system popup (Start Now restarts
+        the TV for 5 minutes): it records the evidence (a probe key, the oledepl condition, a
+        screenshot) and waits up to --wait-popup seconds for someone to dismiss it by hand, then
+        fails the run."""
+        r = self.rec
+        end = time.time() + self.a.wait_popup
+        first = True
+        while True:
+            ui = self.ui() or {}
+            cur = rows.index(ui['row']) if ui.get('row') in rows else 0
+            k1, k2 = ('DOWN', 'UP') if cur + 1 < len(rows) else ('UP', 'DOWN')
+            self.press(k1)
+            moved = (self.ui() or {}).get('row')
+            self.press(k2)
+            if moved != ui.get('row'):
+                if not first:
+                    r.say('key focus restored: the popup was dismissed')
+                return True
+            if first:
+                fg = self.dev.foreground()
+                epl = self.dev.luna('luna://com.webos.service.oledepl/isPixelRefresherCondition')
+                self.shot('keys-blocked')
+                r.say('keys do not reach Home Chooser (focus stayed on %s); foreground %s; oledepl '
+                      'isPixelRefresherCondition %s; a system popup probably holds key focus (see the '
+                      'keys-blocked screenshot); dismiss it by hand with Cancel, waiting up to %ds'
+                      % (ui.get('row'), fg[1], epl[:160], self.a.wait_popup))
+                first = False
+            if time.time() >= end:
+                break
+            time.sleep(10)
+        r.check('remote keys reach Home Chooser (no system popup holding key focus)', False,
+                'focus did not move after a probe key; see the keys-blocked screenshot')
+        raise RuntimeError('keys blocked: a system popup probably holds key focus; not pressing OK on it')
 
     def watcher_active(self):
         rc, out = self.dev.sh('systemctl is-active homechooser-home')
@@ -530,7 +581,8 @@ class Scenario:
         if running is None:
             lines.append('running: unreadable: ' + out[:200])
         else:
-            for label, aid in (('previous home', STOCK), ('chosen launcher', self.launcher)):
+            homes = [('previous home', STOCK)] + ([('5.x fullhome', 'com.webos.app.fullhome')] if self.major == 5 else [])
+            for label, aid in homes + [('chosen launcher', self.launcher)]:
                 a = running.get(aid)
                 if not a:
                     lines.append('%-15s %-28s not running' % (label, aid))
@@ -581,10 +633,17 @@ class Scenario:
         a launcher counts when it is running (it was closed first) or in the foreground: a
         launcher bar such as Dock is an overlay window, so the app underneath stays "foreground"."""
         r = self.rec
+        if expect == STOCK and self.major == 5:
+            # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
+            # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
+            # a launcher: closed first, running afterwards.
+            expect = 'com.webos.app.fullhome'
         if expect != STOCK:
             self.dev.close(expect)
             time.sleep(3)
-            r.say('%s: %s running before the press: %s' % (label, expect, expect in self.running_ids()))
+            pre = expect in self.running_ids()
+            r.say('%s: %s running before the press: %s%s' % (label, expect, pre,
+                  ' (close did not stop it: this check does not discriminate)' if pre else ''))
         if from_app:
             self.front_app()
         self.press('HOME')
@@ -698,6 +757,8 @@ class Scenario:
             raise RuntimeError('UI never listed the launcher; cannot continue')
         r.say('UI driven: initial focus on %s' % ui.get('row'))
         rows = ui['rows']
+        self.ensure_key_focus(rows)
+        ui = self.ui() or ui
         # move focus to the launcher's row
         for _ in range(len(rows) + 2):
             ui = self.ui() or {}
@@ -705,6 +766,8 @@ class Scenario:
                 break
             cur, tgt = rows.index(ui['row']) if ui.get('row') in rows else 0, rows.index(self.launcher)
             self.press('DOWN' if tgt > cur else 'UP')
+            r.say('focus move: was %s, now %s; foreground %s' % (ui.get('row'), (self.ui() or {}).get('row'),
+                                                                 self.dev.foreground()[0]))
         ui = self.ui() or {}
         r.check('focus is on the launcher row', ui.get('row') == self.launcher, json.dumps(ui))
         self.shot('row-focused')
@@ -892,12 +955,23 @@ def ensure_devices(host, vm, rec):
             e['host'] = addr
             changed = True
     dv = byname.get(vm)
-    if dv is not None and dv.get('host') != addr:
+    if dv is None:
+        # the devmode device (prisoner, 9922) with the VM's devmode key, fetched from the host
+        dkeyname = 'beanjar-%s_devmode' % vm
+        dkeypath = os.path.expanduser('~/.ssh/' + dkeyname)
+        if not os.path.exists(dkeypath):
+            if not host.fetch('%s/identity/devmode_rsa' % info['dir'], dkeypath):
+                raise SystemExit('could not fetch the devmode key of %s' % vm)
+            os.chmod(dkeypath, 0o600)
+            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
+        devs.append({'profile': 'ose', 'name': vm, 'host': addr, 'port': 9922, 'username': 'prisoner',
+                     'privateKey': {'openSsh': dkeyname}, 'files': 'sftp'})
+        rec.say('added ares device %s -> %s:9922' % (vm, addr))
+        changed = True
+    elif dv.get('host') != addr:
         rec.say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
         dv['host'] = addr
         changed = True
-    if dv is None:
-        raise SystemExit('no ares device %s (use ares-setup-device with the devmode key)' % vm)
     if changed:
         json.dump(devs, open(p, 'w'), indent=2)
 
@@ -947,8 +1021,9 @@ def main():
     ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',
                     help='remote-key path: QEMU sendkey on the host (default) or ares-do key')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
-    ap.add_argument('--viewer-shots', action='store_true', help='also grab the Pi viewer with grim')
     ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
+    ap.add_argument('--wait-popup', type=int, default=0,
+                    help='seconds to wait for a system popup holding key focus to be dismissed by hand')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()
@@ -972,6 +1047,8 @@ def main():
             raise SystemExit('ares-do not on PATH')
         prepare_vm(host, vm, rec)
         started = True
+        rc, out = host.viewer_open(vm)  # the only view of the TV where guest capture fails
+        rec.say('beanjar viewer open: rc=%s %s' % (rc, out.strip()[-120:]))
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
         end = time.time() + 120
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
@@ -992,6 +1069,7 @@ def main():
         if scenario and scenario.insp:
             scenario.insp.close()
         if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
+            host.viewer_close(vm)
             rc, out = host.stop(vm)
             rec.say('beanjar stop: %s' % out.strip()[-200:])
         elif started and vm in KEEP_LAUNCHER_VMS:
