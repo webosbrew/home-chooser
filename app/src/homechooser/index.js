@@ -13,7 +13,8 @@ export const OVERRIDE_PATH = '/var/webos-profile/override/org.webosbrew.homechoo
 
 const SETTINGS = 'luna://com.webos.settingsservice';
 const SAM = 'luna://com.webos.applicationManager';
-const PROFILE = 'luna://com.webos.service.systemprofile';
+// The system profile is reached through the service's profileGet / profileRescan commands (luna-send
+// run by root): the service's own luna identity is denied getProfiles (12.x) and debug/rescan (11.x, 12.x).
 
 export const STOCK_LABELS = {
 	'com.webos.app.home': 'Stock Home',
@@ -145,10 +146,20 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 
 	const readRecord = readDefaultApps;
 
+	// luna-send exits 0 whatever the reply, so the reply says whether the call worked.
+	const lunaSend = async (run, command) => {
+		const out = await run.run(command);
+		const reply = parseMaybeJson(String((out && out.stdout) || '').trim());
+		if (!reply) throw new Error(`${command}: no JSON reply from luna-send`);
+		if (reply.returnValue === false) throw new Error(`${command}: ${reply.errorText || 'the call failed'}`);
+		return reply;
+	};
+	const rescan = (run) => lunaSend(run, 'profileRescan');
+
 	const readProfile = async (run) => {
 		if (!info.usesProfile) return {profile: null, error: null};
 		try {
-			const reply = await run.luna(`${PROFILE}/getProfiles`, {names: ['defaultApps']});
+			const reply = await lunaSend(run, 'profileGet');
 			const profile = extractDefaultAppsProfile(reply);
 			return profile ? {profile, error: null} : {profile: null, error: 'getProfiles reply has no defaultApps.categories'};
 		} catch (e) {
@@ -273,7 +284,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				if (info.usesProfile) {
 					if (!state.profile) throw new Error(`Cannot read the defaultApps profile: ${state.profileError}`);
 					await run.write(OVERRIDE_PATH, JSON.stringify(buildOverride(state.profile, appId), null, 2));
-					await run.luna(`${PROFILE}/debug/rescan`, {});
+					await rescan(run);
 					const after = await readProfile(run);
 					const home = after.profile && after.profile.categories && after.profile.categories.home;
 					if (home !== appId) throw new Error(`The system profile still names ${home || 'no home app'} after the rescan`);
@@ -329,7 +340,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				}
 				if (info.usesProfile) {
 					await run.remove(OVERRIDE_PATH);
-					await run.luna(`${PROFILE}/debug/rescan`, {});
+					await rescan(run);
 					await readProfile(run);
 				}
 				if (info.needsKeyFilterBackport) {

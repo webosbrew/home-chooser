@@ -26,13 +26,32 @@ const profileReply = (home = STOCK, extra = {}) => ({
 	profiles: {defaultApps: Object.assign({_packageIncluded: true, _configuration: 'defaultApps.json', support: true, categories: {home, aod: 'com.webos.app.lifeonscreen'}}, extra)}
 });
 
+const GETPROFILE = ['luna://com.webos.service.systemprofile/getProfiles', {names: ['defaultApps']}];
+const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
+
 // A fake TV: `record` is general/defaultApps (undefined = never written); `profile` the getProfiles reply.
 const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => {
 	const luna = [];
 	const files = [];
 	const commands = [];
 	const calls = [];
+	// The service's own luna identity is denied systemprofile (12.x getProfiles, 11.x/12.x debug/rescan):
+	// the app has to reach it through the profileGet / profileRescan commands.
+	const profileCall = (uri, payload) => {
+		calls.push(['luna', uri, payload]);
+		luna.push([uri, payload]);
+		const out = (reply) => ({stdout: JSON.stringify(reply) + '\n', stderr: ''});
+		if (uri.endsWith('/getProfiles')) {
+			if (failures.getProfiles) return out(failures.getProfiles);
+			if (!profile) return out({returnValue: false, errorText: 'Service does not exist: com.webos.service.systemprofile'});
+			return out(profile);
+		}
+		return out(failures.rescan || {returnValue: true});
+	};
 	const rootLuna = async (uri, payload) => {
+		if (uri.startsWith('luna://com.webos.service.systemprofile/')) {
+			throw new ServiceError({returnValue: false, errorText: 'Denied method call "' + uri.split('/').pop() + '" for category "/"'});
+		}
 		calls.push(['luna', uri, payload]);
 		luna.push([uri, payload]);
 		const m = uri.split('/').pop();
@@ -49,11 +68,6 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => 
 				record = Object.assign({}, record, {[payload.category]: payload.appId});
 				return {returnValue: true};
 			case 'com.webos.applicationManager/closeByAppId':
-				return {returnValue: true};
-			case 'com.webos.service.systemprofile/getProfiles':
-				if (!profile) throw new ServiceError({returnValue: false, errorText: 'Service does not exist: com.webos.service.systemprofile'});
-				return profile;
-			case 'com.webos.service.systemprofile/debug/rescan':
 				return {returnValue: true};
 			default:
 				throw new Error('unexpected call ' + uri);
@@ -73,6 +87,8 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => 
 		profile = profileReply(STOCK);
 	};
 	const exec = async (command) => {
+		if (command === 'profileGet') return profileCall(GETPROFILE[0], GETPROFILE[1]);
+		if (command === 'profileRescan') return profileCall(RESCAN[0], RESCAN[1]);
 		calls.push(['exec', command]);
 		commands.push(command);
 		return {stdout: '', stderr: ''};
@@ -88,8 +104,6 @@ const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'g
 const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSettings', {category: 'general', settings: {defaultApps}}];
 const SETDEFAULT = (appId) => ['luna://com.webos.applicationManager/setDefaultApp', {category: 'home', appId}];
 const CLOSE = (id) => ['luna://com.webos.applicationManager/closeByAppId', {id, forceMode: true}];
-const GETPROFILE = ['luna://com.webos.service.systemprofile/getProfiles', {names: ['defaultApps']}];
-const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
 
 describe('releaseInfo', () => {
 	test.each([
@@ -267,6 +281,32 @@ describe('apply', () => {
 			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(), 'luna:closeByAppId'
 		]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
+	});
+
+	test('11.2.0 / 12.0.0: the profile is read and rescanned through root commands, never through call', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply()});
+		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(tv.luna.map((c) => c[0].split('/').pop())).toEqual(['getSystemSettings', 'getProfiles', 'setDefaultApp', 'rescan', 'getProfiles', 'closeByAppId']);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
+	});
+
+	test('a false reply from the rescan command fails the apply before the boot entry', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply(), failures: {rescan: {returnValue: false, errorText: 'rescan refused'}}});
+		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
+		expect(res.ok).toBe(false);
+		expect(res.errors).toEqual(['profileRescan: rescan refused']);
+		expect(tv.commands).toEqual([]);
+	});
+
+	test('a denied getProfiles stops the apply before the override and the boot entry', async () => {
+		const denied = {returnValue: false, errorText: 'Denied method call "getProfiles" for category "/"'};
+		const tv = fakeTV({record: {}, profile: profileReply(), failures: {getProfiles: denied}});
+		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
+		expect(res.ok).toBe(false);
+		expect(res.errors).toEqual(['Cannot read the defaultApps profile: profileGet: Denied method call "getProfiles" for category "/"']);
+		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE]);
+		expect(tv.commands).toEqual([]);
 	});
 
 	test('10.3.1: previous home is the record home, not the profile home', async () => {

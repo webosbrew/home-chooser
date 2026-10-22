@@ -45,8 +45,6 @@ static const struct {
 	{"luna://com.webos.applicationManager/closeByAppId", HC_CALL_PLAIN},
 	{"luna://com.webos.settingsservice/getSystemSettings", HC_CALL_SETTINGS_GET},
 	{"luna://com.webos.settingsservice/setSystemSettings", HC_CALL_SETTINGS_SET},
-	{"luna://com.webos.service.systemprofile/getProfiles", HC_CALL_PLAIN},
-	{"luna://com.webos.service.systemprofile/debug/rescan", HC_CALL_PLAIN},
 	{NULL, HC_CALL_DENIED}
 };
 
@@ -74,6 +72,10 @@ static const hc_command COMMANDS[] = {
 	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
 	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
 	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
+	/* systemprofile denies getProfiles (12.x) and debug/rescan (11.x, 12.x) to this service's own luna
+	 * identity, but allows them to luna-send run by root: exact URI and payload, nothing else. */
+	{"profileGet", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
+	{"profileRescan", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
 	{"watchLog", {NULL}, 0, true, true},
 	{NULL, {NULL}, 0, false, false}
 };

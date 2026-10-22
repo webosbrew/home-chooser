@@ -73,7 +73,10 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   `launchDefaultApp`, `closeByAppId`; `settingsservice` `getSystemSettings` and
   `setSystemSettings`, only for category `general` and the single key `defaultApps` (the `keys`
   array of a get; the keys of `settings` of a set); `com.webos.service.systemprofile`
-  `getProfiles` and `debug/rescan`. Anything else is `notAllowed`. The payload is forwarded as is.
+  Anything else is `notAllowed`. The payload is forwarded as is. The system profile is not here: the
+  service's own luna identity is denied `systemprofile/getProfiles` (12.x) and `systemprofile/debug/rescan`
+  (11.x and 12.x) (`Denied method call "rescan" for category "/debug"`), while `luna-send` run by root is
+  not, so those two calls are the `profileGet` and `profileRescan` commands below.
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/keyfilter`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
@@ -105,6 +108,8 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 | `keyfilterRefresh` | same with `refresh` | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
+| `profileGet` | `/usr/bin/luna-send -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
+| `profileRescan` | `/usr/bin/luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
 | `watchLog` | not run: the last 5 lines of `/tmp/homechooser-home.log` | - |
 
 A non-zero exit of any other command is `errorCode: "exitStatus"` with the output attached; a

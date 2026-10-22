@@ -54,8 +54,9 @@ static void test_calls(void)
 	CHECK(hc_call_lookup("luna://com.webos.applicationManager/setDefaultApp") == HC_CALL_PLAIN);
 	CHECK(hc_call_lookup("luna://com.webos.applicationManager/launchDefaultApp") == HC_CALL_PLAIN);
 	CHECK(hc_call_lookup("luna://com.webos.applicationManager/closeByAppId") == HC_CALL_PLAIN);
-	CHECK(hc_call_lookup("luna://com.webos.service.systemprofile/getProfiles") == HC_CALL_PLAIN);
-	CHECK(hc_call_lookup("luna://com.webos.service.systemprofile/debug/rescan") == HC_CALL_PLAIN);
+	/* systemprofile goes through the profileGet / profileRescan commands, not call */
+	CHECK(hc_call_lookup("luna://com.webos.service.systemprofile/getProfiles") == HC_CALL_DENIED);
+	CHECK(hc_call_lookup("luna://com.webos.service.systemprofile/debug/rescan") == HC_CALL_DENIED);
 	CHECK(hc_call_lookup("luna://com.webos.settingsservice/getSystemSettings") == HC_CALL_SETTINGS_GET);
 	CHECK(hc_call_lookup("luna://com.webos.settingsservice/setSystemSettings") == HC_CALL_SETTINGS_SET);
 	CHECK(hc_call_lookup(NULL) == HC_CALL_DENIED);
@@ -91,6 +92,15 @@ static void test_commands(void)
 	CHECK(c && c->tolerant && strcmp(c->argv[2], "homechooser-home") == 0);
 	c = hc_command_lookup("watcherActive");
 	CHECK(c && c->tolerant && strcmp(c->argv[1], "is-active") == 0);
+	c = hc_command_lookup("profileGet");
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
+		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/getProfiles") == 0
+		&& strcmp(c->argv[4], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[5]);
+	c = hc_command_lookup("profileRescan");
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
+		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/debug/rescan") == 0
+		&& strcmp(c->argv[4], "{}") == 0 && !c->argv[5]);
+	CHECK(!hc_command_lookup("luna-send"));
 	c = hc_command_lookup("watchLog");
 	CHECK(c && c->native_tail);
 	CHECK(!hc_command_lookup(NULL));
@@ -98,7 +108,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive"};
+	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);
