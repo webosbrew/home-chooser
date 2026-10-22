@@ -73,6 +73,11 @@ and backport docs.
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
    `init.d/homechooser` links into the installed app; on 6 to 9 the backport targets are mounted
    and the flag file exists, elsewhere not; on 10 and later the profile override exists.
+   Also asserted: at the first open after a fresh install there is no error toast (WAM's
+   `localStorage` outlives `ares-install --remove`, so a `homechooser.pending` marker left by an
+   earlier run must not read as a failed apply; the runner also plants such a marker through the
+   inspector, reopens, and asserts no toast and the marker cleared), and after the
+   apply the panel is opened again with no error toast and the chosen row ticked.
 3. Home from an ordinary app (Homebrew Channel; docs T4): the launcher is running after having
    been closed first, or in front (a launcher bar like Dock is an overlay window, so the app
    beneath stays "foreground"). A press with the stock home in front is only observed.

@@ -421,16 +421,40 @@ describe('Home Chooser screen', () => {
 
 		test('next launch: the marker matches the current home, so the success toast shows once and the marker clears', async () => {
 			pending('org.plain.launcher');
-			mountApp(makeEnv({currentHome: 'org.plain.launcher'}));
+			mountApp(makeEnv({currentHome: 'org.plain.launcher', stored: 'org.plain.launcher'}));
 			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
 		});
 
 		test('next launch: the marker does not match, so the failure toast shows', async () => {
+			// the apply stored the choice but the home is not it: a genuine failure
 			pending('org.plain.launcher');
-			mountApp(makeEnv({currentHome: 'org.fancy.launcher'}));
+			mountApp(makeEnv({currentHome: 'org.fancy.launcher', stored: 'org.plain.launcher'}));
 			expect(await screen.findByText("Couldn't set the Home app.")).toBeTruthy();
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('next launch: a marker from a previous install (nothing stored) is dropped without a toast', async () => {
+			pending('org.plain.launcher');
+			mountApp(makeEnv({currentHome: null, stored: ''}));
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByRole('status')).toBeNull();
+			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('next launch: a marker overtaken by another stored choice is dropped without a toast', async () => {
+			pending('org.plain.launcher');
+			mountApp(makeEnv({currentHome: 'org.fancy.launcher', stored: 'org.fancy.launcher'}));
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByRole('status')).toBeNull();
+			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
+		});
+
+		test('next launch: a stale restore marker with a launcher stored is dropped without a toast', async () => {
+			pending('com.webos.app.home');
+			mountApp(makeEnv({currentHome: 'org.fancy.launcher', stored: 'org.fancy.launcher'}));
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByRole('status')).toBeNull();
 		});
 
 		test('next launch after a restore: stock home is the success', async () => {

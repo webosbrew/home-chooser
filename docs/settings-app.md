@@ -33,10 +33,14 @@ Home Chooser is in English only.
 * **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
   launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
   the change, and confirming applies the choice first and installs the backport last (the restart is the last step, so nothing of the choice depends on code that runs after it). That restart may
-  close the panel. Before it, the app writes a small marker to `localStorage` (`homechooser.pending`,
-  the id being chosen); on the next launch it reads the actual current home, shows the result toast
-  once ("Done. Press Home to try it." if the home is the one chosen, otherwise "Couldn't set the Home
-  app.") and clears the marker. A run that finishes in the same window clears the marker itself. Restoring LG Home
+  close the panel. Before it (and after the apply has gone through and stored the choice), the app writes a small marker to `localStorage` (`homechooser.pending`,
+  the id being chosen); on the next launch it reads the actual current home and the stored choice and
+  judges the marker once, then clears it. The marker belongs to a live apply only when the stored choice
+  equals its id (empty for a restore): then the toast is "Done. Press Home to try it." if the home is the
+  one chosen, otherwise "Couldn't set the Home app." Any other stored choice means the marker is stale
+  (WAM keeps an app's `localStorage` in `/var/lib/wam/Default/Local Storage` across `ares-install --remove`, while
+  the uninstall cleanup removes the stored choice, so a marker left by a cut-short run shows up on the next
+  install) and it is dropped without a toast. A run that finishes in the same window clears the marker itself. Restoring LG Home
   removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
   the dialog says the Home button can't be changed on this TV's software and applies nothing.
 * **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.

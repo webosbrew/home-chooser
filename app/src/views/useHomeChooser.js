@@ -30,6 +30,20 @@ export const patchStateOf = (backport, status) => {
 	return status.match ? 'ready' : 'nomatch';
 };
 
+// What a marker left by an earlier window means now. The marker is only written after the apply
+// went through, and the apply stores the choice first, so a marker that belongs to a live apply
+// has the stored choice equal to its id (empty for a restore). When the stored choice is something
+// else, the marker is from an earlier install (WAM's localStorage outlives an uninstall, the
+// uninstall cleanup removed the choice) or was overtaken by a later choice: it says nothing about
+// this launch, so it is dropped without a toast. 'done', 'failed' or 'stale'.
+export const judgePending = (left, state) => {
+	if (state && state.stored !== null && state.stored !== undefined) {
+		const mine = left.id === STOCK_HOME ? state.stored === '' : state.stored === left.id;
+		if (!mine) return 'stale';
+	}
+	return state && state.home === left.id ? 'done' : 'failed';
+};
+
 // One plain sentence for the screen; the detail is in the log.
 export const plainFailure = (what, errors) => {
 	const text = (errors || []).join(' ');
@@ -73,7 +87,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		setCurrentId((state && (state.profileHome || state.recordHome)) || STOCK_HOME);
 		setStoredId(per.persistence ? per.persistence.stored : '');
 		setPatchStatus(patchRes ? patchRes.status : null);
-		return {home: (state && (state.profileHome || state.recordHome)) || STOCK_HOME};
+		return {
+			home: (state && (state.profileHome || state.recordHome)) || STOCK_HOME,
+			stored: per.persistence ? per.persistence.stored : null // null: the stored choice could not be read
+		};
 	};
 
 	const refreshWith = useCallback(async (e) => {
@@ -101,10 +118,11 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			const left = readPending();
 			if (left) {
 				clearPending();
-				const done = state && state.home === left.id;
+				const verdict = judgePending(left, state);
 				// eslint-disable-next-line no-console
-				console.log(`${LOG_PREFIX} pending: ${left.id} -> ${state ? state.home : 'unknown'} (${done ? 'done' : 'not applied'})`);
-				setToast(done ? {ok: true, text: DONE_TEXT} : {ok: false, text: "Couldn't set the Home app."});
+				console.log(`${LOG_PREFIX} pending: ${left.id} -> ${state ? state.home : 'unknown'}, stored '${state && state.stored}' (${verdict})`);
+				if (verdict === 'done') setToast({ok: true, text: DONE_TEXT});
+				else if (verdict === 'failed') setToast({ok: false, text: "Couldn't set the Home app."});
 			}
 			setPhase('ready');
 		}, (err) => {

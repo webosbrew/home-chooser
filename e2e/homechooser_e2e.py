@@ -383,6 +383,13 @@ FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.clos
             "dialog:(function(){var d=document.querySelector('[role=dialog]');return d?d.getAttribute('aria-label'):null})(),"
             "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
             "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
+PLANT_JS = ("(function(){localStorage.setItem('homechooser.pending',JSON.stringify("
+            "{id:'%s',title:'stale',at:Date.now()-86400000}));return localStorage.getItem('homechooser.pending')})()")
+MARKER_JS = "String(localStorage.getItem('homechooser.pending'))"
+
+# The row carrying the check mark (aria-label "Current"), by data-app-id; '' when none.
+TICK_JS = ("(function(){var c=document.querySelector('[data-app-id] [aria-label=Current]');"
+           "var r=c&&c.closest('[data-app-id]');return r?r.getAttribute('data-app-id'):''})()")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -659,6 +666,33 @@ class Scenario:
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
         self.strat.verify(d, r)
         self.shot('app-open')
+        time.sleep(4)  # the result toast of a left marker is set just after the list appears
+        first = self.ui() or {}
+        r.check('first open after a fresh install: no error toast (a marker left by an earlier install is dropped)',
+                not (first.get('toast') or '').startswith("Couldn't"), 'toast: %r' % first.get('toast'))
+        # a marker as an earlier install's cut-short run leaves it (WAM keeps localStorage across an
+        # uninstall; the choice was removed with it): the next open must drop it without a toast
+        r.note('planted stale marker', self.insp.evaluate(PLANT_JS % self.launcher))
+        d.close(APP_ID)
+        time.sleep(3)
+        d.launch(APP_ID)
+        toasts = []
+
+        def listed_stale():
+            u = self.ui()
+            if u and u.get('toast'):
+                toasts.append(u['toast'])
+            return u if u and self.launcher in (u.get('rows') or []) else None
+        self.wait(listed_stale, 120, every=1)
+        time.sleep(3)
+        stale = self.ui() or {}
+        if stale.get('toast'):
+            toasts.append(stale['toast'])
+        self.shot('stale-marker')
+        r.check('a stale marker (nothing stored) is dropped: no toast at all', not toasts, 'toasts: %r' % toasts)
+        r.check('the stale marker is cleared', self.insp.evaluate(MARKER_JS) in (None, '', 'null'),
+                'marker: %r' % self.insp.evaluate(MARKER_JS))
+        ui = stale if stale.get('rows') else ui
         r.check('the list shows the launcher row (data-app-id)', bool(ui), 'DOM: %s' % json.dumps(ui))
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
@@ -711,6 +745,28 @@ class Scenario:
             r.note('override', d.sh('cat %s' % OVERRIDE)[1])
         r.check('the toast said Done (or the panel restarted)', toast in (None, 'Done. Press Home to try it.'),
                 repr(toast))
+        # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
+        d.close(APP_ID)
+        time.sleep(3)
+        d.launch(APP_ID)
+        seen = []
+
+        def listed():
+            u = self.ui()
+            if u and u.get('toast'):
+                seen.append(u['toast'])
+            return u if u and self.launcher in (u.get('rows') or []) else None
+        again = self.wait(listed, 120, every=1)
+        time.sleep(1)
+        again = self.ui() or again or {}
+        r.note('toasts seen while re-opening', repr(seen + [again.get('toast')]))
+        again['toast'] = again.get('toast') or next((t for t in seen if t.startswith("Couldn't")), None)
+        self.shot('reopened')
+        r.check('re-open after the apply: no error toast', not (again.get('toast') or '').startswith("Couldn't"),
+                'toast: %r' % again.get('toast'))
+        ticked = self.insp.evaluate(TICK_JS) if self.insp else None
+        r.check('re-open after the apply: the chosen row is ticked', ticked == self.launcher,
+                'ticked rows: %r; DOM: %s' % (ticked, json.dumps(again)))
         d.close(APP_ID)
         if self.insp:
             self.insp.close()
