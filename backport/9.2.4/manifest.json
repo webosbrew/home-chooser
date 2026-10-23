@@ -1,6 +1,6 @@
 {
   "release": "9.2.4",
-  "verified": "static",
+  "verified": "vm",
   "files": [
     {
       "path": "/usr/lib/qml/KeyFilters/appLaunch.js",

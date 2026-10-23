@@ -30,7 +30,7 @@ for the build.
 | 03.30.18.01 | S23Z (monitor) | 8.3.0-1063 | `backport/8.3.0-s23z` | static |
 | 13.40.90.01, 13.41.12.01, 13.41.13.01, 13.40.76.01 | W23A, W23H, W23P, W23O | 8.4.0 | `backport/8.4.0` | static |
 | 23.21.20.01 | W22H | 9.2.1-40 | `backport/9.2.1` | VM |
-| 33.20.23.01 | W24P, W24G | 9.2.4-4603 | `backport/9.2.4` | static (VM run recorded below when done) |
+| 33.20.23.01 | W24P, W24G | 9.2.4-4603 | `backport/9.2.4` | VM: w24g-ombre, 2026-10-23 E2E with reboot, 65/65 |
 
 A set that is only statically verified carries `"verified": "static"` in its `manifest.json`; the
 worker ignores the field. The 9.2.4 `systemUi.js` diff is not the 9.2.1 one: 9.2.4 added a fifth
