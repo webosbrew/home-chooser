@@ -66,8 +66,10 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 
 		// 1. make sure general/defaultApps exists, so the compositor's and sam's subscriptions see later writes
 		// 2. enable the backport (flag file) and link the boot entry into init.d
-		// 3. run the worker once  4. restart sam if step 1 created the key
-		async install({onNotice} = {}) {
+		// 3. run the worker once, which restarts sam first when step 1 created the key or the caller
+		//    (`samRestart`) says the apply deferred that restart. The restart is the worker's, not a
+		//    call of ours: it closes the panel, and a panel that is gone makes no further calls.
+		async install({onNotice, samRestart = false} = {}) {
 			const log = [];
 			const run = runner(log);
 			const res = Object.assign(result(log), {status: null, createdKey: false});
@@ -88,12 +90,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 				await run.run(ensureEntryCommand());
 
 				if (onNotice) onNotice('Applying the backport and restarting the compositor; running apps may close.');
-				await run.run(script('apply'));
-
-				if (res.createdKey) {
-					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
-					await run.run('restartSam');
-				}
+				await run.run(res.createdKey || samRestart ? 'keyfilterApplySam' : script('apply'));
 
 				res.status = await readStatus(run);
 				if (!res.status.mounted) throw new Error(`The backport did not mount; see ${LOG_PATH}`);

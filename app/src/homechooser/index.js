@@ -250,7 +250,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
-		async apply(appId, {onNotice} = {}) {
+		async apply(appId, {onNotice, deferSamRestart = false} = {}) {
 			// the stock home is "no choice", not a choice (on 6.x to 9.x sam refuses it for lack of appCategory)
 			if (appId === STOCK_HOME) return this.restoreStock();
 			const log = [];
@@ -258,7 +258,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			const res = Object.assign(result(log), {
 				appId,
 				needsKeyFilterBackport: info.needsKeyFilterBackport,
-				restartedSam: false
+				restartedSam: false,
+				samRestartDeferred: false
 			});
 			try {
 				const state = await readStateWith(run);
@@ -303,7 +304,11 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				if (previous !== appId) await closeApp(run, res, previous);
 
 				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
-				if (needsSamRestart(state)) {
+				// (`deferSamRestart`: the caller is about to install the backport, whose worker does it, see
+				// backport.install; the restart closes this panel, so it may not come before that call)
+				if (needsSamRestart(state) && deferSamRestart) {
+					res.samRestartDeferred = true;
+				} else if (needsSamRestart(state)) {
 					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
 					await run.run('restartSam');
 					res.restartedSam = true;

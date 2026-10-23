@@ -135,6 +135,7 @@ names that have one.
 | Command | Effect |
 | --- | --- |
 | no argument, or `apply` | Find the set, patch copies, bind-mount them, restart the compositor. |
+| `apply samfirst` | Restart `sam` (`systemctl restart sam`), then as `apply`, even when the backport is already mounted. The settings app asks for it on webOS 6 to 8 when its first write created `general/defaultApps` (`sam` misses that write until it restarts); doing it inside this one run keeps it from depending on a panel that the restart closes. |
 | `stop` | Unmount every target of every set it finds, restart the compositor. |
 | `refresh [stock] [norestart]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. With `norestart`, update the copy and leave the compositor running: the watcher does that when it sees the stored choice change (see below). |
 | `status` | Print `mounted=yes` and `release=<set>`, or `mounted=no` and `match=<set or none>`; `data=missing` first if the data directory is absent. |

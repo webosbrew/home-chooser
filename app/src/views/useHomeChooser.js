@@ -204,15 +204,19 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		const needPatch = Boolean(e.backport) && patch !== 'active';
 		if (needPatch && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
 		// The choice is applied first; installing the patch restarts the compositor and may close
-		// this window, so nothing of the choice may depend on code that runs after it.
+		// this window, so nothing of the choice may depend on code that runs after it. The same goes
+		// for the sam restart that webOS 6 to 8 needs after the first write: it closes this window
+		// too, so with a patch to install the apply leaves it to the install, which makes it in the
+		// same root-side run (before the compositor restart). Done in the apply, it could end the
+		// window before the install was ever called.
 		setNotice(`Setting ${candidate.title} as Home...`);
-		const res = await e.chooser.apply(candidate.id);
+		const res = await e.chooser.apply(candidate.id, {deferSamRestart: needPatch});
 		logResult('apply', res);
 		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
 		if (needPatch) {
 			setNotice('Setting up. The screen will blink once.');
 			writePending(candidate.id, candidate.title);
-			const inst = await e.backport.install();
+			const inst = await e.backport.install({samRestart: res.samRestartDeferred});
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
 		}

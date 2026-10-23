@@ -3,6 +3,7 @@ import {backportApplies, createBackport, parseStatus} from '..';
 import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
 const RUN_WORKER = 'keyfilterApply';
+const RUN_WORKER_SAM = 'keyfilterApplySam';
 const ENSURE = ensureEntryCommand();
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
@@ -43,7 +44,7 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
 		}
-		if (command === RUN_WORKER) {
+		if (command === RUN_WORKER || command === RUN_WORKER_SAM) {
 			if (mountWorks) {
 				tv.mounted = true;
 				tv.release = match;
@@ -106,7 +107,7 @@ describe('status', () => {
 });
 
 describe('install', () => {
-	test('absent key: create it, enable and link, run, restart sam last', async () => {
+	test('absent key: create it, enable and link, run the worker, which restarts sam first', async () => {
 		const tv = fakeTV();
 		const notices = [];
 		const res = await backport(tv).install({onNotice: (n) => notices.push(n)});
@@ -119,12 +120,13 @@ describe('install', () => {
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
 		expect(at('setSystemSettings')).toBeLessThan(at('write ' + KEYFILTER_FLAG));
 		expect(at('write ' + KEYFILTER_FLAG)).toBeLessThan(at(ENSURE));
-		expect(at(ENSURE)).toBeLessThan(at(RUN_WORKER));
-		expect(at(RUN_WORKER)).toBeLessThan(at('restartSam'));
-		expect(seq.filter((x) => x === 'restartSam')).toHaveLength(1);
+				expect(at(ENSURE)).toBeLessThan(at(RUN_WORKER_SAM));
+		expect(seq).not.toContain(RUN_WORKER);
+		// sam is restarted inside the worker's run, not by a call after it that a closed panel would never make
+		expect(seq).not.toContain('restartSam');
 		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
 		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: true, release: '9.2.1'});
-		expect(notices).toHaveLength(2);
+		expect(notices).toHaveLength(1);
 	});
 
 	test('record present: no write, no sam restart', async () => {
@@ -135,6 +137,20 @@ describe('install', () => {
 		expect(tv.record()).toEqual({home: 'x.y', kidsApp: 'k'});
 		expect(kinds(tv)).not.toContain('setSystemSettings');
 		expect(kinds(tv)).not.toContain('restartSam');
+		expect(kinds(tv)).toContain(RUN_WORKER);
+	});
+
+	test('record present, sam restart asked for: the same one run of the worker, flag and link first', async () => {
+		const tv = fakeTV({record: {home: 'x.y'}});
+		const res = await backport(tv, [8, 3, 0]).install({samRestart: true});
+		expect(res.ok).toBe(true);
+		const seq = kinds(tv);
+		expect(seq.filter((x) => x === RUN_WORKER_SAM)).toHaveLength(1);
+		expect(seq).not.toContain(RUN_WORKER);
+		expect(seq).not.toContain('restartSam');
+		expect(seq.indexOf('write ' + KEYFILTER_FLAG)).toBeLessThan(seq.indexOf(RUN_WORKER_SAM));
+		expect(seq.indexOf(ENSURE)).toBeLessThan(seq.indexOf(RUN_WORKER_SAM));
+		expect(tv.record()).toEqual({home: 'x.y'});
 	});
 
 	test('no matching set: fails before changing anything', async () => {

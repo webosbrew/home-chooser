@@ -32,8 +32,8 @@ Home Chooser is in English only.
   a success; Back closes it.
 * **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
   launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
-  the change, and confirming applies the choice first and installs the backport last (the restart is the last step, so nothing of the choice depends on code that runs after it). That restart may
-  close the panel. Before it (and after the apply has gone through and stored the choice), the app writes a small marker to `localStorage` (`homechooser.pending`,
+  the change, and confirming applies the choice first and installs the backport last (the restarts are the last step, so nothing of the choice depends on code that runs after it). Those restarts may
+  close the panel; on 6.x to 8.x the `sam` restart that a first `defaultApps` write needs is one of them, and it is made by the backport's worker, not by the apply (see [the order](#why-the-sam-restart-is-not-in-the-apply-on-6-to-9)). Before it (and after the apply has gone through and stored the choice), the app writes a small marker to `localStorage` (`homechooser.pending`,
   the id being chosen); on the next launch it reads the actual current home and the stored choice and
   judges the marker once, then clears it. The marker belongs to a live apply only when the stored choice
   equals its id (empty for a restore): then the toast is "Done. Press Home to try it." if the home is the
@@ -108,7 +108,8 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   there is shown as a warning.
 * On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
-  `systemctl restart sam` is the last step.
+  `systemctl restart sam` is the last step; with the key filter backport to install, that step moves into
+  the backport's worker run (below).
 * On 6.x to 9.x the stock key filter launches `com.webos.app.home` by id, so the Home key follows
   the choice only with the [key filter backport](key-filter-backport.md) installed. The screen
   installs it as part of choosing a launcher when it is not mounted, and removes it again when
@@ -118,6 +119,21 @@ Before these writes `apply` stores the choice, and after them it makes sure the 
 watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
 `/var/lib/webosbrew/homechooser/home`, the platform writes, link the init.d entry and start the
 watcher, close the previous home, and `systemctl restart sam` last if it applies.
+
+### Why the sam restart is not in the apply on 6 to 9
+
+The `sam` restart brings the stock home forward as the last-input app and closes the panel's window.
+When the apply made it, the panel could be gone before the web app made its next call, `backport.install()`,
+and nothing else installs the backport: no flag file and no mounts, the Home key still opens the stock
+home, and the choice shows as made (seen on 8.3.0 and 7.x: apply succeeded, flag `no`, mounts `[]`). The
+panel therefore never makes the restart when it is going to install the backport. `apply(id,
+{deferSamRestart: true})` skips it and returns `samRestartDeferred`; the panel writes the pending marker and
+calls `backport.install({samRestart: true})`, which writes the flag, links the boot entry and then makes one
+root-side call, `keyfilterApplySam` (`homechooser-keyfilter apply samfirst`): the worker restarts `sam`
+first, then mounts the patch and restarts the compositor. That run belongs to the service and goes on
+whether or not the panel survives, and the flag and the entry are in place before it starts, so the next
+boot mounts the backport even if the run is cut short. When the backport is already mounted, nothing is
+deferred and the apply restarts `sam` itself, as before.
 
 ## Persistence
 

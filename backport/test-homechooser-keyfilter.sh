@@ -336,6 +336,31 @@ check "exit 0" rc 0
 check "no mount" test "$(ncmds mount)" = 0
 rm -rf "${T:?}"
 
+echo "== apply samfirst restarts sam before the compositor"
+setup
+run apply samfirst
+check "exit 0" rc 0
+check "sam restarted" has 'systemctl restart sam' "$T/cmds"
+check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+check "sam first, compositor after" test "$(grep -n '^systemctl restart sam$' "$T/cmds" | cut -d: -f1)" -lt "$(grep -n '^systemctl restart surface-manager-daemon.service$' "$T/cmds" | cut -d: -f1)"
+check "mounted" test "$(ncmds mount)" = 2
+rm -rf "${T:?}"
+
+echo "== apply samfirst restarts sam even when nothing is left to mount"
+setup
+run apply samfirst
+: > "$T/cmds"
+run apply samfirst
+check "exit 0" rc 0
+check "sam restarted, nothing else" test "$(cat "$T/cmds")" = "systemctl restart sam"
+rm -rf "${T:?}"
+
+echo "== plain apply never restarts sam"
+setup
+run apply
+check "no sam restart" hasnt 'systemctl restart sam' "$T/cmds"
+rm -rf "${T:?}"
+
 echo "== usage"
 setup
 run bogus

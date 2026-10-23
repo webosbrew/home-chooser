@@ -68,6 +68,8 @@ static const hc_command COMMANDS[] = {
 	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
 	{"keyfilterStatus", {"/bin/sh", HC_KEYFILTER_SCRIPT, "status", NULL}, 20, false, false},
 	{"keyfilterApply", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", NULL}, 90, false, false},
+	/* restarts sam first, inside the one root-side run, so it survives the panel being closed by that restart */
+	{"keyfilterApplySam", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", "samfirst", NULL}, 150, false, false},
 	{"keyfilterStop", {"/bin/sh", HC_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
 	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
 	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},

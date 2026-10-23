@@ -208,6 +208,25 @@ describe('apply', () => {
 		expect(res.needsKeyFilterBackport).toBe(true);
 	});
 
+	test('6.6.0, record absent, sam restart deferred: nothing restarts, the caller is told', async () => {
+		const tv = fakeTV();
+		const notices = [];
+		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {deferSamRestart: true, onNotice: (n) => notices.push(n)});
+		expect(res.ok).toBe(true);
+		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(res.restartedSam).toBe(false);
+		expect(res.samRestartDeferred).toBe(true);
+		expect(notices).toEqual([]);
+	});
+
+	test('6.6.0, record present, deferral asked for: nothing to defer', async () => {
+		const tv = fakeTV({record: {home: OTHER}});
+		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {deferSamRestart: true});
+		expect(res.samRestartDeferred).toBe(false);
+		expect(res.restartedSam).toBe(false);
+	});
+
 	test('6.6.0, record present: no restart', async () => {
 		const tv = fakeTV({record: {home: OTHER, kidsApp: 'k'}});
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE);

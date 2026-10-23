@@ -144,7 +144,7 @@ describe('Home Chooser screen', () => {
 		expect(env.chooser.apply).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByText('Use as Home'));
 		expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
-		expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher');
+		expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: false});
 	});
 
 	test('cancel does nothing', async () => {
@@ -206,6 +206,36 @@ describe('Home Chooser screen', () => {
 			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
 			expect(backport.install).toHaveBeenCalled();
 			expect(backport.install.mock.invocationCallOrder[0]).toBeGreaterThan(env.chooser.apply.mock.invocationCallOrder[0]);
+		});
+
+		test('the sam restart is left to the install, which gets told about it', async () => {
+			const backport = backportOf({mounted: false, enabled: false, match: '8.3.0'});
+			const apply = jest.fn(async () => ok({samRestartDeferred: true}));
+			mountApp(makeEnv({version: [8, 3, 0], backport, apply}));
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+			expect(apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: true});
+			expect(backport.install).toHaveBeenCalledWith({samRestart: true});
+		});
+
+		test('no deferred sam restart: the install is not told to restart it', async () => {
+			const backport = backportOf({mounted: false, enabled: false, match: '8.3.0'});
+			mountApp(makeEnv({version: [8, 3, 0], backport}));
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+			expect(backport.install).toHaveBeenCalledWith({samRestart: undefined});
+		});
+
+		test('patch already active: the apply keeps the sam restart for itself', async () => {
+			const backport = backportOf({mounted: true, enabled: true, match: '8.3.0'});
+			const env = makeEnv({version: [8, 3, 0], backport});
+			mountApp(env);
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
+			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: false});
 		});
 
 		test('install failure is reported after the choice was applied', async () => {

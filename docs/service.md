@@ -104,6 +104,7 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 | `watch` | `/bin/sh <app>/backport/homechooser watch` | 20 s |
 | `keyfilterStatus` | `/bin/sh <app>/backport/homechooser-keyfilter status` | 20 s |
 | `keyfilterApply` | same with `apply` | 90 s |
+| `keyfilterApplySam` | same with `apply samfirst` (restarts sam, then applies) | 150 s |
 | `keyfilterStop` | same with `stop` | 90 s |
 | `keyfilterRefresh` | same with `refresh` | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
