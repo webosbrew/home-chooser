@@ -1,0 +1,10 @@
+<!-- Home Chooser icon. Transparent: webOS fills the tile with appinfo.json's iconColor.
+     Render: rsvg-convert -w 80 icon.svg -o icon.png; rsvg-convert -w 130 icon.svg -o largeIcon.png -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 130">
+  <rect x="35" y="22" width="60" height="78" rx="9" fill="#3d4f7c" transform="rotate(-16 65 118)"/>
+  <rect x="35" y="22" width="60" height="78" rx="9" fill="#56689a" transform="rotate(16 65 118)"/>
+  <rect x="35" y="22" width="60" height="78" rx="9" fill="#f2e6c8"/>
+  <path d="M43 60 L65 39 L87 60 Z" fill="#e04a3a"/>
+  <rect x="49" y="58" width="32" height="26" fill="#e04a3a"/>
+  <rect x="60" y="68" width="10" height="16" fill="#f2e6c8"/>
+</svg>
