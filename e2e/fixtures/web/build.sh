@@ -36,11 +36,13 @@ for v in normal overlay; do
 	cp "$TMP/icon.png" "$stage/icon.png"
 	sed -e "s/@VARIANT@/$v/g" "$HERE/index.html" > "$stage/index.html"
 	python3 -I - "$stage/appinfo.json" "$id" "$v" <<'PY'
-import json, sys
+import json, os, sys
 dst, appid, v = sys.argv[1:4]
 d = {"id": appid, "version": "1.0.0", "vendor": "webOS Homebrew", "type": "web",
      "main": "index.html", "title": "HC Fixture web " + v, "icon": "icon.png",
      "appCategory": ["home"], "visible": True}
+if os.environ.get("HC_FIXTURE_PERMISSION"):
+    d["requiredPermissions"] = [os.environ["HC_FIXTURE_PERMISSION"]]
 if v == "overlay":
     d["transparent"] = True
     d["defaultWindowType"] = "overlay"
