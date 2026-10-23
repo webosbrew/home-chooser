@@ -123,14 +123,14 @@ describe('persistence status', () => {
 	test('assembles the text parsePersistenceStatus reads', async () => {
 		const {stdout} = await createPersistenceStatus(service())();
 		expect(parsePersistenceStatus(stdout)).toMatchObject({
-			entry: 'other', entryTarget: '/app/backport/homechooser', active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']
+			entry: 'other', entryTarget: '/app/backport/homechooser', active: 'active', stored: 'my.home', keyfilterEnabled: true, keyfilterGenerated: true, log: ['line one', 'line two']
 		});
 	});
 	test('no files, no entry', async () => {
 		const {stdout} = await createPersistenceStatus(service({
 			linkStatus: async () => ({entry: 'none', target: ''}), readFile: async () => null, run: async () => ({stdout: '', stderr: ''})
 		}))();
-		expect(parsePersistenceStatus(stdout)).toMatchObject({entry: 'none', active: '', stored: '', keyfilterEnabled: false, log: []});
+		expect(parsePersistenceStatus(stdout)).toMatchObject({entry: 'none', active: '', stored: '', keyfilterEnabled: false, keyfilterGenerated: false, log: []});
 	});
 });
 

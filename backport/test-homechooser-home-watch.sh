@@ -31,7 +31,7 @@ setup() {
     echo '{"release":"1.0","files":[]}' > "$T/app/backport/1.0/manifest.json"
     echo ' diff' > "$T/app/backport/1.0/x.diff"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
-    touch "$T/flag"
+    touch "$T/flag" "$T/generated-flag"
     ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
     : > "$T/calls"
     : > "$T/stream"
@@ -150,7 +150,7 @@ SLEEPSTUB
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
-           HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
+           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
            HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark"
 }
 run() { $SH "$T/app/backport/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
@@ -627,6 +627,7 @@ for major in 6 9; do
     check "$major: other entries kept" has 'kidsApp' "$T/record"
     check "$major: choice file removed" test ! -f "$T/home"
     check "$major: backport flag removed" test ! -f "$T/flag"
+    check "$major: generated opt-in removed" test ! -f "$T/generated-flag"
     check "$major: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$major: app directory is gone" test ! -d "$T/app"
     check "$major: key filter stop ran" has "stop data=$T/rt" "$T/kfcalls"
@@ -727,7 +728,7 @@ run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
-touch "$T/flag"
+touch "$T/flag" "$T/generated-flag"
 : > "$T/stream"
 $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0

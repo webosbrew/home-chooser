@@ -14,6 +14,7 @@
 #define HC_STATE_DIR "/var/lib/webosbrew/homechooser"
 #define HC_HOME_FILE HC_STATE_DIR "/home"
 #define HC_KEYFILTER_FLAG HC_STATE_DIR "/keyfilter"
+#define HC_GENERATED_FLAG HC_STATE_DIR "/keyfilter-generated"
 #define HC_OVERRIDE_FILE "/var/webos-profile/override/" HC_APP_ID ".json"
 #define HC_INIT_DIR "/var/lib/webosbrew/init.d"
 #define HC_INIT_LINK HC_INIT_DIR "/homechooser"

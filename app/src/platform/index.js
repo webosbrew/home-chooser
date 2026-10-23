@@ -10,7 +10,7 @@ import {ServiceError, errorMessage} from './errors';
 import {createBridgeCall} from './bridge';
 import {createServiceClient} from './service';
 import {ensureRoot, FatalError} from './elevate';
-import {HOME_FILE, KEYFILTER_FLAG} from '../homechooser/persistence';
+import {GENERATED_FLAG, HOME_FILE, KEYFILTER_FLAG} from '../homechooser/persistence';
 
 // Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
 export const parseOsRelease = (text) => {
@@ -66,6 +66,7 @@ export const createPersistenceStatus = (service) => async () => {
 	const stored = await service.readFile(HOME_FILE);
 	lines.push(`stored=${stored === null ? '' : stored.trim()}`);
 	lines.push(`keyfilter=${(await service.readFile(KEYFILTER_FLAG)) === null ? 'no' : 'yes'}`);
+	lines.push(`keyfilterGenerated=${(await service.readFile(GENERATED_FLAG)) === null ? 'no' : 'yes'}`);
 	lines.push('--log');
 	const log = await service.run('watchLog');
 	return {stdout: lines.join('\n') + '\n' + log.stdout, stderr: ''};

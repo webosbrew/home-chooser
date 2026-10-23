@@ -67,6 +67,7 @@ STUB
     cat > "$T/bin/umount" <<STUB
 #!/bin/sh
 echo "umount \$*" >> "$T/cmds"
+[ -f "$T/umount-fail" ] && exit 1
 [ "\$1" = "-l" ] && shift
 grep -vF " \$1 " "$T/mounts" > "$T/mounts.new"; mv "$T/mounts.new" "$T/mounts"
 STUB
@@ -94,6 +95,34 @@ echo "sleep \$*" >> "$T/cmds"
 # sam comes up after the second sleep, if asked to
 [ -f "$T/sam-late" ] && [ "\$(grep -c '^sleep' "$T/cmds")" -ge 2 ] && rm -f "$T/sam-silent"
 STUB
+    cat > "$T/bin/node" <<'STUB'
+#!/bin/sh
+T=@T@
+echo "$*" >> "$T/node-calls"
+shift
+mode=$1; shift
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --root) root=$2;;
+        --out) out=$2;;
+        --manifest) manifest=$2;;
+    esac
+    shift 2
+done
+[ -f "$T/generator-success" ] || { echo 'ABORT: fixture refused' >&2; exit 2; }
+if [ "$mode" = generate ]; then
+    mkdir -p "$out/usr/lib/qml"
+    cp "$root/usr/lib/qml/"* "$out/usr/lib/qml/"
+    (cd "$out" && patch -p0 < "$T/data/1.0/a.qml.diff" && patch -p0 < "$T/data/1.0/b.js.diff") || exit 1
+    cp "$T/data/1.0/manifest.json" "$manifest"
+fi
+echo 'ok files=2'
+STUB
+    sed -i "s|@T@|$T|" "$T/bin/node"
+    : > "$T/generator.js"
+    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" \
+           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_NO_SETS_FLAG="$T/debug-no-sets"
+    unset HOMECHOOSER_NO_SETS
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
     export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
@@ -359,6 +388,91 @@ echo "== plain apply never restarts sam"
 setup
 run apply
 check "no sam restart" hasnt 'systemctl restart sam' "$T/cmds"
+rm -rf "${T:?}"
+
+echo "== generated fallback requires opt-in and respects refusals"
+setup
+touch "$T/debug-no-sets" "$T/generator-success"
+run apply
+check "no opt-in: no mounts" test "$(ncmds mount)" = 0
+check "no opt-in: generator not run by apply" test ! -e "$T/node-calls"
+run status
+check "status offers generation" has 'generated=possible' "$T/out"
+check "status opt-in off" has 'optin=no' "$T/out"
+run status
+check "same stock hashes: only one node invocation" test "$(wc -l < "$T/node-calls")" = 1
+echo changed >> "$T/generator.js"
+run status
+check "changed rules hash: check recomputed" test "$(wc -l < "$T/node-calls")" = 2
+echo '// new file' > "$T/root/usr/lib/qml/new.qml"
+# Discovery is scoped to the generator's trees, test those too.
+mkdir -p "$T/root/usr/lib/qml/KeyFilters"
+echo '// new file' > "$T/root/usr/lib/qml/KeyFilters/new.js"
+run status
+check "new discovery input: check recomputed" test "$(wc -l < "$T/node-calls")" = 3
+echo changed >> "$T/root/usr/lib/qml/KeyFilters/new.js"
+run status
+check "changed stock hash: check recomputed" test "$(wc -l < "$T/node-calls")" = 4
+mv "$T/root/usr/lib/qml/KeyFilters/new.js" "$T/root/usr/lib/qml/KeyFilters/renamed.js"
+run status
+check "renamed discovery input: check recomputed" test "$(wc -l < "$T/node-calls")" = 5
+rm -rf "${T:?}"
+
+setup
+touch "$T/debug-no-sets" "$T/generated-flag"
+run apply
+check "refusal leaves stock (exit 0)" rc 0
+check "refusal: no mounts" test "$(ncmds mount)" = 0
+check "refusal: no restart" test "$(ncmds systemctl)" = 0
+check "refusal: no stage or manifest" test ! -e "$T/work/stage" -a ! -e "$T/work/generated/manifest.json"
+run status
+check "status says refused" has 'generated=refused' "$T/out"
+check "status gives reason" has 'reason=ABORT: fixture refused' "$T/out"
+check "status opt-in on" has 'optin=yes' "$T/out"
+run status
+check "refusal cached too" test "$(wc -l < "$T/node-calls")" = 2
+rm -rf "${T:?}"
+
+echo "== generated lifecycle, including refresh and stop without reviewed data"
+setup
+touch "$T/generated-flag" "$T/generator-success"
+HOMECHOOSER_NO_SETS=1 run apply
+check "generated apply succeeds" rc 0
+check "generated mounts both files" test "$(ncmds mount)" = 2
+run status
+check "generated mounted" has 'mounted=yes' "$T/out"
+check "generated release" has 'release=generated' "$T/out"
+check "generated match" has 'match=generated' "$T/out"
+check "generated hashes" has "hash=$(sha256sum "$T/work/stage/usr/lib/qml/b.js" | cut -d' ' -f1) /usr/lib/qml/b.js" "$T/out"
+# Stop and refresh must use the generated manifest even when no reviewed sets exist.
+rm -rf "$T/data"
+echo my.home > "$T/home"
+run refresh
+check "generated refresh bakes choice" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+run refresh stock
+check "generated refresh stock clears choice" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+run apply
+check "already mounted generated: no second generator invocation" test "$(wc -l < "$T/node-calls")" = 1
+touch "$T/umount-fail"
+run stop
+check "failed generated stop reports failure" rc 1
+check "failed stop keeps the generated target list" test -f "$T/work/generated/manifest.json"
+check "failed stop keeps the mounted sources" test -d "$T/work/stage"
+run status
+check "failed stop still reports generated mount" has 'match=generated' "$T/out"
+rm "$T/umount-fail"
+run stop
+check "generated stop succeeds" rc 0
+check "generated mounts gone" test ! -s "$T/mounts"
+check "generated manifest removed" test ! -e "$T/work/generated/manifest.json"
+rm -rf "${T:?}"
+
+echo "== reviewed sets take precedence even with opt-in"
+setup
+touch "$T/generated-flag" "$T/generator-success"
+run apply
+check "reviewed set used" has '1.0' "$T/work/release"
+check "generator not run" test ! -e "$T/node-calls"
 rm -rf "${T:?}"
 
 echo "== usage"

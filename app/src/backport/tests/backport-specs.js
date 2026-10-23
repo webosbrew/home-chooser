@@ -1,6 +1,6 @@
 import {ServiceError} from '../../platform/errors';
 import {backportApplies, createBackport, parseStatus} from '..';
-import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../homechooser/persistence';
+import {ENTRY_SCRIPT, GENERATED_FLAG, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
 const RUN_WORKER = 'keyfilterApply';
 const RUN_WORKER_SAM = 'keyfilterApplySam';
@@ -12,12 +12,12 @@ const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSetting
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
 // script's `status` prints; `installed` is the enable flag file, `entry` the init.d link; running
 // the worker flips `mounted`, `stop` flips it back.
-const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true, stopFails = false, failLuna = null} = {}) => {
+const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true, stopFails = false, failLuna = null, generated = null, optin = false} = {}) => {
 	const calls = [];
-	const tv = {installed: false, entry: 'none', mounted: false, release: null};
+	const tv = {installed: false, entry: 'none', mounted: false, release: null, generatedOptIn: optin};
 	const statusText = () => {
 		if (dataMissing) return 'data=missing\nmounted=no\nmatch=none\n';
-		return tv.mounted ? `mounted=yes\nrelease=${tv.release}\n` : `mounted=no\nmatch=${match || 'none'}\n`;
+		return tv.mounted ? `mounted=yes\nrelease=${tv.release}\n` : `mounted=no\nmatch=${match || 'none'}\ngenerated=${generated || ''}\noptin=${tv.generatedOptIn ? 'yes' : 'no'}\n`;
 	};
 	const rootLuna = async (uri, payload) => {
 		calls.push(['luna', uri, payload]);
@@ -37,7 +37,7 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 		calls.push(['exec', command]);
 		if (command === persistenceStatusCommand()) {
 			const entry = tv.entry === 'ok' ? `link:${ENTRY_SCRIPT}` : tv.entry;
-			return {stdout: `entry=${entry}\nactive=\nstored=\nkeyfilter=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
+			return {stdout: `entry=${entry}\nactive=\nstored=\nkeyfilter=${tv.installed ? 'yes' : 'no'}\nkeyfilterGenerated=${tv.generatedOptIn ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
 		if (command === keyfilterCommand('status')) return {stdout: statusText(), stderr: ''};
 		if (command === ENSURE) {
@@ -47,7 +47,7 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 		if (command === RUN_WORKER || command === RUN_WORKER_SAM) {
 			if (mountWorks) {
 				tv.mounted = true;
-				tv.release = match;
+				tv.release = match || 'generated';
 			}
 			return {stdout: '', stderr: ''};
 		}
@@ -61,12 +61,14 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 	};
 	const writeFile = async (path, text) => {
 		calls.push(['write', path, text]);
-		if (path !== KEYFILTER_FLAG) throw new Error('unexpected writeFile ' + path);
-		tv.installed = true;
+		if (path === GENERATED_FLAG) tv.generatedOptIn = true;
+		else if (path === KEYFILTER_FLAG) tv.installed = true;
+		else throw new Error('unexpected writeFile ' + path);
 	};
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
 		if (path === KEYFILTER_FLAG) tv.installed = false;
+		if (path === GENERATED_FLAG) tv.generatedOptIn = false;
 	};
 	return {rootLuna, exec, writeFile, removeFile, calls, tv, record: () => record};
 };
@@ -86,8 +88,8 @@ describe('backportApplies', () => {
 
 describe('parseStatus', () => {
 	test('reads the script output', () => {
-		expect(parseStatus('mounted=yes\nrelease=9.2.1\n')).toEqual({dataMissing: false, mounted: true, release: '9.2.1', match: null});
-		expect(parseStatus('mounted=no\nmatch=7.6.0\n')).toEqual({dataMissing: false, mounted: false, release: null, match: '7.6.0'});
+		expect(parseStatus('mounted=yes\nrelease=9.2.1\n')).toMatchObject({dataMissing: false, mounted: true, release: '9.2.1', match: null});
+		expect(parseStatus('mounted=no\nmatch=7.6.0\n')).toMatchObject({dataMissing: false, mounted: false, release: null, match: '7.6.0'});
 		expect(parseStatus('mounted=no\nmatch=none\n')).toMatchObject({match: null});
 		expect(parseStatus('data=missing\nmounted=no\nmatch=none\n')).toMatchObject({dataMissing: true});
 		expect(parseStatus('mounted=yes\nrelease=unknown\n')).toMatchObject({mounted: true, release: null});
@@ -101,7 +103,7 @@ describe('status', () => {
 		tv.tv.entry = 'ok';
 		const res = await backport(tv).status();
 		expect(res.ok).toBe(true);
-		expect(res.status).toEqual({enabled: true, entry: 'ok', dataMissing: false, mounted: false, release: null, match: '9.2.1'});
+		expect(res.status).toMatchObject({enabled: true, entry: 'ok', dataMissing: false, mounted: false, release: null, match: '9.2.1'});
 		expect(res.steps.map((s) => s.kind)).toEqual(['exec', 'exec']);
 	});
 });
@@ -220,5 +222,39 @@ describe('remove', () => {
 		expect(res.ok).toBe(false);
 		expect(res.errors[0]).toMatch(/umount: busy/);
 		expect(tv.tv.installed).toBe(false);
+	});
+});
+
+
+describe('generated fallback', () => {
+	test('parses availability, refusal, opt-in and every repeated hash', () => {
+		expect(parseStatus('mounted=no\nmatch=none\ngenerated=refused\nreason=anchor missing\noptin=yes\n')).toMatchObject({generated: 'refused', reason: 'anchor missing', optin: true});
+		expect(parseStatus('mounted=yes\nrelease=generated\nmatch=generated\nhash=abc /a.qml\nhash=def /b.js\n')).toMatchObject({mounted: true, match: 'generated', hashes: ['abc /a.qml', 'def /b.js']});
+	});
+
+	test('possible but off refuses install without any writes', async () => {
+		const tv = fakeTV({match: null, generated: 'possible'});
+		expect((await backport(tv).install()).ok).toBe(false);
+		expect(tv.calls.filter((c) => c[0] === 'write')).toEqual([]);
+	});
+
+	test('opt-in allows install; removal of opt-in precedes disabling and stopping', async () => {
+		const tv = fakeTV({match: null, generated: 'possible'});
+		const bp = backport(tv);
+		expect((await bp.setGenerated(true)).ok).toBe(true);
+		expect(tv.tv.generatedOptIn).toBe(true);
+		expect((await bp.install()).ok).toBe(true);
+		expect((await bp.status()).status).toMatchObject({mounted: true, release: 'generated', generatedOptIn: true});
+		tv.calls.length = 0;
+		await bp.setGenerated(false);
+		await bp.remove();
+		expect(kinds(tv).slice(0, 3)).toEqual(['rm ' + GENERATED_FLAG, 'rm ' + KEYFILTER_FLAG, 'keyfilterStop']);
+		expect(tv.tv.generatedOptIn).toBe(false);
+	});
+
+	test('opt-in does not bypass a generator refusal', async () => {
+		const tv = fakeTV({match: null, generated: 'refused', optin: true});
+		expect((await backport(tv).install()).ok).toBe(false);
+		expect(tv.tv.mounted).toBe(false);
 	});
 });

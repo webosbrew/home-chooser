@@ -41,14 +41,78 @@ stock-id comparison in the Home key handler, under the new screen-magnification 
 converts two new `showSpinnerOnRelaunch ... "com.webos.app.home"` comparisons (spinner on relaunch
 and foreground of the home app), and 8.4.0 gets the 9.2.1 `StarfishGestureUIFeedbackView.qml` diff.
 
-Not supported, by evidence from the coverage check: 6.3.1-1065 (W21Z projector) and 7.4.0-190508
+No reviewed set, by evidence from the coverage check: 6.3.1-1065 (W21Z projector) and 7.4.0-190508
 (W22O) have an older Home-key path. `Key_Super_L` is `if (!pressed && !homeView.appId)
 launchHomeApp(key)`, with no `fullscreenView.appId === HOME_APP_ID` comparison in `systemUi.js`
 (one stock-id site on 6.3.1, two on 7.4.0), and `StarfishBaseLunaServiceAPI.qml` and
 `StarfishNudgeView.qml` have no stock-id site, so the 6.6.0 and 7.6.0 hunks for `systemUi.js`,
 `StarfishBaseLunaServiceAPI.qml` and `StarfishNudgeView.qml` all reject (7.4.0 also rejects
 `StarfishFullscreenController.qml`). Whether replacing the launch site alone would be enough
-depends on the stock `homeView.appId`, a runtime question nobody has answered.
+depends on the stock `homeView.appId`, a runtime question not established by offline generation. The generated fallback accepts these
+stock layouts, but that does not establish Home-key behavior on a device.
+
+## Generated fallback
+
+Reviewed hash-keyed sets always come first. On webOS 6 to 9 with no matching set,
+`homechooser-keyfilter-gen.js` can rewrite copies of the live stock files. It uses the same
+`Settings.getHomeAppId`, `isHomeApp` and `launchHome` behavior as the reviewed sets; it replaces
+stock-id comparisons, launches and values and exposes the helpers to the key filter. The worker
+bakes the stored choice into the copies, bind-mounts them and restarts the compositor through the
+same flow. Refresh, stop and boot reapplication use the generated manifest in
+`/tmp/homechooser-backport/generated/manifest.json`. No stock file is written. If stop cannot unmount a target, it reports failure and keeps the
+stage and manifest so status and a later stop can still find it.
+
+This fallback is opt-in. When generation is possible, the app offers **Use a patch generated for
+this firmware (not reviewed)**. The switch writes
+`/var/lib/webosbrew/homechooser/keyfilter-generated`; the ordinary `keyfilter` enable flag is
+still required for boot application. Switching on installs immediately if a choice is stored,
+otherwise the next choice installs it. Switching off removes the opt-in flag, disables the
+backport and unmounts it. Uninstall cleanup removes both flags. Generation passing is structural
+evidence only; the footer continues to identify a generated patch as not reviewed.
+
+The generator runs on the TV's Node (`node`, falling back to `/usr/bin/node`), using APIs and
+syntax compatible with Node 8.12. It reads and writes latin1 so unchanged bytes survive exactly.
+Before writing any output it requires:
+
+* webOS major 6 through 9, all three required files (`systemUi.js`, `Settings.qml`,
+  `StarfishKeyFilter.qml`), and no target already calling `isHomeApp` or `getHomeAppId`;
+* exact counts for anchored rules and no residual stock-id literal or `HOME_APP_ID`, except the
+  single `stockHomeAppId` fallback in `Settings.qml`;
+* no stock id elsewhere in `WebOSCompositorBase`, imports of `WebOSCompositorBase` for QML using
+  the new `Settings` helpers, changed bytes in every target, unchanged bracket balance and
+  exactly one `@HOMECHOOSER_HOME@` placeholder in `Settings.qml`.
+
+Discovery scans QML/JS in `WebOSCompositor`, `KeyFilters` and `WebOSCompositorBase/global` for
+stock-id references, plus the required files; it checks the rest of `WebOSCompositorBase` for
+stray references. Any failed guard aborts the whole run (exit 2), leaving stock behavior.
+Usage or I/O errors (exit 1) also prevent mounts. Bracket balance is a guard, not a QML parser.
+
+When unmounted with no reviewed match, `status` reports `generated=possible` or
+`generated=refused` with `reason=...`, and `optin=yes|no`. It caches the check in the worker's
+work directory by SHA256 of the generator, OS release and every QML/JS file in the discovery and
+guard trees (paths included). New files and changed bytes invalidate the key; an unchanged key
+reuses the result without starting Node. Apply always runs generation afresh. While a generated
+patch is mounted, status reports `mounted=yes`, `release=generated`, `match=generated` and a
+`hash=<sha256> <absolute target path>` line for each staged file, including the baked choice.
+
+For an offline lab check and a candidate reviewed set, run:
+
+```sh
+node backport/homechooser-keyfilter-gen.js check --root /path/to/rootfs
+node backport/homechooser-keyfilter-gen.js lab-set --root /path/to/rootfs --release 6.x.y --out /path/to/candidate-set
+sh backport/test-generated.sh
+```
+
+`lab-set` writes `manifest.json` and unified diffs in the reviewed-set layout, using the same
+rules as on-device generation. Review those diffs and test the Home key before adding the set.
+Every rule change must keep generation byte-identical to every reviewed set with an available
+firmware root; `test-generated.sh` compares exact target trees, checks determinism, refusal of
+already-patched and out-of-range firmware, and the `lab-set` round trip.
+
+For a known VM to exercise the unknown-build flow, create
+`/var/lib/webosbrew/homechooser/debug-no-sets` (or set `HOMECHOOSER_NO_SETS=1` for a worker run).
+This suppresses reviewed-set lookup without bypassing generation guards or opt-in. Remove the
+marker after the check. It is a root debug aid, outside the service's file allow-list.
 
 ## The home id
 
@@ -250,15 +314,16 @@ runs between the build and `ares-package`).
 Install, as root through Home Chooser's service ([service](service.md)), each step in the step log:
 
 1. `status`. It stops here, changing nothing, if the data is missing or no set matches the live
-   files and nothing is mounted.
+   files and nothing is mounted, unless generation is possible and opted in.
 2. Read `general/defaultApps`. If the key is absent, write the empty record with
    `setSystemSettings`. Subscriptions that start on an absent key miss its creation (see the study's
    first-write caveat), and the compositor's subscription is of the same kind as `sam`'s.
 3. Create the flag file and make `/var/lib/webosbrew/init.d/homechooser` a symlink to the entry in
    the app (see [Persistence](settings-app.md#persistence)).
-4. Run `homechooser-keyfilter apply` once. The compositor restarts, so running apps may close.
-5. `systemctl restart sam` if step 2 created the key.
-6. `status` again; the install fails if the targets are not mounted.
+4. Run `homechooser-keyfilter apply` once (`apply samfirst` if step 2 created the key or the
+   choice deferred a sam restart). The worker restarts sam first when requested, then applies
+   the patch and restarts the compositor, so running apps may close.
+5. `status` again; the install fails if the targets are not mounted.
 
 After that a later choice reaches `sam` and the compositor live.
 

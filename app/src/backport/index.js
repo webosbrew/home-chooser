@@ -2,7 +2,7 @@
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/key-filter-backport.md.
 import {errorMessage} from '../platform/errors';
 import {
-	KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
+	GENERATED_FLAG, KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
 	persistenceStatusCommand
 } from '../homechooser/persistence';
 import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
@@ -20,15 +20,21 @@ export const backportApplies = (version) => {
 // Parse the `key=value` lines of `homechooser-keyfilter status`.
 export const parseStatus = (text) => {
 	const out = {};
+	const hashes = [];
 	String(text || '').split('\n').forEach((line) => {
 		const m = /^([a-z]+)=(.*)$/.exec(line.trim());
-		if (m) out[m[1]] = m[2];
+		if (m && m[1] === 'hash') hashes.push(m[2]);
+		else if (m) out[m[1]] = m[2];
 	});
 	return {
 		dataMissing: out.data === 'missing',
 		mounted: out.mounted === 'yes',
 		release: out.release && out.release !== 'unknown' ? out.release : null,
-		match: out.match && out.match !== 'none' ? out.match : null
+		match: out.match && out.match !== 'none' ? out.match : null,
+		generated: out.generated || null,
+		reason: out.reason || null,
+		optin: out.optin === 'yes',
+		hashes
 	};
 };
 
@@ -40,7 +46,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 	const readStatus = async (run) => {
 		const persistence = parsePersistenceStatus((await run.run(persistenceStatusCommand())).stdout);
 		const state = parseStatus((await run.run(script('status'))).stdout);
-		return Object.assign({enabled: persistence.keyfilterEnabled, entry: persistence.entry}, state);
+		return Object.assign({enabled: persistence.keyfilterEnabled, generatedOptIn: persistence.keyfilterGenerated, entry: persistence.entry}, state);
 	};
 
 	const result = (log) => ({ok: true, steps: log, warnings: [], errors: []});
@@ -52,6 +58,19 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 
 	return {
 		applies: backportApplies(version),
+
+		async setGenerated(enabled) {
+			const log = [];
+			const run = runner(log);
+			const res = result(log);
+			try {
+				if (enabled) await run.write(GENERATED_FLAG, '');
+				else await run.remove(GENERATED_FLAG);
+			} catch (e) {
+				fail(res, e);
+			}
+			return res;
+		},
 
 		async status() {
 			const log = [];
@@ -76,7 +95,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			try {
 				const before = await readStatus(run);
 				if (before.dataMissing) throw new Error('The backport files are missing from the app package');
-				if (!before.mounted && !before.match) {
+				if (!before.mounted && !before.match && !(before.generated === 'possible' && before.optin && before.generatedOptIn)) {
 					throw new Error('No backport set matches this firmware\'s key filter files, so nothing was installed');
 				}
 

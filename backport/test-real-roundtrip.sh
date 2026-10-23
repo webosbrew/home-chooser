@@ -118,6 +118,36 @@ STUB
     : > "$T/after"
     while read -r p && read -r h && read -r d; do sha256sum "$root$p" >> "$T/after"; done < "$T/entries"
     check "$rel: the stock files were never touched" cmp -s "$T/before" "$T/after"
+    # Exercise the real generated fallback on the same stock root, suppressing reviewed lookup.
+    # All side effects remain the stubs above; no stock file is ever written.
+    export HOMECHOOSER_NO_SETS=1 HOMECHOOSER_GEN="$HERE/homechooser-keyfilter-gen.js" \
+           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag"
+    echo my.home > "$T/installed"
+    : > "$T/cmds"
+    w status
+    check "$rel: generated offered without opt-in" has 'generated=possible' "$T/out"
+    check "$rel: opt-in initially off" has 'optin=no' "$T/out"
+    w apply
+    check "$rel: no opt-in mounts nothing" test ! -s "$T/mounts"
+    touch "$T/generated-flag"
+    w apply
+    check "$rel: real generator apply succeeds" test "$?" = 0
+    check "$rel: generated choice baked in" has 'configuredHomeAppId: "my.home"' "$stage"
+    w status
+    check "$rel: generated release" has 'release=generated' "$T/out"
+    check "$rel: generated match" has 'match=generated' "$T/out"
+    check "$rel: generated status hashes every target" test "$(grep -c '^hash=' "$T/out")" = "$(grep -c . "$T/entries" | awk '{print $1 / 3}')"
+    w refresh stock
+    check "$rel: generated refresh stock clears id" has 'configuredHomeAppId: ""' "$stage"
+    w refresh
+    check "$rel: generated refresh restores id" has 'configuredHomeAppId: "my.home"' "$stage"
+    w stop
+    check "$rel: generated stop unmounts everything" test ! -s "$T/mounts"
+    check "$rel: generated manifest removed" test ! -e "$T/work/generated/manifest.json"
+    : > "$T/after"
+    while read -r p && read -r h && read -r d; do sha256sum "$root$p" >> "$T/after"; done < "$T/entries"
+    check "$rel: generation left stock bytes unchanged" cmp -s "$T/before" "$T/after"
+    unset HOMECHOOSER_NO_SETS HOMECHOOSER_GEN HOMECHOOSER_GENERATED_FLAG
     rm -rf "${T:?}"
 done
 

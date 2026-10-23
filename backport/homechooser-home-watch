@@ -75,6 +75,7 @@ WSH=${HOMECHOOSER_SHELL:-/bin/sh}
 APPDIR=${HOMECHOOSER_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser}
 APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications /usr/palm/applications"}
 KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
+GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
 OLD_INITD=$(dirname "$INITD")/homechooser-keyfilter
 RECHECK=${HOMECHOOSER_RECHECK:-300}
@@ -736,7 +737,7 @@ revert_platform() {
 restore_all() {
     log "Home Chooser is uninstalled, restoring the stock Home"
     revert_platform "Home Chooser uninstalled"
-    rm -f "$CHOICE" "$KEYFLAG"
+    rm -f "$CHOICE" "$KEYFLAG" "$GENERATED_FLAG"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
     for l in "$INITD" "$OLD_INITD"; do
         if [ -L "$l" ]; then

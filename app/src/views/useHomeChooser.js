@@ -22,12 +22,15 @@ export const logResult = (label, res) => {
 };
 
 // Where the key filter patch stands (webOS 6 to 9 only; null elsewhere):
-// 'active' (mounted), 'ready' (a patch set matches this firmware), 'nomatch' (hash mismatch), 'unknown'.
+// 'active' (reviewed, mounted), 'ready' (reviewed, available), 'unreviewed' (offered),
+// 'generated' (opted in or mounted), 'nomatch' (refused), 'unknown'.
 export const patchStateOf = (backport, status) => {
 	if (!backport) return null;
 	if (!status) return 'unknown';
-	if (status.mounted) return 'active';
-	return status.match ? 'ready' : 'nomatch';
+	if (status.mounted) return status.release === 'generated' ? 'generated' : 'active';
+	if (status.match) return 'ready';
+	if (status.generated === 'possible') return status.optin ? 'generated' : 'unreviewed';
+	return 'nomatch';
 };
 
 // What a marker left by an earlier window means now. The marker is only written after the apply
@@ -201,8 +204,8 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
 		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
-		const needPatch = Boolean(e.backport) && patch !== 'active';
-		if (needPatch && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+		const needPatch = Boolean(e.backport) && !(patchStatus && patchStatus.mounted);
+		if (needPatch && patch !== 'ready' && patch !== 'generated') return {ok: false, text: "The Home button can't be changed on this TV's software."};
 		// The choice is applied first; installing the patch restarts the compositor and may close
 		// this window, so nothing of the choice may depend on code that runs after it. The same goes
 		// for the sam restart that webOS 6 to 8 needs after the first write: it closes this window
@@ -223,8 +226,30 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		return {ok: true, text: DONE_TEXT};
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
+	const toggleGenerated = useCallback((enabled) => run('change the generated patch', async (e) => {
+		const flag = await e.backport.setGenerated(enabled);
+		logResult('generated opt-in', flag);
+		if (!flag.ok) return {ok: false, text: plainFailure('change the generated patch', flag.errors)};
+		if (enabled && storedId && storedId !== STOCK_HOME) {
+			setNotice('Setting up. The screen will blink once.');
+			writePending(storedId, storedId);
+			const inst = await e.backport.install();
+			logResult('install generated patch', inst);
+			if (!inst.ok) return {ok: false, text: plainFailure('install the generated patch', inst.errors)};
+		} else if (!enabled) {
+			setNotice('Removing the Home key patch. The screen will blink once.');
+			const rem = await e.backport.remove();
+			logResult('remove generated patch', rem);
+			if (!rem.ok) return {ok: false, text: plainFailure('remove the generated patch', rem.errors)};
+		}
+		return {ok: true, text: enabled ? (storedId ? DONE_TEXT : 'Generated patch enabled. Choose a Home app.') : 'Generated patch disabled. The Home button opens LG Home.'};
+	}), [run, storedId]);
+
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
+		patchMounted: Boolean(patchStatus && patchStatus.mounted),
+		showGenerated: Boolean(patchStatus && (patchStatus.generated === 'possible' || patchStatus.release === 'generated' || patchStatus.generatedOptIn)),
+		generatedOptIn: Boolean(patchStatus && patchStatus.generatedOptIn), toggleGenerated,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
 		busy, notice, toast, choose, notify: (text) => setToast({ok: true, text}), dismissToast: () => setToast(null)
 	};

@@ -79,6 +79,7 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   not, so those two calls are the `profileGet` and `profileRescan` commands below.
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/keyfilter`,
+  `/var/lib/webosbrew/homechooser/keyfilter-generated`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
   `/etc/os-release`, because a web app cannot read it and the app needs the release. The
   writable files are opened with `O_NOFOLLOW`. `/etc/os-release` is a symlink to

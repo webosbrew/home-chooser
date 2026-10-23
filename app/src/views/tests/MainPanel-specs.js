@@ -3,6 +3,7 @@ import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import App from '../../App';
 import {FatalError} from '../../homechooser/environment';
 import {PENDING_KEY} from '../pending';
+import {patchStateOf} from '../useHomeChooser';
 
 const ok = (extra) => Object.assign({ok: true, steps: [], warnings: [], errors: []}, extra);
 
@@ -296,6 +297,81 @@ describe('Home Chooser screen', () => {
 		});
 	});
 
+	describe('generated patch switch', () => {
+		const label = 'Use a patch generated for this firmware (not reviewed)';
+		const setupGenerated = ({stored = '', mounted = false, optin = false} = {}) => {
+			const status = {mounted, release: mounted ? 'generated' : null, match: null, generated: 'possible', optin, generatedOptIn: optin};
+			const backport = {
+				status: jest.fn(async () => ok({status: {...status}})),
+				setGenerated: jest.fn(async (on) => { status.optin = on; status.generatedOptIn = on; return ok(); }),
+				install: jest.fn(async () => { status.mounted = true; status.release = 'generated'; return ok(); }),
+				remove: jest.fn(async () => { status.mounted = false; status.release = null; return ok(); })
+			};
+			const env = makeEnv({version: [8, 3, 0], stored, backport});
+			mountApp(env);
+			return {env, backport};
+		};
+
+		test('off by default, explains the blocked choice; on permits choosing and installing', async () => {
+			const {env, backport} = setupGenerated();
+			const toggle = (await screen.findByText(label)).closest('[role="checkbox"]');
+			expect(toggle.getAttribute('aria-checked')).toBe('false');
+			fireEvent.click(screen.getByText('Plain Launcher'));
+			expect(await screen.findByText(/This firmware has no reviewed patch/)).toBeTruthy();
+			expect(screen.queryByText('Use as Home')).toBeNull();
+			fireEvent.click(screen.getByText('OK'));
+			fireEvent.click(toggle);
+			await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
+			expect(backport.setGenerated).toHaveBeenCalledWith(true);
+			expect(backport.install).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await waitFor(() => expect(backport.install).toHaveBeenCalled());
+			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: true});
+			expect((await screen.findByTestId('footer')).textContent).toBe('Home key patch: active (generated, not reviewed)');
+		});
+
+		test('turning on with a stored choice installs after saving opt-in', async () => {
+			const {backport} = setupGenerated({stored: 'org.plain.launcher'});
+			fireEvent.click(await screen.findByText(label));
+			await waitFor(() => expect(backport.install).toHaveBeenCalledTimes(1));
+			expect(backport.setGenerated.mock.invocationCallOrder[0]).toBeLessThan(backport.install.mock.invocationCallOrder[0]);
+			await screen.findByText('Done. Press Home to try it.');
+		});
+
+		test('turning off clears opt-in before removing; active generated choices need no reinstall', async () => {
+			const {env, backport} = setupGenerated({mounted: true, optin: true});
+			fireEvent.click(await screen.findByText('Plain Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await screen.findByText('Done. Press Home to try it.');
+			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: false});
+			expect(backport.install).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByText(label));
+			await waitFor(() => expect(backport.remove).toHaveBeenCalledTimes(1));
+			expect(backport.setGenerated).toHaveBeenCalledWith(false);
+			expect(backport.setGenerated.mock.invocationCallOrder[0]).toBeLessThan(backport.remove.mock.invocationCallOrder[0]);
+			await screen.findByText('Generated patch disabled. The Home button opens LG Home.');
+		});
+
+		test('a failed flag write prevents installation', async () => {
+			const {backport} = setupGenerated({stored: 'org.plain.launcher'});
+			backport.setGenerated.mockResolvedValue(ok({ok: false, errors: ['write failed']}));
+			fireEvent.click(await screen.findByText(label));
+			await screen.findByText("Couldn't change the generated patch.");
+			expect(backport.install).not.toHaveBeenCalled();
+		});
+	});
+
+	test.each([
+		[{mounted: false, generated: 'possible', optin: false}, 'unreviewed'],
+		[{mounted: false, generated: 'possible', optin: true}, 'generated'],
+		[{mounted: true, release: 'generated'}, 'generated'],
+		[{mounted: false, generated: 'refused', optin: true}, 'nomatch'],
+		[{mounted: false, match: '8.3.0', generated: 'possible', optin: true}, 'ready']
+	])('patch state of %j is %s', (status, expected) => {
+		expect(patchStateOf({}, status)).toBe(expected);
+	});
+
 	describe('footer', () => {
 		const withStatus = (version, status) => makeEnv({
 			version,
@@ -304,6 +380,9 @@ describe('Home Chooser screen', () => {
 		test.each([
 			['active', {mounted: true, enabled: true}, 'Home key patch: active'],
 			['not active', {mounted: false, enabled: false, match: '8.3.0'}, 'Home key patch: not active'],
+			['unreviewed', {mounted: false, generated: 'possible', optin: false}, 'Home key patch: no reviewed set for this firmware'],
+			['generated inactive', {mounted: false, generated: 'possible', optin: true}, 'Home key patch: generated, not reviewed (not active)'],
+			['generated active', {mounted: true, release: 'generated'}, 'Home key patch: active (generated, not reviewed)'],
 			['no match', {mounted: false, enabled: false, match: null}, "Home key patch: not available for this TV's software"]
 		])('webOS 8: %s', async (name, status, text) => {
 			mountApp(withStatus([8, 3, 0], status));

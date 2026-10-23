@@ -537,7 +537,7 @@ describe('persistence', () => {
 		});
 		const res = await chooser(tv, [8, 3, 0]).readPersistence();
 		expect(res.ok).toBe(true);
-		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']});
+		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', keyfilterEnabled: true, keyfilterGenerated: false, log: ['line one', 'line two']});
 	});
 
 	test.each([

@@ -26,8 +26,9 @@ homebrew app with three parts:
   again.
 * The webOS 6 to 9 key filter backport is shipped as diffs keyed by the stock file's sha256. A
   Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
-  copies over the originals; a file with an unknown hash is left stock. See the study's
-  Deployment section.
+  copies over the originals. Reviewed sets take precedence; on webOS 6 to 9 with unknown hashes,
+  the owner may opt in to a patch generated from the live stock files with strict post-conditions.
+  Any refusal leaves the files stock. See [Generated fallback](docs/key-filter-backport.md#generated-fallback).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.

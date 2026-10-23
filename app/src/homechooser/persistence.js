@@ -18,6 +18,7 @@ export const STATE_DIR = '/var/lib/webosbrew/homechooser';
 export const HOME_FILE = `${STATE_DIR}/home`;
 // Exists while the key filter backport is enabled (webOS 6 to 9).
 export const KEYFILTER_FLAG = `${STATE_DIR}/keyfilter`;
+export const GENERATED_FLAG = `${STATE_DIR}/keyfilter-generated`;
 
 export const WATCH_UNIT = 'homechooser-home';
 export const WATCH_LOG = '/tmp/homechooser-home.log';
@@ -45,7 +46,7 @@ export const keyfilterCommand = (arg) => 'keyfilter' + arg[0].toUpperCase() + ar
 export const persistenceStatusCommand = () => 'persistenceStatus';
 
 export const parsePersistenceStatus = (text) => {
-	const out = {entry: 'none', entryTarget: null, active: '', stored: '', keyfilterEnabled: false, log: []};
+	const out = {entry: 'none', entryTarget: null, active: '', stored: '', keyfilterEnabled: false, keyfilterGenerated: false, log: []};
 	let inLog = false;
 	String(text || '').split('\n').forEach((line) => {
 		if (inLog) {
@@ -70,6 +71,8 @@ export const parsePersistenceStatus = (text) => {
 		if (m) out.stored = m[1].trim();
 		m = /^keyfilter=(.*)$/.exec(line);
 		if (m) out.keyfilterEnabled = m[1] === 'yes';
+		m = /^keyfilterGenerated=(.*)$/.exec(line);
+		if (m) out.keyfilterGenerated = m[1] === 'yes';
 	});
 	return out;
 };

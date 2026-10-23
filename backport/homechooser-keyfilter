@@ -52,6 +52,11 @@ LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
 SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
+GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
+NO_SETS_FLAG=${HOMECHOOSER_NO_SETS_FLAG:-/var/lib/webosbrew/homechooser/debug-no-sets}
+NODE=${HOMECHOOSER_NODE:-node}
+command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
+GEN=${HOMECHOOSER_GEN:-$(dirname "$0")/homechooser-keyfilter-gen.js}
 TMO_FORM=
 
 log() {
@@ -159,7 +164,7 @@ mkdir -p "$WORK" 2>/dev/null
 
 # any_mounted: succeed when a target of any set in the data directory is a mount point.
 any_mounted() {
-    for m in "$DATA"/*/manifest.json; do
+    for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
         [ -f "$m" ] || continue
         entries "$m" > "$WORK/entries.tmp"
         while read -r p && read -r h && read -r d; do
@@ -175,6 +180,8 @@ any_mounted() {
 
 # find_set: print the release whose files all match their stock hash, if any.
 find_set() {
+    [ "${HOMECHOOSER_NO_SETS:-0}" = 1 ] && return 1
+    [ -f "$NO_SETS_FLAG" ] && return 1
     for m in "$DATA"/*/manifest.json; do
         [ -f "$m" ] || continue
         rel=$(basename "$(dirname "$m")")
@@ -194,6 +201,48 @@ find_set() {
         fi
     done
     return 1
+}
+
+# Cache checks by content, including discovery/guard inputs and the rules themselves.
+# Hash all QML/JS in these trees, so a new target or stray stock id invalidates the cache too.
+generated_key() {
+    {
+        printf '%s\n' "$NODE"
+        "$SHA256" "$GEN" "$ROOT/etc/os-release" 2>/dev/null
+        find "$ROOT/usr/lib/qml/WebOSCompositor" "$ROOT/usr/lib/qml/KeyFilters" \
+             "$ROOT/usr/lib/qml/WebOSCompositorBase" -type f \
+             \( -name '*.qml' -o -name '*.js' \) -exec "$SHA256" {} + 2>/dev/null | LC_ALL=C sort
+    } | "$SHA256" | cut -d' ' -f1
+}
+
+generated_status() {
+    key=$(generated_key)
+    cache="$WORK/check-$key"
+    if [ ! -f "$cache" ]; then
+        if "$NODE" "$GEN" check --root "${ROOT:-/}" > "$WORK/check.$$.out" 2>&1; then
+            echo generated=possible > "$WORK/check.$$.result"
+        else
+            {
+                echo generated=refused
+                printf 'reason='
+                tr '\n\r' '  ' < "$WORK/check.$$.out"
+                printf '\n'
+            } > "$WORK/check.$$.result"
+        fi
+        mv "$WORK/check.$$.result" "$cache"
+        rm -f "$WORK/check.$$.out"
+    fi
+    cat "$cache"
+    if [ -f "$GENERATED_FLAG" ]; then echo optin=yes; else echo optin=no; fi
+}
+
+active_manifest() {
+    rel=$(cat "$WORK/release" 2>/dev/null)
+    if [ "$rel" = generated ]; then
+        echo "$WORK/generated/manifest.json"
+    else
+        echo "$DATA/$rel/manifest.json"
+    fi
 }
 
 restart_compositor() {
@@ -225,42 +274,50 @@ do_apply() {
         log "restarting sam"
         "$SYSTEMCTL" restart sam || log "ERROR: could not restart sam"
     fi
-    if [ ! -d "$DATA" ]; then
-        log "no backport data in $DATA, nothing to do"
-        return 0
-    fi
     if any_mounted; then
         log "key filter backport already mounted, nothing to do"
         return 0
     fi
     rel=$(find_set)
+    rm -rf "$WORK/stage" "$WORK/generated"
     if [ -z "$rel" ]; then
-        log "no diff set matches the stock files, leaving them as they are"
-        return 0
-    fi
-    log "diff set $rel matches the stock files"
-    set_dir="$DATA/$rel"
-
-    rm -rf "$WORK/stage"
-    mkdir -p "$WORK/stage"
-    entries "$set_dir/manifest.json" > "$WORK/entries"
-
-    # Copy every target, then patch every copy; any failure drops the whole set.
-    while read -r p && read -r h && read -r d; do
-        mkdir -p "$WORK/stage$(dirname "$p")" && cp -p "$ROOT$p" "$WORK/stage$p" || {
-            log "ERROR: cannot copy $p, set $rel not applied"
-            rm -rf "$WORK/stage" "$WORK/entries"
-            return 1
-        }
-    done < "$WORK/entries"
-    while read -r p && read -r h && read -r d; do
-        if ! (cd "$WORK/stage" && "$PATCH" -p0 < "$set_dir/$d") >> "$LOG" 2>&1; then
-            log "ERROR: $d does not apply to $p, set $rel not applied"
-            rm -rf "$WORK/stage" "$WORK/entries"
+        log "no diff set matches the stock files"
+        [ -f "$GENERATED_FLAG" ] || { log "generated patch not opted in, leaving stock"; return 0; }
+        mkdir -p "$WORK/generated"
+        "$NODE" "$GEN" generate --root "${ROOT:-/}" --out "$WORK/stage" \
+            --manifest "$WORK/generated/manifest.json" >> "$LOG" 2>&1
+        r=$?
+        if [ "$r" != 0 ]; then
+            log "generator failed ($r), leaving stock; see $LOG"
+            rm -rf "$WORK/stage" "$WORK/generated"
+            [ "$r" = 2 ] && return 0
             return 1
         fi
-        log "patched $p with $d"
-    done < "$WORK/entries"
+        rel=generated
+        entries "$WORK/generated/manifest.json" > "$WORK/entries"
+    else
+        log "diff set $rel matches the stock files"
+        set_dir="$DATA/$rel"
+        mkdir -p "$WORK/stage"
+        entries "$set_dir/manifest.json" > "$WORK/entries"
+
+        # Copy every target, then patch every copy; any failure drops the whole set.
+        while read -r p && read -r h && read -r d; do
+            mkdir -p "$WORK/stage$(dirname "$p")" && cp -p "$ROOT$p" "$WORK/stage$p" || {
+                log "ERROR: cannot copy $p, set $rel not applied"
+                rm -rf "$WORK/stage" "$WORK/entries"
+                return 1
+            }
+        done < "$WORK/entries"
+        while read -r p && read -r h && read -r d; do
+            if ! (cd "$WORK/stage" && "$PATCH" -p0 < "$set_dir/$d") >> "$LOG" 2>&1; then
+                log "ERROR: $d does not apply to $p, set $rel not applied"
+                rm -rf "$WORK/stage" "$WORK/entries"
+                return 1
+            fi
+            log "patched $p with $d"
+        done < "$WORK/entries"
+    fi
 
     # Put the stored choice into the copies that carry the placeholder.
     cid=$(baked_id)
@@ -296,7 +353,7 @@ do_apply() {
 
 do_stop() {
     unmounted=0
-    for m in "$DATA"/*/manifest.json; do
+    for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
         [ -f "$m" ] || continue
         entries "$m" > "$WORK/entries.tmp"
         while read -r p && read -r h && read -r d; do
@@ -313,7 +370,13 @@ do_stop() {
             done
         done < "$WORK/entries.tmp"
     done
-    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$WORK/entries" "$WORK/entries.tmp"
+    # Keep the generated target list and mounted sources if an unmount failed, so status and a
+    # later stop can still find them even when no reviewed set names these files.
+    if any_mounted; then
+        log "ERROR: targets remain mounted; keeping stage and manifest for a later stop"
+        return 1
+    fi
+    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$WORK/entries" "$WORK/entries.tmp" "$WORK/generated"
     if [ "$unmounted" = 1 ]; then
         restart_compositor
     else
@@ -333,7 +396,7 @@ do_refresh() {
     done
     [ "$stock" = 1 ] || cid=$(baked_id)
     changed=0
-    entries "$DATA/$(cat "$WORK/release" 2>/dev/null)/manifest.json" > "$WORK/entries.tmp" 2>/dev/null
+    entries "$(active_manifest)" > "$WORK/entries.tmp" 2>/dev/null
     while read -r p && read -r h && read -r d; do
         f="$WORK/stage$p"
         has_configured "$f" || continue
@@ -357,10 +420,19 @@ do_status() {
     if any_mounted; then
         echo "mounted=yes"
         echo "release=$(cat "$WORK/release" 2>/dev/null || echo unknown)"
+        if [ "$(cat "$WORK/release" 2>/dev/null)" = generated ]; then
+            echo match=generated
+            entries "$WORK/generated/manifest.json" > "$WORK/entries.tmp"
+            while read -r p && read -r h && read -r d; do
+                echo "hash=$(sha_of "$WORK/stage$p") $p"
+            done < "$WORK/entries.tmp"
+            rm -f "$WORK/entries.tmp"
+        fi
     else
         echo "mounted=no"
         rel=$(find_set)
         echo "match=${rel:-none}"
+        [ -n "$rel" ] || generated_status
     fi
 }
 
