@@ -109,13 +109,27 @@ This identity is device-unverified separately on webOS 5.x, 6.x, 7.x, 8.x, 9.x, 
 
 ## Launcher access files
 
-`backport/homechooser-access apply|remove|status` manages only Home Chooser's group/API files under
+`backport/homechooser-access apply|remove|status` manages only Home Chooser's API file under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
-`groups.d/homechooser.groups.json` (non-public `homechooser.applications`) and
-`api-permissions.d/org.webosbrew.homechooser.service.api.json` (five launcher methods), and adds
-their absolute paths to `groupsFiles` and `apiPermissionFiles`, creating missing arrays. On major
-11+ the same five methods are also under `ares.webos.cli`. Neither includes `uninstallConfirmed`.
+`api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`homechooser.applications`: five
+launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
+missing. On major 11+ the same five methods are also under `ares.webos.cli`. Neither includes
+`uninstallConfirmed`. The group is declared only by that API file, the way the installer declares
+`<service>.group` for every developer service.
+
+No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
+`groups.d/homechooser.groups.json` through `groupsFiles`. On webOS 9.2.1 (w22h-ombre) ls-hubd then
+segfaults (`g_hash_table_iter_next`, NULL table) when appinstalld unloads the package manifest at
+"removing service files" (`luna://com.webos.service.bus/removeOneManifest`). appinstalld retries
+that removal at every boot, so the bus never comes up again. It was reproduced on 2026-10-24 with a
+synthetic manifest that had only a `groupsFiles` entry. A manifest that provides a group only
+through `apiPermissionFiles` was removed the same way without a crash. `ls-control scan-services`
+after dropping the entry did not crash either. The same crash at uninstall was seen on 11.2.0
+(w22o-queue-us), which recovered after a reboot. The first version also wrote over the installer's
+own `api-permissions.d/org.webosbrew.homechooser.service.api.json`; that file is the installer's
+and is not touched now. Apply and remove both strip the old `groupsFiles` entry, delete the old
+groups file and rescan while the app is still installed.
 The elevated service's broader public registration still requires the service's own caller gates.
 
 Apply is idempotent and repairs drift. Remove drops these manifest entries and files, including

@@ -2,6 +2,15 @@
 # Install the launcher API group in package manifests already created by the installer.
 # Test overrides: HOMECHOOSER_LUNA_ROOTS (space-separated), HOMECHOOSER_LS_CONTROL,
 # HOMECHOOSER_OSRELEASE. No jq or service changes outside Home Chooser's own files.
+#
+# The group exists only through our own api-permissions file, the way the installer declares
+# <service>.group for every developer service. It is never declared through groupsFiles: on
+# webOS 9.2.1 (and 11.2.0) ls-hubd segfaults in g_hash_table_iter_next when appinstalld unloads a
+# /var/luna-service2*/manifests.d manifest that has a groupsFiles entry (removeOneManifest at
+# "removing service files"), and appinstalld retries that removal at every boot. Our api file
+# also has its own name: org.webosbrew.homechooser.service.api.json is the installer's file (the
+# first version overwrote it; it is left to the installer now). Every run strips the first
+# version's groupsFiles entry and deletes its groups.d file.
 set -eu
 ROOTS=${HOMECHOOSER_LUNA_ROOTS:-'/var/luna-service2-dev /var/luna-service2'}
 CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
@@ -37,23 +46,25 @@ write_changed() {
     fi
 }
 
-# The installer manifest uses flat arrays of file names. Remove only our exact entry, then
-# append it once on apply, or drop an empty array on remove. Other entries are preserved.
-manifest_entry() {
+# The installer manifest uses flat arrays of file names. Remove only our exact entry and drop
+# the array if that leaves it empty; add_entry then appends it once. Other entries are preserved.
+drop_entry() {
     key=$1 path=$2
     escaped=$(printf '%s' "$path" | sed 's/[.[\*^$\\|]/\\&/g')
     json=$(printf '%s\n' "$json" | sed \
         -e "s|\(\"$key\":\[[^]]*\)\"$escaped\",|\1|g" \
         -e "s|\(\"$key\":\[[^]]*\),\"$escaped\"|\1|g" \
-        -e "s|\"$key\":\[\"$escaped\"\]|\"$key\":[]|g")
-    if [ "$action" = apply ]; then
-        if printf '%s\n' "$json" | grep -q "\"$key\":\["; then
-            json=$(printf '%s\n' "$json" | sed "s|\"$key\":\[|\"$key\":[\"$path\",|; s|\"$path\",]|\"$path\"]|")
-        else
-            json=$(printf '%s\n' "$json" | sed "s|^{|{\"$key\":[\"$path\"],|; s|,}|}|")
-        fi
+        -e "s|\"$key\":\[\"$escaped\"\]|\"$key\":[]|g" \
+        -e "s|\"$key\":\[\],||g" -e "s|,\"$key\":\[\]||g" -e "s|\"$key\":\[\]||g")
+}
+
+add_entry() {
+    key=$1 path=$2
+    drop_entry "$key" "$path"
+    if printf '%s\n' "$json" | grep -q "\"$key\":\["; then
+        json=$(printf '%s\n' "$json" | sed "s|\"$key\":\[|\"$key\":[\"$path\",|; s|\"$path\",]|\"$path\"]|")
     else
-        json=$(printf '%s\n' "$json" | sed -e "s|\"$key\":\[\],||g" -e "s|,\"$key\":\[\]||g" -e "s|\"$key\":\[\]||g")
+        json=$(printf '%s\n' "$json" | sed "s|^{|{\"$key\":[\"$path\"],|; s|,}|}|")
     fi
 }
 
@@ -61,35 +72,34 @@ action=${1:-status}
 case "$action" in apply|remove|status) ;; *) echo "usage: $0 apply|remove|status" >&2; exit 2 ;; esac
 for root in $ROOTS; do
     manifest=$root/manifests.d/org.webosbrew.homechooser.json
-    group=$root/groups.d/homechooser.groups.json
-    api=$root/api-permissions.d/org.webosbrew.homechooser.service.api.json
+    api=$root/api-permissions.d/org.webosbrew.homechooser.launcher.api.json
+    legacy_group=$root/groups.d/homechooser.groups.json
     if [ "$action" = status ]; then
-        printf '%s manifest=%s group=%s api=%s\n' "$root" \
+        printf '%s manifest=%s api=%s legacy-group=%s\n' "$root" \
             "$(test -f "$manifest" && echo yes || echo no)" \
-            "$(test -f "$group" && echo yes || echo no)" \
-            "$(test -f "$api" && echo yes || echo no)"
+            "$(test -f "$api" && echo yes || echo no)" \
+            "$(test -f "$legacy_group" && echo yes || echo no)"
         continue
     fi
     if [ -f "$manifest" ]; then
         json=$(compact "$manifest")
         case "$json" in \{*\}) ;; *) echo "Invalid manifest: $manifest" >&2; exit 1 ;; esac
-        manifest_entry groupsFiles "$group"
-        manifest_entry apiPermissionFiles "$api"
+        drop_entry groupsFiles "$legacy_group"
         if [ "$action" = apply ]; then
-            mkdir -p "$root/groups.d" "$root/api-permissions.d"
-            write_changed "$group" '{"homechooser.applications":{"description":"Home Chooser launcher applications","public":false}}'
+            mkdir -p "$root/api-permissions.d"
             methods='["org.webosbrew.homechooser.service/listApps","org.webosbrew.homechooser.service/running","org.webosbrew.homechooser.service/closeById","org.webosbrew.homechooser.service/uninstall","org.webosbrew.homechooser.service/getInfo"]'
             permissions="{\"homechooser.applications\":$methods"
             [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods"
             write_changed "$api" "$permissions}"
+            add_entry apiPermissionFiles "$api"
+        else
+            drop_entry apiPermissionFiles "$api"
         fi
         # Compare compact JSON to avoid rewriting an unchanged pretty-printed manifest.
         if [ "$(compact "$manifest")" != "$json" ]; then write_changed "$manifest" "$json"; fi
     fi
-    if [ "$action" = remove ]; then
-        for file in "$group" "$api"; do
-            if [ -f "$file" ]; then rm -f "$file"; changed=1; fi
-        done
-    fi
+    # Legacy group file: nothing loads it once the manifest entry is gone.
+    if [ -f "$legacy_group" ]; then rm -f "$legacy_group"; changed=1; fi
+    if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi

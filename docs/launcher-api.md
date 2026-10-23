@@ -143,8 +143,9 @@ installed `requiredPermissions`. `closeById` and `uninstall` additionally compar
 stored selection in `/var/lib/webosbrew/homechooser/home`. These are service checks even when the
 hub permits the call via a broader group. An ordinary shell `luna-send` has no app id and is refused.
 
-`backport/homechooser-access` installs `homechooser.applications` as a non-public group and grants
-only `listApps`, `running`, `closeById`, `uninstall`, `getInfo`. It references the files from each
+`backport/homechooser-access` grants `homechooser.applications` (declared only by Home Chooser's
+own API file, never through `groupsFiles`; see docs/service.md) only `listApps`, `running`,
+`closeById`, `uninstall`, `getInfo`. It references the files from each
 existing Home Chooser package manifest under `/var/luna-service2-dev` and `/var/luna-service2`.
 On webOS 11.x and later, where developer apps retain only `ares.webos.cli`/`public`, the same five
 methods are also granted under `ares.webos.cli`; the service still demands the app's declared
@@ -173,11 +174,12 @@ on a device. This applies separately to each supported release:
 | 12.x | device-unverified | device-unverified | device-unverified |
 
 Specifically device-unverified: `getAppInfo` returning `requiredPermissions` (installed appinfo
-fallback exists); the group JSON format, manifest keys `groupsFiles`/`apiPermissionFiles`, and the
-manifest being named after the app id; `/var/luna-service2` surviving reboot; `<id>_default` being
-the correct launch-point id; alert button `onclick`/`params` and the click sender's application
-identity; `running` being callable and returning a `running` array; status 31 reliably being the
-final successful removal status; and `ares.webos.cli` alone allowing delivery on 11+.
+fallback exists); a group declared only by an API file being grantable to launchers, the manifest
+key `apiPermissionFiles`, and the manifest being named after the app id; `/var/luna-service2`
+surviving reboot; `<id>_default` being the correct launch-point id; alert button `onclick`/`params`
+and the click sender's application identity; `running` being callable and returning a `running`
+array; status 31 reliably being the final successful removal status; and `ares.webos.cli` alone
+allowing delivery on 11+.
 
 For a device validation session, the order is: install/elevate Home Chooser and inspect the access
 files; install a consenting Home fixture and inspect its effective client permissions; call
