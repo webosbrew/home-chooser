@@ -23,6 +23,17 @@
 # An app is taken as gone only if it is still gone HOMECHOOSER_CONFIRM_DELAY seconds (15) later,
 # because an update installs by removing first.
 #
+# While a third-party home is chosen (webOS 6 and later) it also keeps LG's stock home,
+# com.webos.app.home, from being preloaded: preloadmanager/setPreloadPolicy with isEnabled false,
+# without "permanent", so nothing is persisted and a reboot starts stock again; then a forced
+# closeByAppId of the stock home, which frees its memory. Once per boot and once per transition
+# (choice becomes a third-party home, becomes stock, the chosen app goes missing or returns; at
+# exit 0, i.e. restore to stock or Home Chooser uninstalled, the policy is set back to enabled).
+# Best effort: a short timeout, the reply is logged, a failure is never retried and never blocks
+# anything else. At start the close waits HOMECHOOSER_PRELOAD_SETTLE seconds (45) in the
+# background, because on 5.x to 9.x snapshot-boot-components launches the stock home at boot,
+# outside the preload manager. webOS 5 is left alone (docs/settings-app.md).
+#
 # The app's files are deleted with the app, so at start the watcher copies itself, the key filter
 # worker and the manifests into /tmp/homechooser-runtime/ and runs from there.
 #
@@ -36,7 +47,9 @@
 # HOMECHOOSER_LOG_MAX, HOMECHOOSER_CLOCK (command printing epoch seconds), HOMECHOOSER_SLEEP,
 # HOMECHOOSER_TMP, HOMECHOOSER_RUNTIME, HOMECHOOSER_SHELL, HOMECHOOSER_APPDIR, HOMECHOOSER_KEYFILTER_FLAG,
 # HOMECHOOSER_INITD, HOMECHOOSER_RECHECK, HOMECHOOSER_TIMER_SLEEP, HOMECHOOSER_CONFIRM_DELAY,
-# HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check).
+# HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check),
+# HOMECHOOSER_PRELOAD_SETTLE, HOMECHOOSER_PRELOAD_SLEEP, HOMECHOOSER_PRELOAD (0 turns the preload
+# policy off).
 
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
@@ -61,6 +74,11 @@ CONFIRM_DELAY=${HOMECHOOSER_CONFIRM_DELAY:-15}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 TMO_FORM=
 CHECK_MARK=${HOMECHOOSER_CHECK_MARK:-}
+PRELOAD_ON=${HOMECHOOSER_PRELOAD:-1}
+PRELOAD_SETTLE=${HOMECHOOSER_PRELOAD_SETTLE:-45}
+PRELOAD_SLEEP=${HOMECHOOSER_PRELOAD_SLEEP:-sleep}
+PRELOAD_TRIES=${HOMECHOOSER_PRELOAD_TRIES:-12}
+PRELOAD_RETRY=${HOMECHOOSER_PRELOAD_RETRY:-10}
 HC_ID=org.webosbrew.homechooser
 STOCK_HOME=com.webos.app.home
 STOCK_FULLHOME=com.webos.app.fullhome
@@ -68,6 +86,7 @@ STOCK_FULLHOME=com.webos.app.fullhome
 SETTINGS=luna://com.webos.settingsservice
 SAM=luna://com.webos.applicationManager
 PROFILE=luna://com.webos.service.systemprofile
+PRELOAD=luna://com.webos.service.preloadmanager
 
 now() {
     if [ -n "$CLOCK" ]; then $CLOCK; else date +%s; fi
@@ -176,11 +195,13 @@ cleanup() {
     [ -n "$LUNA_PID" ] && kill $LUNA_PID 2>/dev/null
     [ -n "$FEED_PIDS" ] && kill $FEED_PIDS 2>/dev/null
     [ -n "$NAP_PID" ] && kill "$NAP_PID" 2>/dev/null
+    [ -n "$CLOSE_PID" ] && kill "$CLOSE_PID" 2>/dev/null
     rm -rf "$TMP"
 }
 
 finish() {
     log "$1"
+    [ "${2:-0}" -eq 0 ] && preload_sync on exit
     cleanup
     exit "${2:-0}"
 }
@@ -422,14 +443,96 @@ detect_timeout() {
     fi
 }
 
-# timed <command...>: run a command under a 10 s timeout when `timeout` works.
-timed() {
+# timed_n <seconds> <command...>: run a command under a timeout when `timeout` works.
+timed_n() {
+    secs=$1
+    shift
     detect_timeout
     case "$TMO_FORM" in
-        new) "$TIMEOUT" 10 "$@" ;;
-        old) "$TIMEOUT" -t 10 "$@" ;;
+        new) "$TIMEOUT" "$secs" "$@" ;;
+        old) "$TIMEOUT" -t "$secs" "$@" ;;
         *) "$@" ;;
     esac
+}
+
+# timed <command...>: run a command under a 10 s timeout when `timeout` works.
+timed() {
+    timed_n 10 "$@"
+}
+
+# --- The stock home's preload policy (webOS 6 and later) -----------------------------------
+
+# close_stock_home: force-close the stock home, only if the policy is still the disabled one.
+close_stock_home() {
+    [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || return 0
+    out=$(timed_n 5 "$LUNA" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
+    log "closeByAppId $STOCK_HOME: ${out:-no reply}"
+}
+
+# preload_set <true|false>: one setPreloadPolicy call; logs the reply, succeeds on returnValue true.
+preload_set() {
+    out=$(timed_n 5 "$LUNA" -n 1 "$PRELOAD/setPreloadPolicy" "{\"application\":{\"id\":\"$STOCK_HOME\",\"isEnabled\":$1}}" 2>&1 | flatten)
+    log "setPreloadPolicy $STOCK_HOME isEnabled=$1: ${out:-no reply}"
+    ok_reply "$out"
+}
+
+# preload_boot_off: in the background, at a watcher start. The preload manager may not answer yet
+# this early in the boot (measured on 9.2.1: the first call timed out), so the call is retried every
+# PRELOAD_RETRY seconds, up to PRELOAD_TRIES times; then the boot is given PRELOAD_SETTLE seconds
+# and the stock home is closed (if the policy is still disabled by then).
+preload_boot_off() {
+    trap 'kill "$CP" 2>/dev/null; exit 0' TERM INT HUP
+    n=0
+    while :; do
+        [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || exit 0
+        preload_set false && break
+        n=$((n + 1))
+        [ "$n" -ge "$PRELOAD_TRIES" ] && exit 0
+        $PRELOAD_SLEEP "$PRELOAD_RETRY" &
+        CP=$!
+        wait "$CP"
+    done
+    $PRELOAD_SLEEP "$PRELOAD_SETTLE" &
+    CP=$!
+    wait "$CP"
+    close_stock_home
+}
+
+# preload_sync <on|off> [start]: bring the stock home's preload policy to the wanted state, once
+# per change of state (PRELOAD_STATE starts empty, so once per watcher start too). Never
+# "permanent", so the preload manager keeps it in memory only. Whatever happens, the caller goes on.
+preload_sync() {
+    [ "$PRELOAD_ON" = 1 ] && [ "$MAJOR" -ge 6 ] || return 0
+    [ "$PRELOAD_STATE" = "$1" ] && return 0
+    if [ "$1" = on ]; then
+        flag=true
+        # an "on" before anything was changed has nothing to undo, except at a start or an exit
+        # (the policy may have been left disabled by an earlier run of the watcher)
+        [ -z "$PRELOAD_STATE" ] && [ -z "$2" ] && { PRELOAD_STATE=on; return 0; }
+    else
+        flag=false
+    fi
+    PRELOAD_STATE=$1
+    echo "$1" > "$TMP/preload" 2>/dev/null
+    if [ "$1" = off ] && [ "$2" = start ]; then
+        [ -n "$CLOSE_PID" ] && kill "$CLOSE_PID" 2>/dev/null
+        preload_boot_off > /dev/null 2>&1 &
+        CLOSE_PID=$!
+        return 0
+    fi
+    preload_set "$flag" || return 0
+    [ "$1" = off ] && close_stock_home
+    return 0
+}
+
+# preload_follow <choice> [start]: the stock home is not preloaded while a third-party home is
+# chosen and installed.
+preload_follow() {
+    if [ -n "$MISSING" ] || [ "$1" = "$STOCK_HOME" ] || [ "$1" = "$STOCK_FULLHOME" ]; then
+        preload_sync on "$2"
+    else
+        preload_sync off "$2"
+    fi
 }
 
 # app_state <id>: yes (installed), no (getAppInfo answers returnValue false, which is what an
@@ -579,6 +682,7 @@ check_apps() {
             log "getAppInfo did not answer for $want, leaving things as they are"
             ;;
     esac
+    preload_follow "$want" "$why"
     [ -n "$CHECK_MARK" ] && echo "$why" >> "$CHECK_MARK"
     return 0
 }
@@ -598,6 +702,7 @@ handle() {
         kf_refresh
         BAKED=$want
     fi
+    preload_follow "$want"
     sync_baked "$want"
     found=$(home_of "$flat")
     [ "$found" = "$want" ] && return 0
@@ -660,6 +765,8 @@ NAP_PID=
 MISSING=
 BAKED=
 FEED_PIDS=
+CLOSE_PID=
+PRELOAD_STATE=
 
 want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
 log "watching, home=$want, webOS $MAJOR"

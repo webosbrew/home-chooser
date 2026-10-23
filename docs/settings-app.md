@@ -171,6 +171,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
     It subscribes to `applicationManager/listApps {"subscribe":true}` as a trigger only, checks the
     chosen app and `org.webosbrew.homechooser` with `getAppInfo` on every message and every 5 min,
     and runs from a copy of itself in `/tmp/homechooser-runtime/`.
+  * It keeps the stock home from being preloaded while a third-party home is chosen; see
+    [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
   * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends.
@@ -188,6 +190,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
   repairs, without one there is nothing to do.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
   (`/tmp/homechooser-home.log`).
+
+The watcher does not use a mocked preload manager in its tests; the preload calls only have to be tolerated by the stub.
 
 Tests: `backport/test-homechooser-home-watch.sh` (a stub `luna-send` plays a stream of replies:
 present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
@@ -307,6 +311,65 @@ answers it at boot when the init.d entry runs; how `listApps` change messages ar
 arrival is used) and that `timeout` accepts `timeout 10 <command>` in the images' busybox;
 and the real uninstall path through Homebrew Channel and `ares-install --remove`, including that
 an update of Home Chooser does not look like an uninstall for 15 s.
+
+## The stock home is not preloaded
+
+LG's stock home, `com.webos.app.home`, is kept resident by the preload manager (and on 5.x to 9.x
+launched at boot by `snapshot-boot-components.service`), which costs 70 to 105 MB while a third-party
+home is in use, and closing it by hand does not last because it is preloaded again. While a third-party
+home is chosen the watcher (webOS 6 and later) runs, as root:
+
+```
+luna-send -n 1 luna://com.webos.service.preloadmanager/setPreloadPolicy '{"application":{"id":"com.webos.app.home","isEnabled":false}}'
+luna-send -n 1 luna://com.webos.applicationManager/closeByAppId '{"id":"com.webos.app.home","forceMode":true}'
+```
+
+(the second only if the first answered `returnValue:true`), and back to `"isEnabled":true` when it
+stops applying. Never `"permanent"`: the preload manager keeps the policy in memory, nothing is
+written, and after a reboot the stock policy is back until the watcher re-applies it. The memory
+manager is not touched.
+
+* **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
+  (so once per boot, and once more after a restart of the unit), when the choice changes between a
+  third-party home and a stock one (`com.webos.app.home` or `com.webos.app.fullhome` in the choice
+  file), when the chosen app is found uninstalled (on) and when it returns (off), and at every exit
+  with status 0: the choice file is gone or unusable, the unit is stopped (Restore to stock runs
+  `systemctl stop homechooser-home` first, so the watcher gets SIGTERM and sets the policy back
+  before the choice file is removed), and the Home Chooser uninstall path, which runs from the
+  `/tmp` copy. A restart after a failure (exit 1) leaves the policy as it is; the new instance
+  applies it again.
+* **The close at boot.** On 5.x to 9.x `snapshot-boot-components.service` launches the stock home
+  outside the preload manager, and Homebrew Channel's boot hook (`init.d`) runs at
+  `minimal-boot-done`, which may be before or after that launch. The preload manager does not answer
+  that early either: on 9.2.1, 7.x, 11.2.0 and 12.0.0 the first call at boot timed out. So at start
+  the policy call runs in the background, retried every `HOMECHOOSER_PRELOAD_RETRY` seconds (10) up
+  to `HOMECHOOSER_PRELOAD_TRIES` times (12) until it answers `returnValue:true`; then the boot is
+  given `HOMECHOOSER_PRELOAD_SETTLE` seconds (45) and the stock home is force-closed, only if the
+  policy is still off by then. Changes later on are made at once and close at once. The close of a
+  stock home that is not running is a harmless `returnValue:false`.
+* **Best effort.** Each call runs under `timeout 5` when the image has it (as the app checks do),
+  its reply goes to `/tmp/homechooser-home.log`, and only the boot call is retried: a refusal
+  (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied call) or a
+  hang costs at most 5 s per call and changes nothing else: the home switch, the restore and the
+  uninstall cleanup go on. `HOMECHOOSER_PRELOAD=0` turns the feature off.
+* **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
+  `com.webos.app.home` is not running, so there is nothing to free; the preload lists of 5.6.1 name
+  both homes, and the 5.x restore path hands the key filter either of them, so a policy change would
+  have risk and no gain. The watcher makes no preload call on 5.x.
+* **Known limit.** With an overlay launcher (Dock) nothing takes the foreground from the stock
+  home, and on 6.x to 9.x `sam` relaunches it as the "last input" app (`NL_APP_LAUNCH_BEGIN`,
+  `caller_app_id: last_input_handler`) when it is closed or the compositor restarts, however the
+  policy is set: measured on 9.2.1 and 8.3.0, about 89 MB, so nothing is freed there. The end-to-end
+  runner records that as an expected failure only when `/var/log/messages` shows the `last_input`
+  relaunch. On 11.2.0 and 12.0.0 the stock home stayed closed with Dock.
+* **Measured (2026-10-23, Beanjar VMs).** Root `luna-send` may call `getPreloadPolicy` and
+  `setPreloadPolicy`; `getPreloadPolicy` answers `{"applications":[{"id":"com.webos.app.home",
+  "isEnabled":...,...},...]}` (an empty list right after boot). On 9.2.1 with the policy disabled, a
+  force-closed stock home (Homebrew Channel in front) stayed closed for 120 s and about 80 MB was
+  freed; re-enabled, the preload manager launched it again about 8 s later; after a reboot the
+  policy was back to enabled. End-to-end with `--reboot-check`: 11.2.0 (103 MB freed) and 12.0.0
+  (71 MB) keep the stock home closed after the switch and after a reboot; 7.x, 8.3.0 and 9.2.1 pass
+  with the overlay expected failure above; 5.6.1 makes no preload call.
 
 ## Restoring the stock home
 

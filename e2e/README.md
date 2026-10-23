@@ -13,7 +13,7 @@ Options: `--launcher <id>` (default `org.webosbrew.dock`) and `--launcher-ipk <p
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--host-mode
 auto|local|remote` and `--host-device` (see below); `--elevation luna|root-shell`; `--input
 qmp|ares`; `--viewer-shots`; `--until N` (stop after step N, no cleanup, for debugging);
-`--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
 `results.json`, numbered screenshots (taken inside the guest with `ares-do screenshot`).
 
 Before booting, the runner stops if any VM is running. It adds the `hbchannel` layer and
@@ -89,6 +89,27 @@ and backport docs.
 5. `ares-install --remove` Home Chooser: record, override, choice file, `init.d` link, flag,
    mounts and the watcher unit are gone; Home opens stock.
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`), stop the VM.
+
+Preload checks (docs/settings-app.md "The stock home is not preloaded"), on 6.x and later; on 5.x
+the watcher makes no preload call, so the checks only assert the policy is not disabled:
+
+* after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
+  `com.webos.app.home`, then after a 60 s settle `com.webos.app.home` is not in `applicationManager/running`
+  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 9.x this
+  second check is `XFAIL` if the stock home is running, citing the compositor-restart relaunch measured on
+  9.2.1 (~89 MB; the backport restarts the compositor there); on 10.x and later, or with a non-overlay
+  launcher, it is a `FAIL`;
+* after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
+  after the launcher is reinstalled, `isEnabled:false` again;
+* with `--reboot-check` (after step 3, launcher chosen): the VM is stopped and started with Beanjar;
+  after the boot the watcher is active, the record still names the launcher, the watcher's log
+  (in `/tmp`, so from this boot) shows `setPreloadPolicy ... isEnabled=false`, the policy reads false, and
+  after the 45 s boot close plus a 30 s settle the stock home is not running over 60 s (same
+  overlay `XFAIL` rule). On 5.x it asserts that there was no preload call.
+
+None of this has run yet: `getPreloadPolicy`'s reply shape (an `applications` array whose entries
+carry the app id and `isEnabled`) and root `luna-send` access to `preloadmanager` are inferred from
+the firmware.
 
 A check that fails where the docs name a limitation is recorded `XFAIL` with the citation
 (`Recorder.check(..., expected=...)`); nothing uses it yet, since 11.x and 12.x run with

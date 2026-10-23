@@ -54,6 +54,17 @@ MATRIX = [
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
+# Stock-home preload policy (backport/homechooser-home-watch; docs/settings-app.md "The stock home is
+# not preloaded").  Launchers that are overlay windows (the stock home is then not the one in front,
+# and sam relaunches it as the "last input" app when the compositor restarts: measured on 9.2.1,
+# ~89 MB with Dock chosen).  The key filter backport restarts the compositor on 6.x to 9.x only.
+OVERLAY_LAUNCHERS = {'org.webosbrew.dock'}
+OVERLAY_RELAUNCH = ('docs/settings-app.md known limit: with an overlay launcher a compositor restart makes sam '
+                    'relaunch the stock home as the last-input app (measured on 9.2.1, ~89 MB); not fixed by '
+                    'the preload policy')
+PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
+PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
+
 
 def entry(release_or_vm):
     for m in MATRIX:
@@ -212,6 +223,17 @@ class Device:
             return json.loads(out).get('appId', ''), out
         except ValueError:
             return None, out
+
+    def preload_policy(self, appid=STOCK):
+        """(isEnabled or None, raw reply) of preloadmanager/getPreloadPolicy for one app, as root."""
+        out = self.luna('luna://com.webos.service.preloadmanager/getPreloadPolicy')
+        try:
+            for a in json.loads(out).get('applications', []):
+                if appid in [v for v in a.values() if isinstance(v, str)]:
+                    return a.get('isEnabled'), out
+        except (ValueError, AttributeError, TypeError):
+            pass
+        return None, out
 
     def record_home(self):
         out = self.luna('luna://com.webos.settingsservice/getSystemSettings',
@@ -614,6 +636,69 @@ class Scenario:
         elif self.uses_backport():
             r.check(label + ': no backport mounts', not s['mounts'], 'mounts: %s' % s['mounts'])
 
+    # -- the stock home's preload policy
+    def preload_log(self):
+        return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
+
+    def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
+        """Sample `running` for the stock home: list of (seconds, running)."""
+        t0, out = time.time(), []
+        while True:
+            out.append((int(time.time() - t0), STOCK in self.running_ids()))
+            if time.time() - t0 + every > seconds:
+                break
+            time.sleep(every)
+        return out
+
+    def check_preload_off(self, label, settle=PRELOAD_SETTLE):
+        """A third-party home is chosen: the watcher disabled the stock home's preload and the stock
+        home stays closed.  5.x: the watcher leaves the policy alone (settings-app.md), so it must not
+        read false; the stock home is only observed (com.webos.app.home is not running on 5.x)."""
+        r = self.rec
+        enabled, raw = self.dev.preload_policy()
+        if self.major <= 5:
+            r.check(label + ': 5.x, the stock home policy is left alone (not disabled)', enabled is not False,
+                    'isEnabled=%r; %s' % (enabled, raw))
+            r.note(label + ': watcher log (5.x: no setPreloadPolicy expected)', self.preload_log())
+            return
+        ok = self.wait(lambda: self.dev.preload_policy()[0] is False, 60, 5)
+        enabled, raw = self.dev.preload_policy()
+        r.check(label + ': getPreloadPolicy shows isEnabled:false for ' + STOCK, enabled is False,
+                'isEnabled=%r; %s' % (enabled, raw))
+        r.note(label + ': watcher log', self.preload_log())
+        r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
+        time.sleep(settle)
+        samples = self.stock_running_samples()
+        ok = not any(run_ for _, run_ in samples)
+        overlay = self.launcher in OVERLAY_LAUNCHERS and self.uses_backport()
+        if not ok:
+            # the XFAIL is allowed only if sam's journal shows the last-input relaunch and no preload one
+            lines = self.dev.sh("(zcat /var/log/messages.0.gz 2>/dev/null; cat /var/log/messages) | grep "
+                                "'NL_APP_LAUNCH_BEGIN.*\"app_id\":\"%s\"' | tail -n 4" % STOCK)[1].strip()
+            r.note(label + ': sam launches of the stock home (last 4)', lines)
+            last = lines.splitlines()[-1] if lines else ''
+            if overlay and 'last_input' not in last:
+                overlay = False   # a preload (or unknown) relaunch is a FAIL, not the known limit
+        r.check('%s: %s is not running over %d s' % (label, STOCK, PRELOAD_SAMPLE), ok,
+                'running at t=%s s' % [t for t, run_ in samples if run_] if not ok else 'never running in %d samples' % len(samples),
+                expected=OVERLAY_RELAUNCH if overlay else None)
+        if not ok:
+            self.residency(label + ': stock home came back')
+
+    def check_preload_on(self, label, wait_for=120):
+        """The policy is back to enabled (launcher uninstalled, choice stock, Home Chooser uninstalled)."""
+        r = self.rec
+        if self.major <= 5:
+            enabled, raw = self.dev.preload_policy()
+            r.check(label + ': 5.x, the stock home policy was never touched', enabled is not False,
+                    'isEnabled=%r; %s' % (enabled, raw))
+            return
+        self.wait(lambda: self.dev.preload_policy()[0] is True, wait_for, 5)
+        enabled, raw = self.dev.preload_policy()
+        r.check(label + ': getPreloadPolicy shows isEnabled:true for ' + STOCK, enabled is True,
+                'isEnabled=%r; %s' % (enabled, raw))
+        r.note(label + ': watcher log', self.preload_log())
+
     def front_app(self, appid='org.webosbrew.hbchannel'):
         """An ordinary app in front, as docs T4 presses Home from.  (With the stock home in front
         the key is passed to the home view and nothing is launched: see step 3.)"""
@@ -623,10 +708,19 @@ class Scenario:
         time.sleep(3)
 
     def running_ids(self):
+        """Ids in applicationManager/running whose process is alive.  On 12.x sam keeps a ghost entry
+        (pid gone from /proc) for a force-closed flutter app, so an entry with a dead pid is dropped."""
         try:
-            return [x['id'] for x in json.loads(self.dev.luna('luna://com.webos.applicationManager/running'))['running']]
+            rows = json.loads(self.dev.luna('luna://com.webos.applicationManager/running'))['running']
         except (ValueError, KeyError, TypeError):
             return []
+        pids = [x.get('processid') for x in rows if x.get('processid')]
+        alive = set(pids)
+        if pids:
+            rc, out = self.dev.sh('for p in %s; do test -d /proc/$p && echo $p; done' % ' '.join(
+                p for p in pids if str(p).isdigit()))
+            alive = set(out.split())
+        return [x['id'] for x in rows if not x.get('processid') or x['processid'] in alive]
 
     def home_press(self, expect, label, from_app=True):
         """Press Home from an ordinary app.  The stock home must be in the foreground afterwards;
@@ -684,6 +778,7 @@ class Scenario:
                 str(d.installed()))
         df = d.sh('df -h /media/developer | tail -1')[1].strip()
         r.note('df /media/developer', df)
+        r.note('baseline preload policy of %s (isEnabled, raw reply)' % STOCK, repr(d.preload_policy()))
 
         steps = [self.step1, self.step2, self.step3, self.step4, self.step5]
         try:
@@ -691,6 +786,8 @@ class Scenario:
                 if i > self.a.until:
                     break
                 fn(strat) if i == 1 else fn()
+                if i == 3 and self.a.reboot_check:
+                    self.step_reboot()
         finally:
             if self.a.until >= 5:
                 self.step6()
@@ -834,6 +931,7 @@ class Scenario:
         if self.insp:
             self.insp.close()
             self.insp = None
+        self.check_preload_off('after the switch')
 
     def step3(self):
         self.rec.begin('3 Home opens the launcher')
@@ -851,6 +949,44 @@ class Scenario:
         rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
         r.note('processes mentioning the launcher id', out.strip())
 
+    def step_reboot(self):
+        """Optional (--reboot-check), launcher chosen: after a boot the watcher re-applied the policy
+        (it is never persisted) and the stock home is not running.  On 6.x to 9.x
+        snapshot-boot-components launches the stock home at boot, outside the preload manager; the
+        watcher's delayed close (45 s) is what removes it.  5.x: no policy call is expected."""
+        r, d, host = self.rec, self.dev, self.host
+        r.begin('3r reboot with the launcher chosen (--reboot-check)')
+        rc, out = host.stop(self.vm)
+        r.say('beanjar stop: %s' % out.strip()[-200:])
+        rc, out = host.start(self.vm)
+        r.say('beanjar start: %s' % out.strip()[-200:])
+        host.viewer_open(self.vm)
+        end = time.time() + 120
+        while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
+            time.sleep(3)
+        ensure_devices(host, self.vm, r)
+        up = wait_for_device(self.vm, r)
+        r.check('the VM is back with Homebrew Channel', up, 'wait_for_device')
+        if not up:
+            return
+        active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
+        r.check('after the boot the watcher is active (started from init.d)', bool(active), self.watcher_active())
+        s = self.state()
+        r.check('after the boot the choice and the record are still the launcher',
+                s['choice'] == self.launcher and s['record_home'] == self.launcher, s['record_raw'])
+        if self.major >= 6:
+            # the call comes at once, the close after the 45 s settle
+            self.wait(lambda: 'closeByAppId' in self.preload_log(), 150, 5)
+            log = self.preload_log()
+            r.check('after the boot the watcher called setPreloadPolicy isEnabled=false (log is from this boot: /tmp)',
+                    'isEnabled=false' in log, log)
+        else:
+            r.check('after the boot (5.x) the watcher made no preload call', 'setPreloadPolicy' not in self.preload_log(),
+                    self.preload_log())
+        self.check_preload_off('after the reboot', settle=30)
+        self.residency('after the reboot')
+        self.shot('3r-after-reboot')
+
     def step4(self):
         r, d = self.rec, self.dev
         r.begin('4 sudden launcher uninstall')
@@ -862,6 +998,7 @@ class Scenario:
         r.note('state after the launcher was removed', json.dumps(s))
         self.residency('after the launcher uninstall')
         self.assert_stock('after removal', s, mounts_stay=True)
+        self.check_preload_on('after the launcher removal')
         r.check('choice file is kept (the user\'s choice)', s['choice'] == self.launcher, repr(s['choice']))
         r.check('watcher still active', s['watcher'] == 'active', s['watcher'])
         rc, out = d.sh('tail -n 8 /tmp/homechooser-home.log')
@@ -882,6 +1019,11 @@ class Scenario:
             baked = self.baked_id()
             r.check('on return the id is baked into the mounted Settings.qml again',
                     self.launcher in baked, baked)
+        self.wait(lambda: self.major <= 5 or self.dev.preload_policy()[0] is False, 60, 5)
+        if self.major >= 6:
+            enabled, raw = d.preload_policy()
+            r.check('on return the stock home policy is disabled again (isEnabled:false)', enabled is False,
+                    'isEnabled=%r; %s' % (enabled, raw))
         self.home_press(self.launcher, '4-home-launcher-back')
 
     def step5(self):
@@ -896,6 +1038,7 @@ class Scenario:
         self.residency('after the Home Chooser uninstall')
         r.check('choice file removed', 'No such file' in s['choice'], repr(s['choice']))
         self.assert_stock('after uninstall', s)
+        self.check_preload_on('after the Home Chooser uninstall')
         r.check('init.d entry removed', 'No such file' in s['initd'] or s['initd'] == '', repr(s['initd']))
         r.check('backport flag removed', s['flag'] == 'no', s['flag'])
         r.check('watcher unit stopped', s['watcher'] != 'active', s['watcher'])
@@ -1024,6 +1167,9 @@ def main():
     ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
     ap.add_argument('--wait-popup', type=int, default=0,
                     help='seconds to wait for a system popup holding key focus to be dismissed by hand')
+    ap.add_argument('--reboot-check', action='store_true',
+                    help='after step 3 reboot the VM (beanjar stop/start) and check that the watcher re-applied '
+                         'the stock-home preload policy and the stock home is not running')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()
