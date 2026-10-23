@@ -2,8 +2,8 @@
 """End-to-end test of Home Chooser on a Beanjar VM.  See e2e/README.md.
 
 Python 3 standard library only.  The device is reached with the ares-* tools only (by device
-name); the VM host (Beanjar) through the BeanjarHost class below, locally or through
-`ares-shell -d raspberrypi -r`.
+name); the VM host (Beanjar) through the BeanjarHost class below, locally or over
+`ssh raspberrypi` (the Pi is a Linux host, not a TV: ares-shell is for televisions only).
 """
 import argparse
 import base64
@@ -234,7 +234,8 @@ class BeanjarHost:
     """Every operation on the machine that runs Beanjar goes through here.
 
     local mode: beanjar and friends run as local commands.  remote mode: each command line is
-    run with `ares-shell -d <device> -r`.  The rest of the runner never quotes for the remote.
+    run with `ssh <host>` (an ssh config alias; BatchMode, so it never prompts) and files come
+    back with scp.  The rest of the runner never quotes for the remote.
     """
 
     def __init__(self, mode='auto', device='raspberrypi'):
@@ -246,7 +247,7 @@ class BeanjarHost:
     def sh(self, cmd, timeout=120):
         if self.mode == 'local':
             return run(['sh', '-c', cmd], timeout)
-        return run(['ares-shell', '-d', self.device, '-r', cmd], timeout)
+        return run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', self.device, cmd], timeout)
 
     def _q(self, *words):
         return ' '.join(shlex.quote(str(w)) for w in words)
@@ -256,7 +257,7 @@ class BeanjarHost:
         if self.mode == 'local':
             shutil.copyfile(remote_path, local_path)
             return True
-        rc, _ = run(['ares-pull', '-d', self.device, remote_path, local_path])
+        rc, _ = run(['scp', '-q', '-o', 'BatchMode=yes', '%s:%s' % (self.device, remote_path), local_path])
         return rc == 0
 
     def beanjar(self, *args, timeout=300):
@@ -1695,8 +1696,8 @@ def main():
     ap.add_argument('--update-from', default=None,
                     help='git ref of the older Home Chooser (default: the previous commit that changed app/, service/ or backport/)')
     ap.add_argument('--host-mode', choices=['auto', 'local', 'remote'], default='auto',
-                    help='where beanjar runs: local if on PATH, else through ares-shell (default auto)')
-    ap.add_argument('--host-device', default='raspberrypi', help='ares device of the Beanjar host in remote mode')
+                    help='where beanjar runs: local if on PATH, else over ssh (default auto)')
+    ap.add_argument('--host-device', default='raspberrypi', help='ssh host (config alias) of the Beanjar host in remote mode')
     ap.add_argument('--elevation', choices=sorted(ELEVATIONS), default=None,
                     help="override the matrix's elevation strategy")
     ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',

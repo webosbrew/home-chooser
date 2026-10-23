@@ -45,9 +45,10 @@ result.
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
 through `socat`, the TV screenshot through `beanjar screenshot`, the fallback viewer capture through `grim`, fetching a key) goes through the
 `BeanjarHost` class. Mode is automatic: local when `beanjar` is on PATH (the Pi), otherwise remote
-through `ares-shell -d raspberrypi -r` (`--host-device` renames the device, `--host-mode` forces
-a mode). No remote quoting exists outside that class. The screenshots the steps look at come from
-`beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `ares-pull` in remote mode; the
+over `ssh raspberrypi` (`--host-device` names another ssh config alias, `--host-mode` forces a
+mode). The Pi is a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions
+and VMs only. No remote quoting exists outside that class. The screenshots the steps look at come from
+`beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; the
 `grim` fallback is the whole Wayland output.
 
 ## Elevation strategies
