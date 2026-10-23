@@ -696,6 +696,9 @@ class Scenario:
                 'running at t=%s s' % [t for t, run_ in samples if run_] if not ok else 'never running in %d samples' % len(samples))
         if not ok:
             self.residency(label + ': stock home came back')
+            r.note(label + ': whole watcher log', self.dev.sh('cat /tmp/homechooser-home.log 2>&1 | tail -n 40')[1])
+            r.note(label + ': sam lines about the stock home', self.dev.sh(
+                "grep -E 'com.webos.app.home' /var/log/messages | grep -E 'close|Close|launch|Launch|NL_APP' | tail -n 15")[1])
 
     def check_preload_on(self, label, wait_for=120):
         """The policy is back to enabled (launcher uninstalled, choice stock, Home Chooser uninstalled)."""
@@ -752,22 +755,58 @@ class Scenario:
                   ' (close did not stop it: this check does not discriminate)' if pre else ''))
         if from_app:
             self.front_app()
+        mark = self.messages_mark()
         self.press('HOME')
         time.sleep(6)
+        sam = []
 
         def seen():
             fg = self.dev.foreground()
             if fg[0] == expect or (expect != STOCK and expect in self.running_ids()):
                 return fg
+            if expect == STOCK:
+                # getForegroundAppInfo keeps naming the app beneath on 12.x although the stock home
+                # is on screen: sam's own record of the Home key is the signal there.
+                sam[:] = self.sam_home_lines(mark)
+                if sam:
+                    return fg
             return None
         fg = self.wait(seen, 20, 3)
+        if not fg and expect == STOCK and not self.sam_home_lines(mark):
+            r.note(label + ': no sam record of the Home key after the first press; evidence, then one more press',
+                   'messages since %s mentioning key/home:\n%s' % (mark, '\n'.join(
+                       self.sam_home_lines(mark, 'homeKey|launchDefaultApp|keyfilter|com.webos.app.home'))))
+            self.shot(label + '-first-press')
+            mark = self.messages_mark()
+            self.press('HOME')
+            time.sleep(6)
+            fg = self.wait(seen, 20, 3)
         ok = bool(fg)
         fg = fg or self.dev.foreground()
         self.shot(label)
-        r.check('%s: Home opens %s (foreground, or for a launcher: running after being closed first)'
-                % (label, expect), ok,
-                'getForegroundAppInfo: %s; running: %s' % (fg[1], self.running_ids()))
+        via = 'foreground' if fg[0] == expect else ('sam log' if sam else 'none')
+        r.check('%s: Home opens %s (foreground, sam homeKey launch of the stock home in the log, or for a '
+                'launcher: running after being closed first)' % (label, expect), ok,
+                'signal: %s; getForegroundAppInfo: %s; running: %s%s' % (
+                    via, fg[1], self.running_ids(),
+                    ('; sam lines:\n' + '\n'.join(sam[:6])) if sam and via == 'sam log' else ''))
         return ok
+
+    def messages_mark(self):
+        """UTC time on the device as sam stamps its lines (2026-10-23T05:48:12), taken before a press.
+        A time, not a line count, because /var/log/messages can rotate between the two reads."""
+        rc, out = self.dev.sh('date -u +%Y-%m-%dT%H:%M:%S')
+        return out.strip().splitlines()[-1] if out.strip() else ''
+
+    def sam_home_lines(self, mark, pattern=None):
+        """Lines in /var/log/messages stamped at or after `mark` that show the Home key reaching the
+        stock home: surface-manager's launchDefaultApp {"category":"home",...homeKey}, or sam's
+        relaunch of com.webos.app.home."""
+        pattern = pattern or ('launchDefaultApp.*homeKey|homeKey.*launchDefaultApp|'
+                              'RelaunchAsCommon.*com.webos.app.home')
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8"
+                              % (mark, pattern))
+        return [l for l in out.splitlines() if l.strip()]
 
     # -- steps
     def run(self):
