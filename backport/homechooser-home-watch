@@ -65,6 +65,7 @@ TMP=${HOMECHOOSER_TMP:-/tmp/homechooser-home-watch.$$}
 RT=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
 WSH=${HOMECHOOSER_SHELL:-/bin/sh}
 APPDIR=${HOMECHOOSER_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser}
+APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications /usr/palm/applications"}
 KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
 OLD_INITD=$(dirname "$INITD")/homechooser-keyfilter
@@ -465,8 +466,41 @@ timed() {
 # close_stock_home: force-close the stock home, only if the policy is still the disabled one.
 close_stock_home() {
     [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || return 0
+    if [ "$MAJOR" -le 9 ] && [ "$OVL_VAL" = yes ]; then
+        log "overlay launcher $OVL_ID on webOS $MAJOR: stock home left running (sam relaunches it as the last-input app)"
+        return 0
+    fi
     out=$(timed_n 5 "$LUNA" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
     log "closeByAppId $STOCK_HOME: ${out:-no reply}"
+}
+
+# overlay_check <id>: on webOS 6 to 9, whether the launcher is an overlay window (appinfo
+# defaultWindowType "overlay"): yes, no or unknown. Cached per choice in OVL_ID and OVL_VAL (an unknown
+# is asked again). getAppInfo carries the appinfo fields; failing that the installed appinfo.json is read.
+# Unreadable means unknown, and the stock home is closed as before.
+overlay_check() {
+    [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
+    [ "$OVL_ID" = "$1" ] && [ "$OVL_VAL" != unknown ] && return 0
+    OVL_ID=$1
+    OVL_VAL=unknown
+    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    wt=$(printf '%s' "$out" | sed -n 's/.*"defaultWindowType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [ -z "$wt" ]; then
+        for d in $APPS_DIRS; do
+            [ -f "$d/$1/appinfo.json" ] || continue
+            wt=$(flatten < "$d/$1/appinfo.json" | sed -n 's/.*"defaultWindowType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            break
+        done
+    fi
+    if [ "$wt" = overlay ]; then
+        OVL_VAL=yes
+    elif [ -n "$wt" ]; then
+        OVL_VAL=no
+    elif ok_reply "$out"; then
+        OVL_VAL=no   # installed, no defaultWindowType declared: an ordinary window
+    else
+        log "window type of $1 not readable, stock home will be closed as usual"
+    fi
 }
 
 # preload_set <true|false>: one setPreloadPolicy call; logs the reply, succeeds on returnValue true.
@@ -531,6 +565,7 @@ preload_follow() {
     if [ -n "$MISSING" ] || [ "$1" = "$STOCK_HOME" ] || [ "$1" = "$STOCK_FULLHOME" ]; then
         preload_sync on "$2"
     else
+        overlay_check "$1"
         preload_sync off "$2"
     fi
 }
@@ -767,6 +802,8 @@ BAKED=
 FEED_PIDS=
 CLOSE_PID=
 PRELOAD_STATE=
+OVL_ID=
+OVL_VAL=
 
 want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
 log "watching, home=$want, webOS $MAJOR"

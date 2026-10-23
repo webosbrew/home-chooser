@@ -324,7 +324,7 @@ luna-send -n 1 luna://com.webos.service.preloadmanager/setPreloadPolicy '{"appli
 luna-send -n 1 luna://com.webos.applicationManager/closeByAppId '{"id":"com.webos.app.home","forceMode":true}'
 ```
 
-(the second only if the first answered `returnValue:true`), and back to `"isEnabled":true` when it
+(the second only if the first answered `returnValue:true`, and not on 6.x to 9.x for an overlay launcher, see below), and back to `"isEnabled":true` when it
 stops applying. Never `"permanent"`: the preload manager keeps the policy in memory, nothing is
 written, and after a reboot the stock policy is back until the watcher re-applies it. The memory
 manager is not touched.
@@ -356,12 +356,16 @@ manager is not touched.
   `com.webos.app.home` is not running, so there is nothing to free; the preload lists of 5.6.1 name
   both homes, and the 5.x restore path hands the key filter either of them, so a policy change would
   have risk and no gain. The watcher makes no preload call on 5.x.
-* **Known limit.** With an overlay launcher (Dock) nothing takes the foreground from the stock
-  home, and on 6.x to 9.x `sam` relaunches it as the "last input" app (`NL_APP_LAUNCH_BEGIN`,
-  `caller_app_id: last_input_handler`) when it is closed or the compositor restarts, however the
-  policy is set: measured on 9.2.1 and 8.3.0, about 89 MB, so nothing is freed there. The end-to-end
-  runner records that as an expected failure only when `/var/log/messages` shows the `last_input`
-  relaunch. On 11.2.0 and 12.0.0 the stock home stayed closed with Dock.
+* **Overlay launchers on 6.x to 9.x.** With an overlay launcher (appinfo `defaultWindowType` is
+  `overlay`, e.g. Dock) nothing takes the foreground from the stock home, so `sam` relaunches it
+  immediately as the "last input" app (`NL_APP_LAUNCH_BEGIN`, `caller_app_id: last_input_handler`,
+  mode `last_input`) whenever it is closed: measured on 9.2.1 and 8.3.0, about 89 MB. The close frees
+  nothing and only makes it restart, so on 6.x to 9.x the watcher does not close the stock home for an
+  overlay launcher, at boot or on a change; it keeps the preload policy and logs `overlay launcher <id>
+  on webOS <major>: stock home left running (sam relaunches it as the last-input app)`. The window type
+  comes from `sam/getAppInfo` (the installed `appinfo.json` if the reply lacks it), once per choice;
+  if it cannot be read the stock home is closed as before and the log says so. On 10.x and later the
+  close does stick with Dock (11.2.0 and 12.0.0), so it is kept there.
 * **Measured (2026-10-23, Beanjar VMs).** Root `luna-send` may call `getPreloadPolicy` and
   `setPreloadPolicy`; `getPreloadPolicy` answers `{"applications":[{"id":"com.webos.app.home",
   "isEnabled":...,...},...]}` (an empty list right after boot). On 9.2.1 with the policy disabled, a
@@ -369,7 +373,7 @@ manager is not touched.
   freed; re-enabled, the preload manager launched it again about 8 s later; after a reboot the
   policy was back to enabled. End-to-end with `--reboot-check`: 11.2.0 (103 MB freed) and 12.0.0
   (71 MB) keep the stock home closed after the switch and after a reboot; 7.x, 8.3.0 and 9.2.1 pass
-  with the overlay expected failure above; 5.6.1 makes no preload call.
+  with the stock home left running for the overlay launcher, as above; 5.6.1 makes no preload call.
 
 ## Restoring the stock home
 

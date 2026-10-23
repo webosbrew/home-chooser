@@ -45,7 +45,8 @@ homebrew app with three parts:
 * While a third-party home is chosen (webOS 6 and later), the watcher keeps LG's stock home,
   `com.webos.app.home`, from being preloaded, so that a force-close of it sticks and its 70 to 105 MB
   stay free: `preloadmanager/setPreloadPolicy` with `isEnabled:false`, then a forced
-  `closeByAppId`. The call is made once per boot and once per change, never with `permanent` (the
+  `closeByAppId` (not on webOS 6 to 9 when the launcher is an overlay app such as Dock: `sam` would
+  relaunch the stock home at once, so it is left running there). The call is made once per boot and once per change, never with `permanent` (the
   preload manager keeps it in memory only and a reboot starts stock), and it is set back to enabled
   when the choice is stock, the chosen app is uninstalled, or Home Chooser is uninstalled. The
   memory manager is not touched. This is an accepted exception to "does not change other

@@ -95,17 +95,19 @@ the watcher makes no preload call, so the checks only assert the policy is not d
 
 * after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
   `com.webos.app.home`, then after a 60 s settle `com.webos.app.home` is not in `applicationManager/running`
-  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 9.x this
-  second check is `XFAIL` if the stock home is running, citing the compositor-restart relaunch measured on
-  9.2.1 (~89 MB; the backport restarts the compositor there); on 10.x and later, or with a non-overlay
-  launcher, it is a `FAIL`;
+  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 9.x the
+  watcher deliberately leaves the stock home running (sam would relaunch it at once as the last-input app,
+  ~89 MB measured on 9.2.1 and 8.3.0), so the expected result is explicit: the stock home is running, the
+  watcher log has the `overlay launcher ... stock home left running` line and no `closeByAppId
+  com.webos.app.home` line; on 10.x and later, or with a non-overlay launcher, the stock home must not run
+  and a running one is a `FAIL`;
 * after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
   after the launcher is reinstalled, `isEnabled:false` again;
 * with `--reboot-check` (after step 3, launcher chosen): the VM is stopped and started with Beanjar;
   after the boot the watcher is active, the record still names the launcher, the watcher's log
   (in `/tmp`, so from this boot) shows `setPreloadPolicy ... isEnabled=false`, the policy reads false, and
   after the 45 s boot close plus a 30 s settle the stock home is not running over 60 s (same
-  overlay `XFAIL` rule). On 5.x it asserts that there was no preload call.
+  overlay rule: running, skip line, no close). On 5.x it asserts that there was no preload call.
 
 None of this has run yet: `getPreloadPolicy`'s reply shape (an `applications` array whose entries
 carry the app id and `isEnabled`) and root `luna-send` access to `preloadmanager` are inferred from

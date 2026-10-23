@@ -55,13 +55,12 @@ MATRIX = [
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
 # Stock-home preload policy (backport/homechooser-home-watch; docs/settings-app.md "The stock home is
-# not preloaded").  Launchers that are overlay windows (the stock home is then not the one in front,
-# and sam relaunches it as the "last input" app when the compositor restarts: measured on 9.2.1,
-# ~89 MB with Dock chosen).  The key filter backport restarts the compositor on 6.x to 9.x only.
+# not preloaded").  Launchers that are overlay windows take nothing from the stock home's foreground, so
+# on 6.x to 9.x sam relaunches a closed stock home at once as the "last input" app (measured on 9.2.1 and
+# 8.3.0, ~89 MB with Dock chosen).  The watcher therefore does not close it there: the expected result
+# is the stock home running, the skip line in the watcher log and no closeByAppId for it.
 OVERLAY_LAUNCHERS = {'org.webosbrew.dock'}
-OVERLAY_RELAUNCH = ('docs/settings-app.md known limit: with an overlay launcher a compositor restart makes sam '
-                    'relaunch the stock home as the last-input app (measured on 9.2.1, ~89 MB); not fixed by '
-                    'the preload policy')
+SKIP_LINE = 'stock home left running'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 
@@ -638,7 +637,27 @@ class Scenario:
 
     # -- the stock home's preload policy
     def preload_log(self):
-        return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
+        return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|overlay launcher' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
+
+    def overlay_skip(self):
+        """6.x to 9.x with an overlay launcher: the watcher leaves the stock home running."""
+        return self.launcher in OVERLAY_LAUNCHERS and self.uses_backport() and 6 <= self.major <= 9
+
+    def check_stock_left_running(self, label, samples):
+        """Overlay launcher on 6.x to 9.x: the stock home is running, the watcher logged the skip and
+        never called closeByAppId for it."""
+        r = self.rec
+        self.wait(lambda: SKIP_LINE in self.dev.sh("cat /tmp/homechooser-home.log 2>&1")[1], 120, 5)
+        log = self.dev.sh("cat /tmp/homechooser-home.log 2>&1")[1]
+        skips = [l for l in log.splitlines() if SKIP_LINE in l]
+        closes = [l for l in log.splitlines() if 'closeByAppId ' + STOCK in l]
+        r.note(label + ': watcher skip lines', '\n'.join(skips))
+        r.check(label + ': watcher log has the overlay skip line (stock home left running)', bool(skips),
+                skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
+        r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
+        r.check(label + ': %s is running (expected: left alone with an overlay launcher)' % STOCK,
+                bool(samples) and samples[-1][1], 'running at t=%s s of %d samples' % (
+                    [t for t, run_ in samples if run_], len(samples)))
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""
@@ -669,19 +688,12 @@ class Scenario:
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
         time.sleep(settle)
         samples = self.stock_running_samples()
+        if self.overlay_skip():
+            self.check_stock_left_running(label, samples)
+            return
         ok = not any(run_ for _, run_ in samples)
-        overlay = self.launcher in OVERLAY_LAUNCHERS and self.uses_backport()
-        if not ok:
-            # the XFAIL is allowed only if sam's journal shows the last-input relaunch and no preload one
-            lines = self.dev.sh("(zcat /var/log/messages.0.gz 2>/dev/null; cat /var/log/messages) | grep "
-                                "'NL_APP_LAUNCH_BEGIN.*\"app_id\":\"%s\"' | tail -n 4" % STOCK)[1].strip()
-            r.note(label + ': sam launches of the stock home (last 4)', lines)
-            last = lines.splitlines()[-1] if lines else ''
-            if overlay and 'last_input' not in last:
-                overlay = False   # a preload (or unknown) relaunch is a FAIL, not the known limit
         r.check('%s: %s is not running over %d s' % (label, STOCK, PRELOAD_SAMPLE), ok,
-                'running at t=%s s' % [t for t, run_ in samples if run_] if not ok else 'never running in %d samples' % len(samples),
-                expected=OVERLAY_RELAUNCH if overlay else None)
+                'running at t=%s s' % [t for t, run_ in samples if run_] if not ok else 'never running in %d samples' % len(samples))
         if not ok:
             self.residency(label + ': stock home came back')
 
@@ -976,7 +988,7 @@ class Scenario:
                 s['choice'] == self.launcher and s['record_home'] == self.launcher, s['record_raw'])
         if self.major >= 6:
             # the call comes at once, the close after the 45 s settle
-            self.wait(lambda: 'closeByAppId' in self.preload_log(), 150, 5)
+            self.wait(lambda: ('closeByAppId' in self.preload_log()) or (self.overlay_skip() and SKIP_LINE in self.preload_log()), 150, 5)
             log = self.preload_log()
             r.check('after the boot the watcher called setPreloadPolicy isEnabled=false (log is from this boot: /tmp)',
                     'isEnabled=false' in log, log)

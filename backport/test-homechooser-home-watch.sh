@@ -476,7 +476,7 @@ echo 'FLAP my.home 1' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "no write" test "$(writes)" = 0
-check "checked twice" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 3
+check "checked twice" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 4
 check "no revert logged" hasnt 'not installed' "$T/log"
 cleanup
 setup 8 'my.home\n'
