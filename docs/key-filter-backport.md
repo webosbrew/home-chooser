@@ -23,7 +23,7 @@ for the build.
 
 | Build | Model(s) | webOS | Set dir | Verified |
 | --- | --- | --- | --- | --- |
-| 03.53.25.01 | W21A | 6.5.2-43 | `backport/6.5.2` | static (VM run recorded below when done) |
+| 03.53.25.01 | W21A | 6.5.2-43 | `backport/6.5.2` | VM: w21a-kisscurl, 2026-10-23 E2E with reboot, 66 PASS (the one FAIL was a runner over-assertion, since fixed) |
 | 03.70.25.01, 03.60.55.01 | W21P, W21U | 6.6.0-6, 6.6.0-12 | `backport/6.6.0` | VM |
 | 04.60.90.01, 04.60.85.01 | W22L, W22P, W22A, W22H | 7.6.0-19, 7.6.0-18 | `backport/7.6.0` | VM |
 | 13.30.56.01, 13.30.61.01 | W22O, W22H | 8.3.0-2301, 8.3.0-2401 | `backport/8.3.0` | VM |

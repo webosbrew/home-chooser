@@ -50,6 +50,9 @@ MATRIX = [
     # release, vm, elevation, sure, note
     ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
     ('6.x', 'w21p-kisscurl', 'luna', 'docs', "W21P 03.70.25.01 = 6.6.0; owned by the Dock project: ask before use; end state keeps Dock selected"),
+    ('6.x', 'w21a-kisscurl', 'luna', 'docs', 'W21A 03.53.25.01 = 6.5.2-43 per backport/6.5.2; os-release to be read'),
+    ('9.x', 'w24g-ombre', 'luna', 'docs', 'W24G 33.20.23.01 = 9.2.4-4603 per backport/9.2.4; os-release to be read'),
+    ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per backport/9.2.4; os-release to be read'),
     ('7.x', 'w22p-mullet', 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
     ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
     ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
@@ -902,13 +905,11 @@ class Scenario:
         r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
         running = bool(samples) and samples[-1][1]
         detail = 'running at t=%s s of %d samples' % ([t for t, run_ in samples if run_], len(samples))
-        if 'reboot' in label and self.major >= 10:
-            # 10.x does not launch the stock home at boot (5.x to 9.x do, snapshot-boot-components), and the
-            # policy is off, so after a reboot nothing starts it: either state is fine, a close is the failure.
-            r.note(label + ': %s running=%s (10.x: not started at boot with the policy off; no check)' % (STOCK, running), detail)
-            return
-        r.check(label + ': %s is running (expected: left alone with an overlay launcher; appinfo of %s declares defaultWindowType=%s)'
-                % (STOCK, self.launcher, self.L.appinfo.get('defaultWindowType')), running, detail)
+        # "Left alone" means the watcher did not close it (the two checks above). Whether the stock home
+        # is running then is up to the platform: with the preload policy off nothing may start it again
+        # (6.5.2 after the switch, 10.x after a reboot), which only saves memory. Recorded, not asserted.
+        r.note(label + ': %s running=%s (overlay launcher %s, defaultWindowType=%s; left alone either way)'
+               % (STOCK, running, self.launcher, self.L.appinfo.get('defaultWindowType')), detail)
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""

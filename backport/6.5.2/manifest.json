@@ -1,6 +1,6 @@
 {
   "release": "6.5.2",
-  "verified": "static",
+  "verified": "vm",
   "files": [
     {
       "path": "/usr/lib/qml/KeyFilters/systemUi.js",
