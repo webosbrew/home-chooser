@@ -49,6 +49,7 @@ SHA256=${HOMECHOOSER_SHA256:-sha256sum}
 UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
+HC_LUNA_IDENTITY=com.webos.applicationManager    # privileged luna calls run with this identity (docs/service.md)
 SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
@@ -103,9 +104,9 @@ detect_timeout() {
 app_state() {
     detect_timeout
     case "$TMO_FORM" in
-        new) set -- "$TIMEOUT" 10 "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
-        old) set -- "$TIMEOUT" -t 10 "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
-        *) set -- "$LUNA" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+        new) set -- "$TIMEOUT" 10 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+        old) set -- "$TIMEOUT" -t 10 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
+        *) set -- "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.applicationManager/getAppInfo "{\"id\":\"$1\"}" ;;
     esac
     out=$("$@" 2>&1 | tr '\n' ' ')
     if printf '%s' "$out" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*true'; then

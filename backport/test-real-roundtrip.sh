@@ -65,6 +65,7 @@ STUB
     printf '#!/bin/sh\necho "systemctl $*" >> %s/cmds\n' "$T" > "$T/bin/systemctl"
     cat > "$T/bin/luna-send" <<STUB
 #!/bin/sh
+[ "\$1" = -a ] && shift 2
 id=\$(echo "\$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
 if grep -qxF "\$id" "$T/installed"; then echo '{"returnValue":true}'; else echo '{"returnValue":false}'; fi
 STUB

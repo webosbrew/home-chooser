@@ -79,6 +79,7 @@ STUB
     cat > "$T/bin/luna-send" <<'STUB'
 #!/bin/sh
 T=@T@
+if [ "$1" = -a ]; then echo "$2" >> $T/lunaids; shift 2; fi
 echo "$3 $4" >> $T/lunacalls
 [ -f $T/sam-silent ] && exit 0
 id=$(echo "$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
@@ -262,6 +263,7 @@ printf 'my.home\n' > "$T/home"
 run
 check "installed: id baked in" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 check "asked sam about the id" has 'getAppInfo {"id":"my.home"}' "$T/lunacalls"
+check "asks sam as com.webos.applicationManager (luna-send -a)" has com.webos.applicationManager "$T/lunaids"
 rm -rf "${T:?}"
 setup
 printf 'my.home\n' > "$T/home"
