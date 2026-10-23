@@ -129,6 +129,7 @@ static bool on_status(LSHandle *sh, LSMessage *msg, void *ctx)
 	put_bool(o, "root", geteuid() == 0);
 	put_int(o, "uid", (int)geteuid());
 	put_str(o, "version", HC_VERSION);
+	put_int(o, "apiVersion", HC_API_VERSION);
 	send_reply(msg, o);
 	return true;
 }
@@ -577,8 +578,10 @@ static void drain(int fd, GString *dst)
 	}
 }
 
-/* Runs argv without a shell. Returns the exit status, -1 on a spawn failure, -2 on timeout. */
-static int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err)
+/* Runs argv without a shell. Returns the exit status, -1 on a spawn failure, -2 on timeout. `done`,
+ * when given, sees the output so far on every poll; once it says non-zero the child is killed and
+ * the result is 0 (a stream the caller has read to its end). */
+static int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err, int (*done)(const char *))
 {
 	int po[2], pe[2];
 	if (pipe2(po, O_CLOEXEC | O_NONBLOCK) != 0) return -1;
@@ -618,6 +621,12 @@ static int run_argv(const char *const *argv, int timeout_s, GString *out, GStrin
 			result = WIFEXITED(status) ? WEXITSTATUS(status) : -3;
 			break;
 		}
+		if (done && done(out->str)) {
+			kill(pid, SIGKILL);
+			waitpid(pid, &status, 0);
+			result = 0;
+			break;
+		}
 		if (time(NULL) >= deadline) {
 			kill(pid, SIGKILL);
 			waitpid(pid, &status, 0);
@@ -652,7 +661,7 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 			g_free(buf);
 		} else {
 			LOGI("RUN", "%s", cmd->name);
-			code = run_argv(cmd->argv, cmd->timeout_s, out, err);
+			code = run_argv(cmd->argv, cmd->timeout_s, out, err, NULL);
 		}
 		sanitize(out->str, out->len);
 		sanitize(err->str, err->len);
@@ -688,17 +697,6 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 }
 
 /* ---- readIcon: an app's icon, found through getAppInfo ---- */
-
-static bool app_id_ok(const char *id)
-{
-	size_t n = id ? strlen(id) : 0;
-	if (n == 0 || n > 128) return false;
-	for (size_t i = 0; i < n; i++) {
-		char c = id[i];
-		if (!g_ascii_isalnum(c) && c != '.' && c != '-' && c != '_') return false;
-	}
-	return true;
-}
 
 static bool icon_reply(LSHandle *sh, LSMessage *reply, void *ctx)
 {
@@ -749,7 +747,7 @@ static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
 	if (!gate(msg, "readIcon", true)) return true;
 	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
 	char *app = req ? get_string(req, "appId") : NULL;
-	if (!app_id_ok(app)) {
+	if (!hc_app_id_ok(app)) {
 		send_error(msg, "badRequest", "readIcon needs an appId");
 	} else {
 		Pending *p = g_new0(Pending, 1);
@@ -768,6 +766,589 @@ static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
+/* ---- the launcher API (docs/launcher-api.md) ----
+ * getInfo, listApps, running, closeById, uninstall for apps that declare the permission group,
+ * and uninstallConfirmed for the confirmation. The caller is the application id the hub reports. */
+
+#define LAUNCHER_LIST_PROPS "id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible"
+static const char *const LIST_FIELDS[] = {LAUNCHER_LIST_PROPS, NULL};
+static const char *const RUNNING_FIELDS[] = {"id", "instanceId", "processid", "webprocessid", NULL};
+
+#define SAM_URI "luna://com.webos.applicationManager"
+#define TOKEN_TTL_US (120 * G_USEC_PER_SEC)
+#define TOKEN_SLOTS 4
+
+typedef struct {
+	char token[HC_TOKEN_LEN + 1];
+	char id[130];
+	char requester[130];
+	char folder[512];
+	gint64 expires;
+	bool live;
+} UninstallToken;
+
+static UninstallToken g_tokens[TOKEN_SLOTS];
+static int g_token_next;
+
+/* An asynchronous call of the service's own luna identity. done gets the parsed reply, or NULL on a
+ * failed or timed-out call. */
+typedef struct Call Call;
+struct Call {
+	LSMessageToken token;
+	guint timer;
+	char *uri;
+	void (*done)(Call *c, jvalue_ref reply);
+	void *ctx;
+};
+
+static void call_free(Call *c)
+{
+	g_free(c->uri);
+	g_free(c);
+}
+
+static gboolean call_timeout(gpointer data)
+{
+	Call *c = data;
+	LSError e;
+	LSErrorInit(&e);
+	LSCallCancel(g_handle, c->token, &e);
+	LSErrorFree(&e);
+	LOGE("CALL_TIMEOUT", "%s", c->uri);
+	c->done(c, NULL);
+	call_free(c);
+	return FALSE;
+}
+
+static bool call_reply(LSHandle *sh, LSMessage *reply, void *ctx)
+{
+	(void)sh;
+	Call *c = ctx;
+	g_source_remove(c->timer);
+	jvalue_ref parsed = parse_object(LSMessageGetPayload(reply));
+	c->done(c, parsed);
+	j_release(&parsed);
+	call_free(c);
+	return true;
+}
+
+static void call_start(const char *uri, const char *payload, void (*done)(Call *, jvalue_ref), void *ctx)
+{
+	Call *c = g_new0(Call, 1);
+	c->uri = g_strdup(uri);
+	c->done = done;
+	c->ctx = ctx;
+	LSError e;
+	LSErrorInit(&e);
+	if (!LSCallOneReply(g_handle, uri, payload, call_reply, c, &c->token, &e)) {
+		LOGE("CALL_FAILED", "%s: %s", uri, e.message ? e.message : "?");
+		LSErrorFree(&e);
+		done(c, NULL);
+		call_free(c);
+		return;
+	}
+	c->timer = g_timeout_add_seconds(CALL_TIMEOUT_S, call_timeout, c);
+}
+
+static bool reply_ok(jvalue_ref r)
+{
+	jvalue_ref rv = r ? jobject_get(r, key_buf("returnValue")) : NULL;
+	bool v = false;
+	return rv && jis_valid(rv) && jis_boolean(rv) && jboolean_get(rv, &v) == CONV_OK && v;
+}
+
+/* A blocking luna-send as HC_LUNA_IDENTITY. Returns the exit status (-2 timeout, -1 spawn failure,
+ * 126 uri not on the list). stdout is the reply text. */
+static int luna_run(const char *uri, const char *payload, int replies, int timeout_s, int (*done)(const char *), GString *out)
+{
+	const char *argv[8];
+	GString *err = g_string_new(NULL);
+	if (!hc_luna_argv(uri, payload, replies, argv)) {
+		g_string_free(err, TRUE);
+		return 126;
+	}
+	LOGI("RUN", "luna-send -a %s %s", HC_LUNA_IDENTITY, uri);
+	int code = run_argv(argv, timeout_s, out, err, done);
+	sanitize(out->str, out->len);
+	if (err->len) LOGI("RUN_STDERR", "%s: %s", uri, err->str);
+	g_string_free(err, TRUE);
+	return code;
+}
+
+static char *read_choice(void)
+{
+	char *buf = NULL;
+	return slurp(HC_HOME_FILE, 4096, &buf, NULL) >= 0 ? buf : NULL;
+}
+
+static void send_error_for(LSMessage *msg, const char *method, const char *code, const char *text)
+{
+	LOGI("LAUNCHER_ERROR", "%s: %s: %s", method, code, text);
+	send_error(msg, code, "%s", text);
+}
+
+/* One launcher request in flight. */
+typedef struct LOp {
+	LSMessage *msg;
+	const char *method;
+	char caller[130];
+	char *target;      /* the id parameter */
+	bool consent;
+	bool force;
+	void (*next)(struct LOp *op);
+	bool need_consent;
+	char *target_title;
+	char *target_folder;
+	int target_removable;
+} LOp;
+
+static void op_free(LOp *op)
+{
+	LSMessageUnref(op->msg);
+	g_free(op->target);
+	g_free(op->target_title);
+	g_free(op->target_folder);
+	g_free(op);
+}
+
+/* Root, a real application id, and (need_home) the caller being the selected home. Fills `caller`.
+ * Replies and returns false on refusal. */
+static bool launcher_gate(LSMessage *msg, const char *method, bool need_root, bool need_home, char *caller, size_t callerlen)
+{
+	const char *app = LSMessageGetApplicationID(msg);
+	if (!hc_caller_id(app, caller, callerlen)) {
+		const char *svc = LSMessageGetSenderServiceName(msg);
+		LOGE("REFUSED", "%s from application id '%s', service name '%s'", method, app ? app : "(none)", svc ? svc : "(none)");
+		send_error(msg, "forbidden", "This method is for apps; the caller has no application id");
+		return false;
+	}
+	if (need_root && geteuid() != 0) {
+		LOGI("NOT_ROOT", "%s refused: uid %d", method, (int)geteuid());
+		send_error(msg, "notRoot", "The service is not running as root; open Home Chooser once to set it up");
+		return false;
+	}
+	if (need_home) {
+		char *choice = read_choice();
+		bool home = hc_is_selected_home(caller, choice);
+		g_free(choice);
+		if (!home) {
+			LOGE("REFUSED", "%s from %s, which is not the selected home", method, caller);
+			send_error(msg, "notHome", "Only the app selected as Home may call this method");
+			return false;
+		}
+	}
+	LOGI("CALL", "%s from %s", method, caller);
+	return true;
+}
+
+static void consent_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	jvalue_ref info = reply ? jobject_get(reply, key_buf("appInfo")) : NULL;
+	if (!info || !jis_valid(info) || !jis_object(info)) info = reply;
+	jvalue_ref perms = info ? jobject_get(info, key_buf("requiredPermissions")) : NULL;
+	char *folder = info ? get_string(info, "folderPath") : NULL;
+	char *file = NULL;
+	jvalue_ref file_json = NULL;
+	if ((!perms || !jis_valid(perms) || !jis_array(perms)) && folder && folder[0] == '/' && !strstr(folder, "..")) {
+		/* getAppInfo did not carry the appinfo's own fields: read the file the app was installed with */
+		char *path = g_strdup_printf("%s/appinfo.json", folder);
+		ssize_t n = slurp(path, 65536, &file, NULL);
+		g_free(path);
+		file_json = n >= 0 ? parse_object(file) : NULL;
+		perms = file_json ? jobject_get(file_json, key_buf("requiredPermissions")) : NULL;
+	}
+	GPtrArray *list = g_ptr_array_new_with_free_func(g_free);
+	if (perms && jis_valid(perms) && jis_array(perms)) {
+		ssize_t len = jarray_size(perms);
+		for (ssize_t i = 0; i < len && i < 256; i++) {
+			jvalue_ref s = jarray_get(perms, i);
+			if (!jis_string(s)) continue;
+			raw_buffer b = jstring_get_fast(s);
+			g_ptr_array_add(list, g_strndup(b.m_str, b.m_len));
+		}
+	}
+	op->consent = hc_perms_grant((const char *const *)list->pdata, list->len);
+	g_ptr_array_free(list, TRUE);
+	j_release(&file_json);
+	g_free(file);
+	g_free(folder);
+	if (op->need_consent && !op->consent) {
+		LOGE("REFUSED", "%s from %s, whose appinfo does not request %s", op->method, op->caller, HC_GROUP);
+		send_error(op->msg, "noPermission", "The app's appinfo.json must list \"%s\" in requiredPermissions", HC_GROUP);
+		op_free(op);
+		return;
+	}
+	op->next(op);
+}
+
+/* Reads the caller's appinfo for its consent, then runs next(op). Takes over op. */
+static void launcher_consent(LOp *op)
+{
+	jvalue_ref q = jobject_create();
+	put_str(q, "id", op->caller);
+	call_start(SAM_URI "/getAppInfo", jvalue_stringify(q), consent_done, op);
+	j_release(&q);
+}
+
+/* Starts a launcher request: gate, optional id parameter, then the consent check. */
+static void launcher_begin(LSMessage *msg, const char *method, bool need_root, bool need_home, bool need_consent, bool need_id, void (*next)(LOp *))
+{
+	char caller[130];
+	if (!launcher_gate(msg, method, need_root, need_home, caller, sizeof caller)) return;
+	LOp *op = g_new0(LOp, 1);
+	op->msg = msg;
+	LSMessageRef(msg);
+	op->method = method;
+	op->next = next;
+	op->need_consent = need_consent;
+	op->target_removable = -1;
+	g_strlcpy(op->caller, caller, sizeof op->caller);
+	if (need_id) {
+		jvalue_ref req = parse_object(LSMessageGetPayload(msg));
+		op->target = req ? get_string(req, "id") : NULL;
+		jvalue_ref f = req ? jobject_get(req, key_buf("force")) : NULL;
+		bool force = false;
+		if (f && jis_valid(f) && jis_boolean(f)) jboolean_get(f, &force);
+		op->force = force;
+		j_release(&req);
+		if (!hc_app_id_ok(op->target)) {
+			send_error_for(msg, method, "badRequest", "This method needs an id: the app id");
+			op_free(op);
+			return;
+		}
+	}
+	launcher_consent(op);
+}
+
+/* Keep only the listed fields of each object of an array. */
+static jvalue_ref pick_fields(jvalue_ref arr, const char *const *fields)
+{
+	jvalue_ref out = jarray_create(NULL);
+	ssize_t len = arr && jis_valid(arr) && jis_array(arr) ? jarray_size(arr) : 0;
+	for (ssize_t i = 0; i < len; i++) {
+		jvalue_ref app = jarray_get(arr, i);
+		if (!jis_object(app)) continue;
+		jvalue_ref o = jobject_create();
+		for (int f = 0; fields[f]; f++) {
+			jvalue_ref v = jobject_get(app, key_buf(fields[f]));
+			if (v && jis_valid(v) && !jis_null(v)) jobject_set(o, key_buf(fields[f]), jvalue_duplicate(v));
+		}
+		jarray_append(out, o);
+	}
+	return out;
+}
+
+static void list_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	bool running = strcmp(op->method, "running") == 0;
+	if (!reply || !reply_ok(reply)) {
+		send_error_for(op->msg, op->method, reply ? "callFailed" : "timeout", reply ? "The application manager refused the call" : "No reply from the application manager");
+	} else {
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_int(o, "apiVersion", HC_API_VERSION);
+		jobject_set(o, key_buf(running ? "running" : "apps"),
+			pick_fields(jobject_get(reply, key_buf(running ? "running" : "apps")), running ? RUNNING_FIELDS : LIST_FIELDS));
+		send_reply(op->msg, o);
+	}
+	op_free(op);
+}
+
+static void list_next(LOp *op)
+{
+	if (strcmp(op->method, "running") == 0) {
+		call_start(SAM_URI "/running", "{}", list_done, op);
+	} else {
+		/* the reply is cut to LIST_FIELDS; asking for just those keeps it small */
+		jvalue_ref q = jobject_create();
+		jvalue_ref props = jarray_create(NULL);
+		for (int i = 0; LIST_FIELDS[i]; i++) jarray_append(props, jstring_create(LIST_FIELDS[i]));
+		jobject_set(q, key_buf("properties"), props);
+		call_start(SAM_URI "/listApps", jvalue_stringify(q), list_done, op);
+		j_release(&q);
+	}
+}
+
+static bool on_launcher_list_apps(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "listApps", true, false, true, false, list_next);
+	return true;
+}
+
+static bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "running", true, false, true, false, list_next);
+	return true;
+}
+
+/* getInfo: for any app; says what the caller may do. */
+static void info_next(LOp *op)
+{
+	char *choice = read_choice();
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	put_int(o, "apiVersion", HC_API_VERSION);
+	put_str(o, "version", HC_VERSION);
+	put_bool(o, "root", geteuid() == 0);
+	put_str(o, "group", HC_GROUP);
+	put_bool(o, "permitted", op->consent);
+	put_bool(o, "isHome", hc_is_selected_home(op->caller, choice));
+	send_reply(op->msg, o);
+	g_free(choice);
+	op_free(op);
+}
+
+static bool on_launcher_get_info(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "getInfo", false, false, false, false, info_next);
+	return true;
+}
+
+/* closeById */
+static void close_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	if (reply && reply_ok(reply)) {
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_str(o, "id", op->target);
+		send_reply(op->msg, o);
+	} else {
+		send_error_for(op->msg, op->method, reply ? "callFailed" : "timeout", reply ? "The application manager did not close the app" : "No reply from the application manager");
+	}
+	op_free(op);
+}
+
+static void close_next(LOp *op)
+{
+	jvalue_ref q = jobject_create();
+	put_str(q, "id", op->target);
+	if (op->force) put_bool(q, "forceMode", true);
+	call_start(SAM_URI "/closeByAppId", jvalue_stringify(q), close_done, op);
+	j_release(&q);
+}
+
+static bool on_launcher_close_by_id(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "closeById", true, true, true, true, close_next);
+	return true;
+}
+
+/* uninstall: look the app up, apply the refusal list, then ask the user. */
+static void new_token(char *out)
+{
+	unsigned char raw[HC_TOKEN_LEN / 2];
+	int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+	size_t got = 0;
+	while (fd >= 0 && got < sizeof raw) {
+		ssize_t r = read(fd, raw + got, sizeof raw - got);
+		if (r < 0 && errno == EINTR) continue;
+		if (r <= 0) break;
+		got += (size_t)r;
+	}
+	if (fd >= 0) close(fd);
+	if (got < sizeof raw) { /* no entropy: do not hand out a guessable token */
+		out[0] = '\0';
+		return;
+	}
+	for (size_t i = 0; i < sizeof raw; i++) snprintf(out + 2 * i, 3, "%02x", raw[i]);
+}
+
+static int never_stop(const char *text) { (void)text; return 0; }
+
+static void uninstall_ask(LOp *op)
+{
+	UninstallToken *t = &g_tokens[g_token_next++ % TOKEN_SLOTS];
+	memset(t, 0, sizeof *t);
+	new_token(t->token);
+	if (!hc_token_ok(t->token)) {
+		send_error_for(op->msg, op->method, "internal", "Could not make a confirmation token");
+		return;
+	}
+	g_strlcpy(t->id, op->target, sizeof t->id);
+	g_strlcpy(t->requester, op->caller, sizeof t->requester);
+	g_strlcpy(t->folder, op->target_folder ? op->target_folder : "", sizeof t->folder);
+	t->expires = g_get_monotonic_time() + TOKEN_TTL_US;
+	t->live = true;
+
+	/* The alert: only Uninstall calls the service, with the token. */
+	char *question = g_strdup_printf("Uninstall %s?", op->target_title ? op->target_title : op->target);
+	jvalue_ref a = jobject_create();
+	put_str(a, "sourceId", HC_APP_ID);
+	put_str(a, "title", "Home Chooser");
+	put_str(a, "message", question);
+	jvalue_ref buttons = jarray_create(NULL);
+	jvalue_ref yes = jobject_create();
+	put_str(yes, "label", "Uninstall");
+	put_str(yes, "onclick", "luna://" HC_SERVICE_ID "/uninstallConfirmed");
+	jvalue_ref yes_params = jobject_create();
+	put_str(yes_params, "token", t->token);
+	jobject_set(yes, key_buf("params"), yes_params);
+	jarray_append(buttons, yes);
+	jvalue_ref no = jobject_create();
+	put_str(no, "label", "Cancel");
+	put_bool(no, "focus", true);
+	jarray_append(buttons, no);
+	jobject_set(a, key_buf("buttons"), buttons);
+	GString *out = g_string_new(NULL);
+	int code = luna_run("luna://com.webos.notification/createAlert", jvalue_stringify(a), 1, 8, never_stop, out);
+	bool alert = code == 0 && hc_remove_reply_class(out->str) == 1;
+	LOGI("UNINSTALL_ASK", "%s by %s: alert %s (exit %d): %s", op->target, op->caller, alert ? "shown" : "refused", code, out->str);
+	g_string_free(out, TRUE);
+	j_release(&a);
+	g_free(question);
+
+	const char *how = "alert";
+	if (!alert) {
+		/* Alerts are refused to root on some releases: Home Chooser's own screen asks instead. */
+		jvalue_ref l = jobject_create();
+		put_str(l, "id", HC_APP_ID);
+		jvalue_ref params = jobject_create();
+		put_str(params, "confirmUninstall", op->target);
+		put_str(params, "token", t->token);
+		jobject_set(l, key_buf("params"), params);
+		out = g_string_new(NULL);
+		code = luna_run("luna://com.webos.applicationManager/launch", jvalue_stringify(l), 1, 15, never_stop, out);
+		bool launched = code == 0 && hc_remove_reply_class(out->str) == 1;
+		LOGI("UNINSTALL_ASK", "%s: launch the confirmation screen (exit %d): %s", op->target, code, out->str);
+		g_string_free(out, TRUE);
+		j_release(&l);
+		if (!launched) {
+			t->live = false;
+			send_error_for(op->msg, op->method, "confirmFailed", "Could not ask the user: neither the alert nor the Home Chooser screen could be shown");
+			return;
+		}
+		how = "screen";
+	}
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	put_bool(o, "pending", true);
+	put_str(o, "id", op->target);
+	put_str(o, "confirm", how);
+	send_reply(op->msg, o);
+}
+
+static void uninstall_info_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	jvalue_ref info = reply ? jobject_get(reply, key_buf("appInfo")) : NULL;
+	if (!info || !jis_valid(info) || !jis_object(info)) info = reply;
+	if (!reply || !reply_ok(reply) || !info) {
+		send_error_for(op->msg, op->method, reply ? "notFound" : "timeout", reply ? "No such app" : "No reply from the application manager");
+	} else {
+		jvalue_ref rem = jobject_get(info, key_buf("removable"));
+		bool removable = true;
+		int rflag = -1;
+		if (rem && jis_valid(rem) && jis_boolean(rem) && jboolean_get(rem, &removable) == CONV_OK) rflag = removable ? 1 : 0;
+		op->target_folder = get_string(info, "folderPath");
+		op->target_title = get_string(info, "title");
+		hc_remove_verdict v = hc_remove_check(op->target, op->caller, rflag, op->target_folder);
+		if (v != HC_REMOVE_OK) {
+			LOGE("REFUSED", "uninstall %s by %s: %s", op->target, op->caller, hc_remove_verdict_text(v));
+			send_error(op->msg, "notAllowed", "%s", hc_remove_verdict_text(v));
+		} else {
+			uninstall_ask(op);
+		}
+	}
+	op_free(op);
+}
+
+static void uninstall_next(LOp *op)
+{
+	jvalue_ref q = jobject_create();
+	put_str(q, "id", op->target);
+	call_start(SAM_URI "/getAppInfo", jvalue_stringify(q), uninstall_info_done, op);
+	j_release(&q);
+}
+
+static bool on_launcher_uninstall(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "uninstall", true, true, true, true, uninstall_next);
+	return true;
+}
+
+/* uninstallConfirmed {token}: the user said yes (the alert's button, or Home Chooser's screen). */
+static int stop_progress(const char *text) { return hc_progress_state(text) != 0; }
+
+static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	const char *app = LSMessageGetApplicationID(msg);
+	/* The alert's button comes from the notification service (no application id); the screen
+	 * from the Home Chooser app. Any other app is refused, and the token is the capability. */
+	if (app && app[0] && !hc_sender_ok(app)) {
+		LOGE("REFUSED", "uninstallConfirmed from application id '%s'", app);
+		send_error(msg, "forbidden", "Only the confirmation may call this method");
+		return true;
+	}
+	if (geteuid() != 0) {
+		send_error(msg, "notRoot", "The service is not running as root");
+		return true;
+	}
+	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
+	char *token = req ? get_string(req, "token") : NULL;
+	j_release(&req);
+	UninstallToken *t = NULL;
+	for (int i = 0; hc_token_ok(token) && i < TOKEN_SLOTS; i++) {
+		if (g_tokens[i].live && strcmp(g_tokens[i].token, token) == 0) t = &g_tokens[i];
+	}
+	g_free(token);
+	if (!t || g_get_monotonic_time() > t->expires) {
+		if (t) t->live = false;
+		LOGE("REFUSED", "uninstallConfirmed with an unknown or expired token");
+		send_error(msg, "badToken", "The confirmation is unknown, used or expired");
+		return true;
+	}
+	t->live = false; /* one shot */
+	char *choice = read_choice();
+	bool still = hc_is_selected_home(t->requester, choice);
+	g_free(choice);
+	if (!still) {
+		send_error(msg, "notHome", "The app that asked is no longer the selected Home");
+		return true;
+	}
+	char id[130], folder[512];
+	g_strlcpy(id, t->id, sizeof id);
+	g_strlcpy(folder, t->folder, sizeof folder);
+	const char *route = NULL;
+	const char *failure = "The removal failed";
+	bool refused = false;
+	for (int step = 0; step < 2 && !route; step++) {
+		hc_remove_call rc;
+		if (!hc_remove_step(step, id, folder, &rc)) break;
+		GString *out = g_string_new(NULL);
+		int code = luna_run(rc.uri, rc.payload, rc.progress ? 20 : 1, rc.timeout_s, rc.progress ? stop_progress : never_stop, out);
+		int state = rc.progress ? hc_progress_state(out->str) : hc_remove_reply_class(out->str);
+		LOGI("UNINSTALL", "%s step %d %s (exit %d, state %d): %s", id, step, rc.uri, code, state, out->str);
+		g_string_free(out, TRUE);
+		if (state == 1) {
+			route = step == 0 ? "launchPoint" : "appInstallService";
+		} else if (state == 0 && !rc.progress) {
+			refused = true; /* LG says it is not removable: no other route */
+			break;
+		}
+	}
+	if (route) {
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_str(o, "id", id);
+		put_str(o, "route", route);
+		send_reply(msg, o);
+	} else if (refused) {
+		send_error_for(msg, "uninstallConfirmed", "notRemovable", "The platform says this app is not removable");
+	} else {
+		send_error_for(msg, "uninstallConfirmed", "removeFailed", failure);
+	}
+	return true;
+}
+
 /* ---- registration ---- */
 
 static LSMethod methods[] = {
@@ -782,6 +1363,13 @@ static LSMethod methods[] = {
 	{"unlink", on_unlink, LUNA_METHOD_FLAGS_NONE},
 	{"linkStatus", on_link_status, LUNA_METHOD_FLAGS_NONE},
 	{"run", on_run, LUNA_METHOD_FLAGS_NONE},
+	/* the launcher API: the caller is checked in each handler, not by hc_sender_ok */
+	{"getInfo", on_launcher_get_info, LUNA_METHOD_FLAGS_NONE},
+	{"listApps", on_launcher_list_apps, LUNA_METHOD_FLAGS_NONE},
+	{"running", on_launcher_running, LUNA_METHOD_FLAGS_NONE},
+	{"closeById", on_launcher_close_by_id, LUNA_METHOD_FLAGS_NONE},
+	{"uninstall", on_launcher_uninstall, LUNA_METHOD_FLAGS_NONE},
+	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
 };
 
