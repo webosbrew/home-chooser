@@ -688,15 +688,21 @@ class Scenario:
             return
         reply = new[-1]
         accepted = '"returnValue":true' in reply.replace(' ', '')
-        rc, fb = d.sh("grep -E 'alert was refused|notification createToast:' /tmp/homechooser-home.log | tail -n 3")
-        r.check('the notification service accepted the alert (plain root luna-send, no -a)', accepted,
-                'reply: %s%s' % (reply, '' if accepted else
-                                 '\nDENIED or unanswered. Fallback evidence (a refused alert is shown as a toast, an '
-                                 'unanswered one is not retried):\n' + fb.strip()))
         if not accepted:
+            # A refused alert is shown as a toast instead (decided: the toast is enough). 5.6.1 and 9.2.1
+            # answered "Alert is blocked by [ system ]" on every try; 10.3.1 accepted the alert.
+            refused = 'blocked' in reply or '"returnValue":false' in reply.replace(' ', '')
+            # the fallback toast is retried too: wait for the latest createToast reply to be accepted
+            self.wait(lambda: 'returnValue":true' in d.sh(
+                "grep 'notification createToast:' /tmp/homechooser-home.log | tail -n 1")[1].replace(' ', ''), 30, 3)
+            rc, fb = d.sh("grep -E 'alert was refused|notification createToast:' /tmp/homechooser-home.log | tail -n 3")
+            toast_ok = refused and any('alert was refused' in l for l in fb.splitlines()) and \
+                '"returnValue":true' in fb.strip().splitlines()[-1].replace(' ', '')
             self.shot('4-alert-refused')
-            r.note('the alert did not go through; the user was told only if the fallback toast above was accepted', fb.strip())
+            r.check('the user was told: the alert was refused, so the fallback toast was shown', toast_ok,
+                    'alert reply: %s\nfallback:\n%s' % (reply, fb.strip()))
             return
+        r.check('the user was told: the alert was accepted (plain root luna-send, no -a)', True, 'reply: %s' % reply)
         time.sleep(2)
         self.shot('4-alert')
         r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "<launcher title> was removed, '
