@@ -19,6 +19,12 @@ qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture).
 
+Use `--keyfilter-generated` only on webOS 6-9 to exercise the opt-in generated keyfilter. The runner
+creates `debug-no-sets` and `keyfilter-generated` after installing Home Chooser and before the Home
+selection, checks `homechooser-keyfilter status` after selection and after `--reboot-check`, and uses
+the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
+fails. The option refuses other releases and a non-stock baseline.
+
 Before booting, the runner stops if any VM is running. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
 `<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a

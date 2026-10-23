@@ -32,6 +32,8 @@ SVC_ID = APP_ID + '.service'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/keyfilter'
+GENERATED_FLAG = '/var/lib/webosbrew/homechooser/keyfilter-generated'
+NO_SETS_FLAG = '/var/lib/webosbrew/homechooser/debug-no-sets'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
@@ -635,6 +637,7 @@ class Scenario:
         self.capture_broken = False
         self.viewer_opened = False
         self.major = 0  # webOS TV release, 5..12
+        self.generated_markers_cleaned = False
 
     # -- helpers
     def shot(self, label):
@@ -759,6 +762,20 @@ class Scenario:
 
     def uses_override(self):
         return self.major >= 10
+
+    def check_generated_status(self, label):
+        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        self.rec.check('%s: generated keyfilter is mounted' % label,
+                       rc == 0 and 'mounted=yes' in out and 'match=generated' in out, out.strip())
+
+    def cleanup_generated_markers(self):
+        if not self.a.keyfilter_generated or self.generated_markers_cleaned:
+            return
+        rm_rc, rm_out = self.dev.sh('rm -f %s %s' % (NO_SETS_FLAG, GENERATED_FLAG))
+        rc, out = self.dev.sh('test ! -e %s && test ! -e %s' % (NO_SETS_FLAG, GENERATED_FLAG))
+        self.rec.check('generated-patch markers removed', rm_rc == 0 and rc == 0,
+                       out.strip() or rm_out.strip() or 'both markers absent')
+        self.generated_markers_cleaned = rc == 0
 
     def stock_record_ok(self, home):
         if self.major == 5:
@@ -1140,6 +1157,18 @@ class Scenario:
         r.check('baseline: nothing of Home Chooser is installed',
                 APP_ID not in d.installed() and 'No such' in base['choice'],
                 'installed: %s; choice: %s' % (d.installed(), base['choice']))
+        if self.a.keyfilter_generated:
+            rc, markers = d.sh('test ! -e %s && test ! -e %s' % (NO_SETS_FLAG, GENERATED_FLAG))
+            stock_baseline = (APP_ID not in d.installed() and 'No such' in base['choice']
+                              and self.stock_record_ok(base['record_home'])
+                              and base['watcher'] != 'active'
+                              and ('No such' in base['initd'] or not base['initd'])
+                              and not base['mounts'] and base['flag'] == 'no'
+                              and rc == 0)
+            r.check('generated-patch run starts from a stock baseline', stock_baseline,
+                    'state: %s; markers: %s' % (json.dumps(base), markers.strip() or 'absent'))
+            if not stock_baseline:
+                raise RuntimeError('generated-patch run requires a stock baseline; refusing to install')
         r.check('baseline: Homebrew Channel is installed', 'org.webosbrew.hbchannel' in d.installed(),
                 str(d.installed()))
         df = d.sh('df -h /media/developer | tail -1')[1].strip()
@@ -1163,10 +1192,13 @@ class Scenario:
                 if i == 3 and self.a.update_check:
                     self.step_update()
         finally:
-            if self.a.until >= 5:
-                self.step6()
-            else:
-                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+            try:
+                if self.a.until >= 5:
+                    self.step6()
+                else:
+                    r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+            finally:
+                self.cleanup_generated_markers()
 
     def step1(self, strat):
         r, d = self.rec, self.dev
@@ -1180,6 +1212,12 @@ class Scenario:
         r.note('df /media/developer before installing', df)
         rc, out = d.install(hc)
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
+        if self.a.keyfilter_generated:
+            rc, out = d.sh('mkdir -p /var/lib/webosbrew/homechooser && touch %s %s'
+                           % (NO_SETS_FLAG, GENERATED_FLAG))
+            r.check('enable generated-patch test markers', rc == 0, out.strip() or 'markers created')
+            if rc != 0:
+                raise RuntimeError('could not create generated-patch markers')
         rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
         r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
@@ -1272,6 +1310,8 @@ class Scenario:
         if self.uses_backport():
             r.check('backport mounts are present (webOS 6-9)', len(s['mounts']) >= 9, 'mounts: %s' % s['mounts'])
             r.check('backport flag file exists', s['flag'] == 'yes', s['flag'])
+            if self.a.keyfilter_generated:
+                self.check_generated_status('after selection')
         else:
             r.check('no backport on this release', not s['mounts'] and s['flag'] == 'no',
                     'mounts: %s flag: %s' % (s['mounts'], s['flag']))
@@ -1358,6 +1398,8 @@ class Scenario:
             r.check('after the boot (5.x) the watcher made no preload call', 'setPreloadPolicy' not in self.preload_log(),
                     self.preload_log())
         self.check_preload_off('after the reboot', settle=30)
+        if self.a.keyfilter_generated:
+            self.check_generated_status('after reboot')
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
 
@@ -1723,6 +1765,8 @@ def main():
     ap.add_argument('--reboot-check', action='store_true',
                     help='after step 3 reboot the VM (beanjar stop/start) and check that the watcher re-applied '
                          'the stock-home preload policy and the stock home is not running')
+    ap.add_argument('--keyfilter-generated', action='store_true',
+                    help='opt in to the generated keyfilter patch for a webOS 6-9 device run')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()
@@ -1735,6 +1779,8 @@ def main():
         ap.error('--vm is required')
     row = entry(args.vm)
     vm = row[1]
+    if args.keyfilter_generated and not 6 <= int(row[0].split('.')[0]) <= 9:
+        ap.error('--keyfilter-generated is valid only for webOS 6-9')
     if args.launchers:
         specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
     else:
@@ -1799,6 +1845,11 @@ def main():
     finally:
         if scenario and scenario.insp:
             scenario.insp.close()
+        if scenario and args.keyfilter_generated and not scenario.generated_markers_cleaned:
+            try:
+                scenario.cleanup_generated_markers()
+            except Exception as e:
+                rec.check('generated-patch markers removed', False, repr(e))
         if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
             if scenario and scenario.viewer_opened:
                 host.viewer_close(vm)
