@@ -56,8 +56,8 @@ KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
 # Stock-home preload policy (backport/homechooser-home-watch; docs/settings-app.md "The stock home is
 # not preloaded").  Launchers that are overlay windows take nothing from the stock home's foreground, so
-# on 6.x to 9.x sam relaunches a closed stock home at once as the "last input" app (measured on 9.2.1 and
-# 8.3.0, ~89 MB with Dock chosen).  The watcher therefore does not close it there: the expected result
+# on 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app (measured on 9.2.1,
+# 8.3.0 and 10.3.1, 75 to 89 MB with Dock chosen).  The watcher therefore does not close it there: the expected result
 # is the stock home running, the skip line in the watcher log and no closeByAppId for it.
 OVERLAY_LAUNCHERS = {'org.webosbrew.dock'}
 SKIP_LINE = 'stock home left running'
@@ -165,6 +165,15 @@ class BeanjarHost:
 
     def viewer_close(self, vm):
         return self.beanjar('viewer', 'close', vm, timeout=60)
+
+    def tv_screenshot(self, vm, local_path):
+        """`beanjar screenshot` (0.3.1+): the TV picture of the running VM, headless or through a viewer.
+        Returns (ok, detail); detail is the command's output (--json: path, taken_by)."""
+        tmp = '/tmp/e2e-tv-%d.png' % os.getpid()
+        rc, out = self.beanjar('screenshot', vm, tmp, '--json', timeout=60)
+        ok = rc == 0 and self.fetch(tmp, local_path)
+        self.sh('rm -f ' + tmp)
+        return ok, out.strip()
 
     def screenshot(self, local_path):
         """The Pi desktop (whole Wayland output; no crop geometry, so the viewer window may sit anywhere on it)."""
@@ -474,23 +483,39 @@ class Scenario:
         self.shot_n = 0
         self.insp = None
         self.capture_broken = False
+        self.viewer_opened = False
         self.major = 0  # webOS TV release, 5..12
 
     # -- helpers
     def shot(self, label):
-        """A guest screenshot (ares-do screenshot) and, always, the Pi desktop with the viewer window.
-        com.webos.service.capture fails on webOS 5 (timeout) and 10.x (ERROR_INTERNAL); after the
-        first failure it is not tried again, and the viewer shot is the only view of the TV."""
+        """The TV picture from `beanjar screenshot` (about 2 s, headless, no viewer needed).  Only if
+        that fails: the guest capture (ares-do screenshot; com.webos.service.capture fails on webOS 5
+        and 10.x to 12.x, and after the first failure it is not tried again), then the Pi desktop with
+        the viewer window (grim, `*-viewer.png`; the viewer is opened for it on first use).  Each
+        fallback used is logged."""
         self.shot_n += 1
-        path = os.path.join(self.rec.outdir, '%02d-%s.png' % (self.shot_n, label))
+        name = '%02d-%s.png' % (self.shot_n, label)
+        path = os.path.join(self.rec.outdir, name)
+        ok, detail = self.host.tv_screenshot(self.vm, path)
+        self.rec.say('screenshot %s (beanjar screenshot): %s' % (name, detail[-160:] if detail else ('ok' if ok else 'failed')))
+        if ok:
+            return path
+        self.rec.say('FALLBACK: beanjar screenshot failed for %s' % name)
         if not self.capture_broken:
             rc, out = self.dev.screenshot(path)
-            self.rec.say('screenshot %s (%s)' % (os.path.basename(path), 'ok' if rc == 0 else out.strip()))
+            self.rec.say('FALLBACK screenshot %s (guest capture): %s' % (name, 'ok' if rc == 0 else out.strip()))
             if rc != 0:
                 self.capture_broken = True
-        ok, out = self.host.screenshot(path.replace('.png', '-viewer.png'))
-        self.rec.say('viewer screenshot %s: %s' % (os.path.basename(path).replace('.png', '-viewer.png'),
-                                                   'ok' if ok else out.strip()))
+            else:
+                return path
+        if not self.viewer_opened:
+            rc, out = self.host.viewer_open(self.vm)
+            self.viewer_opened = True
+            self.rec.say('FALLBACK: beanjar viewer open: rc=%s %s' % (rc, out.strip()[-120:]))
+            time.sleep(3)
+        vname = name.replace('.png', '-viewer.png')
+        ok, out = self.host.screenshot(os.path.join(self.rec.outdir, vname))
+        self.rec.say('FALLBACK screenshot %s (grim, whole Pi desktop): %s' % (vname, 'ok' if ok else out.strip()))
         return path
 
     def press(self, *keys):
@@ -640,11 +665,11 @@ class Scenario:
         return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|overlay launcher' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
 
     def overlay_skip(self):
-        """6.x to 9.x with an overlay launcher: the watcher leaves the stock home running."""
-        return self.launcher in OVERLAY_LAUNCHERS and self.uses_backport() and 6 <= self.major <= 9
+        """6.x to 10.x with an overlay launcher: the watcher leaves the stock home running."""
+        return self.launcher in OVERLAY_LAUNCHERS and 6 <= self.major <= 10
 
     def check_stock_left_running(self, label, samples):
-        """Overlay launcher on 6.x to 9.x: the stock home is running, the watcher logged the skip and
+        """Overlay launcher on 6.x to 10.x: the stock home is running, the watcher logged the skip and
         never called closeByAppId for it."""
         r = self.rec
         self.wait(lambda: SKIP_LINE in self.dev.sh("cat /tmp/homechooser-home.log 2>&1")[1], 120, 5)
@@ -655,9 +680,14 @@ class Scenario:
         r.check(label + ': watcher log has the overlay skip line (stock home left running)', bool(skips),
                 skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
         r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
-        r.check(label + ': %s is running (expected: left alone with an overlay launcher)' % STOCK,
-                bool(samples) and samples[-1][1], 'running at t=%s s of %d samples' % (
-                    [t for t, run_ in samples if run_], len(samples)))
+        running = bool(samples) and samples[-1][1]
+        detail = 'running at t=%s s of %d samples' % ([t for t, run_ in samples if run_], len(samples))
+        if 'reboot' in label and self.major >= 10:
+            # 10.x does not launch the stock home at boot (5.x to 9.x do, snapshot-boot-components), and the
+            # policy is off, so after a reboot nothing starts it: either state is fine, a close is the failure.
+            r.note(label + ': %s running=%s (10.x: not started at boot with the policy off; no check)' % (STOCK, running), detail)
+            return
+        r.check(label + ': %s is running (expected: left alone with an overlay launcher)' % STOCK, running, detail)
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""
@@ -1011,7 +1041,6 @@ class Scenario:
         r.say('beanjar stop: %s' % out.strip()[-200:])
         rc, out = host.start(self.vm)
         r.say('beanjar start: %s' % out.strip()[-200:])
-        host.viewer_open(self.vm)
         end = time.time() + 120
         while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
             time.sleep(3)
@@ -1244,8 +1273,6 @@ def main():
             raise SystemExit('ares-do not on PATH')
         prepare_vm(host, vm, rec)
         started = True
-        rc, out = host.viewer_open(vm)  # the only view of the TV where guest capture fails
-        rec.say('beanjar viewer open: rc=%s %s' % (rc, out.strip()[-120:]))
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
         end = time.time() + 120
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
@@ -1266,7 +1293,8 @@ def main():
         if scenario and scenario.insp:
             scenario.insp.close()
         if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
-            host.viewer_close(vm)
+            if scenario and scenario.viewer_opened:
+                host.viewer_close(vm)
             rc, out = host.stop(vm)
             rec.say('beanjar stop: %s' % out.strip()[-200:])
         elif started and vm in KEEP_LAUNCHER_VMS:

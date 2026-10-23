@@ -12,9 +12,9 @@ python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 Options: `--launcher <id>` (default `org.webosbrew.dock`) and `--launcher-ipk <path>`; `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--host-mode
 auto|local|remote` and `--host-device` (see below); `--elevation luna|root-shell`; `--input
-qmp|ares`; `--viewer-shots`; `--until N` (stop after step N, no cleanup, for debugging);
+qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
-`results.json`, numbered screenshots (taken inside the guest with `ares-do screenshot`).
+`results.json`, numbered screenshots (`beanjar screenshot`, the TV picture).
 
 Before booting, the runner stops if any VM is running. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
@@ -40,12 +40,12 @@ result.
 ## Beanjar host abstraction
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
-through `socat`, the viewer capture through `grim`, fetching a key) goes through the
+through `socat`, the TV screenshot through `beanjar screenshot`, the fallback viewer capture through `grim`, fetching a key) goes through the
 `BeanjarHost` class. Mode is automatic: local when `beanjar` is on PATH (the Pi), otherwise remote
 through `ares-shell -d raspberrypi -r` (`--host-device` renames the device, `--host-mode` forces
-a mode). No remote quoting exists outside that class. The viewer capture is the whole Wayland
-output (no hard-coded crop geometry); the screenshots the steps look at come from inside the
-guest.
+a mode). No remote quoting exists outside that class. The screenshots the steps look at come from
+`beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `ares-pull` in remote mode; the
+`grim` fallback is the whole Wayland output.
 
 ## Elevation strategies
 
@@ -95,11 +95,11 @@ the watcher makes no preload call, so the checks only assert the policy is not d
 
 * after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
   `com.webos.app.home`, then after a 60 s settle `com.webos.app.home` is not in `applicationManager/running`
-  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 9.x the
+  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 10.x the
   watcher deliberately leaves the stock home running (sam would relaunch it at once as the last-input app,
-  ~89 MB measured on 9.2.1 and 8.3.0), so the expected result is explicit: the stock home is running, the
+  75 to 89 MB measured on 10.3.1, 9.2.1 and 8.3.0), so the expected result is explicit: the stock home is running, the
   watcher log has the `overlay launcher ... stock home left running` line and no `closeByAppId
-  com.webos.app.home` line; on 10.x and later, or with a non-overlay launcher, the stock home must not run
+  com.webos.app.home` line; on 11.x and 12.x, or with a non-overlay launcher, the stock home must not run
   and a running one is a `FAIL`;
 * after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
   after the launcher is reinstalled, `isEnabled:false` again;
@@ -107,7 +107,8 @@ the watcher makes no preload call, so the checks only assert the policy is not d
   after the boot the watcher is active, the record still names the launcher, the watcher's log
   (in `/tmp`, so from this boot) shows `setPreloadPolicy ... isEnabled=false`, the policy reads false, and
   after the 45 s boot close plus a 30 s settle the stock home is not running over 60 s (same
-  overlay rule: running, skip line, no close). On 5.x it asserts that there was no preload call.
+  overlay rule: skip line, no close; the stock home running only on 6.x to 9.x, where `snapshot-boot-components`
+  launches it, while on 10.x nothing starts it at boot, so its state is only noted). On 5.x it asserts that there was no preload call.
 
 None of this has run yet: `getPreloadPolicy`'s reply shape (an `applications` array whose entries
 carry the app id and `isEnabled`) and root `luna-send` access to `preloadmanager` are inferred from
@@ -124,5 +125,5 @@ stock home and the launcher running (`applicationManager/running`), pids and RSS
 ## System popups and screenshots
 
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
-* `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`). The runner opens the Beanjar viewer (`beanjar viewer open`) after the start, closes it before the stop, and every `shot()` also saves a full-desktop `grim` of the Pi (`*-viewer.png`; the viewer window is wherever the compositor put it). After the first failed guest capture the guest capture is skipped.
+* Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then `grim` of the whole Pi desktop (`*-viewer.png`), for which the viewer is opened on first use and closed before the stop. Each fallback is logged with the word FALLBACK.
 * On 5.x Home starts `com.webos.app.fullhome` as an overlay over the app in front (foreground stays the app), so step 3/4/5's "Home opens stock" looks for it running.
