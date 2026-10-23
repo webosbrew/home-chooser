@@ -88,6 +88,7 @@ export const createPlatform = (call = createBridgeCall()) => {
 	return {
 		service,
 		rootLuna: service.luna,
+		uninstallConfirmed: service.uninstallConfirmed,
 		writeFile: service.writeFile,
 		removeFile: service.removeFile,
 		exec: createExec(service),

@@ -10,6 +10,13 @@ export {FatalError};
 
 export const loadEnvironment = async (platform = createPlatform()) => {
 	await platform.ensureRoot();
+	try {
+		await platform.exec('accessApply');
+	} catch (e) {
+		// Access setup is retried by the boot entry and watcher; the settings panel still works.
+		// eslint-disable-next-line no-console
+		console.log(`[HomeChooser] access: ${errorMessage(e)}`);
+	}
 	let release;
 	try {
 		release = await platform.osRelease();
@@ -28,6 +35,8 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 		version: release.version,
 		chooser: createHomeChooser(deps),
 		backport: backport.applies ? backport : null,
-		readIcon: platform.readIcon
+		readIcon: platform.readIcon,
+		rootLuna: platform.rootLuna,
+		uninstallConfirmed: platform.uninstallConfirmed
 	};
 };

@@ -30,8 +30,8 @@ export const patchFooter = (patch) => {
 	return 'Home key patch: not active';
 };
 
-const MainPanel = ({model, ...rest}) => {
-	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch} = model;
+const MainPanel = ({model, launchParams, ...rest}) => {
+	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
 	const known = candidates.some((c) => c.id === currentId);
@@ -65,22 +65,41 @@ const MainPanel = ({model, ...rest}) => {
 	const choose = useCallback((id) => {
 		if (busy) return;
 		if (id === current) {
-			model.notify((id === STOCK_HOME ? 'LG Home' : (candidates.find((c) => c.id === id) || {}).title || id) + ' is already your Home.');
+			notify((id === STOCK_HOME ? 'LG Home' : (candidates.find((c) => c.id === id) || {}).title || id) + ' is already your Home.');
 			return;
 		}
 		opener.current = id;
 		setPending(id === STOCK_HOME ? {id, title: 'LG Home'} : {id, title: (candidates.find((c) => c.id === id) || {}).title || id});
-	}, [busy, candidates, current, model]);
+	}, [busy, candidates, current, notify]);
+	const handled = useRef(null);
+	useEffect(() => () => { handled.current = null; }, []);
+	useEffect(() => {
+		if (!launchParams || phase !== 'ready' || rootError || busy || handled.current === launchParams) return;
+		handled.current = launchParams;
+		setPending(null);
+		if (launchParams.confirmUninstall) {
+			getUninstallTitle(launchParams.confirmUninstall).then((title) => {
+				if (handled.current === launchParams) setPending({id: launchParams.confirmUninstall, title, token: launchParams.token, uninstall: true});
+			}, () => {
+				if (handled.current === launchParams) notify("Couldn't read the app to uninstall. Try again from your Home app.");
+			});
+		} else if (launchParams.request && launchParams.request !== STOCK_HOME && candidates.some((c) => c.id === launchParams.request)) {
+			choose(launchParams.request);
+		}
+	}, [launchParams, phase, rootError, busy, candidates, choose, getUninstallTitle, notify]);
+
 	const cancel = useCallback(() => setPending(null), []);
 	const confirm = useCallback(() => {
 		const item = pending;
 		setPending(null);
-		model.choose(item);
+		if (item.uninstall) model.uninstall(item);
+		else model.choose(item);
 	}, [pending, model]);
 
 	const footer = patchFooter(patch);
+	const uninstall = pending && pending.uninstall;
 	const stock = pending && pending.id === STOCK_HOME;
-	const blocked = !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
+	const blocked = !uninstall && !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
 
 	return (
 		<Panel {...rest}>
@@ -113,12 +132,12 @@ const MainPanel = ({model, ...rest}) => {
 			<Toast toast={toast} onDone={model.dismissToast} />
 			<ConfirmDialog
 				open={Boolean(pending)}
-				title={blocked ? "Can't change Home here" : stock ? 'Use LG Home?' : `Use ${pending ? pending.title : ''} as Home?`}
-				confirmLabel={stock ? 'Use LG Home' : 'Use as Home'}
+				title={uninstall ? `Uninstall ${pending.title}?` : blocked ? "Can't change Home here" : stock ? 'Use LG Home?' : `Use ${pending ? pending.title : ''} as Home?`}
+				confirmLabel={uninstall ? 'Uninstall' : stock ? 'Use LG Home' : 'Use as Home'}
 				onConfirm={blocked ? null : confirm}
 				onCancel={cancel}
 			>
-				{blocked ? "The Home button can't be changed on this TV's software."
+				{uninstall ? 'This app will be removed from the TV.' : blocked ? "The Home button can't be changed on this TV's software."
 					: stock ? 'The Home button will open the LG Home again.'
 						: 'The Home button will open this app.' + (model.hasPatch && patch !== 'active' ? ' The screen will blink once while the TV loads the change.' : '')}
 			</ConfirmDialog>

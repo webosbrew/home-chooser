@@ -85,6 +85,23 @@ describe('service client', () => {
 		});
 	});
 
+	test('uninstall confirmation uses the run timeout and checks service errors', async () => {
+		jest.useFakeTimers();
+		try {
+			const call = jest.fn(() => new Promise(() => {}));
+			const result = createServiceClient(call).uninstallConfirmed('token');
+			const check = result.catch((err) => err);
+			expect(call).toHaveBeenCalledWith(SERVICE_URI + '/uninstallConfirmed', {token: 'token'});
+			jest.advanceTimersByTime(30001);
+			expect(jest.getTimerCount()).toBe(1);
+			jest.advanceTimersByTime(90000);
+			await expect(check).resolves.toMatchObject({message: expect.stringContaining('120000 ms')});
+			await expect(createServiceClient(bridge({uninstallConfirmed: {returnValue: false, errorCode: 'badToken'}}).call).uninstallConfirmed('token')).rejects.toBeInstanceOf(ServiceError);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	test('a call that never answers times out', async () => {
 		const s = createServiceClient(() => new Promise(() => {}), {timeoutMs: 20});
 		await expect(s.status()).rejects.toThrow(/timed out/);
