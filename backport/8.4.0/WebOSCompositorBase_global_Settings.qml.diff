@@ -1,0 +1,75 @@
+--- usr/lib/qml/WebOSCompositorBase/global/Settings.qml
++++ usr/lib/qml/WebOSCompositorBase/global/Settings.qml
+@@ -19,6 +19,7 @@
+ import QtQuick 2.4
+ import WebOS.Global 1.0
+ import WebOSCompositorBase 1.0
++import WebOSServices 1.0
+ 
+ import "qrc:/WebOSCompositor"
+ import "file:///usr/lib/qml/WebOSCompositor"
+@@ -40,6 +41,64 @@
+         return systemSettings.subscribeOnDemand(type, method, key, returnRaw);
+     }
+ 
++    // Home Chooser: the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.
++    readonly property string stockHomeAppId: "com.webos.app.home"
++    // Set at boot by homechooser-keyfilter from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.
++    readonly property string configuredHomeAppId: "@HOMECHOOSER_HOME@"
++
++    function getHomeAppId() {
++        var apps = root.subscribe("com.webos.settingsservice", "getSystemSettings",
++                                  {"category": "general", "keys": ["defaultApps"]});
++        if (apps && typeof apps.home === "string" && apps.home !== "")
++            return apps.home;
++        if (root.configuredHomeAppId !== "")
++            return root.configuredHomeAppId;
++        return root.stockHomeAppId;
++    }
++
++    function isHomeApp(appId) {
++        return appId === root.getHomeAppId();
++    }
++
++    // Launch the home app with the extra fields of the stock call (params, reason, ...).
++    // When the chosen app is not the stock one and the launch fails, launch the stock one the same way.
++    property var __homeLaunch: null
++
++    function launchHome(request) {
++        var id = root.getHomeAppId();
++        request = request || {};
++        root.__homeLaunch = (id !== root.stockHomeAppId) ? request : null;
++        root.__launchApp(id, request);
++    }
++
++    function __launchApp(id, request) {
++        var payload = {"id": id};
++        for (var key in request)
++            payload[key] = request[key];
++        homeLaunchService.callService(payload);
++    }
++
++    Service {
++        id: homeLaunchService
++        appId: root.appId
++        service: "com.webos.applicationManager"
++        method: "launch"
++        onResponse: {
++            var request = root.__homeLaunch;
++            root.__homeLaunch = null;
++            var reply;
++            try {
++                reply = JSON.parse(payload);
++            } catch (e) {
++                return;
++            }
++            if (request && reply.returnValue === false) {
++                console.warn("Home app launch failed, launching " + root.stockHomeAppId + ": " + payload);
++                root.__launchApp(root.stockHomeAppId, request);
++            }
++        }
++    }
++
+     DefaultSettings {
+         id: defaultSettingsData
+     }

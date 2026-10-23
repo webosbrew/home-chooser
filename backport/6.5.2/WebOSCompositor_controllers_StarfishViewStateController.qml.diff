@@ -1,0 +1,20 @@
+--- usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
++++ usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
+@@ -48,6 +48,8 @@
+     property var unifiedAppLifeCycleSupport: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["com.webos.surfacemanager.unifiedAppLifeCycleSupport"]}) || {"relaunch": true}
+ 
+     property bool audioGuidance: (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"option", "keys":["audioGuidance"]}) || "") === "on" // false by default
++    // Home Chooser: start the home app subscription with the compositor
++    property string homeAppId: Settings.getHomeAppId()
+     property string lastInputApp: Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv"
+ 
+     property string autoBrowserUrl: Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"hotelMode", "keys":["autoBrowserUrl"]}) || ""
+@@ -588,7 +590,7 @@
+                 console.log("launching appId: " + appId + ", event: " + event + ", showSplash: " + showSplash + ", showSpinner: " + showSpinner);
+                 if (appId != null) {
+                     if (showSplash) {
+-                        if (views.starfishImageSplash && appId != null && appId != "com.webos.app.home")
++                        if (views.starfishImageSplash && appId != null && !Settings.isHomeApp(appId))
+                             views.starfishImageSplash.open(appId, splashBackground.replace("file://", ""));
+                     } else if (showSpinner) {
+                         if (!isForegroundApp(appId)) {

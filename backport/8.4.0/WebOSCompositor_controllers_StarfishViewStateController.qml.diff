@@ -1,0 +1,38 @@
+--- usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
++++ usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml
+@@ -53,7 +53,9 @@
+ 
+     property bool supportNMRM: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["tv.hw.supportNMRM"]}) === true
+     property bool showSpinnerOnRelaunch: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["com.webos.surfacemanager.showSpinnerOnRelaunch"]}) === true // false by default
+-    property string lastInputApp: supportNMRM ? "com.webos.app.home" : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
++    // Home Chooser: start the home app subscription with the compositor
++    property string homeAppId: Settings.getHomeAppId()
++    property string lastInputApp: supportNMRM ? Settings.getHomeAppId() : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
+ 
+     property string autoBrowserUrl: Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"hotelMode", "keys":["autoBrowserUrl"]}) || ""
+     property bool disableAccessibilityLaunch: tvlinkOsdDisplay === "null" ? ((enableHotelMode === true) && (enableLimitedMode === true)
+@@ -605,7 +607,7 @@
+                 console.log("launching appId: " + appId + ", event: " + event + ", showSplash: " + showSplash + ", showSpinner: " + showSpinner);
+                 if (appId != null) {
+                     if (showSplash) {
+-                        if (views.starfishImageSplash && appId != null && appId != "com.webos.app.home")
++                        if (views.starfishImageSplash && appId != null && !Settings.isHomeApp(appId))
+                             views.starfishImageSplash.open(appId, splashBackground.replace("file://", ""));
+                     } else if (showSpinner) {
+                         if (!isForegroundApp(appId)) {
+@@ -640,13 +642,13 @@
+                     views.fullscreen.isMultiViewApp(appId)) {
+                     console.info("relaunching appId: " + appId);
+                     //show spinner when home app is relaunched
+-                    if((showSpinnerOnRelaunch === true && appId === "com.webos.app.home") && !views.starfishSpinner.visible && (bootCompleted === true)){
++                    if((showSpinnerOnRelaunch === true && Settings.isHomeApp(appId)) && !views.starfishSpinner.visible && (bootCompleted === true)){
+                         views.starfishSpinner.open(appId);
+                     }
+                     if (views.starfishHome && views.starfishHome.isOpen)
+                         views.starfishHome.closeHome();
+                 }
+-            } else if ((showSpinnerOnRelaunch === true && appId === "com.webos.app.home") && event === "foreground") {
++            } else if ((showSpinnerOnRelaunch === true && Settings.isHomeApp(appId)) && event === "foreground") {
+                 console.log("foreground event appInfo ", appId);
+                 views.starfishSpinner.requestClose(appId);
+             }

@@ -1,0 +1,11 @@
+--- usr/lib/qml/WebOSCompositor/controllers/StarfishFullscreenController.qml
++++ usr/lib/qml/WebOSCompositor/controllers/StarfishFullscreenController.qml
+@@ -22,7 +22,7 @@
+ 
+     property bool supportNMRM: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["tv.hw.supportNMRM"]}) === true
+     property string __currentInputApp : (Settings.subscribe("com.webos.settingsservice", "getSystemSettings", {"category":"general", "keys":["lastInputApp"]}) || "com.webos.app.livetv")
+-    property string __lastInputApp: supportNMRM ? "com.webos.app.home" : __currentInputApp
++    property string __lastInputApp: supportNMRM ? Settings.getHomeAppId() : __currentInputApp
+ 
+     property Item __pendingItem: null
+     property var __unifiedAppLifeCycleSupport: Settings.subscribe("com.webos.service.config", "getConfigs", {"configNames":["com.webos.surfacemanager.__unifiedAppLifeCycleSupport"]}) || {"relaunch": true}

@@ -8,22 +8,30 @@
 # unmounts everything; and that the stock files were never touched.
 #
 # usage: test-real-roundtrip.sh [shell] [release=rootfs ...]
-#   shell defaults to sh (e.g. "busybox sh"). With no release=rootfs pairs, the firmware roots
-#   from scratch/notes/backport-sites.md are used where they exist.
+#   shell defaults to sh (e.g. "busybox sh"). With no release=rootfs pairs, every set directory
+#   is tried against its known firmware root; a set whose root is not on this machine is skipped
+#   with a notice. Explicit pairs must exist (a missing root fails).
 SH=${1:-sh}
 [ $# -gt 0 ] && shift
 HERE=$(cd "$(dirname "$0")" && pwd)
 PASS=0
+SKIPPED=0
+DEFAULTS=
 FAIL=0
 check() { d=$1; shift; if "$@"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1)); echo "FAIL: $d"; fi; }
 has() { grep -qF -- "$1" "$2"; }
 
 if [ $# -eq 0 ]; then
+    DEFAULTS=1
     P=$HOME/Projects
-    set -- "6.6.0=$P/webos-firmwares/03.70.25.01-HE_DTV_W21P_AFADATAA/rootfs" \
+    set -- "6.5.2=$P/webos-hypervisor/build/w21a/03.53.25.01-HE_DTV_W21A_AFADATAA/rootfs" \
+           "6.6.0=$P/webos-firmwares/03.70.25.01-HE_DTV_W21P_AFADATAA/rootfs" \
            "7.6.0=$P/webos-firmwares/04.60.90.01-HE_DTV_W22P_AFADATAA/rootfs" \
            "8.3.0=$P/webos-hypervisor/scratch/w22-upgrades/number1-extracted/rootfs" \
-           "9.2.1=$P/webos-hypervisor/scratch/w22-upgrades/ombre-extracted/rootfs"
+           "8.3.0-s23z=${OPENHOUSE_S23Z_ROOTFS:-$P/webos-hypervisor/scratch/firmware/03.30.18.01-HE_MNT_S23Z_AAACGLAA/rootfs.pak.unsquashfs}" \
+           "8.4.0=$P/webos-hypervisor/scratch/firmware/k8hpp/13.41.12.01-HE_DTV_W23H_AFADATAA/rootfs" \
+           "9.2.1=$P/webos-hypervisor/scratch/w22-upgrades/ombre-extracted/rootfs" \
+           "9.2.4=$P/webos-hypervisor/build/k8lpn2-ombre/rootfs"
 fi
 
 entries() { tr '{},' '\n\n\n' < "$1" | sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'; }
@@ -33,6 +41,7 @@ for pair in "$@"; do
     root=${pair#*=}
     echo "== $rel ($SH)"
     if [ ! -d "$root/usr/lib/qml" ]; then
+        if [ -n "$DEFAULTS" ]; then echo "SKIP: $rel: firmware root not on this machine ($root)"; SKIPPED=$((SKIPPED + 1)); continue; fi
         FAIL=$((FAIL + 1)); echo "FAIL: $rel: no rootfs at $root"; continue
     fi
     T=$(mktemp -d)
@@ -112,5 +121,5 @@ STUB
     rm -rf "${T:?}"
 done
 
-echo "$PASS passed, $FAIL failed ($SH)"
+echo "$PASS passed, $FAIL failed, $SKIPPED skipped ($SH)"
 [ "$FAIL" = 0 ]

@@ -1,0 +1,61 @@
+{
+  "release": "8.3.0-s23z",
+  "verified": "static",
+  "files": [
+    {
+      "path": "/usr/lib/qml/KeyFilters/systemUi.js",
+      "sha256": "6edae04f25992bfa0352b0e4dcacb3295a14c2c78a37efe05351612bad199280",
+      "diff": "KeyFilters_systemUi.js.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/StarfishFullscreenController.qml",
+      "sha256": "2fc2e1c0c2e6a8554ec54aebea3d6a6375e2cc8680c756204bc2c6f7c181474c",
+      "diff": "WebOSCompositor_controllers_StarfishFullscreenController.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/StarfishKeyFilter.qml",
+      "sha256": "60ad86ec9064f61691bae97805b09a2403864d9496aa19a8a6ae0f6629c17e6a",
+      "diff": "WebOSCompositor_controllers_StarfishKeyFilter.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml",
+      "sha256": "919c1948ac25ec907baeb6e5745f0e28cb5d9977b89c21c01cfca6e14d1c80ce",
+      "diff": "WebOSCompositor_controllers_StarfishViewStateController.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/controllers/fullscreen/StarfishRecents.qml",
+      "sha256": "c4fb330665155bfec19b5faa2239abd32c7afd3a4d29cf8d272c204fe798d513",
+      "diff": "WebOSCompositor_controllers_fullscreen_StarfishRecents.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml",
+      "sha256": "45aaeaaeb5454c23c1ba960cef68d6b0d20dcc10d6c4a096cd13112964a572b4",
+      "diff": "WebOSCompositor_services_StarfishBaseLunaServiceAPI.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/base/StarfishFocusedWindowInfoMgr.qml",
+      "sha256": "4ae0457816375768707cf7c5796fa287568acb4e168bfa8f1bb22c373deee888",
+      "diff": "WebOSCompositor_services_base_StarfishFocusedWindowInfoMgr.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/services/base/StarfishOverlayPlayVideoStateMgr.qml",
+      "sha256": "da58b653db1ab2cea33ade93a04cb81e1f734c59e79f81329b31e731538b4433",
+      "diff": "WebOSCompositor_services_base_StarfishOverlayPlayVideoStateMgr.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/views/StarfishHomeView.qml",
+      "sha256": "e21484204179a653886a4918b583bbc1828012b7e0cb6709ccd4055181620379",
+      "diff": "WebOSCompositor_views_StarfishHomeView.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositor/views/StarfishNudgeView.qml",
+      "sha256": "f37ddabdb68b6fde11007884ea7facd4f132dfceedaf73d4eff1864ffb45dfd5",
+      "diff": "WebOSCompositor_views_StarfishNudgeView.qml.diff"
+    },
+    {
+      "path": "/usr/lib/qml/WebOSCompositorBase/global/Settings.qml",
+      "sha256": "4dafd9444ebb4e4e1a666b2a71a8e48b02b690de2e08df013bca5dc6ffb1fb78",
+      "diff": "WebOSCompositorBase_global_Settings.qml.diff"
+    }
+  ]
+}

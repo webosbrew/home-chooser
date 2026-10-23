@@ -1,0 +1,11 @@
+--- usr/lib/qml/WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml
++++ usr/lib/qml/WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml
+@@ -161,7 +161,7 @@
+ 
+     property bool __currentStateConnected: false;
+     property string __currentState: {
+-        if (views.fullscreen.currentItem && views.fullscreen.currentItem.appId === "com.webos.app.home") {
++        if (views.fullscreen.currentItem && Settings.isHomeApp(views.fullscreen.currentItem.appId)) {
+             return "launcher";
+         } else {
+             if (views.starfishOverlay && views.starfishOverlay.isOpen)

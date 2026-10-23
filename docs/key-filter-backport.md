@@ -1,7 +1,7 @@
-# The key filter backport, webOS 6.6.0 to 9.2.1
+# The key filter backport, webOS 6.5.2 to 9.2.4
 
 On 10.3.1 the compositor and the Home key filter take the home app from `compositor.getHomeAppId()`
-and `compositor.isHomeApp()`. On 6.6.0 to 9.2.1 they name `com.webos.app.home` in the source. The
+and `compositor.isHomeApp()`. On 6.5.2 to 9.2.4 they name `com.webos.app.home` in the source. The
 backport gives those releases the same two functions, fed by the `general/defaultApps` record that
 the settings app writes, and replaces every stock-id site in the compositor QML and the key filter
 scripts with them. The facts behind it are in the
@@ -11,6 +11,44 @@ built. Paths are relative to each firmware's `rootfs/`.
 The patch is shipped as diffs in [`backport/`](../backport), one directory per release, and applied
 at boot by `backport/homechooser-keyfilter`, which the init.d entry `backport/homechooser` runs (see
 [Deployment](#deployment) and [Persistence](settings-app.md#persistence)).
+
+## Coverage
+
+A set is chosen by the sha256 of its target files, so each set covers exactly the builds listed
+for it. "VM" means the set was installed and the Home key checked on a beanjar VM of that build;
+"static" means it was checked only against the unpacked firmware (every hash matches, `patch -F0`
+applies and reverses to the stock bytes, no stock-id literal is left except the `Settings.qml`
+fallback, `qmllint` passes, and `backport/test-real-roundtrip.sh` passes) because no VM exists
+for the build.
+
+| Build | Model(s) | webOS | Set dir | Verified |
+| --- | --- | --- | --- | --- |
+| 03.53.25.01 | W21A | 6.5.2-43 | `backport/6.5.2` | static (VM run recorded below when done) |
+| 03.70.25.01, 03.60.55.01 | W21P, W21U | 6.6.0-6, 6.6.0-12 | `backport/6.6.0` | VM |
+| 04.60.90.01, 04.60.85.01 | W22L, W22P, W22A, W22H | 7.6.0-19, 7.6.0-18 | `backport/7.6.0` | VM |
+| 13.30.56.01, 13.30.61.01 | W22O, W22H | 8.3.0-2301, 8.3.0-2401 | `backport/8.3.0` | VM |
+| 03.30.18.01 | S23Z (monitor) | 8.3.0-1063 | `backport/8.3.0-s23z` | static |
+| 13.40.90.01, 13.41.12.01, 13.41.13.01, 13.40.76.01 | W23A, W23H, W23P, W23O | 8.4.0 | `backport/8.4.0` | static |
+| 23.21.20.01 | W22H | 9.2.1-40 | `backport/9.2.1` | VM |
+| 33.20.23.01 | W24P, W24G | 9.2.4-4603 | `backport/9.2.4` | static (VM run recorded below when done) |
+
+A set that is only statically verified carries `"verified": "static"` in its `manifest.json`; the
+worker ignores the field. The 9.2.4 `systemUi.js` diff is not the 9.2.1 one: 9.2.4 added a fifth
+stock-id comparison in the Home key handler, under the new screen-magnification branch
+(`if (fullscreenView.appId !== HOME_APP_ID) launchHomeApp(key)`), which the 9.2.1 diff (it deletes
+`var HOME_APP_ID`) would leave as a ReferenceError; the set replaces it with
+`!global.isHomeApp(fullscreenView.appId)`. The 8.4.0 `StarfishViewStateController.qml` diff also
+converts two new `showSpinnerOnRelaunch ... "com.webos.app.home"` comparisons (spinner on relaunch
+and foreground of the home app), and 8.4.0 gets the 9.2.1 `StarfishGestureUIFeedbackView.qml` diff.
+
+Not supported, by evidence from the coverage check: 6.3.1-1065 (W21Z projector) and 7.4.0-190508
+(W22O) have an older Home-key path. `Key_Super_L` is `if (!pressed && !homeView.appId)
+launchHomeApp(key)`, with no `fullscreenView.appId === HOME_APP_ID` comparison in `systemUi.js`
+(one stock-id site on 6.3.1, two on 7.4.0), and `StarfishBaseLunaServiceAPI.qml` and
+`StarfishNudgeView.qml` have no stock-id site, so the 6.6.0 and 7.6.0 hunks for `systemUi.js`,
+`StarfishBaseLunaServiceAPI.qml` and `StarfishNudgeView.qml` all reject (7.4.0 also rejects
+`StarfishFullscreenController.qml`). Whether replacing the launch site alone would be enough
+depends on the stock `homeView.appId`, a runtime question nobody has answered.
 
 ## The home id
 
@@ -124,7 +162,9 @@ Decisions for the class (c) sites and for the kept ones:
 The diffs are `diff -u` of the stock file against the edited one, with the path relative to `/` in
 both header lines and no timestamps, so `patch -p0` run in a directory that holds copies of the
 files applies them. The `sha256` is the stock file's. A set is applied all or nothing, and the set
-is chosen by hash, not by version: 6.6.0 is nine files, 7.6.0 and 8.3.0 eleven, 9.2.1 thirteen.
+is chosen by hash, not by version: 6.5.2 and 6.6.0 are nine files, 7.6.0, 8.3.0 and 8.3.0-s23z
+eleven, 8.4.0 twelve, 9.2.1 and 9.2.4 thirteen. The directory name is only the label `status`
+prints as `match=` and `release=`; an optional `"verified"` key is ignored.
 
 `backport/homechooser-keyfilter` is a busybox `sh` script, the worker. It is not in init.d itself:
 the entry `/var/lib/webosbrew/init.d/homechooser`, a symlink to `backport/homechooser` in the installed
@@ -188,8 +228,9 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
   and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone, and
   `refresh norestart`.
 * `backport/test-real-roundtrip.sh [shell] [release=rootfs ...]` runs the worker against the
-  real stock files of 6.6.0, 7.6.0, 8.3.0 and 9.2.1 (the firmware roots listed in
-  `scratch/notes/backport-sites.md`; other roots can be given as arguments), with only `mount`,
+  real stock files of every set (the firmware roots are listed in the script; a set whose root is
+  not on the machine is skipped with a notice, and `OPENHOUSE_S23Z_ROOTFS` points at an unpacked
+  S23Z image; other roots can be given as `release=rootfs` arguments), with only `mount`,
   `umount`, `systemctl` and `luna-send` stubbed: the set is found by hash, every target is
   patched and mounted, the baked id follows the installed state, the patched copies reverse-patch
   to the stock bytes, `stop` unmounts, and the stock files are unchanged.
