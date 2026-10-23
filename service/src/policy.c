@@ -79,10 +79,9 @@ static const hc_command COMMANDS[] = {
 	{"accessStatus", {"/bin/sh", HC_ACCESS_SCRIPT, "status", NULL}, 10, true, false},
 	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
 	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
-	/* systemprofile denies getProfiles (12.x) and debug/rescan (11.x, 12.x) to this service's own luna
-	 * identity, but allows them to luna-send run by root: exact URI and payload, nothing else. */
-	{"profileGet", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
-	{"profileRescan", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
+	/* Exact profile calls use the same identity as every other privileged luna call. */
+	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
+	{"profileRescan", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
 	{"watchLog", {NULL}, 0, true, true},
 	{NULL, {NULL}, 0, false, false}
 };
@@ -332,6 +331,7 @@ static const char *const LUNA_URIS[] = {
 
 bool hc_luna_uri_allowed(const char *uri)
 {
+	if (hc_call_lookup(uri) != HC_CALL_DENIED) return true;
 	for (int i = 0; uri && LUNA_URIS[i]; i++)
 		if (strcmp(uri, LUNA_URIS[i]) == 0) return true;
 	return false;

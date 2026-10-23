@@ -67,7 +67,7 @@ bool hc_settings_ok(const char *category, const char *const *keys, size_t nkeys)
 /* A command the service may run, by name. argv[0] is absolute; no shell. */
 typedef struct {
 	const char *name;
-	const char *argv[6];
+	const char *argv[8];
 	int timeout_s;
 	bool tolerant;    /* a non-zero exit is an answer, not an error */
 	bool native_tail; /* not run: the last lines of HC_WATCH_LOG */

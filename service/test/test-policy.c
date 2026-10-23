@@ -96,13 +96,13 @@ static void test_commands(void)
 	c = hc_command_lookup("watcherActive");
 	CHECK(c && c->tolerant && strcmp(c->argv[1], "is-active") == 0);
 	c = hc_command_lookup("profileGet");
-	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
-		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/getProfiles") == 0
-		&& strcmp(c->argv[4], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[5]);
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
+		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/getProfiles") == 0
+		&& strcmp(c->argv[6], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[7]);
 	c = hc_command_lookup("profileRescan");
-	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
-		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/debug/rescan") == 0
-		&& strcmp(c->argv[4], "{}") == 0 && !c->argv[5]);
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
+		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/debug/rescan") == 0
+		&& strcmp(c->argv[6], "{}") == 0 && !c->argv[7]);
 	CHECK(!hc_command_lookup("luna-send"));
 	c = hc_command_lookup("watchLog");
 	CHECK(c && c->native_tail);
@@ -252,6 +252,17 @@ static void test_luna_run(void)
 		&& strcmp(argv[6], "{}") == 0 && argv[7] == NULL);
 	CHECK(strncmp(HC_LUNA_IDENTITY, "com.webos.", 10) == 0);
 	CHECK(hc_luna_argv("luna://com.webos.appInstallService/remove", "{}", 5, argv) && strcmp(argv[4], "20") == 0);
+	static const char *const forwarded[] = {
+		"listApps", "running", "getAppInfo", "closeByAppId", "setDefaultApp", "launchDefaultApp"
+	};
+	for (size_t i = 0; i < sizeof forwarded / sizeof forwarded[0]; i++) {
+		char uri[160];
+		snprintf(uri, sizeof uri, "luna://com.webos.applicationManager/%s", forwarded[i]);
+		CHECK(hc_luna_argv(uri, "{}", 1, argv));
+		CHECK(strcmp(argv[1], "-a") == 0 && strcmp(argv[2], HC_LUNA_IDENTITY) == 0);
+	}
+	CHECK(hc_luna_uri_allowed("luna://com.webos.settingsservice/getSystemSettings"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.settingsservice/setSystemSettings"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/removeLaunchPoint"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/launch"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.appInstallService/dev/remove"));

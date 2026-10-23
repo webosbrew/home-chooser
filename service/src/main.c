@@ -152,12 +152,14 @@ static bool on_quit(LSHandle *sh, LSMessage *msg, void *ctx)
 
 /* ---- call: an allow-listed luna call ---- */
 
+/* All privileged calls use the fixed luna-send identity, including the settings app's
+ * forwarding and icon lookup. No call runs under this service's own hub identity. */
+static int luna_run(const char *, const char *, int, int, int (*)(const char *), GString *);
+
 typedef struct {
 	LSMessage *msg;
-	LSMessageToken token;
-	guint timer;
 	char *uri;
-	char *icon_app; /* set for readIcon: the reply is turned into the icon */
+	char *icon_app;
 } Pending;
 
 static void pending_free(Pending *p)
@@ -168,50 +170,28 @@ static void pending_free(Pending *p)
 	g_free(p);
 }
 
-static gboolean pending_timeout(gpointer data)
+static void forward_reply(Pending *p, jvalue_ref parsed)
 {
-	Pending *p = data;
-	LSError e;
-	LSErrorInit(&e);
-	LSCallCancel(g_handle, p->token, &e);
-	LSErrorFree(&e);
-	LOGE("CALL_TIMEOUT", "%s", p->uri);
-	send_error(p->msg, "timeout", "No reply from %s in %d seconds", p->uri, CALL_TIMEOUT_S);
-	pending_free(p);
-	return FALSE;
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	jobject_set(o, key_buf("reply"), jvalue_duplicate(parsed));
+	send_reply(p->msg, o);
 }
 
-static bool forward_reply(LSHandle *sh, LSMessage *reply, void *ctx)
+static void start_call(Pending *p, const char *payload, void (*cb)(Pending *, jvalue_ref))
 {
-	(void)sh;
-	Pending *p = ctx;
-	g_source_remove(p->timer);
-	jvalue_ref parsed = parse_object(LSMessageGetPayload(reply));
+	GString *out = g_string_new(NULL);
+	int code = luna_run(p->uri, payload, 1, CALL_TIMEOUT_S, NULL, out);
+	jvalue_ref parsed = code == 0 ? parse_object(out->str) : NULL;
 	if (!parsed) {
-		send_error(p->msg, "badReply", "The reply from %s is not a JSON object", p->uri);
+		LOGE("CALL_FAILED", "%s (exit %d)", p->uri, code);
+		send_error(p->msg, code == -2 ? "timeout" : "badReply", "No JSON reply from %s (exit %d)", p->uri, code);
 	} else {
-		jvalue_ref o = jobject_create();
-		put_bool(o, "returnValue", true);
-		jobject_set(o, key_buf("reply"), parsed);
-		send_reply(p->msg, o);
+		cb(p, parsed);
 	}
+	j_release(&parsed);
+	g_string_free(out, TRUE);
 	pending_free(p);
-	return true;
-}
-
-/* Start the luna call and arm the timeout; takes over `p` (replies with an error itself on failure). */
-static void start_call(Pending *p, const char *payload, LSFilterFunc cb)
-{
-	LSError e;
-	LSErrorInit(&e);
-	if (!LSCallOneReply(g_handle, p->uri, payload, cb, p, &p->token, &e)) {
-		LOGE("CALL_FAILED", "%s: %s", p->uri, e.message ? e.message : "?");
-		send_error(p->msg, "callFailed", "Could not call %s: %s", p->uri, e.message ? e.message : "?");
-		LSErrorFree(&e);
-		pending_free(p);
-		return;
-	}
-	p->timer = g_timeout_add_seconds(CALL_TIMEOUT_S, pending_timeout, p);
 }
 
 /* The member names of an object / the strings of an array, up to max; returns the count or -1. */
@@ -489,7 +469,7 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	if (!gate(msg, "link", true)) return true;
-	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_KEYFILTER_SCRIPT, HC_WATCH_SCRIPT, NULL};
+	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_KEYFILTER_SCRIPT, HC_WATCH_SCRIPT, HC_ACCESS_SCRIPT, NULL};
 	if (!mkdir_p(HC_INIT_DIR)) {
 		send_error(msg, "linkFailed", "Could not create %s: %s", HC_INIT_DIR, strerror(errno));
 		return true;
@@ -600,6 +580,9 @@ static int run_argv(const char *const *argv, int timeout_s, GString *out, GStrin
 		dup2(nul, 0);
 		dup2(po[1], 1);
 		dup2(pe[1], 2);
+		/* Readers poll without blocking; the writer must wait rather than lose a large reply. */
+		fcntl(1, F_SETFL, fcntl(1, F_GETFL) & ~O_NONBLOCK);
+		fcntl(2, F_SETFL, fcntl(2, F_GETFL) & ~O_NONBLOCK);
 		for (int fd = 3; fd < 1024; fd++) close(fd);
 		execve(argv[0], (char *const *)argv, envp);
 		_exit(127);
@@ -698,12 +681,8 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 
 /* ---- readIcon: an app's icon, found through getAppInfo ---- */
 
-static bool icon_reply(LSHandle *sh, LSMessage *reply, void *ctx)
+static void icon_reply(Pending *p, jvalue_ref info)
 {
-	(void)sh;
-	Pending *p = ctx;
-	g_source_remove(p->timer);
-	jvalue_ref info = parse_object(LSMessageGetPayload(reply));
 	jvalue_ref inner = info ? jobject_get(info, key_buf("appInfo")) : NULL;
 	if (inner && !(jis_valid(inner) && jis_object(inner))) inner = NULL;
 	jvalue_ref src = inner ? inner : info;
@@ -736,9 +715,6 @@ static bool icon_reply(LSHandle *sh, LSMessage *reply, void *ctx)
 	}
 	g_free(folder);
 	g_free(icon);
-	j_release(&info);
-	pending_free(p);
-	return true;
 }
 
 static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
@@ -790,64 +766,19 @@ typedef struct {
 static UninstallToken g_tokens[TOKEN_SLOTS];
 static int g_token_next;
 
-/* An asynchronous call of the service's own luna identity. done gets the parsed reply, or NULL on a
- * failed or timed-out call. */
-typedef struct Call Call;
-struct Call {
-	LSMessageToken token;
-	guint timer;
-	char *uri;
-	void (*done)(Call *c, jvalue_ref reply);
-	void *ctx;
-};
-
-static void call_free(Call *c)
-{
-	g_free(c->uri);
-	g_free(c);
-}
-
-static gboolean call_timeout(gpointer data)
-{
-	Call *c = data;
-	LSError e;
-	LSErrorInit(&e);
-	LSCallCancel(g_handle, c->token, &e);
-	LSErrorFree(&e);
-	LOGE("CALL_TIMEOUT", "%s", c->uri);
-	c->done(c, NULL);
-	call_free(c);
-	return FALSE;
-}
-
-static bool call_reply(LSHandle *sh, LSMessage *reply, void *ctx)
-{
-	(void)sh;
-	Call *c = ctx;
-	g_source_remove(c->timer);
-	jvalue_ref parsed = parse_object(LSMessageGetPayload(reply));
-	c->done(c, parsed);
-	j_release(&parsed);
-	call_free(c);
-	return true;
-}
+/* Callback context for the launcher operations. luna-send runs with a bounded timeout. */
+typedef struct { void *ctx; } Call;
 
 static void call_start(const char *uri, const char *payload, void (*done)(Call *, jvalue_ref), void *ctx)
 {
-	Call *c = g_new0(Call, 1);
-	c->uri = g_strdup(uri);
-	c->done = done;
-	c->ctx = ctx;
-	LSError e;
-	LSErrorInit(&e);
-	if (!LSCallOneReply(g_handle, uri, payload, call_reply, c, &c->token, &e)) {
-		LOGE("CALL_FAILED", "%s: %s", uri, e.message ? e.message : "?");
-		LSErrorFree(&e);
-		done(c, NULL);
-		call_free(c);
-		return;
-	}
-	c->timer = g_timeout_add_seconds(CALL_TIMEOUT_S, call_timeout, c);
+	Call c = {.ctx = ctx};
+	GString *out = g_string_new(NULL);
+	int code = luna_run(uri, payload, 1, CALL_TIMEOUT_S, NULL, out);
+	jvalue_ref parsed = code == 0 ? parse_object(out->str) : NULL;
+	if (!parsed) LOGE("CALL_FAILED", "%s (exit %d)", uri, code);
+	done(&c, parsed);
+	j_release(&parsed);
+	g_string_free(out, TRUE);
 }
 
 static bool reply_ok(jvalue_ref r)
@@ -869,7 +800,7 @@ static int luna_run(const char *uri, const char *payload, int replies, int timeo
 	}
 	LOGI("RUN", "luna-send -a %s %s", HC_LUNA_IDENTITY, uri);
 	int code = run_argv(argv, timeout_s, out, err, done);
-	sanitize(out->str, out->len);
+	/* JSON replies retain UTF-8 titles and paths. */
 	if (err->len) LOGI("RUN_STDERR", "%s: %s", uri, err->str);
 	g_string_free(err, TRUE);
 	return code;
@@ -1045,6 +976,8 @@ static void list_done(Call *c, jvalue_ref reply)
 	bool running = strcmp(op->method, "running") == 0;
 	if (!reply || !reply_ok(reply)) {
 		send_error_for(op->msg, op->method, reply ? "callFailed" : "timeout", reply ? "The application manager refused the call" : "No reply from the application manager");
+	} else if (!jis_array(jobject_get(reply, key_buf(running ? "running" : "apps")))) {
+		send_error_for(op->msg, op->method, "badReply", "The application manager did not return an app array");
 	} else {
 		jvalue_ref o = jobject_create();
 		put_bool(o, "returnValue", true);
