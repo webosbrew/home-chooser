@@ -43,7 +43,7 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 
 | Method | Request | Reply |
 | --- | --- | --- |
-| `status` | `{}` | `{returnValue, root, uid, version}`; works while not root |
+| `status` | `{}` | `{returnValue, root, uid, version, apiVersion}`; works while not root |
 | `quit` | `{}` | `{returnValue}`, then exits after 300 ms; works while not root |
 | `call` | `{uri, payload}` | `{returnValue: true, reply: <the called service's reply>}`; the call times out after 20 s (`timeout`) |
 | `readFile` | `{path}` | `{returnValue, exists, text}` (at most 64 KiB) |
@@ -52,18 +52,84 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `readIcon` | `{appId}` | `{returnValue, mime, data}` with `data` base64; at most 256 KiB |
 | `link` / `unlink` / `linkStatus` | `{}` | the boot entry, below |
 | `run` | `{command}` | `{returnValue, exitCode, stdoutString, stderrString}` |
+| `getInfo` | `{}` | `{returnValue, apiVersion, version, root, group, permitted, isHome}` |
+| `listApps` | `{}` | `{returnValue, apiVersion, apps:[…]}`; selected app fields only |
+| `running` | `{}` | `{returnValue, apiVersion, running:[…]}`; selected process fields only |
+| `closeById` | `{id, force?}` | `{returnValue, id}`; selected Home only |
+| `uninstall` | `{id}` | `{returnValue, pending:true, id, confirm}` (`alert` or `screen`); selected Home only |
+| `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; internal confirmation only |
 
-Every method except `status` and `quit` is privileged: when the service is not root it answers
+Every method except `status`, `quit` and `getInfo` is privileged: when the service is not root it answers
 `errorCode: "notRoot"` and does nothing.
 
 ## Who may call
 
-Each method first checks the sender with `LSMessageGetApplicationID`: it must be
-`org.webosbrew.homechooser` (an instance suffix after a space is accepted). Anything else, including
-a service caller (`luna-send` from a shell has no application id), gets `errorCode: "forbidden"`
-and a `REFUSED` log line with the application id and service name the hub reported. A build made
-with `make -C service dev` accepts any sender; it is for testing with `luna-send` and is never
-packaged.
+Settings methods (`status`, `quit`, `call`, files/icons, boot links and `run`) check
+`LSMessageGetApplicationID`: it must be `org.webosbrew.homechooser` (an instance suffix after a
+space is accepted). Others receive `forbidden`. `make -C service dev` relaxes this settings gate;
+it is never packaged.
+
+Launcher methods use a separate gate: a valid hub-reported application id, root and the caller's
+installed `requiredPermissions` containing `homechooser.applications`. `getAppInfo` supplies the
+permissions, with an installed `appinfo.json` fallback. `closeById` and `uninstall` also require the
+caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
+root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
+
+`uninstallConfirmed` accepts Home Chooser or a sender without an application id (the notification
+route), always with a live random one-shot token. Four slots expire after 120 seconds; confirmation
+consumes the token and rechecks that the requester is still Home. Targets cannot be Home Chooser,
+Homebrew Channel, the requester, non-removable apps or apps outside developer/store app directories.
+The service raises an `Uninstall <title>?` alert, with Uninstall/Cancel; only Uninstall calls the
+token method. If alerts are refused, it launches Home Chooser's own confirmation screen.
+Removal first uses `removeLaunchPoint` (`<id>_default`), then the appropriate `appInstallService`
+route unless LG explicitly says “is not removable”. Stream status 31 means success and 25 failure
+in the implementation. The settings app allows 120 seconds for confirmation.
+
+See [Launcher API version 1](launcher-api.md) for the contract, fields, errors, caller rules,
+selection requests and absence detection. Plain shell callers have no application id and are
+refused by launcher gates.
+
+## Privileged luna identity
+
+Every privileged luna call in the native service uses
+`/usr/bin/luna-send -a com.webos.applicationManager`, the constant `HC_LUNA_IDENTITY`. There are no
+calls under the native service's own luna identity. This includes `listApps`, `running`, every
+`getAppInfo` lookup (consent, icons, uninstall, forwarding), `closeByAppId`, settings/default-app
+calls, notifications, removal and the fixed profile commands. Arguments go directly to `execve`,
+without a shell, using allow-listed URIs and the settings payload restriction below. Watcher
+calls and subscriptions carry the same fixed identity.
+
+Native one-shot calls use `luna_run` with a 20 second bound. They run serially, so a slow query or
+confirmation can delay other requests. The alert and screen-launch bounds are 8 and 15 seconds;
+streamed removal has a 90 second bound. Output is capped at 64 KiB per stream. JSON replies retain
+UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the same argv identity.
+
+This identity is device-unverified separately on webOS 5.x, 6.x, 7.x, 8.x, 9.x, 10.x, 11.x and
+12.x. Prior service-identity denials do not establish this identity's groups on every release.
+
+## Launcher access files
+
+`backport/homechooser-access apply|remove|status` manages only Home Chooser's group/API files under
+`/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
+`manifests.d/org.webosbrew.homechooser.json` exists. It writes
+`groups.d/homechooser.groups.json` (non-public `homechooser.applications`) and
+`api-permissions.d/org.webosbrew.homechooser.service.api.json` (five launcher methods), and adds
+their absolute paths to `groupsFiles` and `apiPermissionFiles`, creating missing arrays. On major
+11+ the same five methods are also under `ares.webos.cli`. Neither includes `uninstallConfirmed`.
+The elevated service's broader public registration still requires the service's own caller gates.
+
+Apply is idempotent and repairs drift. Remove drops these manifest entries and files, including
+files whose package manifest has disappeared. `ls-control scan-services` runs only after a change;
+status prints file presence. The app best-effort applies after elevation, the boot entry applies
+without needing a Home choice, and the watcher applies at start. The watcher stages the access
+worker into its runtime directory so uninstall cleanup works after the app directory disappears.
+Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`.
+
+The group format, manifest keys and app-id naming, non-dev root persistence across reboot, and
+effective CLI permissions on 11+ are device-unverified. So are permission metadata in `getAppInfo`,
+`running` availability/shape, launch-point ids, alert button payloads and click sender identity,
+and the terminal removal status. The [per-release table](launcher-api.md#device-validation-status)
+records this separately for each release.
 
 ## Allow-lists
 
@@ -72,11 +138,8 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 * **`call` URIs**: `applicationManager` `listApps`, `getAppInfo`, `setDefaultApp`,
   `launchDefaultApp`, `closeByAppId`; `settingsservice` `getSystemSettings` and
   `setSystemSettings`, only for category `general` and the single key `defaultApps` (the `keys`
-  array of a get; the keys of `settings` of a set); `com.webos.service.systemprofile`
-  Anything else is `notAllowed`. The payload is forwarded as is. The system profile is not here: the
-  service's own luna identity is denied `systemprofile/getProfiles` (12.x) and `systemprofile/debug/rescan`
-  (11.x and 12.x) (`Denied method call "rescan" for category "/debug"`), while `luna-send` run by root is
-  not, so those two calls are the `profileGet` and `profileRescan` commands below.
+  array of a get; the keys of `settings` of a set). Anything else is `notAllowed`.
+  System profile calls are fixed commands (`profileGet`, `profileRescan`), not generic forwarding.
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/keyfilter`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
@@ -90,7 +153,7 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   requires the result to lie inside the real `folderPath`, then returns the file if it is a regular
   file of at most 256 KiB.
 * **Boot entry**: `link` creates the directory `/var/lib/webosbrew/init.d`, removes the earlier
-  `homechooser-keyfilter` entry, sets mode 755 on the three scripts in the app's `backport/`
+  `homechooser-keyfilter` entry, sets mode 755 on the four scripts in the app's `backport/`
   directory, and makes `/var/lib/webosbrew/init.d/homechooser` a symlink to the app's
   `backport/homechooser` (replacing a link or a regular file). `unlink` removes both names.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The app directory
@@ -109,8 +172,11 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 | `keyfilterRefresh` | same with `refresh` | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
-| `profileGet` | `/usr/bin/luna-send -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
-| `profileRescan` | `/usr/bin/luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
+| `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
+| `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
+| `accessApply` | `/bin/sh <app>/backport/homechooser-access apply` | 30 s |
+| `accessRemove` | same with `remove` | 30 s |
+| `accessStatus` | same with `status` (non-zero exit is not an error) | 10 s |
 | `watchLog` | not run: the last 5 lines of `/tmp/homechooser-home.log` | - |
 
 A non-zero exit of any other command is `errorCode: "exitStatus"` with the output attached; a
@@ -130,6 +196,7 @@ in the web console.
 * `make -C service test`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
-* Needs a TV: the sender id the hub reports for the app, `elevateService` rewriting this
-  package's service, the role file's outbound permissions for the forwarded calls, and each
-  method end to end.
+* `backport/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
+  against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.
+* Device-unverified: hub sender ids, elevation of this package, effective groups for the fixed
+  identity, and each launcher API behavior listed in the validation table.
