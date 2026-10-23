@@ -1604,6 +1604,20 @@ def ensure_devices(host, vm, rec):
     addr = info.get('lan_address') or ''
     if not addr or addr == '-':
         raise SystemExit('VM %s has no LAN address (is it running with link=lan?)' % vm)
+    # Beanjar 0.3.1+git7 sends the VM's name as its DHCP hostname, so the LAN's DNS knows it while it
+    # runs (`beanjar info` lan_hostname). Prefer the name, so the entries survive a new lease, but only
+    # when it resolves to this lease; otherwise keep the address.
+    name = info.get('lan_hostname') or ''
+    if name and name != '-':
+        import socket
+        for cand in (name + '.lan', name):
+            try:
+                if socket.gethostbyname(cand) == addr:
+                    rec.say('VM %s resolves as %s (%s)' % (vm, cand, addr))
+                    addr = cand
+                    break
+            except OSError:
+                pass
     p = os.path.expanduser('~/.webos/ose/novacom-devices.json')
     devs = json.load(open(p))
     byname = {x['name']: x for x in devs}
