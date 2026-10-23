@@ -55,6 +55,22 @@ homebrew app with three parts:
   [The stock home is not preloaded](docs/settings-app.md#the-stock-home-is-not-preloaded).
 * The UI is built with Enact.
 
+## Launchers
+
+Home Chooser supports a launcher only through its appinfo: an app that declares `appCategory: ["home"]` (and, if it is an
+overlay window, `defaultWindowType: "overlay"`) is listed and can be chosen. Apps that patch the system themselves
+(AltHome style) are out of scope. The end-to-end test checks this with six fixture launchers
+([`e2e/fixtures`](e2e/fixtures/README.md)) besides Dock:
+
+| | normal window | overlay window |
+| --- | --- | --- |
+| native (C, SDL2) | `org.webosbrew.hcfixture.native.normal` | `org.webosbrew.hcfixture.native.overlay` |
+| QML | `org.webosbrew.hcfixture.qml.normal` | `org.webosbrew.hcfixture.qml.overlay` |
+| web | `org.webosbrew.hcfixture.web.normal` | `org.webosbrew.hcfixture.web.overlay` |
+
+The fixtures have not run on a device yet; whether `type: "qml"` apps run on each release is recorded, with the
+firmware evidence, in `e2e/fixtures/qml/support.json`.
+
 ## Documents
 
 * [The Home key and the home app, webOS 5 to 26](docs/research/home-key-and-home-app.md): how

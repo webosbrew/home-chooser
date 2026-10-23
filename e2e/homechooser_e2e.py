@@ -17,8 +17,13 @@ import socket
 import struct
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.request
+import glob
+import hashlib
+import io
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -59,10 +64,150 @@ KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 # on 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app (measured on 9.2.1,
 # 8.3.0 and 10.3.1, 75 to 89 MB with Dock chosen).  The watcher therefore does not close it there: the expected result
 # is the stock home running, the skip line in the watcher log and no closeByAppId for it.
-OVERLAY_LAUNCHERS = {'org.webosbrew.dock'}
+# Whether a launcher is an overlay is read from the defaultWindowType in the appinfo.json inside its
+# ipk (Launcher.overlay), never from an id: the watcher decides the same way for any id
+# (backport/homechooser-home-watch overlay_check: getAppInfo, else the installed appinfo.json).
 SKIP_LINE = 'stock home left running'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
+
+
+# ---------------------------------------------------------------------------------------------
+# Launchers under test: Dock, one of the six fixtures in e2e/fixtures ({native,qml,web} x
+# {normal,overlay}), or any app id with --launcher-ipk.
+# ---------------------------------------------------------------------------------------------
+DOCK_ID = 'org.webosbrew.dock'
+DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'
+FIXTURE_TYPES = ('native', 'qml', 'web')
+FIXTURE_WINDOWS = ('normal', 'overlay')
+FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
+FIXTURE_ID = 'org.webosbrew.hcfixture.%s.%s'
+
+
+def ipk_files(path):
+    """{member name: bytes} of the data.tar.gz inside an ipk (an ar archive; stdlib only)."""
+    raw = open(path, 'rb').read()
+    if raw[:8] != b'!<arch>\n':
+        raise ValueError('%s is not an ar archive' % path)
+    pos, data = 8, None
+    while pos + 60 <= len(raw):
+        name = raw[pos:pos + 16].decode().strip().rstrip('/')
+        size = int(raw[pos + 48:pos + 58].decode().strip())
+        body = raw[pos + 60:pos + 60 + size]
+        if name == 'data.tar.gz':
+            data = body
+        pos += 60 + size + (size & 1)
+    if data is None:
+        raise ValueError('no data.tar.gz in %s' % path)
+    out = {}
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as t:
+        for m in t.getmembers():
+            if m.isfile():
+                out[m.name.lstrip('./')] = t.extractfile(m).read()
+    return out
+
+
+def ipk_appinfo(path):
+    for name, body in ipk_files(path).items():
+        if name.endswith('/appinfo.json') and name.startswith('usr/palm/applications/'):
+            return json.loads(body.decode('utf-8'))
+    raise ValueError('no appinfo.json in %s' % path)
+
+
+class Launcher:
+    """id, ipk, and what the appinfo inside the ipk declares."""
+
+    def __init__(self, spec, ident, ipk, kind='app'):
+        self.spec, self.id, self.ipk, self.kind = spec, ident, ipk, kind
+        self.appinfo = ipk_appinfo(ipk) if ipk and os.path.exists(ipk) else {}
+        self.overlay = self.appinfo.get('defaultWindowType') == 'overlay'
+        self.title = self.appinfo.get('title', ident)
+        self.tag = spec.replace(':', '-')
+        parts = ident.split('.')
+        self.fixture = (parts[-2], parts[-1]) if kind == 'fixture' else None  # (type, window)
+
+    @property
+    def is_fixture(self):
+        return self.kind == 'fixture'
+
+
+def fixture_specs():
+    return ['fixture:%s.%s' % (t, w) for t in FIXTURE_TYPES for w in FIXTURE_WINDOWS]
+
+
+def make_launcher(spec, ipk_override=None, announce=print):
+    if spec == 'dock':
+        return Launcher(spec, DOCK_ID, ipk_override or DOCK_IPK, 'dock')
+    if spec.startswith('fixture:'):
+        t, _, w = spec[8:].partition('.')
+        if t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS:
+            raise SystemExit('unknown fixture %r; use fixture:<native|qml|web>.<normal|overlay>' % spec)
+        ident = FIXTURE_ID % (t, w)
+        found = sorted(glob.glob(os.path.join(FIXTURE_DIR, ident + '_*.ipk')))
+        if not found:
+            announce('fixture ipk for %s missing: running e2e/fixtures/build.sh (offline)' % ident)
+            rc, out = run(['sh', os.path.join(HERE, 'fixtures', 'build.sh')], 600)
+            announce(out.strip()[-400:])
+            found = sorted(glob.glob(os.path.join(FIXTURE_DIR, ident + '_*.ipk')))
+        if not found:
+            raise SystemExit('could not build the fixture ipk for %s' % ident)
+        return Launcher(spec, ident, found[-1], 'fixture')
+    if not ipk_override:
+        raise SystemExit('--launcher %s needs --launcher-ipk' % spec)
+    return Launcher(spec, spec, ipk_override, 'app')
+
+
+def qml_support(major):
+    """(supported, evidence) from e2e/fixtures/qml/support.json for a release; True/False/'unknown'."""
+    try:
+        d = json.load(open(os.path.join(HERE, 'fixtures', 'qml', 'support.json')))
+        e = d.get(str(major), {})
+        return e.get('supported', 'unknown'), e.get('evidence', 'no entry')
+    except (OSError, ValueError):
+        return 'unknown', 'support.json unreadable'
+
+
+def default_update_ref():
+    """The previous commit that changed app/, service/ or backport/: the last one before HEAD, unless
+    those paths have uncommitted changes (then HEAD is the build the working tree departs from)."""
+    rc, dirty = run(['git', '-C', REPO, 'status', '--porcelain', '--', 'app', 'service', 'backport'], 30)
+    if dirty.strip():
+        return 'HEAD'
+    rc, out = run(['git', '-C', REPO, 'log', '-1', '--format=%H', 'HEAD~1', '--', 'app', 'service', 'backport'], 30)
+    ref = out.strip()
+    if rc != 0 or not ref:
+        raise SystemExit('cannot find a previous commit touching app/, service/ or backport/; use --update-from')
+    return ref
+
+
+def build_old_home_chooser(ref, rec):
+    """Build Home Chooser from a git ref in a temp dir: `git archive` extracted under /tmp (the main
+    working tree and .git are not touched), node_modules linked from the main tree.
+    Returns (ipk path, temp dir)."""
+    tmp = tempfile.mkdtemp(prefix='hc-e2e-old-')
+    rc, out = run(['sh', '-c', 'git -C %s archive %s | tar -x -C %s' % (shlex.quote(REPO), shlex.quote(ref), shlex.quote(tmp))], 120)
+    rec.check('git archive %s into %s' % (ref, tmp), rc == 0, out[-300:])
+    if rc != 0:
+        raise RuntimeError('git archive failed')
+    os.makedirs(os.path.join(tmp, 'build', 'ipk'), exist_ok=True)
+    os.symlink(os.path.join(REPO, 'app', 'node_modules'), os.path.join(tmp, 'app', 'node_modules'))
+    rec.say('building the old Home Chooser (%s): npm run package in %s/app' % (ref, tmp))
+    rc, out = run(['sh', '-c', 'cd %s/app && npm run package' % shlex.quote(tmp)], 1200)
+    ipks = sorted(glob.glob(os.path.join(tmp, 'build', 'ipk', '*.ipk')))
+    rec.check('old Home Chooser build (%s) produced an ipk' % ref, rc == 0 and bool(ipks), out[-300:])
+    if rc != 0 or not ipks:
+        raise RuntimeError('old build failed')
+    return ipks[-1], tmp
+
+
+def current_home_chooser_ipk(rec, build=False):
+    ipks = sorted(glob.glob(os.path.join(REPO, 'build/ipk/*.ipk')))
+    if build or not ipks:
+        rec.say('building Home Chooser: npm run package')
+        rc, out = run(['sh', '-c', 'cd %s/app && npm run package' % shlex.quote(REPO)], 900)
+        rec.check('npm run package', rc == 0, out[-300:])
+        ipks = sorted(glob.glob(os.path.join(REPO, 'build/ipk/*.ipk')))
+    return ipks[-1]
 
 
 def entry(release_or_vm):
@@ -436,6 +581,7 @@ class Recorder:
         self.outdir = outdir
         self.results = []
         self.step = ''
+        self.tag = ''
         self.log = open(os.path.join(outdir, 'run.log'), 'w')
 
     def say(self, text):
@@ -445,8 +591,8 @@ class Recorder:
         self.log.flush()
 
     def begin(self, step):
-        self.step = step
-        self.say('== ' + step)
+        self.step = (self.tag + ' ' if self.tag else '') + step
+        self.say('== ' + self.step)
 
     def note(self, what, evidence=''):
         self.say('note: %s\n    %s' % (what, str(evidence).replace('\n', '\n    ')))
@@ -475,11 +621,12 @@ class Recorder:
 # The scenario
 # ---------------------------------------------------------------------------------------------
 class Scenario:
-    def __init__(self, args, host, rec, row):
+    def __init__(self, args, host, rec, row, launcher):
         self.a, self.host, self.rec = args, host, rec
+        self.L = launcher
         self.release, self.vm, self.strategy_name, self.sure, self.note = row
         self.dev = Device(self.vm)
-        self.launcher = args.launcher
+        self.launcher = launcher.id
         self.shot_n = 0
         self.insp = None
         self.capture_broken = False
@@ -494,7 +641,7 @@ class Scenario:
         the viewer window (grim, `*-viewer.png`; the viewer is opened for it on first use).  Each
         fallback used is logged."""
         self.shot_n += 1
-        name = '%02d-%s.png' % (self.shot_n, label)
+        name = '%02d-%s%s.png' % (self.shot_n, (self.L.tag + '-') if self.a.multi else '', label)
         path = os.path.join(self.rec.outdir, name)
         ok, detail = self.host.tv_screenshot(self.vm, path)
         self.rec.say('screenshot %s (beanjar screenshot): %s' % (name, detail[-160:] if detail else ('ok' if ok else 'failed')))
@@ -737,7 +884,7 @@ class Scenario:
 
     def overlay_skip(self):
         """6.x to 10.x with an overlay launcher: the watcher leaves the stock home running."""
-        return self.launcher in OVERLAY_LAUNCHERS and 6 <= self.major <= 10
+        return self.L.overlay and 6 <= self.major <= 10
 
     def check_stock_left_running(self, label, samples):
         """Overlay launcher on 6.x to 10.x: the stock home is running, the watcher logged the skip and
@@ -748,7 +895,8 @@ class Scenario:
         skips = [l for l in log.splitlines() if SKIP_LINE in l]
         closes = [l for l in log.splitlines() if 'closeByAppId ' + STOCK in l]
         r.note(label + ': watcher skip lines', '\n'.join(skips))
-        r.check(label + ': watcher log has the overlay skip line (stock home left running)', bool(skips),
+        r.check(label + ': watcher log has the overlay skip line naming %s (stock home left running)' % self.launcher,
+                any(self.launcher in l for l in skips) if skips else False,
                 skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
         r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
         running = bool(samples) and samples[-1][1]
@@ -758,7 +906,8 @@ class Scenario:
             # policy is off, so after a reboot nothing starts it: either state is fine, a close is the failure.
             r.note(label + ': %s running=%s (10.x: not started at boot with the policy off; no check)' % (STOCK, running), detail)
             return
-        r.check(label + ': %s is running (expected: left alone with an overlay launcher)' % STOCK, running, detail)
+        r.check(label + ': %s is running (expected: left alone with an overlay launcher; appinfo of %s declares defaultWindowType=%s)'
+                % (STOCK, self.launcher, self.L.appinfo.get('defaultWindowType')), running, detail)
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""
@@ -843,6 +992,9 @@ class Scenario:
         a launcher counts when it is running (it was closed first) or in the foreground: a
         launcher bar such as Dock is an overlay window, so the app underneath stays "foreground"."""
         r = self.rec
+        proof = expect == self.launcher and self.L.is_fixture
+        if proof:
+            rec_before, rec_mark = set(self.launch_records()), self.messages_mark()
         if expect == STOCK and self.major == 5:
             # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
             # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
@@ -884,7 +1036,9 @@ class Scenario:
             fg = self.wait(seen, 20, 3)
         ok = bool(fg)
         fg = fg or self.dev.foreground()
-        self.shot(label)
+        shot_path = self.shot(label)
+        if proof:
+            self.fixture_proof(label, rec_before, rec_mark, shot_path)
         via = 'foreground' if fg[0] == expect else ('sam log' if sam else 'none')
         r.check('%s: Home opens %s (foreground, sam homeKey launch of the stock home in the log, or for a '
                 'launcher: running after being closed first)' % (label, expect), ok,
@@ -892,6 +1046,63 @@ class Scenario:
                     via, fg[1], self.running_ids(),
                     ('; sam lines:\n' + '\n'.join(sam[:6])) if sam and via == 'sam log' else ''))
         return ok
+
+    # -- the fixture's own launch record (e2e/fixtures/README.md "Launch records")
+    def launch_records(self):
+        """Lines the fixture wrote about itself: HCFIXTURE/hcfixture lines naming its id in
+        /var/log/messages (native: syslog; qml: PmLog; web: console.log where WAM forwards it) and the
+        native fixture's append-only file(s).  Lines are compared as a set before/after, so log
+        rotation does not matter."""
+        i = self.launcher
+        rc, out = self.dev.sh(
+            "grep -i hcfixture /var/log/messages 2>/dev/null | grep -F %s | sed 's/^/messages: /'; "
+            "for f in /media/developer/temp/%s.launches /tmp/%s.launches /tmp/hcfixture-%s.json; do "
+            "[ -f $f ] && sed \"s|^|$f: |\" $f; done; true" % (shlex.quote(i), i, i, i))
+        return [l for l in out.splitlines() if l.strip()]
+
+    def fixture_expectation(self):
+        """Text citing why the fixture's own record may legitimately be absent (XFAIL), or None."""
+        t = self.L.fixture[0]
+        if t == 'qml':
+            sup, ev = qml_support(self.major)
+            if sup is not True:
+                return 'qml on %d.x is %s: %s' % (self.major, sup, ev)
+            return ('qml: reaching /var/log/messages through PmLog/console.log of qml-runner is not verified '
+                    'on any release (e2e/fixtures/README.md)')
+        if t == 'web':
+            return ('web: WAM forwarding console.log to /var/log/messages is not established; sam logs the '
+                    'launch (e2e/fixtures/README.md)')
+        return None
+
+    def fixture_proof(self, label, before, mark, shot_path):
+        """After a Home press that should open the fixture: its own record gained lines, and the
+        screenshot is described so a reader can compare the picture with the label."""
+        r = self.rec
+        t, w = self.L.fixture
+        new = []
+
+        def got():
+            nonlocal new
+            new = [l for l in self.launch_records() if l not in before]
+            return new
+        self.wait(got, 20, 2)
+        sources = sorted({l.split(': ', 1)[0].split('/')[-1] if not l.startswith('messages') else 'messages' for l in new})
+        r.check('%s: the fixture %s recorded the launch itself (new HCFIXTURE lines)' % (label, self.launcher),
+                bool(new), '\n'.join(new[-6:]) or 'no new fixture record; sources checked: /var/log/messages, '
+                '/media/developer/temp/<id>.launches, /tmp/<id>.launches, /tmp/hcfixture-<id>.json',
+                expected=self.fixture_expectation())
+        if new:
+            r.say('%s: record sources that gained lines: %s' % (label, sources))
+        sam = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | grep -i -E 'launch|appfocus|NL_APP' | tail -n 5"
+                          % (mark, shlex.quote(self.launcher)))[1].strip()
+        r.note('%s: sam/system log lines naming %s since the press (independent of the fixture)' % (label, self.launcher),
+               sam or 'none')
+        if self.L.overlay:
+            desc = ('transparent window with one visible bar showing "%s" / %s %s and a launch counter; the stock home or '
+                    'the app beneath shows through everywhere else' % (self.launcher, t.upper(), w.upper()))
+        else:
+            desc = 'opaque full-screen card showing "%s" / %s %s and a launch counter' % (self.launcher, t.upper(), w.upper())
+        r.note('%s: expected on screen in %s' % (label, os.path.basename(shot_path)), desc)
 
     def messages_mark(self):
         """UTC time on the device as sam stamps its lines (2026-10-23T05:48:12), taken before a press.
@@ -913,9 +1124,9 @@ class Scenario:
     def run(self):
         r, d = self.rec, self.dev
         strat = ELEVATIONS[self.a.elevation or self.strategy_name]()
-        r.say('run: vm=%s release=%s elevation=%s (matrix default %s) input=%s host=%s launcher=%s'
+        r.say('run: vm=%s release=%s elevation=%s (matrix default %s) input=%s host=%s launcher=%s (%s, overlay=%s, ipk %s)'
               % (self.vm, self.release, strat.name, self.strategy_name, self.a.input, self.host.mode,
-                 self.launcher))
+                 self.launcher, self.L.spec, self.L.overlay, self.L.ipk))
         r.say('matrix confidence: %s -- %s' % (self.sure, self.note))
         self.major, osr = d.release()
         r.begin('0 baseline')
@@ -932,6 +1143,12 @@ class Scenario:
         r.note('df /media/developer', df)
         r.note('baseline preload policy of %s (isEnabled, raw reply)' % STOCK, repr(d.preload_policy()))
 
+        if self.L.is_fixture and self.L.fixture[0] == 'qml':
+            sup, ev = qml_support(self.major)
+            r.note('qml support expectation for %d.x: %s' % (self.major, sup), ev)
+            if sup is False:
+                r.check('qml fixtures run on %d.x' % self.major, False, ev, expected=ev)
+                return
         steps = [self.step1, self.step2, self.step3, self.step4, self.step5]
         try:
             for i, fn in enumerate(steps, 1):
@@ -940,6 +1157,8 @@ class Scenario:
                 fn(strat) if i == 1 else fn()
                 if i == 3 and self.a.reboot_check:
                     self.step_reboot()
+                if i == 3 and self.a.update_check:
+                    self.step_update()
         finally:
             if self.a.until >= 5:
                 self.step6()
@@ -949,17 +1168,18 @@ class Scenario:
     def step1(self, strat):
         r, d = self.rec, self.dev
         r.begin('1 install')
-        ipks = sorted(f for f in os.listdir(os.path.join(REPO, 'build/ipk')) if f.endswith('.ipk'))
-        hc = os.path.join(REPO, 'build/ipk', ipks[-1]) if ipks else None
-        if self.a.build or not hc:
-            r.say('building Home Chooser: npm run package')
-            rc, out = run(['sh', '-c', 'cd %s/app && npm run package' % REPO], 900)
-            r.check('npm run package', rc == 0, out[-300:])
-            hc = os.path.join(REPO, 'build/ipk', sorted(os.listdir(os.path.join(REPO, 'build/ipk')))[-1])
+        self.hc_new = self.a.new_ipk or current_home_chooser_ipk(r, self.a.build)
+        hc = self.a.old_ipk if self.a.update_check else self.hc_new
+        if self.a.update_check:
+            r.say('--update-check: the OLD Home Chooser (%s, %s) is installed first; the current build %s goes over it in step 3u'
+                  % (self.a.old_ref, hc, self.hc_new))
+        df = d.sh('df -h /media/developer | tail -1')[1].strip()
+        r.note('df /media/developer before installing', df)
         rc, out = d.install(hc)
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
-        rc, out = d.install(self.a.launcher_ipk)
+        rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
+        r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
         r.check('both apps are listed', APP_ID in d.installed() and self.launcher in d.installed(),
                 str(d.installed()))
         strat.prepare(d, r)
@@ -1138,6 +1358,145 @@ class Scenario:
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
 
+    # -- the app update (--update-check)
+    def watcher_procs(self):
+        """Top-level watcher processes (a forked subshell shares the command line, so only a process
+        whose parent is not itself a watcher counts) and the unit's own numbers."""
+        d = self.dev
+        top = d.sh("ps -eo pid,ppid,args | awk '/homechooser-home-watch/ && !/awk/ && !/grep/ {pid[$1]=1; pp[$1]=$2} "
+                   "END {n=0; for (p in pid) if (!(pp[p] in pid)) {n++; printf \"%s \", p}; print \"top=\" n}'")[1].strip()
+        m = re.search(r'top=(\d+)', top)
+        n = int(m.group(1)) if m else -1
+        show = d.sh('systemctl show homechooser-home -p MainPID -p NRestarts -p ActiveState 2>&1')[1]
+        kv = dict(l.split('=', 1) for l in show.splitlines() if '=' in l)
+        units = d.sh("systemctl list-units --all --no-legend 'homechooser-home*' 2>&1 | grep -c homechooser-home")[1].strip()
+        return {'top': n, 'pids': top, 'main_pid': kv.get('MainPID'), 'restarts': kv.get('NRestarts'),
+                'active': kv.get('ActiveState'), 'units': units}
+
+    def md5(self, path):
+        out = self.dev.sh('md5sum %s 2>&1' % path)[1].split()
+        return out[0] if out and len(out[0]) == 32 else 'missing'
+
+    def log_lines(self):
+        rc, out = self.dev.sh('cat /tmp/homechooser-home.log 2>&1')
+        return out.splitlines()
+
+    def open_app_check(self, label):
+        """Open Home Chooser, no error toast, the chosen row ticked; close it."""
+        r, d = self.rec, self.dev
+        self.insp = Inspector(self.vm)
+        d.launch(APP_ID)
+        seen = []
+
+        def listed():
+            u = self.ui()
+            if u and u.get('toast'):
+                seen.append(u['toast'])
+            return u if u and self.launcher in (u.get('rows') or []) else None
+        ui = self.wait(listed, 120, every=1)
+        time.sleep(4)
+        ui = self.ui() or ui or {}
+        if ui.get('toast'):
+            seen.append(ui['toast'])
+        self.shot(label)
+        r.check('%s: the app opens and lists the launcher' % label, bool(ui) and self.launcher in (ui.get('rows') or []), json.dumps(ui))
+        r.check('%s: no error toast after opening' % label, not any(t.startswith("Couldn't") for t in seen), 'toasts: %r' % seen)
+        ticked = self.insp.evaluate(TICK_JS)
+        r.check('%s: the chosen row is still ticked' % label, ticked == self.launcher, 'ticked: %r' % ticked)
+        d.close(APP_ID)
+        self.insp.close()
+        self.insp = None
+
+    def update_snapshot(self):
+        d = self.dev
+        s = self.state()
+        s['watcher_procs'] = self.watcher_procs()
+        s['preload'] = d.preload_policy()[0] if self.major >= 6 else None
+        s['log_lines'] = len(self.log_lines())
+        s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-home-watch')
+        s['app_md5'] = self.md5(APPDIR + '/backport/homechooser-home-watch')
+        s['app_version'] = d.sh("sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' %s/appinfo.json | head -1" % APPDIR)[1].strip()
+        s['baked'] = self.baked_id() if self.uses_backport() else ''
+        return s
+
+    def step_update(self):
+        """The Home Chooser update: the current build installed over the old one with ares-install and no
+        uninstall in between.  Design basis (backport/homechooser-home-watch, header and check_hc; docs/settings-app.md
+        "When apps are removed"): an update installs by removing first, so the watcher takes Home Chooser as gone only
+        if it is still gone HOMECHOOSER_CONFIRM_DELAY (15 s) later (check_hc: "Home Chooser is back, not removing
+        anything"); no notification is sent "for the temporary absence of an update"; the watcher runs from a copy in
+        /tmp/homechooser-runtime, so the app directory being replaced does not pull the script from under it, and the
+        unit is NOT restarted by the update: one watcher, the same MainPID, still the old build's code until its next
+        start (boot or restart).  So the log must show no restore and no \"watching, home=\" line from the update; a
+        "Home Chooser is back" line appears only if the watcher happened to look during the gap."""
+        r, d = self.rec, self.dev
+        r.begin('3u update Home Chooser over the old build (--update-check)')
+        new_files, old_files = ipk_files(self.hc_new), ipk_files(self.a.old_ipk)
+        wk = 'usr/palm/applications/%s/backport/homechooser-home-watch' % APP_ID
+        r.check('both ipks carry the watcher script', wk in new_files and wk in old_files, wk)
+        new_md5 = hashlib.md5(new_files.get(wk, b'')).hexdigest()
+        old_md5 = hashlib.md5(old_files.get(wk, b'')).hexdigest()
+        r.note('old build %s (%s) vs new build %s: watcher script md5 old=%s new=%s' % (
+            self.a.old_ref, os.path.basename(self.a.old_ipk), os.path.basename(self.hc_new), old_md5, new_md5),
+            'identical scripts: the script-level checks do not discriminate' if old_md5 == new_md5 else 'scripts differ')
+        before = self.update_snapshot()
+        r.note('state before the update', json.dumps(before))
+        r.check('before the update: exactly one watcher unit and one watcher process',
+                before['watcher_procs']['top'] == 1 and before['watcher_procs']['units'] == '1', json.dumps(before['watcher_procs']))
+        r.check('before the update: the running watcher is the old build (runtime copy md5 = old script)',
+                before['runtime_md5'] == old_md5, 'runtime %s, old %s' % (before['runtime_md5'], old_md5))
+        t_install = self.messages_mark()
+        rc, out = d.install(self.hc_new)
+        r.check('ares-install of the current build over the old one (no uninstall)', rc == 0 and 'Installed package' in out, out.strip())
+        # CONFIRM_DELAY 15 s plus the compositor/sam settling; the watcher may also sit in nap
+        self.wait(lambda: False, 45, 45)
+        self.wait(lambda: self.watcher_active() == 'active', 60, 5)
+        after = self.update_snapshot()
+        r.note('state after the update', json.dumps(after))
+        new_log = self.log_lines()[before['log_lines']:]
+        r.note('watcher log lines written during the update', '\n'.join(new_log) or '(none)')
+        r.check('after the update: the app directory holds the new build (watcher script md5 = new, version %s)' % after['app_version'],
+                after['app_md5'] == new_md5, 'device %s, new %s' % (after['app_md5'], new_md5))
+        r.check('after the update: choice file unchanged', after['choice'] == before['choice'] == self.launcher, repr(after['choice']))
+        r.check('after the update: record home is still the launcher', after['record_home'] == self.launcher, after['record_raw'])
+        wp = after['watcher_procs']
+        r.check('after the update: watcher unit active, exactly ONE watcher unit and ONE process (no duplicate)',
+                after['watcher'] == 'active' and wp['top'] == 1 and wp['units'] == '1', json.dumps(wp))
+        r.check('after the update: the watcher was not restarted (same MainPID, NRestarts unchanged: the design keeps it running from /tmp)',
+                wp['main_pid'] == before['watcher_procs']['main_pid'] and wp['restarts'] == before['watcher_procs']['restarts'],
+                'before %s, after %s' % (json.dumps(before['watcher_procs']), json.dumps(wp)))
+        r.check('after the update: no \"watching, home=\" line (no watcher restart logged)',
+                not any('watching, home=' in l for l in new_log), '\n'.join(l for l in new_log if 'watching' in l) or 'none')
+        bad = [l for l in new_log if re.search(r'stock Home restored|is not installed, stock Home|isEnabled=true|createAlert|createToast|revert', l)]
+        r.check('after the update: the watcher log shows no restore, no revert, no notification', not bad, '\n'.join(bad) or 'none')
+        r.note('after the update: "Home Chooser is back" (only logged if the watcher looked during the gap)',
+               '\n'.join(l for l in new_log if 'is back' in l) or 'not logged')
+        r.note('after the update: which build the running watcher is (runtime copy md5; the design leaves it the old one until its next start)',
+               'runtime %s; old %s; new %s' % (after['runtime_md5'], old_md5, new_md5))
+        r.check('after the update: init.d entry is a symlink into the installed app and its target exists',
+                after['initd'] == APPDIR + '/backport/homechooser' and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
+        if self.uses_backport():
+            r.check('after the update: backport mounts unchanged', sorted(after['mounts']) == sorted(before['mounts']) and bool(after['mounts']),
+                    'before %s after %s' % (before['mounts'], after['mounts']))
+            r.check('after the update: backport flag still exists', after['flag'] == 'yes', after['flag'])
+            r.check('after the update: the launcher id is still baked into the mounted Settings.qml', self.launcher in after['baked'], after['baked'])
+        else:
+            r.check('after the update: no backport mounts or flag on this release', not after['mounts'] and after['flag'] == 'no',
+                    'mounts %s flag %s' % (after['mounts'], after['flag']))
+        if self.uses_override():
+            r.check('after the update: profile override still exists', after['override'] == 'yes', after['override'])
+        if self.major >= 6:
+            self.wait(lambda: d.preload_policy()[0] is False, 30, 5)
+            en = d.preload_policy()
+            r.check('after the update: stock home preload policy still disabled (isEnabled:false)', en[0] is False, 'isEnabled=%r; %s' % en)
+        else:
+            en = d.preload_policy()
+            r.check('after the update: 5.x, the stock home policy is still not disabled', en[0] is not False, 'isEnabled=%r' % (en[0],))
+        self.home_press(self.launcher, '3u-home')
+        self.open_app_check('3u-app')
+        r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
+            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12" % (t_install, APP_ID))[1])
+
     def step4(self):
         r, d = self.rec, self.dev
         r.begin('4 sudden launcher uninstall')
@@ -1158,7 +1517,7 @@ class Scenario:
         r.note('watcher log', out)
         self.home_press(STOCK, '4-home-stock')
         # reinstall
-        rc, out = d.install(self.a.launcher_ipk)
+        rc, out = d.install(self.L.ipk)
         r.check('reinstall launcher', rc == 0 and 'Installed package' in out, out.strip())
         self.wait(lambda: d.record_home()[0] == self.launcher, 120, 5)
         s = self.state()
@@ -1322,8 +1681,17 @@ def wait_for_device(vm, rec, timeout=300):
 def main():
     ap = argparse.ArgumentParser(description='Home Chooser end-to-end test on one Beanjar VM')
     ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
-    ap.add_argument('--launcher', default='org.webosbrew.dock')
-    ap.add_argument('--launcher-ipk', default='/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk')
+    ap.add_argument('--launcher', default='dock',
+                    help="'dock' (default), 'fixture:<native|qml|web>.<normal|overlay>', or an app id with --launcher-ipk")
+    ap.add_argument('--launchers', default=None,
+                    help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
+                         "same VM, in sequence, with cleanup between")
+    ap.add_argument('--launcher-ipk', default=None, help='ipk of --launcher when it is an app id (or to replace Dock\'s)')
+    ap.add_argument('--update-check', action='store_true',
+                    help='install an older Home Chooser first, choose the launcher, then install the current build over it '
+                         '(step 3u) and check that everything survives')
+    ap.add_argument('--update-from', default=None,
+                    help='git ref of the older Home Chooser (default: the previous commit that changed app/, service/ or backport/)')
     ap.add_argument('--host-mode', choices=['auto', 'local', 'remote'], default='auto',
                     help='where beanjar runs: local if on PATH, else through ares-shell (default auto)')
     ap.add_argument('--host-device', default='raspberrypi', help='ares device of the Beanjar host in remote mode')
@@ -1344,11 +1712,22 @@ def main():
     if args.list:
         for m in MATRIX:
             print('%-5s %-18s %-10s %-9s %s' % m)
+        print('launchers: dock, %s' % ', '.join(fixture_specs()))
         return 0
     if not args.vm:
         ap.error('--vm is required')
     row = entry(args.vm)
     vm = row[1]
+    if args.launchers:
+        specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
+    else:
+        specs = [args.launcher]
+    args.multi = len(specs) > 1
+    if args.multi and vm in KEEP_LAUNCHER_VMS:
+        ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
+    launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
+                               lambda t: print(t, flush=True)) for sp in specs]
+    args.new_ipk = args.old_ipk = args.old_ref = None
     host = BeanjarHost(args.host_mode, args.host_device)
     outdir = os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
@@ -1356,9 +1735,18 @@ def main():
     rec.say('artefacts: ' + outdir)
     started = False
     scenario = None
+    old_tmp = None
     try:
         if not shutil.which('ares-do'):
             raise SystemExit('ares-do not on PATH')
+        if args.update_check:
+            args.old_ref = args.update_from or default_update_ref()
+            rc, full = run(['git', '-C', REPO, 'rev-parse', '--short', args.old_ref], 30)
+            rec.say('--update-check: old build from git ref %s (%s)' % (args.old_ref, full.strip()))
+            args.new_ipk = current_home_chooser_ipk(rec, args.build)
+            args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
+            for label, f in (('old', args.old_ipk), ('current', args.new_ipk)):
+                rec.say('%s Home Chooser ipk %s version %s' % (label, f, ipk_appinfo(f).get('version')))
         prepare_vm(host, vm, rec)
         started = True
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
@@ -1368,8 +1756,22 @@ def main():
         ensure_devices(host, vm, rec)
         if not wait_for_device(vm, rec):
             raise SystemExit('the VM did not come up with Homebrew Channel')
-        scenario = Scenario(args, host, rec, row)
-        scenario.run()
+        for launcher in launchers:
+            rec.tag = '[%s]' % launcher.spec if args.multi else ''
+            rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))
+            scenario = Scenario(args, host, rec, row, launcher)
+            try:
+                scenario.run()
+            except Exception as e:  # with several launchers: keep going, the failure is recorded
+                if not args.multi:
+                    raise
+                import traceback
+                rec.say('runner error in %s:\n%s' % (launcher.spec, traceback.format_exc()))
+                rec.check('scenario ran to the end', False, repr(e))
+            finally:
+                if scenario.insp:
+                    scenario.insp.close()
+                    scenario.insp = None
     except SystemExit as e:
         rec.say('abort: %s' % e)
         rec.check('runner setup', False, str(e))
@@ -1387,6 +1789,8 @@ def main():
             rec.say('beanjar stop: %s' % out.strip()[-200:])
         elif started and vm in KEEP_LAUNCHER_VMS:
             rec.say('%s is left running for the manual restore of its end state' % vm)
+        if old_tmp:
+            shutil.rmtree(old_tmp, ignore_errors=True)
         counts = rec.finish()
     return 1 if counts.get('FAIL') else 0
 

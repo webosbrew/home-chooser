@@ -1,0 +1,12 @@
+{
+  "id": "@APPID@",
+  "version": "1.0.0",
+  "vendor": "webOS Homebrew",
+  "title": "@TITLE@",
+  "type": "qml",
+  "main": "main.qml",
+  "icon": "icon.png",
+  "appCategory": ["home"],
+  "noSplashOnLaunch": true,
+  "visible": true@EXTRA@
+}

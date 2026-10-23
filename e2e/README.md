@@ -9,7 +9,10 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher <id>` (default `org.webosbrew.dock`) and `--launcher-ipk <path>`; `--build`
+Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`; an app id needs
+`--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
+screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--host-mode
 auto|local|remote` and `--host-device` (see below); `--elevation luna|root-shell`; `--input
 qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
@@ -140,6 +143,57 @@ root-shell elevation.
 The log also has a "home-app residency" section at five points (before selecting, after "Use as
 Home", after the Home press, after the launcher uninstall, after the Home Chooser uninstall): is the
 stock home and the launcher running (`applicationManager/running`), pids and RSS. Observation only.
+
+## Launchers: Dock and the fixtures
+
+`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist`. The six fixtures
+(`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
+an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
+`appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else.
+
+* **Overlay expectations come from the ipk.** `Launcher.overlay` is `defaultWindowType == "overlay"` in the
+  `appinfo.json` inside the launcher's ipk (any id, any launcher). It drives the 6.x to 10.x preload expectations
+  (steps 2, 3r: the stock home left running, the skip line `overlay launcher <id> on webOS N: stock home left running`
+  must name that id, no `closeByAppId com.webos.app.home`); a normal-window launcher must see the stock home closed. The
+  watcher decides the same way for any id (`overlay_check` in `backport/homechooser-home-watch`: `getAppInfo`, else the
+  installed `appinfo.json`), so the two are independent readings of the same declaration.
+* **Proof the fixture came up** (each Home press that should open it: steps 3, 4 and 3u): the fixture's own launch
+  record gained lines (`messages`, `.launches` files, see the fixtures README), plus the `beanjar screenshot` taken
+  by the step; the log describes what the picture must show (id, type, window, transparent or opaque) and lists sam's own
+  lines naming the id as independent evidence. For native a missing record is a `FAIL`; for qml and web it is an `XFAIL`
+  citing the unverified record path, and on a release where `fixtures/qml/support.json` says `false` the qml fixture is
+  skipped with an `XFAIL`.
+* With `--launchers all-fixtures` a failure in one launcher is recorded and the next one runs.
+
+## The update step (`--update-check`)
+
+The old build comes from `--update-from <git ref>` (default: the last commit before HEAD that changed `app/`,
+`service/` or `backport/`, or HEAD itself if those have uncommitted changes), built by `git archive` into a `/tmp`
+directory (the working tree and `.git` are not touched; `node_modules` is linked from the main tree) and removed at the
+end. Both builds are `0.1.0` today, so the version does not tell them apart: the runner compares the watcher script's md5
+in the two ipks and in the app directory on the device. The old build is installed in step 1 instead of the current one
+and used for step 2 (choose the launcher) and step 3 (Home opens it). Then step 3u installs the current build with
+`ares-install` and no uninstall.
+
+What the design says (`backport/homechooser-home-watch` header and `check_hc`; `docs/settings-app.md` "When apps are
+removed" and "What is left when the watcher is not running"): an update installs by removing first, so the watcher takes
+Home Chooser as gone only if it is still gone `HOMECHOOSER_CONFIRM_DELAY` (15 s) later, else it logs `Home Chooser is
+back, not removing anything`; no notification is sent for the temporary absence of an update; the watcher runs from a copy
+in `/tmp/homechooser-runtime`, so replacing the app directory does not pull the script from under it, and the unit is not
+restarted. So no restart is expected, and the old build's watcher code keeps running until its next start.
+Asserted after a 45 s settle:
+
+* the app directory holds the new build (watcher script md5);
+* the choice file and the record `home` still name the launcher;
+* exactly one watcher unit and one top-level watcher process, with the same `MainPID` and `NRestarts` as before (no duplicate, no restart);
+* the watcher log lines written during the update contain no `watching, home=` (no restart), no restore, revert, `isEnabled=true`, alert or toast; the optional `Home Chooser is back` line is noted either way, as is which build the running watcher is;
+* the `init.d` entry links into the installed app and the target exists;
+* on 6 to 9 the backport mounts are the same set, the flag file exists and the launcher id is still baked in; elsewhere none; on 10 and later the override exists;
+* the stock home preload policy is still disabled (6 and later; 5.x: not disabled);
+* Home opens the launcher (with the fixture proof above);
+* the app opens, lists the launcher, shows no `Couldn't` toast and has the launcher's row ticked.
+
+Then steps 4 and 5 run on the updated install.
 
 ## System popups and screenshots
 
