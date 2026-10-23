@@ -91,6 +91,9 @@ case "$1" in
         exit $?
         ;;
     "")
+        if [ -f "$HERE/homechooser-access" ]; then
+            sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
+        fi
         major=$(major_version)
         if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-keyfilter" ]; then
             log "applying the key filter backport"

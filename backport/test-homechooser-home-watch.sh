@@ -28,6 +28,7 @@ setup() {
     mkdir -p "$T/app/backport/1.0" "$T/init.d"
     cp "$SCRIPT" "$T/app/backport/homechooser-home-watch"
     printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/app/backport/homechooser-keyfilter"
+    printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
     echo '{"release":"1.0","files":[]}' > "$T/app/backport/1.0/manifest.json"
     echo ' diff' > "$T/app/backport/1.0/x.diff"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
@@ -42,6 +43,10 @@ setup() {
     cat > "$T/bin/luna-send" <<'STUB'
 #!/bin/sh
 T=$T
+# Reject any production call without the fixed identity; then parse its remaining argv.
+[ "$1 $2" = '-a com.webos.applicationManager' ] || { echo 'bad identity' >> "$T/identity-errors"; exit 1; }
+echo "$1 $2" >> "$T/identity-args"
+shift 2
 if [ "$1" = -i ]; then
     echo "$(cat $T/clock) SUB $2 $3" >> $T/calls
     case "$2" in
@@ -176,6 +181,10 @@ setup 8 'my.home\n'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
 check "subscription ends: exit 1" rc 1
+check "access applied at start" has "access apply from=$T/rt/homechooser-access" "$T/access"
+check "access staged in runtime" test -f "$T/rt/homechooser-access"
+check "fixed luna identity used" has "-a com.webos.applicationManager" "$T/identity-args"
+check "no calls bypass identity" test ! -f "$T/identity-errors"
 check "subscribed with the settings payload" has 'SUB luna://com.webos.settingsservice/getSystemSettings {"category":"general","keys":["defaultApps"],"subscribe":true}' "$T/calls"
 check "no write" test "$(writes)" = 0
 cleanup
@@ -676,6 +685,7 @@ check "exit 0" rc 0
 check "override removed" test ! -f "$T/override/o.json"
 check "rescanned" has debug/rescan "$T/calls"
 check "home removed" nohome
+check "access removed from runtime after uninstall" has "access remove from=$T/rt/homechooser-access" "$T/access"
 check "choice, flag and link removed" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 check "no key filter on 11" test ! -s "$T/kfcalls"
 cleanup
@@ -889,7 +899,7 @@ for major in 5 8 10 11; do
     check "$major: one alert, not repeated by the later checks" test "$(alerts)" = 1
     check "$major: no toast" test "$(toasts)" = 0
     check "$major: payload" has "CALL luna://com.webos.notification/createAlert {\"sourceId\":\"org.webosbrew.homechooser\",\"title\":\"Home Chooser\",\"message\":\"$ALERT_MSG\",\"buttons\":[{\"label\":\"OK\",\"focus\":true}]}" "$T/calls"
-    check "$major: called as a plain luna-send -n 1, without -a" test "$(cat "$T/notify-args")" = "-n 1"
+    check "$major: called through the fixed identity" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the revert write" test "$(lineof createAlert)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
     check "$major: reply logged" has 'notification createAlert: {"returnValue":true}' "$T/log"
     cleanup
@@ -1024,7 +1034,7 @@ live '{"home":"my.home"}'
 cp "$T/bin/luna-send" "$T/bin/luna-send.real"
 cat > "$T/bin/luna-send" <<'MUTE'
 #!/bin/sh
-case "$3" in */createAlert|*/createToast) echo "$3 $4" >> $T/muted; exit 0 ;; esac
+case "$5" in */createAlert|*/createToast) echo "$5 $6" >> $T/muted; exit 0 ;; esac
 exec $T/bin/luna-send.real "$@"
 MUTE
 sed -i "s|^exec \$T|exec $T|; 1a T=$T" "$T/bin/luna-send"
@@ -1061,7 +1071,7 @@ for major in 5 6 9 10; do
     check "$major: one toast" test "$(toasts)" = 1
     check "$major: no alert" test "$(alerts)" = 0
     check "$major: payload" has 'CALL luna://com.webos.notification/createToast {"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}' "$T/calls"
-    check "$major: plain luna-send -n 1" test "$(cat "$T/notify-args")" = "-n 1"
+    check "$major: fixed identity, one reply" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the record revert" test "$(lineof createToast)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
     [ "$major" = 6 -o "$major" = 9 ] && check "$major: after the backport stop (compositor restart)" test "$(lineof createToast)" -gt "$(lineof 'KF stop')"
     check "$major: files gone before the toast is the last word" test ! -f "$T/home"

@@ -11,7 +11,7 @@ const dest = path.join(dist, 'backport');
 
 fs.rmSync(dest, {recursive: true, force: true});
 fs.mkdirSync(dest, {recursive: true});
-['homechooser', 'homechooser-keyfilter', 'homechooser-home-watch'].forEach((name) => {
+['homechooser', 'homechooser-keyfilter', 'homechooser-home-watch', 'homechooser-access'].forEach((name) => {
 	fs.copyFileSync(path.join(src, name), path.join(dest, name));
 	fs.chmodSync(path.join(dest, name), 0o755);
 });
