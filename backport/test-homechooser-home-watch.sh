@@ -27,7 +27,7 @@ setup() {
     mkfifo "$T/appsfeed"
     mkdir -p "$T/app/backport/1.0" "$T/init.d"
     cp "$SCRIPT" "$T/app/backport/homechooser-home-watch"
-    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA from=$0" >> %s/kfcalls\n' "$T" > "$T/app/backport/homechooser-keyfilter"
+    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/app/backport/homechooser-keyfilter"
     echo '{"release":"1.0","files":[]}' > "$T/app/backport/1.0/manifest.json"
     echo ' diff' > "$T/app/backport/1.0/x.diff"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
@@ -84,7 +84,8 @@ case "$3" in
             fi
         fi
         if grep -qxF "$id" $T/installed; then
-            echo '{"returnValue":true,"appInfo":{"id":"'$id'"}}'
+            title=; [ -f $T/notitle ] || title=',"title":"Title of '$id'"'
+            echo '{"returnValue":true,"appInfo":{"id":"'$id'"'"$title"'}}'
         else
             echo '{"returnValue":false,"errorCode":-1,"errorText":"Invalid appId specified OR Unsupported Application Type"}'
         fi ;;
@@ -103,13 +104,47 @@ case "$3" in
     */setSystemSettings)
         cat $T/r-setsys
         [ -f $T/live ] && echo "$4" | sed 's/^{"category":"general","settings":\(.*\)}$/{"returnValue":true,"settings":\1}/' > $T/record ;;
+    */createAlert)
+        echo "$1 $2" >> $T/notify-args
+        if [ -f $T/alert-deny ]; then echo '{"returnValue":false,"errorText":"Denied method call"}'; else echo '{"returnValue":true}'; fi ;;
+    */createToast) echo "$1 $2" >> $T/notify-args; echo '{"returnValue":true}' ;;
     */getProfiles) cat $T/profiles ;;
     */debug/rescan) echo '{"returnValue":true}' ;;
 esac
 STUB
     sed -i "s|^T=.*|T=$T|" "$T/bin/luna-send"
     printf '#!/bin/sh\ncat %s/clock\n' "$T" > "$T/bin/clock"
-    printf '#!/bin/sh\necho "SLEEP $1" >> %s/calls\nc=$(cat %s/clock); echo $((c + $1)) > %s/clock\n' "$T" "$T" "$T" > "$T/bin/sleep"
+    # The fake sleep advances the clock. A line queued in napq is done inside the sleep, as if it
+    # happened while the watcher was waiting: UNINSTALL <id>, INSTALL <id> (each followed by a
+    # listApps message), QUIET-UNINSTALL <id> (no message), or RMCHOICE.
+    cat > "$T/bin/sleep" <<'SLEEPSTUB'
+#!/bin/sh
+T=$T
+echo "SLEEP $1" >> $T/calls
+c=$(cat $T/clock); echo $((c + $1)) > $T/clock
+if [ -s $T/napq ]; then
+    l=$(head -n 1 $T/napq); sed 1d $T/napq > $T/napq.new; mv $T/napq.new $T/napq
+    echo "$(cat $T/clock) DURING-SLEEP $l" >> $T/calls
+    case "$l" in
+        "UNINSTALL "*)
+            id=${l#UNINSTALL }
+            grep -vxF "$id" $T/installed > $T/installed.new; mv $T/installed.new $T/installed
+            [ "$id" = org.webosbrew.homechooser ] && rm -rf $T/app
+            echo '{"returnValue":true,"subscribed":true,"apps":[]}' > $T/appsfeed ;;
+        "QUIET-UNINSTALL "*)
+            id=${l#QUIET-UNINSTALL }
+            grep -vxF "$id" $T/installed > $T/installed.new; mv $T/installed.new $T/installed
+            [ "$id" = org.webosbrew.homechooser ] && rm -rf $T/app ;;
+        "INSTALL "*)
+            echo "${l#INSTALL }" >> $T/installed
+            [ "${l#INSTALL }" = org.webosbrew.homechooser ] && mkdir -p $T/app
+            echo '{"returnValue":true,"subscribed":true,"apps":[]}' > $T/appsfeed ;;
+        RMCHOICE) rm -f $T/home ;;
+    esac
+fi
+SLEEPSTUB
+    sed -i "s|^T=.*|T=$T|" "$T/bin/sleep"
+    : > "$T/napq"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_WATCH_LOG="$T/log" \
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
@@ -476,7 +511,7 @@ echo 'FLAP my.home 1' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "no write" test "$(writes)" = 0
-check "checked twice" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 4
+check "checked twice (and asked once for its title)" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 5
 check "no revert logged" hasnt 'not installed' "$T/log"
 cleanup
 setup 8 'my.home\n'
@@ -746,6 +781,315 @@ echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 HOMECHOOSER_TIMEOUT="$T/bin/timeout" run
 check "a timeout that works in neither form is not used" test "$(writes)" = 1
+cleanup
+
+# clean_end <label> <major>: the end state after both uninstalls
+clean_end() {
+    check "$1: exit 0 (the unit stays stopped)" rc 0
+    check "$1: choice file removed" test ! -f "$T/home"
+    check "$1: init.d link removed" test ! -L "$T/init.d/homechooser"
+    check "$1: flag removed" test ! -f "$T/flag"
+    check "$1: record restored" nohome
+    check "$1: stock restored line logged" has 'stock Home restored' "$T/log"
+    [ "$2" -ge 10 ] && check "$1: override removed" test ! -f "$T/override/o.json"
+    if [ "$2" -ge 6 ]; then
+        last=$(grep setPreloadPolicy "$T/calls" | tail -n 1)
+        check "$1: stock home preload policy enabled again" test "${last#*isEnabled\":}" != "$last" -a "$(echo "$last" | grep -c 'isEnabled":true')" = 1
+    fi
+}
+
+# Both apps removed, the second one while the watcher is waiting out the confirmation delay of the
+# first (15 s), in either order and with the second one's listApps message delivered or lost.
+echo "== both removed: Home Chooser goes while the chosen app is being confirmed"
+for major in 5 8 9 11; do
+    for how in UNINSTALL QUIET-UNINSTALL; do
+        setup $major 'my.home\n'
+        live '{"home":"my.home","kidsApp":"k.app"}'
+        mkdir -p "$T/override"
+        echo '{"defaultApps":{"categories":{"home":"my.home"}}}' > "$T/override/o.json"
+        reply '{"home":"my.home","kidsApp":"k.app"}'
+        echo 'UNINSTALL my.home' >> "$T/stream"
+        echo APPS >> "$T/stream"
+        echo "$how org.webosbrew.homechooser" > "$T/napq"
+        HOMECHOOSER_CONFIRM_DELAY=15 run
+        if [ "$major" = 5 ]; then
+            check "5/$how: record names the stock launcher" has '"home":"com.webos.app.home"' "$T/record"
+            check "5/$how: exit 0" rc 0
+            check "5/$how: choice, flag and link removed" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
+        else
+            clean_end "$major/$how" "$major"
+        fi
+        check "$major/$how: the chosen app's revert was not made first and then repeated" test "$(writes)" -le 1
+        cleanup
+    done
+done
+
+echo "== both removed: the chosen app goes while Home Chooser is being confirmed"
+for major in 8 11; do
+    for how in UNINSTALL QUIET-UNINSTALL; do
+        setup $major 'my.home\n'
+        live '{"home":"my.home","kidsApp":"k.app"}'
+        mkdir -p "$T/override"
+        echo '{"defaultApps":{"categories":{"home":"my.home"}}}' > "$T/override/o.json"
+        reply '{"home":"my.home","kidsApp":"k.app"}'
+        echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
+        echo APPS >> "$T/stream"
+        echo "$how my.home" > "$T/napq"
+        HOMECHOOSER_CONFIRM_DELAY=15 run
+        clean_end "$major/$how" "$major"
+        cleanup
+    done
+done
+
+echo "== both removed, far apart: the chosen app, then Home Chooser at the periodic check"
+for major in 8 11; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    mkdir -p "$T/override"
+    echo '{"defaultApps":{"categories":{"home":"my.home"}}}' > "$T/override/o.json"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
+    echo TIMER >> "$T/stream"
+    HOMECHOOSER_CONFIRM_DELAY=15 HOMECHOOSER_RECHECK=1 run
+    clean_end "$major/far apart" "$major"
+    cleanup
+done
+
+echo "== Home Chooser removed while the chosen app is confirmed, then put back: nothing is removed"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+printf 'UNINSTALL org.webosbrew.homechooser\nINSTALL org.webosbrew.homechooser\n' > "$T/napq"
+HOMECHOOSER_CONFIRM_DELAY=15 run
+check "the choice file stays (an update)" test -f "$T/home"
+check "the link stays" test -L "$T/init.d/homechooser"
+cleanup
+
+# --- Removal notifications: our own trigger logic (what the notification service does with the
+# calls is not tested here)
+alerts() { grep -c ' CALL luna://com.webos.notification/createAlert' "$T/calls"; }
+toasts() { grep -c ' CALL luna://com.webos.notification/createToast' "$T/calls"; }
+lineof() { grep -n -- "$1" "$T/calls" | head -n 1 | cut -d: -f1; }
+ALERT_MSG='Title of my.home was removed, so the Home button opens LG Home again.'
+
+echo "== the chosen app removed: one alert, after the revert, with its title"
+for major in 5 8 10 11; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    echo APPS >> "$T/stream"
+    echo TIMER >> "$T/stream"
+    HOMECHOOSER_RECHECK=1 run
+    check "$major: one alert, not repeated by the later checks" test "$(alerts)" = 1
+    check "$major: no toast" test "$(toasts)" = 0
+    check "$major: payload" has "CALL luna://com.webos.notification/createAlert {\"sourceId\":\"org.webosbrew.homechooser\",\"title\":\"Home Chooser\",\"message\":\"$ALERT_MSG\",\"buttons\":[{\"label\":\"OK\",\"focus\":true}]}" "$T/calls"
+    check "$major: called as a plain luna-send -n 1, without -a" test "$(cat "$T/notify-args")" = "-n 1"
+    check "$major: after the revert write" test "$(lineof createAlert)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
+    check "$major: reply logged" has 'notification createAlert: {"returnValue":true}' "$T/log"
+    cleanup
+done
+echo "== the alert comes after the compositor restart of the revert (6 to 9)"
+for major in 6 9; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    run
+    check "$major: refresh stock ran before the alert" test "$(lineof 'KF refresh stock')" -lt "$(lineof createAlert)"
+    check "$major: one alert" test "$(alerts)" = 1
+    cleanup
+done
+
+echo "== the alert names the id when the title is not known"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+touch "$T/notitle"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "id in the message" has '"message":"my.home was removed, so the Home button opens LG Home again."' "$T/calls"
+cleanup
+echo "== the title is read from appinfo.json when getAppInfo carries none"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+touch "$T/notitle"
+mkdir -p "$T/apps/my.home"
+echo '{"id":"my.home","title": "Pretty Home"}' > "$T/apps/my.home/appinfo.json"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+HOMECHOOSER_APPS_DIRS="$T/apps" run
+check "title from the file" has '"message":"Pretty Home was removed, so' "$T/calls"
+cleanup
+echo "== a title with quotes or backslashes is not put into the payload"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+touch "$T/notitle"
+mkdir -p "$T/apps/my.home"
+echo '{"id":"my.home","title":"Bad \"one\""}' > "$T/apps/my.home/appinfo.json"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+HOMECHOOSER_APPS_DIRS="$T/apps" run
+check "falls back to the id" has '"message":"my.home was removed, so' "$T/calls"
+cleanup
+
+echo "== no alert for a transient absence, for a watcher start with the app missing, or for a restore from the app"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+reply '{"home":"my.home"}'
+echo 'FLAP my.home 1' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "transient absence: no alert" test "$(alerts)" = 0
+check "transient absence: no toast" test "$(toasts)" = 0
+cleanup
+setup 10 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+grep -vx my.home "$T/installed" > "$T/i.new"; mv "$T/i.new" "$T/installed"
+reply '{"home":"my.home","kidsApp":"k.app"}'
+run
+check "missing at start: reverted" has 'my.home is not installed' "$T/log"
+check "missing at start: no alert (not a new removal)" test "$(alerts)" = 0
+cleanup
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo RMCHOICE >> "$T/stream"
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "restored from the app, then the app removed: exit 0" rc 0
+check "restore from the app: no alert" test "$(alerts)" = 0
+check "restore from the app: no toast" test "$(toasts)" = 0
+cleanup
+
+echo "== one alert per removal event: back and removed again is a second one"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo 'INSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "two removals, two alerts" test "$(alerts)" = 2
+cleanup
+
+echo "== a new choice replaces the missing one: no alert for it"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+printf 'my.home\nother.home\norg.webosbrew.homechooser\n' > "$T/installed"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo 'CHOICE other.home' >> "$T/stream"
+reply '{"kidsApp":"k.app"}'
+echo APPS >> "$T/stream"
+echo 'UNINSTALL other.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "the title cached for the new choice is used" has '"message":"Title of other.home was removed' "$T/calls"
+check "one alert per removal" test "$(alerts)" = 2
+cleanup
+
+echo "== a refused alert is shown as a toast with the same message (our fallback)"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+touch "$T/alert-deny"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "a refused alert is tried 8 times (a transient refusal while the compositor restarts), then falls back" test "$(alerts)" = 8
+check "one toast with the same message" has "CALL luna://com.webos.notification/createToast {\"sourceId\":\"org.webosbrew.homechooser\",\"noaction\":true,\"message\":\"$ALERT_MSG\"}" "$T/calls"
+check "one toast" test "$(toasts)" = 1
+check "the refusal is logged" has 'alert was refused' "$T/log"
+check "the restore itself is unaffected" has 'my.home is not installed' "$T/log"
+cleanup
+echo "== a notification call that gives no answer is logged and not retried"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+cp "$T/bin/luna-send" "$T/bin/luna-send.real"
+cat > "$T/bin/luna-send" <<'MUTE'
+#!/bin/sh
+case "$3" in */createAlert|*/createToast) echo "$3 $4" >> $T/muted; exit 0 ;; esac
+exec $T/bin/luna-send.real "$@"
+MUTE
+sed -i "s|^exec \$T|exec $T|; 1a T=$T" "$T/bin/luna-send"
+chmod +x "$T/bin/luna-send"
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "tried once" test "$(grep -c createAlert "$T/muted")" = 1
+check "no toast instead" test "$(grep -c createToast "$T/muted")" = 0
+check "logged without a reply" has 'notification createAlert: no reply' "$T/log"
+cleanup
+
+echo "== notifications can be turned off"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+reply '{"home":"my.home"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+HOMECHOOSER_NOTIFY=0 run
+check "none sent" test "$(alerts)$(toasts)" = 00
+cleanup
+
+echo "== Home Chooser uninstalled: one toast, after the backport is undone"
+for major in 5 6 9 10; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    echo APPS >> "$T/stream"
+    run
+    check "$major: exit 0" rc 0
+    check "$major: one toast" test "$(toasts)" = 1
+    check "$major: no alert" test "$(alerts)" = 0
+    check "$major: payload" has 'CALL luna://com.webos.notification/createToast {"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}' "$T/calls"
+    check "$major: plain luna-send -n 1" test "$(cat "$T/notify-args")" = "-n 1"
+    check "$major: after the record revert" test "$(lineof createToast)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
+    [ "$major" = 6 -o "$major" = 9 ] && check "$major: after the backport stop (compositor restart)" test "$(lineof createToast)" -gt "$(lineof 'KF stop')"
+    check "$major: files gone before the toast is the last word" test ! -f "$T/home"
+    cleanup
+done
+echo "== both apps removed: the alert for the chosen app, then the toast for Home Chooser"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "one alert" test "$(alerts)" = 1
+check "one toast" test "$(toasts)" = 1
+check "alert first" test "$(lineof createAlert)" -lt "$(lineof createToast)"
+cleanup
+echo "== Home Chooser removed during the chosen app's confirmation: the toast only, the alert is skipped"
+setup 8 'my.home\n'
+live '{"home":"my.home","kidsApp":"k.app"}'
+reply '{"home":"my.home","kidsApp":"k.app"}'
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+echo 'UNINSTALL org.webosbrew.homechooser' > "$T/napq"
+HOMECHOOSER_CONFIRM_DELAY=15 run
+check "no alert" test "$(alerts)" = 0
+check "one toast" test "$(toasts)" = 1
 cleanup
 
 echo "$PASS passed, $FAIL failed ($SH)"

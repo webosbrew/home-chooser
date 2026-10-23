@@ -660,6 +660,71 @@ class Scenario:
         elif self.uses_backport():
             r.check(label + ': no backport mounts', not s['mounts'], 'mounts: %s' % s['mounts'])
 
+    # -- the removal notifications (docs/settings-app.md "When apps are removed")
+    def notif_lines(self, method):
+        """The watcher log's `notification <method>:` lines (call replies), oldest first."""
+        rc, out = self.dev.sh("grep 'notification %s:' /tmp/homechooser-home.log 2>&1" % method)
+        return [l for l in out.splitlines() if 'notification %s:' % method in l]
+
+    def notif_wait(self, method, before, timeout, every=3):
+        """Wait until the log has more `notification <method>:` lines than `before`."""
+        return self.wait(lambda: len(self.notif_lines(method)) > before, timeout, every)
+
+    def check_alert(self, before):
+        """After the chosen launcher was removed: the watcher logged one createAlert call and its reply.
+        A reply that is not returnValue true is a FAIL with the fallback recorded, never a silent pass.
+        With an accepted alert: screenshot, press OK (it is our own alert, not a system popup),
+        screenshot again.  Plain root luna-send without -a was assumed to pass; this is the evidence."""
+        r, d = self.rec, self.dev
+        got = self.notif_wait('createAlert', before, 90)
+        # a refusal is retried by the watcher (up to 8 tries, 3 s apart): wait for an accepted reply
+        self.wait(lambda: any('"returnValue":true' in l.replace(' ', '') for l in self.notif_lines('createAlert')[before:]), 45, 3)
+        lines = self.notif_lines('createAlert')
+        new = lines[before:]
+        ok_ix = [i for i, l in enumerate(new) if '"returnValue":true' in l.replace(' ', '')]
+        r.check('watcher sent a createAlert for the removal (refusals retried, at most one accepted, last)',
+                bool(new) and len(new) <= 8 and (not ok_ix or ok_ix == [len(new) - 1]), '\n'.join(new) or 'no createAlert line in the log')
+        if not new:
+            return
+        reply = new[-1]
+        accepted = '"returnValue":true' in reply.replace(' ', '')
+        rc, fb = d.sh("grep -E 'alert was refused|notification createToast:' /tmp/homechooser-home.log | tail -n 3")
+        r.check('the notification service accepted the alert (plain root luna-send, no -a)', accepted,
+                'reply: %s%s' % (reply, '' if accepted else
+                                 '\nDENIED or unanswered. Fallback evidence (a refused alert is shown as a toast, an '
+                                 'unanswered one is not retried):\n' + fb.strip()))
+        if not accepted:
+            self.shot('4-alert-refused')
+            r.note('the alert did not go through; the user was told only if the fallback toast above was accepted', fb.strip())
+            return
+        time.sleep(2)
+        self.shot('4-alert')
+        r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "<launcher title> was removed, '
+               'so the Home button opens LG Home again." and one OK button', '')
+        fg0 = d.foreground()
+        self.press('OK')
+        time.sleep(3)
+        self.shot('4-alert-dismissed')
+        r.note('OK pressed on the alert; foreground before/after (the alert itself is not an app)',
+               '%s -> %s' % (fg0[0], d.foreground()[0]))
+
+    def check_toast(self, before):
+        """After Home Chooser was removed: the watcher logged one createToast call and its reply; a
+        screenshot is taken as soon as the call shows in the log (a toast is short-lived)."""
+        r = self.rec
+        self.notif_wait('createToast', before, 150, 1)
+        self.shot('5-toast')
+        self.wait(lambda: any('"returnValue":true' in l.replace(' ', '') for l in self.notif_lines('createToast')[before:]), 30, 3)
+        lines = self.notif_lines('createToast')
+        new = lines[before:]
+        ok_ix = [i for i, l in enumerate(new) if '"returnValue":true' in l.replace(' ', '')]
+        r.check('watcher sent a createToast for the uninstall (refusals retried, at most one accepted, last)',
+                bool(new) and len(new) <= 8 and (not ok_ix or ok_ix == [len(new) - 1]), '\n'.join(new) or 'no createToast line in the log')
+        if new:
+            r.check('the notification service accepted the toast', '"returnValue":true' in new[-1].replace(' ', ''), new[-1])
+        r.note('look at screenshot 5-toast: a toast "Home Chooser was removed. The Home button opens LG Home again." '
+               '(it may already be gone: the log reply is the evidence)', '')
+
     # -- the stock home's preload policy
     def preload_log(self):
         return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|overlay launcher' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
@@ -1070,10 +1135,12 @@ class Scenario:
     def step4(self):
         r, d = self.rec, self.dev
         r.begin('4 sudden launcher uninstall')
+        alerts_before = len(self.notif_lines('createAlert'))
         rc, out = d.remove(self.launcher)
         r.check('ares-install --remove launcher', rc == 0, out.strip())
         s = {}
         self.wait(lambda: self.stock_record_ok(d.record_home()[0]), 120, 5)
+        self.check_alert(alerts_before)
         s = self.state()
         r.note('state after the launcher was removed', json.dumps(s))
         self.residency('after the launcher uninstall')
@@ -1109,8 +1176,10 @@ class Scenario:
     def step5(self):
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
+        toasts_before = len(self.notif_lines('createToast'))
         rc, out = d.remove(APP_ID)
         r.check('ares-install --remove Home Chooser', rc == 0, out.strip())
+        self.check_toast(toasts_before)
         self.wait(lambda: self.watcher_active() != 'active' and self.stock_record_ok(d.record_home()[0]), 150, 5)
         time.sleep(5)
         s = self.state()
@@ -1135,12 +1204,25 @@ class Scenario:
             r.note('this VM keeps Dock installed and selected: restore by hand (Home Chooser must be '
                    'installed and Dock chosen through its UI); the runner does not do that yet', '')
         else:
+            removed_hc = False
             for app in (self.launcher, APP_ID):
                 if app in d.installed():
                     rc, out = d.remove(app)
                     r.say('removed %s: %s' % (app, out.strip()))
+                    removed_hc = removed_hc or app == APP_ID
             r.check('no test apps left installed', not ({self.launcher, APP_ID} & set(d.installed())),
                     str(d.installed()))
+            if removed_hc:
+                # The watcher needs about 15 s per removal it has to confirm, one after the other, and a VM
+                # stopped before it finishes leaves the choice file behind (a dangling init.d link
+                # runs nothing at the next boot).  Wait for it before the VM is stopped.
+                done = self.wait(lambda: self.watcher_active() != 'active'
+                                 and 'No such file' in d.sh('cat %s 2>&1' % CHOICE)[1], 150, 5)
+                s = self.state()
+                r.check('after the cleanup uninstalls the watcher finished the restore: choice file gone, '
+                        'init.d entry gone, watcher stopped',
+                        bool(done) and ('No such file' in s['initd'] or s['initd'] == ''), json.dumps(s))
+                r.note('watcher log', d.sh('tail -n 12 /tmp/homechooser-home.log')[1])
         r.note('df /media/developer', d.sh('df -h /media/developer | tail -1')[1])
 
 

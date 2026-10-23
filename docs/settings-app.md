@@ -198,7 +198,7 @@ present, missing, different, `Unknown method`, pretty-printed, string records, a
 file in each form, the override on 10.x; a fake clock and sleep check the rate limiting; markers in
 the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
 are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Home Chooser removed with
-the full restore, both in either order, a transient absence, a silent `getAppInfo`, the periodic
+the full restore, both in either order and one removed during the other's confirmation wait with its message delivered or lost, the alert and toast triggers (once, not on a transient absence, not at a start, not after a restore from the app), a transient absence, a silent `getAppInfo`, the periodic
 check, the restore from the runtime copy after the app directory is deleted),
 `backport/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
 6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone, the unit's wrapper),
@@ -226,12 +226,14 @@ Unsupported Application Type`). The same look is repeated every 5 min (`HOMECHOO
 the subscription missed something, and once at start. Home Chooser counts as gone when `getAppInfo`
 says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
 (`HOMECHOOSER_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
-compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing.
+compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing. The look at Home
+Chooser is repeated after the chosen app's confirmation delay, so a Home Chooser removed while that
+wait lasts is found without depending on a `listApps` message of its own.
 
 ### The chosen app is uninstalled
 
 The platform goes back to stock, the choice file stays (it is the user's choice), the watcher logs
-it and stops writing. When the app is installed again it applies the choice again, with the same
+it, tells the user (below) and stops writing. When the app is installed again it applies the choice again, with the same
 writes as a new choice. A new choice made while the old app is missing replaces it at once.
 
 | Release | Put back to stock | Home key while the app is missing |
@@ -245,6 +247,26 @@ On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later
 `getProfiles`; 6.x to 9.x run `homechooser-keyfilter refresh`, which bakes the id back in. The
 screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
+
+**The user is told once.** After the revert, and after the compositor restart that comes with it on
+6.x to 9.x, the watcher shows an alert with one OK button:
+`luna-send -n 1 luna://com.webos.notification/createAlert '{"sourceId":"org.webosbrew.homechooser","title":"Home Chooser","message":"<title> was removed, so the Home button opens LG Home again.","buttons":[{"label":"OK","focus":true}]}'`.
+The title of an app that is gone cannot be looked up, so the watcher reads it from `getAppInfo`
+(failing that `appinfo.json`) while the app is installed and keeps it per choice, like the window
+type; a title it does not have, or one with a quote or backslash in it, is replaced by the app id.
+The wording is the same on 5.x (the stock home there is `fullhome`). It is sent once per removal
+event: the later checks find the app already marked missing and say nothing, and a return followed
+by a new removal is a new event. It is not sent for a temporary absence (the confirmation delay
+comes first), when the user restores stock from the app (the choice file is removed and the watcher
+stopped before anything is missing), when the choice is changed to another app, or when a watcher
+starts and finds the app already missing (a boot is not a new removal). The call is a plain root
+`luna-send` without `-a`, because `-a <appid>` would make the caller that app and `createAlert` is
+not in a public group, under a 5 s timeout; its reply is logged (`notification createAlert: ...`) and
+nothing waits on it. A reply that says `returnValue:false` (a refusal) is logged
+(`the alert was refused`) and the same message is shown as a toast; no reply is logged and not
+retried. `HOMECHOOSER_NOTIFY=0` turns it off. What the notification service really does with the
+call is not tested here; it was read from the firmware (5.6.1 to 11.2.0) and has not been run on a
+device.
 
 Clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 [Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
@@ -265,7 +287,11 @@ gone it does, in order:
    is a symlink;
 4. on webOS 6 to 9, `homechooser-keyfilter stop` from the runtime copy: it unmounts the bind mounts
    it finds in the manifests and restarts the compositor, and does nothing if nothing is mounted;
-5. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
+5. shows a toast, once, after the compositor restart of step 4:
+   `luna-send -n 1 luna://com.webos.notification/createToast '{"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}'`
+   (plain root, no `-a`, no `iconUrl` because the app's icon is being deleted; 5 s timeout, reply
+   logged, never blocks);
+6. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
    stopped.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
@@ -275,7 +301,15 @@ runtime copy, else exits 0, so a watcher that crashes and is restarted after the
 finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
 (`/tmp/homechooser-home.log`) and the runtime copy stay in `/tmp` until reboot.
 
-Both removed: Home Chooser first (or both at once, which is checked in that order) is the full
+Both removed, in either order and at any spacing while the watcher runs, ends at the same clean
+state (no choice file, flag or `init.d` link, the record `home` unset, the override gone, the
+unit stopped, the stock home's preload policy enabled): the watcher looks at Home Chooser first in
+every check and again after the chosen app's confirmation wait, so a Home Chooser removed during that
+wait is found whether or not its own `listApps` message arrives (before this was added, a lost
+message left the choice file, the flag and the link until the 5 min check). It takes about 15 s per
+removal it has to confirm, one after the other, so up to about 30 s after the second removal; a
+watcher stopped before that (a TV or VM powered off right after the second removal) leaves the
+state described below. Home Chooser first (or both at once, which is checked in that order) is the full
 restore, after which the chosen app's removal finds nothing of ours. The chosen app first is the
 revert above; the later removal of Home Chooser repeats it harmlessly and cleans up. So B followed by
 A, and A followed by B, end at the same stock state, and a removal of the chosen app after Open

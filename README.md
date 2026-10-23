@@ -39,7 +39,8 @@ homebrew app with three parts:
 * The stock launcher keeps working when apps are removed. The watcher notices that the chosen app
   is uninstalled and puts the platform back to stock until it returns; when Home Chooser itself is
   uninstalled it undoes everything it wrote (record, override, choice, boot entry, backport
-  mounts) from a copy of its scripts in `/tmp`. See
+  mounts) from a copy of its scripts in `/tmp`. Each of the two tells the user once, with an alert
+  (the chosen app) or a toast (Home Chooser), that the Home button opens LG Home again. See
   [When apps are removed](docs/settings-app.md#when-apps-are-removed), including what is left if
   the watcher was not running at the time.
 * While a third-party home is chosen (webOS 6 and later), the watcher keeps LG's stock home,

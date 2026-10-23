@@ -83,12 +83,29 @@ and backport docs.
    beneath stays "foreground"). A press with the stock home in front is only observed.
 4. `ares-install --remove` the launcher: record `home` is stock/unset (5.x: a stock id), the
    override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id, the
-   choice file stays, the watcher stays active, Home opens the stock launcher. Reinstall: the
+   choice file stays, the watcher stays active, Home opens the stock launcher. The watcher log shows
+   one `notification createAlert:` line (the call and its reply); the check "the notification service
+   accepted the alert" records the reply, and a refused or unanswered alert is a `FAIL` with the
+   fallback evidence (a refused alert is shown as a toast, the log says `alert was refused`), never a
+   silent pass. With an accepted alert the runner takes a `beanjar screenshot` (`4-alert`; look for
+   "<launcher title> was removed, so the Home button opens LG Home again." and one OK button),
+   presses OK (it is Home Chooser's own alert; the rule against pressing OK is about LG's system
+   popups), and takes `4-alert-dismissed`. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher.
 5. `ares-install --remove` Home Chooser: record, override, choice file, `init.d` link, flag,
-   mounts and the watcher unit are gone; Home opens stock.
-6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`), stop the VM.
+   mounts and the watcher unit are gone; Home opens stock. The runner polls the log once a second
+   for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
+   reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
+6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
+   removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
+   restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
+   and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
+   file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
+
+None of the notification checks has run yet. Whether the alert passes from a plain root `luna-send`
+without `-a` (its own identity has group `all`, and `createAlert` is not in a public group) and
+whether it shows while the compositor restarts on 6.x to 9.x are exactly what the first run settles.
 
 Preload checks (docs/settings-app.md "The stock home is not preloaded"), on 6.x and later; on 5.x
 the watcher makes no preload call, so the checks only assert the policy is not disabled:

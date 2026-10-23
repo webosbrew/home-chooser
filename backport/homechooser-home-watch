@@ -34,6 +34,14 @@
 # background, because on 5.x to 9.x snapshot-boot-components launches the stock home at boot,
 # outside the preload manager. webOS 5 is left alone (docs/settings-app.md).
 #
+# The user is told once about each removal that puts the stock home back (best effort, see
+# docs/settings-app.md, "When apps are removed"): a chosen app removed gets an alert with an OK button
+# (luna://com.webos.notification/createAlert; a refused alert is shown as a toast), Home Chooser
+# removed gets a toast (createToast). Both are plain root luna-send calls without `-a`, sent after
+# the revert and after any compositor restart it caused, under a short timeout; the reply is logged
+# and a failure never blocks the restore. Not sent at a watcher start (a boot with the app still
+# missing is not a new removal) and not for the temporary absence of an update.
+#
 # The app's files are deleted with the app, so at start the watcher copies itself, the key filter
 # worker and the manifests into /tmp/homechooser-runtime/ and runs from there.
 #
@@ -49,7 +57,7 @@
 # HOMECHOOSER_INITD, HOMECHOOSER_RECHECK, HOMECHOOSER_TIMER_SLEEP, HOMECHOOSER_CONFIRM_DELAY,
 # HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check),
 # HOMECHOOSER_PRELOAD_SETTLE, HOMECHOOSER_PRELOAD_SLEEP, HOMECHOOSER_PRELOAD (0 turns the preload
-# policy off).
+# policy off), HOMECHOOSER_NOTIFY (0 turns the removal notifications off).
 
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
@@ -80,6 +88,7 @@ PRELOAD_SETTLE=${HOMECHOOSER_PRELOAD_SETTLE:-45}
 PRELOAD_SLEEP=${HOMECHOOSER_PRELOAD_SLEEP:-sleep}
 PRELOAD_TRIES=${HOMECHOOSER_PRELOAD_TRIES:-12}
 PRELOAD_RETRY=${HOMECHOOSER_PRELOAD_RETRY:-10}
+NOTIFY_ON=${HOMECHOOSER_NOTIFY:-1}
 HC_ID=org.webosbrew.homechooser
 STOCK_HOME=com.webos.app.home
 STOCK_FULLHOME=com.webos.app.fullhome
@@ -88,6 +97,7 @@ SETTINGS=luna://com.webos.settingsservice
 SAM=luna://com.webos.applicationManager
 PROFILE=luna://com.webos.service.systemprofile
 PRELOAD=luna://com.webos.service.preloadmanager
+NOTIF=luna://com.webos.notification
 
 now() {
     if [ -n "$CLOCK" ]; then $CLOCK; else date +%s; fi
@@ -566,9 +576,78 @@ preload_follow() {
     if [ -n "$MISSING" ] || [ "$1" = "$STOCK_HOME" ] || [ "$1" = "$STOCK_FULLHOME" ]; then
         preload_sync on "$2"
     else
+        remember_title "$1"
         overlay_check "$1"
         preload_sync off "$2"
     fi
+}
+
+# --- Telling the user about a removal ---------------------------------------------------------
+
+# remember_title <id>: the chosen app's title, from getAppInfo (failing that its appinfo.json),
+# while it is installed; once it is gone it cannot be looked up. Cached per choice in TITLE_ID and
+# TITLE_VAL: an installed app without a title is not asked again, a getAppInfo that does not answer is.
+remember_title() {
+    [ "$NOTIFY_ON" = 1 ] || return 0
+    [ "$TITLE_ID" = "$1" ] && return 0
+    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    ok_reply "$out" || return 0
+    t=$(printf '%s' "$out" | grep -o '"title"[[:space:]]*:[[:space:]]*"[^"\\]*"' | head -n 1 | sed 's/^[^:]*:[[:space:]]*"\(.*\)"$/\1/')
+    if [ -z "$t" ]; then
+        for d in $APPS_DIRS; do
+            [ -f "$d/$1/appinfo.json" ] || continue
+            t=$(flatten < "$d/$1/appinfo.json" | grep -o '"title"[[:space:]]*:[[:space:]]*"[^"\\]*"' | head -n 1 | sed 's/^[^:]*:[[:space:]]*"\(.*\)"$/\1/')
+            break
+        done
+    fi
+    TITLE_ID=$1
+    TITLE_VAL=$(printf '%s' "$t" | tr -d '\000-\037' | sed -e 's/^ *//' -e 's/ *$//')
+}
+
+# notify_call <method> <payload>: one call to the notification service as root, no `-a` (luna-send's
+# own identity), a short timeout. The reply is logged and kept in NOTIFY_OUT; succeeds on returnValue true.
+notify_call() {
+    nc_try=0
+    while :; do
+        NOTIFY_OUT=$(timed_n 5 "$LUNA" -n 1 "$NOTIF/$1" "$2" 2>&1 | flatten)
+        log "notification $1: ${NOTIFY_OUT:-no reply}"
+        ok_reply "$NOTIFY_OUT" && return 0
+        # A false reply right after the compositor restart ("Alert is blocked by [ system  ui ]",
+        # "UI is not yet ready", seen on 9.2.1) is transient: try again for up to NOTIFY_RETRIES
+        # times, NOTIFY_RETRY_WAIT seconds apart. No reply at all is not retried.
+        printf '%s' "$NOTIFY_OUT" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*false' || return 1
+        nc_try=$((nc_try + 1))
+        [ "$nc_try" -lt "${NOTIFY_RETRIES:-8}" ] || return 1
+        $SLEEP "${NOTIFY_RETRY_WAIT:-3}"
+    done
+}
+
+# notify_toast <message>: an informational toast. Best effort.
+notify_toast() {
+    [ "$NOTIFY_ON" = 1 ] || return 0
+    notify_call createToast "{\"sourceId\":\"$HC_ID\",\"noaction\":true,\"message\":\"$1\"}" || :
+    return 0
+}
+
+# notify_alert <message>: an alert with one OK button; a reply that says false (refused) is shown
+# as a toast with the same message, and logged. No reply at all is not retried. Best effort.
+notify_alert() {
+    [ "$NOTIFY_ON" = 1 ] || return 0
+    if notify_call createAlert "{\"sourceId\":\"$HC_ID\",\"title\":\"Home Chooser\",\"message\":\"$1\",\"buttons\":[{\"label\":\"OK\",\"focus\":true}]}"; then
+        return 0
+    fi
+    if printf '%s' "$NOTIFY_OUT" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*false'; then
+        log "the alert was refused, showing the message as a toast"
+        notify_toast "$1"
+    fi
+    return 0
+}
+
+# announce_removed <id>: the chosen app was removed and the stock home is back.
+announce_removed() {
+    name=$1
+    [ "$TITLE_ID" = "$1" ] && [ -n "$TITLE_VAL" ] && name=$TITLE_VAL
+    notify_alert "$name was removed, so the Home button opens LG Home again."
 }
 
 # app_state <id>: yes (installed), no (getAppInfo answers returnValue false, which is what an
@@ -668,12 +747,12 @@ restore_all() {
     if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] && [ -f "$KEYFILTER" ]; then
         HOMECHOOSER_DATA=$KF_DATA $WSH "$KEYFILTER" stop >> "$LOG" 2>&1
     fi
+    notify_toast "Home Chooser was removed. The Home button opens LG Home again."
     finish "stock Home restored, exiting" 0
 }
 
-# check_apps <why>: look at Home Chooser and at the chosen app.
-check_apps() {
-    why=$1
+# check_hc: Home Chooser is gone, and still gone after the confirmation delay: the full restore.
+check_hc() {
     if hc_gone; then
         nap "$CONFIRM_DELAY"
         if hc_gone; then
@@ -681,6 +760,12 @@ check_apps() {
         fi
         log "Home Chooser is back, not removing anything"
     fi
+}
+
+# check_apps <why>: look at Home Chooser and at the chosen app.
+check_apps() {
+    why=$1
+    check_hc
     want=$(read_choice) || finish "choice file is gone, exiting" 0
     [ -n "$MISSING" ] && [ "$MISSING" != "$want" ] && MISSING=
     st=$(app_state "$want")
@@ -688,12 +773,16 @@ check_apps() {
         no)
             if [ "$MISSING" != "$want" ]; then
                 nap "$CONFIRM_DELAY"
+                # Home Chooser may have been removed while this waited, and its own message
+                # may be queued behind this check or never come: look again before acting.
+                check_hc
                 if [ "$(app_state "$want")" = no ]; then
                     log "$want is not installed, stock Home in use until it comes back"
                     MISSING=$want
                     revert_platform "$want not installed"
                     kf_refresh stock
                     BAKED=
+                    [ "$why" = start ] || announce_removed "$want"
                 fi
             fi
             ;;
@@ -805,6 +894,9 @@ CLOSE_PID=
 PRELOAD_STATE=
 OVL_ID=
 OVL_VAL=
+TITLE_ID=
+TITLE_VAL=
+NOTIFY_OUT=
 
 want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
 log "watching, home=$want, webOS $MAJOR"
