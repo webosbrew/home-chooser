@@ -49,9 +49,8 @@ HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.se
 MATRIX = [
     # release, vm, elevation, sure, note
     ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
-    ('6.x', 'w21p-kisscurl', 'luna', 'docs', "W21P 03.70.25.01 = 6.6.0; owned by the Dock project: ask before use; end state keeps Dock selected"),
-    ('6.x', 'w21a-kisscurl', 'luna', 'docs', 'W21A 03.53.25.01 = 6.5.2-43 per backport/6.5.2; os-release to be read'),
-    ('9.x', 'w24g-ombre', 'luna', 'docs', 'W24G 33.20.23.01 = 9.2.4-4603 per backport/9.2.4; os-release to be read'),
+    ('6.x', 'w21a-kisscurl', 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to the Dock project and is not in the matrix)'),
+    ('9.x', 'w24g-ombre', 'luna', 'verified', 'W24G 33.20.23.01 = 9.2.4; os-release read 2026-10-23'),
     ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per backport/9.2.4; os-release to be read'),
     ('7.x', 'w22p-mullet', 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
     ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),

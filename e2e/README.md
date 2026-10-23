@@ -29,16 +29,33 @@ changed LAN address. It stops the VM at the end (not `w21p-kisscurl`).
 | Release | VM | Elevation | How sure |
 | --- | --- | --- | --- |
 | 5.x | `w20l-jhericurl` | luna | verified: 5.6.1 (os-release) |
-| 6.x | `w21p-kisscurl` | luna | docs: W21P `03.70.25.01` is 6.6.0. Owned by the Dock project: ask first. Dock must be left installed and selected with Home Chooser installed; the runner does not restore that |
+| 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (os-release). `w21p-kisscurl` (6.6.0) belongs to the Dock project and is not in the matrix |
 | 7.x | `w22p-mullet` | luna | verified: 7.6.0 |
 | 8.x | `w22o-number1` | luna | verified: 8.3.0 (beanjar's "webOS 23" is a platform label) |
 | 9.x | `w22h-ombre` | luna | verified: 9.2.1 |
+| 9.x | `w24g-ombre` | luna | verified: 9.2.4 (`w24p-ombre` runs the same firmware) |
 | 10.x | `w22o-ponytail-us` | luna | verified: 10.3.1 |
 | 11.x | `w22o-queue-us` | root-shell | verified: 11.2.0 (`w22o-queue`, `w22o-queue-jp` run the same firmware) |
 | 12.x | `w24g-spacebuns` | root-shell | verified: 12.0.0 (os-release) |
 
 The runner checks the release it finds (`/usr/lib/os-release`) against the row and records the
 result.
+
+## Which runs a change needs
+
+A full matrix run with `--reboot-check` takes about 10 to 14 minutes per VM, so a change gets the
+runs its reach calls for, not the whole matrix every time:
+
+| Change | Runs |
+| --- | --- |
+| Any change | The offline suites: `backport/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
+| Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, one backport set) | The releases inside the gate, plus one just outside it |
+| Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (backport), 11.x (root-shell elevation, profile path) |
+| Only the runner or the docs | One VM |
+| A release or a tag | The whole matrix with `--reboot-check` |
+
+`--reboot-check` is used where boot behaviour is involved (the watcher, the preload policy, the
+backport mounts). There is no shortened mode; settle and sampling times stay as they are.
 
 ## Beanjar host abstraction
 
