@@ -37,7 +37,7 @@
 # The user is told once about each removal that puts the stock home back (best effort, see
 # docs/settings-app.md, "When apps are removed"): a chosen app removed gets an alert with an OK button
 # (luna://com.webos.notification/createAlert; a refused alert is shown as a toast), Home Chooser
-# removed gets a toast (createToast). Both are plain root luna-send calls without `-a`, sent after
+# removed gets a toast (createToast). Both use the fixed HC_LUNA_IDENTITY with `-a`, sent after
 # the revert and after any compositor restart it caused, under a short timeout; the reply is logged
 # and a failure never blocks the restore. Not sent at a watcher start (a boot with the app still
 # missing is not a new removal) and not for the temporary absence of an update.
@@ -61,6 +61,7 @@
 
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
+HC_LUNA_IDENTITY=com.webos.applicationManager
 LOG=${HOMECHOOSER_WATCH_LOG:-/tmp/homechooser-home.log}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 OVERRIDE=${HOMECHOOSER_OVERRIDE:-/var/webos-profile/override/org.webosbrew.homechooser.json}
@@ -126,9 +127,9 @@ major_version() {
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
-    for f in homechooser-home-watch homechooser-keyfilter; do
+    for f in homechooser-home-watch homechooser-keyfilter homechooser-access; do
         if [ ! -f "$1/$f" ]; then
-            [ "$f" = homechooser-keyfilter ] && continue
+            [ "$f" != homechooser-home-watch ] && continue
             return 1
         fi
         cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
@@ -156,7 +157,7 @@ read_choice() {
 
 # call <uri> <payload>: print luna-send's output.
 call() {
-    "$LUNA" -n 1 "$1" "$2" 2>&1
+    "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$1" "$2" 2>&1
 }
 
 flatten() {
@@ -482,7 +483,7 @@ close_stock_home() {
         log "overlay launcher $OVL_ID on webOS $MAJOR: stock home left running (sam relaunches it as the last-input app)"
         return 0
     fi
-    out=$(timed_n 5 "$LUNA" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
+    out=$(timed_n 5 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
     log "closeByAppId $STOCK_HOME: ${out:-no reply}"
 }
 
@@ -495,7 +496,7 @@ overlay_check() {
     [ "$OVL_ID" = "$1" ] && [ "$OVL_VAL" != unknown ] && return 0
     OVL_ID=$1
     OVL_VAL=unknown
-    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    out=$(timed "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
     wt=$(printf '%s' "$out" | sed -n 's/.*"defaultWindowType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
     if [ -z "$wt" ]; then
         for d in $APPS_DIRS; do
@@ -517,7 +518,7 @@ overlay_check() {
 
 # preload_set <true|false>: one setPreloadPolicy call; logs the reply, succeeds on returnValue true.
 preload_set() {
-    out=$(timed_n 5 "$LUNA" -n 1 "$PRELOAD/setPreloadPolicy" "{\"application\":{\"id\":\"$STOCK_HOME\",\"isEnabled\":$1}}" 2>&1 | flatten)
+    out=$(timed_n 5 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$PRELOAD/setPreloadPolicy" "{\"application\":{\"id\":\"$STOCK_HOME\",\"isEnabled\":$1}}" 2>&1 | flatten)
     log "setPreloadPolicy $STOCK_HOME isEnabled=$1: ${out:-no reply}"
     ok_reply "$out"
 }
@@ -591,7 +592,7 @@ preload_follow() {
 remember_title() {
     [ "$NOTIFY_ON" = 1 ] || return 0
     [ "$TITLE_ID" = "$1" ] && return 0
-    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    out=$(timed "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
     ok_reply "$out" || return 0
     t=$(printf '%s' "$out" | grep -o '"title"[[:space:]]*:[[:space:]]*"[^"\\]*"' | head -n 1 | sed 's/^[^:]*:[[:space:]]*"\(.*\)"$/\1/')
     if [ -z "$t" ]; then
@@ -605,12 +606,12 @@ remember_title() {
     TITLE_VAL=$(printf '%s' "$t" | tr -d '\000-\037' | sed -e 's/^ *//' -e 's/ *$//')
 }
 
-# notify_call <method> <payload>: one call to the notification service as root, no `-a` (luna-send's
-# own identity), a short timeout. The reply is logged and kept in NOTIFY_OUT; succeeds on returnValue true.
+# notify_call <method> <payload>: one call to the notification service with HC_LUNA_IDENTITY.
+# A short timeout; the reply is logged and kept in NOTIFY_OUT; succeeds on returnValue true.
 notify_call() {
     nc_try=0
     while :; do
-        NOTIFY_OUT=$(timed_n 5 "$LUNA" -n 1 "$NOTIF/$1" "$2" 2>&1 | flatten)
+        NOTIFY_OUT=$(timed_n 5 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$NOTIF/$1" "$2" 2>&1 | flatten)
         log "notification $1: ${NOTIFY_OUT:-no reply}"
         ok_reply "$NOTIFY_OUT" && return 0
         # A false reply right after the compositor restart ("Alert is blocked by [ system  ui ]",
@@ -654,7 +655,7 @@ announce_removed() {
 # app_state <id>: yes (installed), no (getAppInfo answers returnValue false, which is what an
 # uninstalled id gets) or unknown (no answer).
 app_state() {
-    out=$(timed "$LUNA" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
+    out=$(timed "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
     if ok_reply "$out"; then
         echo yes
     elif printf '%s' "$out" | grep -q '"returnValue"[[:space:]]*:[[:space:]]*false'; then
@@ -736,6 +737,9 @@ revert_platform() {
 # that do not live in the app directory, and the watcher ends.
 restore_all() {
     log "Home Chooser is uninstalled, restoring the stock Home"
+    if [ -f "$SRC/homechooser-access" ]; then
+        $WSH "$SRC/homechooser-access" remove >> "$LOG" 2>&1 || log "could not remove launcher access"
+    fi
     revert_platform "Home Chooser uninstalled"
     rm -f "$CHOICE" "$KEYFLAG" "$GENERATED_FLAG"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
@@ -883,6 +887,9 @@ KF_DATA=$SRC
 trap 'finish "stopped by signal" 0' TERM INT HUP
 
 MAJOR=$(major_version)
+if [ -f "$SRC/homechooser-access" ]; then
+    $WSH "$SRC/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
+fi
 detect_timeout
 LAST_WRITE=0
 STREAK=0
@@ -907,9 +914,9 @@ want=$(read_choice) || finish "choice file is gone, exiting" 0
 [ -n "$MISSING" ] || check_override "$want"
 
 mkfifo "$TMP/settings" "$TMP/apps" "$TMP/events" || finish "cannot create the pipes in $TMP" 1
-"$LUNA" -i "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"],"subscribe":true}' > "$TMP/settings" 2>&1 &
+"$LUNA" -a "$HC_LUNA_IDENTITY" -i "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"],"subscribe":true}' > "$TMP/settings" 2>&1 &
 LUNA_PID=$!
-"$LUNA" -i "$SAM/listApps" '{"subscribe":true}' > "$TMP/apps" 2>&1 &
+"$LUNA" -a "$HC_LUNA_IDENTITY" -i "$SAM/listApps" '{"subscribe":true}' > "$TMP/apps" 2>&1 &
 LUNA_PID="$LUNA_PID $!"
 feed S 0 < "$TMP/settings" > "$TMP/events" &
 FEED_PIDS=$!

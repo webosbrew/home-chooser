@@ -43,6 +43,7 @@ export const createServiceClient = (call, {timeoutMs = CALL_TIMEOUT_MS, runTimeo
 		writeFile: (path, text) => invoke('writeFile', {path, text}).then(ok),
 		removeFile: (path) => invoke('removeFile', {path}).then(ok),
 		readIcon: (appId) => invoke('readIcon', {appId}).then(ok).then((r) => ({mime: r.mime, data: r.data})),
+		uninstallConfirmed: (token) => invoke('uninstallConfirmed', {token}, runTimeoutMs).then(ok),
 		link: () => invoke('link').then(ok),
 		unlink: () => invoke('unlink').then(ok),
 		linkStatus: () => invoke('linkStatus').then(ok),

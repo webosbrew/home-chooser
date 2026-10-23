@@ -7,18 +7,20 @@ import css from '../views/Home.module.less';
 
 import MainPanel from '../views/MainPanel';
 import {useHomeChooser} from '../views/useHomeChooser';
+import {readLaunchParams, useLaunchParams} from '../views/launch';
 import {loadEnvironment} from '../homechooser/environment';
 
 // Always close the window (never webOSSystem.hide()): focus goes back to the app underneath.
 const closeApp = () => window.close();
 
-const AppBase = ({load = loadEnvironment, onExit = closeApp, ...rest}) => {
+const AppBase = ({load = loadEnvironment, launch = readLaunchParams, onExit = closeApp, ...rest}) => {
 	const model = useHomeChooser(load);
+	const launchParams = useLaunchParams(launch);
 	return (
 		<div {...rest} className={css.app}>
 			<div className={css.panel}>
 				<Panels index={0} noCloseButton onApplicationClose={onExit}>
-					<MainPanel model={model} />
+					<MainPanel model={model} launchParams={launchParams} />
 				</Panels>
 			</div>
 		</div>

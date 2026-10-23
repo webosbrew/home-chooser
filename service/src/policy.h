@@ -22,9 +22,22 @@
 #define HC_ENTRY_SCRIPT HC_APP_DIR "/backport/homechooser"
 #define HC_KEYFILTER_SCRIPT HC_APP_DIR "/backport/homechooser-keyfilter"
 #define HC_WATCH_SCRIPT HC_APP_DIR "/backport/homechooser-home-watch"
+#define HC_ACCESS_SCRIPT HC_APP_DIR "/backport/homechooser-access"
 #define HC_OSRELEASE "/etc/os-release"
 #define HC_OSRELEASE_REAL "/usr/lib/os-release"
 #define HC_WATCH_LOG "/tmp/homechooser-home.log"
+
+/* The launcher-facing API (docs/launcher-api.md). */
+#define HC_API_VERSION 1
+#define HC_GROUP "homechooser.applications"
+#define HC_HBC_APP_ID "org.webosbrew.hbchannel"
+#define HC_STOCK_HOME_ID "com.webos.app.home"
+/* Every privileged luna call the service makes through luna-send runs as this identity (`luna-send
+ * -a`), never as a bare root luna-send: a bare one only has the `all` group, which the ACG check
+ * treats as an ordinary group, so methods in groups such as appinstalld.internal may be denied and
+ * createAlert is refused. Device-unverified per release. */
+#define HC_LUNA_IDENTITY "com.webos.applicationManager"
+#define HC_TOKEN_LEN 32
 
 /* Sender: the Home Chooser app, as luna-service2 reports its application id. The id may carry an
  * instance suffix after a space ("org.webosbrew.homechooser 1234"). NULL and every other id: no. */
@@ -55,7 +68,7 @@ bool hc_settings_ok(const char *category, const char *const *keys, size_t nkeys)
 /* A command the service may run, by name. argv[0] is absolute; no shell. */
 typedef struct {
 	const char *name;
-	const char *argv[6];
+	const char *argv[8];
 	int timeout_s;
 	bool tolerant;    /* a non-zero exit is an answer, not an error */
 	bool native_tail; /* not run: the last lines of HC_WATCH_LOG */
@@ -76,5 +89,58 @@ bool hc_base64(const unsigned char *in, size_t len, char *out, size_t outlen);
 
 /* Offset into buf where the last n lines start (a trailing newline does not start a line). */
 size_t hc_last_lines(const char *buf, size_t len, int n);
+
+/* ---- launcher API ---- */
+
+/* An app id: 1 to 128 characters of letters, digits, '.', '-' and '_'. */
+bool hc_app_id_ok(const char *id);
+/* The caller's app id from LSMessageGetApplicationID: NULL, empty and invalid ids are refused (a
+ * service or luna-send caller has none); an instance suffix after a space is dropped. */
+bool hc_caller_id(const char *raw, char *out, size_t outlen);
+/* True when the caller asked for the group: perms (the appinfo's requiredPermissions) holds it. */
+bool hc_perms_grant(const char *const *perms, size_t n);
+/* True when caller is the app named by the choice file's text (trimmed; empty is nobody). */
+bool hc_is_selected_home(const char *caller, const char *choice_text);
+
+typedef enum {
+	HC_REMOVE_OK = 0,
+	HC_REMOVE_BADID,
+	HC_REMOVE_SELF,    /* Home Chooser */
+	HC_REMOVE_HBC,     /* Homebrew Channel */
+	HC_REMOVE_CALLER,  /* the app that asks */
+	HC_REMOVE_SYSTEM   /* removable false, a system folder, or not provably a user app */
+} hc_remove_verdict;
+
+/* removable: 1 / 0 from the app info, -1 when it has no such field. */
+hc_remove_verdict hc_remove_check(const char *id, const char *caller, int removable, const char *folder);
+const char *hc_remove_verdict_text(hc_remove_verdict v);
+
+/* Folders user apps live in: developer-mode (dev/remove) and store (appInstallService/remove). */
+typedef enum { HC_FOLDER_OTHER = 0, HC_FOLDER_DEV, HC_FOLDER_STORE } hc_folder_kind;
+hc_folder_kind hc_folder_kind_of(const char *folder);
+
+/* Calls the service makes through luna-send with HC_LUNA_IDENTITY. */
+typedef struct {
+	const char *uri;
+	char payload[320];
+	int timeout_s;
+	bool progress; /* a stream that ends with status 31 (done) or 25 (failed) */
+} hc_remove_call;
+
+/* The removal steps for an app, in order: 0 removeLaunchPoint (LG's own route, with its
+ * removability check), 1 appInstallService/dev/remove or /remove by the folder. false past the end. */
+bool hc_remove_step(int step, const char *id, const char *folder, hc_remove_call *out);
+/* 1 done, -1 failed, 0 not yet: scans a progress stream for "status": 31 / 25 and returnValue false. */
+int hc_progress_state(const char *text);
+/* 1 accepted, 0 refused by LG ("is not removable"), -1 failed otherwise (false returnValue, no reply). */
+int hc_remove_reply_class(const char *text);
+
+/* argv for a luna-send run: {luna-send, -a, identity, -n, N, uri, payload}. Only URIs on the
+ * list below. argv needs 8 slots. false for an unlisted uri. */
+bool hc_luna_argv(const char *uri, const char *payload, int replies, const char **argv);
+bool hc_luna_uri_allowed(const char *uri);
+
+/* A one-shot uninstall token: exactly HC_TOKEN_LEN lowercase hex digits. */
+bool hc_token_ok(const char *token);
 
 #endif

@@ -25,6 +25,18 @@ describe('loadEnvironment', () => {
 		const b = await loadEnvironment(platform({osRelease: jest.fn().mockResolvedValue({version: [11, 0, 0]})}));
 		expect(b.backport).toBeNull();
 	});
+	test('access setup follows elevation and failures leave the panel usable', async () => {
+		const p = platform();
+		await loadEnvironment(p);
+		expect(p.exec).toHaveBeenCalledWith('accessApply');
+		expect(p.exec.mock.invocationCallOrder[0]).toBeGreaterThan(p.ensureRoot.mock.invocationCallOrder[0]);
+		const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			await expect(loadEnvironment(platform({exec: jest.fn().mockRejectedValue(new Error('scan failed'))}))).resolves.toHaveProperty('chooser');
+		} finally {
+			log.mockRestore();
+		}
+	});
 	test('elevation errors pass through as fatal kinds', async () => {
 		const failing = (kind) => platform({ensureRoot: jest.fn().mockRejectedValue(new FatalError(kind, 'x'))});
 		for (const kind of ['denied', 'unreachable', 'notRoot', 'failed']) {

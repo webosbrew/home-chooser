@@ -19,6 +19,7 @@ setup() {
     cp "$SCRIPT" "$T/app/backport/homechooser"
     printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA" >> %s/cmds\n' "$T" > "$T/app/backport/homechooser-keyfilter"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser-home-watch"
+    printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
     printf '#!/bin/sh\necho "systemd-run $*" >> %s/cmds\n' "$T" > "$T/bin/systemd-run"
     cat > "$T/bin/systemctl" <<STUB
 #!/bin/sh
@@ -43,6 +44,7 @@ printf 'my.home\n' > "$T/state/home"
 touch "$T/state/keyfilter"
 run
 check "exit 0" rc 0
+check "boot applies access" has "access apply" "$T/access"
 check "no key filter on 5" hasnt keyfilter "$T/cmds"
 check "systemd-run with the watcher" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
 check "checked the unit first" has 'systemctl is-active --quiet homechooser-home' "$T/cmds"
@@ -53,6 +55,7 @@ setup 5
 run
 check "exit 0" rc 0
 check "no commands" test ! -s "$T/cmds"
+check "access applied without a home choice" has "access apply" "$T/access"
 cleanup
 
 echo "== already running: not started twice"

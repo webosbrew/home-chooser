@@ -1,6 +1,7 @@
 #include "policy.h"
 
 #include <string.h>
+#include <stdio.h>
 #include <strings.h>
 
 bool hc_sender_ok(const char *app_id)
@@ -72,12 +73,15 @@ static const hc_command COMMANDS[] = {
 	{"keyfilterApplySam", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", "samfirst", NULL}, 150, false, false},
 	{"keyfilterStop", {"/bin/sh", HC_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
 	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
+	/* the launcher API's permission group and API permissions (backport/homechooser-access) */
+	{"accessApply", {"/bin/sh", HC_ACCESS_SCRIPT, "apply", NULL}, 30, false, false},
+	{"accessRemove", {"/bin/sh", HC_ACCESS_SCRIPT, "remove", NULL}, 30, false, false},
+	{"accessStatus", {"/bin/sh", HC_ACCESS_SCRIPT, "status", NULL}, 10, true, false},
 	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
 	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
-	/* systemprofile denies getProfiles (12.x) and debug/rescan (11.x, 12.x) to this service's own luna
-	 * identity, but allows them to luna-send run by root: exact URI and payload, nothing else. */
-	{"profileGet", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
-	{"profileRescan", {"/usr/bin/luna-send", "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
+	/* Exact profile calls use the same identity as every other privileged luna call. */
+	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
+	{"profileRescan", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
 	{"watchLog", {NULL}, 0, true, true},
 	{NULL, {NULL}, 0, false, false}
 };
@@ -176,4 +180,181 @@ size_t hc_last_lines(const char *buf, size_t len, int n)
 		if (buf[i - 1] == '\n' && ++seen == n) return i;
 	}
 	return 0;
+}
+
+/* ---- launcher API ---- */
+
+bool hc_app_id_ok(const char *id)
+{
+	size_t n = id ? strlen(id) : 0;
+	if (n == 0 || n > 128) return false;
+	for (size_t i = 0; i < n; i++) {
+		char c = id[i];
+		bool alnum = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+		if (!alnum && c != '.' && c != '-' && c != '_') return false;
+	}
+	return true;
+}
+
+bool hc_caller_id(const char *raw, char *out, size_t outlen)
+{
+	if (!raw || !out || !raw[0]) return false;
+	size_t n = strcspn(raw, " ");
+	if (n == 0 || n > 128 || n >= outlen) return false;
+	memcpy(out, raw, n);
+	out[n] = '\0';
+	if (!hc_app_id_ok(out)) {
+		out[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+bool hc_perms_grant(const char *const *perms, size_t n)
+{
+	for (size_t i = 0; perms && i < n; i++)
+		if (perms[i] && strcmp(perms[i], HC_GROUP) == 0) return true;
+	return false;
+}
+
+bool hc_is_selected_home(const char *caller, const char *choice_text)
+{
+	if (!caller || !caller[0] || !choice_text) return false;
+	while (*choice_text == ' ' || *choice_text == '\t' || *choice_text == '\r' || *choice_text == '\n') choice_text++;
+	size_t n = strlen(choice_text);
+	while (n > 0 && (choice_text[n - 1] == ' ' || choice_text[n - 1] == '\t' || choice_text[n - 1] == '\r' || choice_text[n - 1] == '\n')) n--;
+	return n == strlen(caller) && strncmp(choice_text, caller, n) == 0;
+}
+
+hc_folder_kind hc_folder_kind_of(const char *folder)
+{
+	if (!folder || folder[0] != '/' || has_dotdot(folder)) return HC_FOLDER_OTHER;
+	/* strictly below the applications directory: the directory itself is no app */
+	static const struct { const char *dir; hc_folder_kind kind; } D[] = {
+		{"/media/developer/apps/usr/palm/applications", HC_FOLDER_DEV},
+		{"/media/cryptofs/apps/usr/palm/applications", HC_FOLDER_STORE},
+		{NULL, HC_FOLDER_OTHER}
+	};
+	for (int i = 0; D[i].dir; i++) {
+		size_t dl = strlen(D[i].dir);
+		if (strncmp(folder, D[i].dir, dl) == 0 && folder[dl] == '/' && folder[dl + 1]) return D[i].kind;
+	}
+	return HC_FOLDER_OTHER;
+}
+
+hc_remove_verdict hc_remove_check(const char *id, const char *caller, int removable, const char *folder)
+{
+	if (!hc_app_id_ok(id)) return HC_REMOVE_BADID;
+	if (strcmp(id, HC_APP_ID) == 0) return HC_REMOVE_SELF;
+	if (strcmp(id, HC_HBC_APP_ID) == 0) return HC_REMOVE_HBC;
+	if (caller && strcmp(id, caller) == 0) return HC_REMOVE_CALLER;
+	if (removable == 0 || hc_folder_kind_of(folder) == HC_FOLDER_OTHER) return HC_REMOVE_SYSTEM;
+	return HC_REMOVE_OK;
+}
+
+const char *hc_remove_verdict_text(hc_remove_verdict v)
+{
+	switch (v) {
+	case HC_REMOVE_OK: return "ok";
+	case HC_REMOVE_BADID: return "not a valid app id";
+	case HC_REMOVE_SELF: return "Home Chooser cannot be uninstalled through its own API";
+	case HC_REMOVE_HBC: return "Homebrew Channel cannot be uninstalled through this API";
+	case HC_REMOVE_CALLER: return "an app cannot uninstall itself through this API";
+	case HC_REMOVE_SYSTEM: return "this is a system app or is not removable";
+	}
+	return "refused";
+}
+
+bool hc_remove_step(int step, const char *id, const char *folder, hc_remove_call *out)
+{
+	if (!out || !hc_app_id_ok(id)) return false;
+	memset(out, 0, sizeof *out);
+	out->timeout_s = 90;
+	if (step == 0) {
+		out->uri = "luna://com.webos.applicationManager/removeLaunchPoint";
+		snprintf(out->payload, sizeof out->payload, "{\"launchPointId\":\"%s_default\"}", id);
+		out->timeout_s = 30;
+		return true;
+	}
+	if (step == 1) {
+		hc_folder_kind k = hc_folder_kind_of(folder);
+		if (k == HC_FOLDER_OTHER) return false;
+		out->uri = k == HC_FOLDER_DEV ? "luna://com.webos.appInstallService/dev/remove" : "luna://com.webos.appInstallService/remove";
+		snprintf(out->payload, sizeof out->payload, "{\"id\":\"%s\",\"subscribe\":true}", id);
+		out->progress = true;
+		return true;
+	}
+	return false;
+}
+
+int hc_progress_state(const char *text)
+{
+	if (!text) return 0;
+	int state = 0;
+	const char *p = text;
+	while ((p = strstr(p, "\"status\"")) != NULL) {
+		p += 8;
+		while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+		if (*p != ':') continue;
+		p++;
+		while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+		int v = 0, digits = 0;
+		while (*p >= '0' && *p <= '9' && digits < 6) { v = v * 10 + (*p - '0'); p++; digits++; }
+		if (digits && v == 31) return 1;
+		if (digits && v == 25) state = -1;
+	}
+	if (state == 0 && strstr(text, "\"returnValue\":false")) state = -1;
+	if (state == 0 && strstr(text, "\"returnValue\": false")) state = -1;
+	return state;
+}
+
+int hc_remove_reply_class(const char *text)
+{
+	if (!text || !text[0]) return -1;
+	bool is_false = strstr(text, "\"returnValue\":false") || strstr(text, "\"returnValue\": false");
+	if (!is_false) return strstr(text, "\"returnValue\"") ? 1 : -1;
+	return strstr(text, "is not removable") ? 0 : -1;
+}
+
+static const char *const LUNA_URIS[] = {
+	"luna://com.webos.notification/createAlert",
+	"luna://com.webos.applicationManager/launch",
+	"luna://com.webos.applicationManager/removeLaunchPoint",
+	"luna://com.webos.applicationManager/listApps",
+	"luna://com.webos.applicationManager/running",
+	"luna://com.webos.applicationManager/getAppInfo",
+	"luna://com.webos.applicationManager/closeByAppId",
+	"luna://com.webos.appInstallService/remove",
+	"luna://com.webos.appInstallService/dev/remove",
+	NULL
+};
+
+bool hc_luna_uri_allowed(const char *uri)
+{
+	if (hc_call_lookup(uri) != HC_CALL_DENIED) return true;
+	for (int i = 0; uri && LUNA_URIS[i]; i++)
+		if (strcmp(uri, LUNA_URIS[i]) == 0) return true;
+	return false;
+}
+
+bool hc_luna_argv(const char *uri, const char *payload, int replies, const char **argv)
+{
+	if (!argv || !payload || !hc_luna_uri_allowed(uri)) return false;
+	argv[0] = "/usr/bin/luna-send";
+	argv[1] = "-a";
+	argv[2] = HC_LUNA_IDENTITY;
+	argv[3] = "-n";
+	argv[4] = replies > 1 ? "20" : "1";
+	argv[5] = uri;
+	argv[6] = payload;
+	argv[7] = NULL;
+	return true;
+}
+
+bool hc_token_ok(const char *token)
+{
+	if (!token || strlen(token) != HC_TOKEN_LEN) return false;
+	for (int i = 0; i < HC_TOKEN_LEN; i++)
+		if (!((token[i] >= '0' && token[i] <= '9') || (token[i] >= 'a' && token[i] <= 'f'))) return false;
+	return true;
 }

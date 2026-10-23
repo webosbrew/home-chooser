@@ -244,6 +244,24 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		}
 		return {ok: true, text: enabled ? (storedId ? DONE_TEXT : 'Generated patch enabled. Choose a Home app.') : 'Generated patch disabled. The Home button opens LG Home.'};
 	}), [run, storedId]);
+	const notify = useCallback((text) => setToast({ok: true, text}), []);
+	const getUninstallTitle = useCallback(async (id) => {
+		const reply = await env.rootLuna('luna://com.webos.applicationManager/getAppInfo', {id});
+		const info = reply.appInfo || reply;
+		if (reply.returnValue === false || !info.title) throw new Error('No app title');
+		return info.title;
+	}, [env]);
+	const uninstall = useCallback((item) => run('uninstall the app', async (e) => {
+		setNotice(`Uninstalling ${item.title}...`);
+		try {
+			await e.uninstallConfirmed(item.token);
+			return {ok: true, text: `${item.title} was uninstalled.`};
+		} catch (err) {
+			// eslint-disable-next-line no-console
+			console.log(`${LOG_PREFIX} uninstall: ${errorMessage(err)}`);
+			return {ok: false, text: plainFailure('uninstall the app', [errorMessage(err)])};
+		}
+	}), [run]);
 
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
@@ -251,6 +269,6 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		showGenerated: Boolean(patchStatus && (patchStatus.generated === 'possible' || patchStatus.release === 'generated' || patchStatus.generatedOptIn)),
 		generatedOptIn: Boolean(patchStatus && patchStatus.generatedOptIn), toggleGenerated,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
-		busy, notice, toast, choose, notify: (text) => setToast({ok: true, text}), dismissToast: () => setToast(null)
+		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };

@@ -4,6 +4,7 @@ import App from '../../App';
 import {FatalError} from '../../homechooser/environment';
 import {PENDING_KEY} from '../pending';
 import {patchStateOf} from '../useHomeChooser';
+import {parseLaunchParams} from '../launch';
 
 const ok = (extra) => Object.assign({ok: true, steps: [], warnings: [], errors: []}, extra);
 
@@ -24,6 +25,8 @@ const makeEnv = ({version = [11, 0, 0], candidates, currentHome = null, stored =
 		version,
 		chooser,
 		backport,
+		rootLuna: jest.fn(async () => ({returnValue: true, appInfo: {title: 'Example App'}})),
+		uninstallConfirmed: jest.fn(async () => ({returnValue: true})),
 		readIcon: jest.fn(async (id, p) => (p.includes('fancy') ? 'data:image/png;base64,AAAA' : null))
 	};
 };
@@ -40,6 +43,102 @@ describe('Home Chooser screen', () => {
 	let log;
 	beforeEach(() => { log = jest.spyOn(console, 'log').mockImplementation(() => {}); });
 	afterEach(() => { log.mockRestore(); window.localStorage.clear(); });
+
+
+	describe('launch requests', () => {
+		const token = '0123456789abcdef0123456789abcdef';
+		const launchApp = (env, params) => render(<App load={async () => env} launch={() => params} onExit={jest.fn()} />);
+
+		test('initial request waits for candidates and uses the existing confirmation', async () => {
+			const env = makeEnv();
+			let release;
+			env.chooser.listCandidates.mockImplementationOnce(() => new Promise((resolve) => {
+				release = () => resolve(ok({candidates: [{id: 'org.plain.launcher', title: 'Plain Launcher'}]}));
+			}));
+			launchApp(env, JSON.stringify({request: 'org.plain.launcher'}));
+			await waitFor(() => expect(release).toBeTruthy());
+			expect(screen.queryByRole('dialog')).toBeNull();
+			await act(async () => release());
+			expect(await screen.findByText('Use Plain Launcher as Home?')).toBeTruthy();
+			expect(env.chooser.apply).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByText('Use as Home'));
+			await screen.findByText('Done. Press Home to try it.');
+			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: false});
+		});
+
+		test.each(['com.webos.app.home', 'org.unknown', 'org.nonhome', '../bad'])('ignores stock, unknown or non-home request %s', async (request) => {
+			const env = makeEnv();
+			launchApp(env, {request});
+			await screen.findByText('Plain Launcher');
+			expect(screen.queryByRole('dialog')).toBeNull();
+			expect(env.chooser.apply).not.toHaveBeenCalled();
+		});
+
+		test('request for the current home shows the existing toast', async () => {
+			launchApp(makeEnv({currentHome: 'org.plain.launcher'}), {request: 'org.plain.launcher'});
+			expect(await screen.findByText('Plain Launcher is already your Home.')).toBeTruthy();
+			expect(screen.queryByRole('dialog')).toBeNull();
+		});
+
+		test('PalmSystem launchParams and webOSRelaunch work repeatedly', async () => {
+			window.PalmSystem = {launchParams: '{"request":"org.plain.launcher"}'};
+			mountApp(makeEnv());
+			await screen.findByText('Use Plain Launcher as Home?');
+			fireEvent.click(screen.getByText('Cancel'));
+			window.PalmSystem.launchParams = '{"request":"org.fancy.launcher"}';
+			fireEvent(window, new CustomEvent('webOSRelaunch'));
+			await screen.findByText('Use Fancy Launcher as Home?');
+			fireEvent.click(screen.getByText('Cancel'));
+			fireEvent(window, new CustomEvent('webOSRelaunch', {detail: {request: 'org.plain.launcher'}}));
+			await screen.findByText('Use Plain Launcher as Home?');
+			delete window.PalmSystem;
+		});
+
+		test('uninstall asks with the platform title and calls only after confirmation', async () => {
+			const env = makeEnv();
+			launchApp(env, {confirmUninstall: 'org.example.app', token});
+			expect(await screen.findByText('Uninstall Example App?')).toBeTruthy();
+			expect(env.rootLuna).toHaveBeenCalledWith('luna://com.webos.applicationManager/getAppInfo', {id: 'org.example.app'});
+			expect(env.uninstallConfirmed).not.toHaveBeenCalled();
+			fireEvent.click(screen.getByText('Uninstall'));
+			expect(await screen.findByText('Example App was uninstalled.')).toBeTruthy();
+			expect(env.uninstallConfirmed).toHaveBeenCalledTimes(1);
+			expect(env.uninstallConfirmed).toHaveBeenCalledWith(token);
+			expect(env.chooser.apply).not.toHaveBeenCalled();
+		});
+
+		test('uninstall cancel never calls the service', async () => {
+			const env = makeEnv();
+			launchApp(env, {confirmUninstall: 'org.example.app', token});
+			await screen.findByText('Uninstall Example App?');
+			fireEvent.click(screen.getByText('Cancel'));
+			await flush();
+			expect(screen.queryByRole('dialog')).toBeNull();
+			expect(env.uninstallConfirmed).not.toHaveBeenCalled();
+		});
+
+		test('uninstall failure is shown without claiming success', async () => {
+			const env = makeEnv();
+			env.uninstallConfirmed.mockRejectedValue(new Error('expired'));
+			launchApp(env, {confirmUninstall: 'org.example.app', token});
+			await screen.findByText('Uninstall Example App?');
+			fireEvent.click(screen.getByText('Uninstall'));
+			expect(await screen.findByText("Couldn't uninstall the app.")).toBeTruthy();
+		});
+
+		test('missing title does not show an uninstall button', async () => {
+			const env = makeEnv();
+			env.rootLuna.mockRejectedValue(new Error('gone'));
+			launchApp(env, {confirmUninstall: 'org.example.app', token});
+			await screen.findByText("Couldn't read the app to uninstall. Try again from your Home app.");
+			expect(screen.queryByRole('dialog')).toBeNull();
+			expect(env.uninstallConfirmed).not.toHaveBeenCalled();
+		});
+
+		test.each(['{bad', '[]', 'null', '{"request":42}', '{"confirmUninstall":"org.example.app","token":"bad"}'])('invalid launch params %s are ignored', (raw) => {
+			expect(parseLaunchParams(raw)).toEqual({});
+		});
+	});
 
 	test('a read that throws shows the failure line, not an endless empty state', async () => {
 		const env = makeEnv();

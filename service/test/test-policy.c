@@ -101,13 +101,13 @@ static void test_commands(void)
 	c = hc_command_lookup("watcherActive");
 	CHECK(c && c->tolerant && strcmp(c->argv[1], "is-active") == 0);
 	c = hc_command_lookup("profileGet");
-	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
-		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/getProfiles") == 0
-		&& strcmp(c->argv[4], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[5]);
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
+		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/getProfiles") == 0
+		&& strcmp(c->argv[6], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[7]);
 	c = hc_command_lookup("profileRescan");
-	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-n") == 0 && strcmp(c->argv[2], "1") == 0
-		&& strcmp(c->argv[3], "luna://com.webos.service.systemprofile/debug/rescan") == 0
-		&& strcmp(c->argv[4], "{}") == 0 && !c->argv[5]);
+	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
+		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/debug/rescan") == 0
+		&& strcmp(c->argv[6], "{}") == 0 && !c->argv[7]);
 	CHECK(!hc_command_lookup("luna-send"));
 	c = hc_command_lookup("watchLog");
 	CHECK(c && c->native_tail);
@@ -116,7 +116,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterApplySam", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan"};
+	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterApplySam", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);
@@ -171,6 +171,121 @@ static void test_base64_and_lines(void)
 	CHECK(hc_last_lines("", 0, 5) == 0);
 }
 
+static void test_caller(void)
+{
+	char id[64];
+	CHECK(hc_caller_id("com.example.dock", id, sizeof id) && strcmp(id, "com.example.dock") == 0);
+	CHECK(hc_caller_id("com.example.dock 1234", id, sizeof id) && strcmp(id, "com.example.dock") == 0);
+	/* a service or luna-send caller has no application id */
+	CHECK(!hc_caller_id(NULL, id, sizeof id));
+	CHECK(!hc_caller_id("", id, sizeof id));
+	CHECK(!hc_caller_id(" 1234", id, sizeof id));
+	CHECK(!hc_caller_id("bad/id", id, sizeof id));
+	CHECK(!hc_caller_id("a;b", id, sizeof id));
+	CHECK(!hc_caller_id("com.example.dock", id, 5));
+	CHECK(!hc_app_id_ok(NULL) && !hc_app_id_ok("") && hc_app_id_ok("a-b_c.d1"));
+
+	const char *with[] = {"all", HC_GROUP};
+	const char *without[] = {"all", "public", "homechooser.applications.x"};
+	CHECK(hc_perms_grant(with, 2));
+	CHECK(!hc_perms_grant(without, 3));
+	CHECK(!hc_perms_grant(NULL, 0));
+
+	CHECK(hc_is_selected_home("com.example.dock", "com.example.dock"));
+	CHECK(hc_is_selected_home("com.example.dock", "  com.example.dock \r\n"));
+	CHECK(!hc_is_selected_home("com.example.dock", "com.example.dock2"));
+	CHECK(!hc_is_selected_home("com.example.doc", "com.example.dock"));
+	CHECK(!hc_is_selected_home("com.example.dock", ""));
+	CHECK(!hc_is_selected_home("com.example.dock", "com.webos.app.home"));
+	CHECK(!hc_is_selected_home("", ""));
+	CHECK(!hc_is_selected_home(NULL, "x"));
+	CHECK(!hc_is_selected_home("x", NULL));
+}
+
+static void test_remove(void)
+{
+	const char *dev = "/media/developer/apps/usr/palm/applications/org.x.app";
+	const char *store = "/media/cryptofs/apps/usr/palm/applications/org.y.app";
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, dev) == HC_REMOVE_OK);
+	CHECK(hc_remove_check("org.y.app", "org.launcher", -1, store) == HC_REMOVE_OK);
+	/* the refusal list */
+	CHECK(hc_remove_check(HC_APP_ID, "org.launcher", 1, dev) == HC_REMOVE_SELF);
+	CHECK(hc_remove_check(HC_HBC_APP_ID, "org.launcher", 1, dev) == HC_REMOVE_HBC);
+	CHECK(hc_remove_check("org.launcher", "org.launcher", 1, dev) == HC_REMOVE_CALLER);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 0, dev) == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("com.webos.app.home", "org.launcher", -1, "/usr/palm/applications/com.webos.app.home") == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, "/mnt/lg/res/apps/org.x.app") == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, NULL) == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, "/media/developer/apps/usr/palm/applications") == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, "/media/developer/apps/usr/palm/applications/../../../etc") == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("org.x.app", "org.launcher", 1, "/media/developer/apps/usr/palm/applicationsX/a") == HC_REMOVE_SYSTEM);
+	CHECK(hc_remove_check("a b", "org.launcher", 1, dev) == HC_REMOVE_BADID);
+	CHECK(hc_remove_check("a\"}", "org.launcher", 1, dev) == HC_REMOVE_BADID);
+	CHECK(hc_remove_check(NULL, "org.launcher", 1, dev) == HC_REMOVE_BADID);
+	CHECK(hc_folder_kind_of(dev) == HC_FOLDER_DEV && hc_folder_kind_of(store) == HC_FOLDER_STORE);
+
+	hc_remove_call rc;
+	CHECK(hc_remove_step(0, "org.x.app", dev, &rc) && strcmp(rc.uri, "luna://com.webos.applicationManager/removeLaunchPoint") == 0
+		&& strcmp(rc.payload, "{\"launchPointId\":\"org.x.app_default\"}") == 0 && !rc.progress);
+	CHECK(hc_remove_step(1, "org.x.app", dev, &rc) && strcmp(rc.uri, "luna://com.webos.appInstallService/dev/remove") == 0
+		&& strcmp(rc.payload, "{\"id\":\"org.x.app\",\"subscribe\":true}") == 0 && rc.progress);
+	CHECK(hc_remove_step(1, "org.y.app", store, &rc) && strcmp(rc.uri, "luna://com.webos.appInstallService/remove") == 0);
+	CHECK(!hc_remove_step(1, "org.x.app", "/usr/palm/applications/x", &rc));
+	CHECK(!hc_remove_step(2, "org.x.app", dev, &rc));
+	CHECK(!hc_remove_step(0, "bad id", dev, &rc));
+
+	CHECK(hc_progress_state("{\"status\": 31, \"statusValue\": 31}") == 1);
+	CHECK(hc_progress_state("{\"returnValue\":true,\"status\":25,\"details\":{}}") == -1);
+	CHECK(hc_progress_state("{\"returnValue\":true,\"status\":22}\n{\"status\" : 31}") == 1);
+	CHECK(hc_progress_state("{\"returnValue\":true,\"status\":22}") == 0);
+	CHECK(hc_progress_state("{\"returnValue\":false,\"errorText\":\"x\"}") == -1);
+	CHECK(hc_progress_state("{\"status\":310}") == 0);
+	CHECK(hc_progress_state("") == 0 && hc_progress_state(NULL) == 0);
+	CHECK(hc_remove_reply_class("{\"returnValue\":true}") == 1);
+	CHECK(hc_remove_reply_class("{\"returnValue\": false, \"errorText\": \"org.x is not removable\"}") == 0);
+	CHECK(hc_remove_reply_class("{\"returnValue\":false,\"errorText\":\"nope\"}") == -1);
+	CHECK(hc_remove_reply_class("") == -1 && hc_remove_reply_class(NULL) == -1);
+}
+
+static void test_luna_run(void)
+{
+	const char *argv[8];
+	/* every privileged call carries the one identity, never a bare luna-send */
+	CHECK(hc_luna_argv("luna://com.webos.notification/createAlert", "{}", 1, argv));
+	CHECK(strcmp(argv[0], "/usr/bin/luna-send") == 0 && strcmp(argv[1], "-a") == 0 && strcmp(argv[2], HC_LUNA_IDENTITY) == 0);
+	CHECK(strcmp(argv[3], "-n") == 0 && strcmp(argv[4], "1") == 0 && strcmp(argv[5], "luna://com.webos.notification/createAlert") == 0
+		&& strcmp(argv[6], "{}") == 0 && argv[7] == NULL);
+	CHECK(strncmp(HC_LUNA_IDENTITY, "com.webos.", 10) == 0);
+	CHECK(hc_luna_argv("luna://com.webos.appInstallService/remove", "{}", 5, argv) && strcmp(argv[4], "20") == 0);
+	static const char *const forwarded[] = {
+		"listApps", "running", "getAppInfo", "closeByAppId", "setDefaultApp", "launchDefaultApp"
+	};
+	for (size_t i = 0; i < sizeof forwarded / sizeof forwarded[0]; i++) {
+		char uri[160];
+		snprintf(uri, sizeof uri, "luna://com.webos.applicationManager/%s", forwarded[i]);
+		CHECK(hc_luna_argv(uri, "{}", 1, argv));
+		CHECK(strcmp(argv[1], "-a") == 0 && strcmp(argv[2], HC_LUNA_IDENTITY) == 0);
+	}
+	CHECK(hc_luna_uri_allowed("luna://com.webos.settingsservice/getSystemSettings"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.settingsservice/setSystemSettings"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/removeLaunchPoint"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/launch"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.appInstallService/dev/remove"));
+	CHECK(!hc_luna_uri_allowed("luna://com.webos.service.systemprofile/debug/rescan"));
+	CHECK(!hc_luna_uri_allowed("luna://com.webos.applicationManager/uninstallApp"));
+	CHECK(!hc_luna_uri_allowed("luna://com.webos.appInstallService/install"));
+	CHECK(!hc_luna_uri_allowed(NULL));
+	CHECK(!hc_luna_argv("luna://com.webos.appInstallService/install", "{}", 1, argv));
+	CHECK(!hc_luna_argv("luna://com.webos.notification/createAlert", NULL, 1, argv));
+
+	CHECK(hc_token_ok("0123456789abcdef0123456789abcdef"));
+	CHECK(!hc_token_ok("0123456789ABCDEF0123456789abcdef"));
+	CHECK(!hc_token_ok("0123456789abcdef0123456789abcde"));
+	CHECK(!hc_token_ok("0123456789abcdef0123456789abcdefa"));
+	CHECK(!hc_token_ok("0123456789abcdef0123456789abcde\""));
+	CHECK(!hc_token_ok(NULL));
+}
+
 int main(void)
 {
 	test_sender();
@@ -179,6 +294,9 @@ int main(void)
 	test_commands();
 	test_icons();
 	test_base64_and_lines();
+	test_caller();
+	test_remove();
+	test_luna_run();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

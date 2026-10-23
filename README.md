@@ -19,8 +19,9 @@ homebrew app with three parts:
 * The settings app does not call the settings and application manager services under its own
   identity. It calls Home Chooser's own native service, `org.webosbrew.homechooser.service`, which
   Homebrew Channel elevates to root once (`luna://org.webosbrew.hbchannel.service/elevateService`)
-  and which makes the privileged calls itself. The service only offers the narrow operations the
-  app needs and only answers the Home Chooser app. A rooted TV with Homebrew Channel is a
+  and which makes the privileged calls itself. The service offers narrow settings operations to Home Chooser and a versioned
+  application API to launchers that declare its permission group. Closing and uninstalling apps
+  also require the caller to be the selected Home; uninstall asks the owner to confirm. A rooted TV with Homebrew Channel is a
   requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
   calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
   again.
@@ -73,6 +74,9 @@ The fixtures have not run on a device yet; whether `type: "qml"` apps run on eac
 firmware evidence, in `e2e/fixtures/qml/support.json`.
 
 ## Documents
+
+* [Launcher API version 1](docs/launcher-api.md): appinfo permissions, application methods, selection
+  requests and user-confirmed uninstall for launcher authors.
 
 * [The Home key and the home app, webOS 5 to 26](docs/research/home-key-and-home-app.md): how
   each release picks and launches the home app, verified against the firmware and on emulator
