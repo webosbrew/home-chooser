@@ -149,7 +149,7 @@ stock home and the launcher running (`applicationManager/running`), pids and RSS
 `--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist`. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
-`appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else.
+`appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
 
 * **Overlay expectations come from the ipk.** `Launcher.overlay` is `defaultWindowType == "overlay"` in the
   `appinfo.json` inside the launcher's ipk (any id, any launcher). It drives the 6.x to 10.x preload expectations
@@ -157,12 +157,23 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
   must name that id, no `closeByAppId com.webos.app.home`); a normal-window launcher must see the stock home closed. The
   watcher decides the same way for any id (`overlay_check` in `backport/homechooser-home-watch`: `getAppInfo`, else the
   installed `appinfo.json`), so the two are independent readings of the same declaration.
-* **Proof the fixture came up** (each Home press that should open it: steps 3, 4 and 3u): the fixture's own launch
-  record gained lines (`messages`, `.launches` files, see the fixtures README), plus the `beanjar screenshot` taken
-  by the step; the log describes what the picture must show (id, type, window, transparent or opaque) and lists sam's own
-  lines naming the id as independent evidence. For native a missing record is a `FAIL`; for qml and web it is an `XFAIL`
-  citing the unverified record path, and on a release where `fixtures/qml/support.json` says `false` the qml fixture is
-  skipped with an `XFAIL`.
+* **Launch proof** (every Home press that should open the launcher, for Dock, any `--launcher-ipk` app and the
+  fixtures alike: steps 3, 4 and 3u). Nothing visual is evidence; `beanjar screenshot` pictures are kept as artefacts
+  only. The check passes when both hold:
+  1. sam's own record of the launch. Before the press the runner starts `luna-send -i
+     luna://com.webos.applicationManager/getAppLifeEvents {"subscribe":true}` on the device (output to
+     `/tmp/hc-e2e-life.log`), and takes a UTC mark. Afterwards it accepts either a sam line in `/var/log/messages`
+     stamped at or after the mark that names the id, one of `NL_APP_LAUNCH_BEGIN {"app_id":"<id>",...}`,
+     `APP_LAUNCHED` or `RelaunchAsCommon` (the `_ERR`/`_WARNING` variants are shown, never counted), or a
+     `getAppLifeEvents` event for the id of kind `launch`, `relaunch`, `foreground` or `splash`. Either source also
+     catches a relaunch of an app that is already running (`RelaunchAsCommon` line, `relaunch` event); the report
+     says whether one was seen. The log line is the primary signal (no subscription to hold, and the same mark-based
+     read the 12.x homeKey check uses); the event stream is the second source and is recorded either way.
+  2. the id is in `applicationManager/running` afterwards, with a live pid (dead-pid ghost entries dropped).
+
+  The formats are firmware-derived, not yet device-confirmed for a third-party launcher: see
+  `e2e/fixtures/README.md` "What the runner proves". A missing proof is a `FAIL` for every type; on a release where
+  `fixtures/qml/support.json` says `false` the qml fixture is skipped with an `XFAIL`.
 * With `--launchers all-fixtures` a failure in one launcher is recorded and the next one runs.
 
 ## The update step (`--update-check`)

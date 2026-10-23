@@ -34,8 +34,7 @@ for v in normal overlay; do
 	stage=$TMP/$id
 	mkdir -p "$stage"
 	cp "$TMP/icon.png" "$stage/icon.png"
-	cp "$HERE/index.html" "$stage/index.html"
-	sed -e "s/@APPID@/$id/g" -e "s/@VARIANT@/$v/g" "$HERE/app.js" > "$stage/app.js"
+	sed -e "s/@VARIANT@/$v/g" "$HERE/index.html" > "$stage/index.html"
 	python3 -I - "$stage/appinfo.json" "$id" "$v" <<'PY'
 import json, sys
 dst, appid, v = sys.argv[1:4]

@@ -1,81 +1,16 @@
-// Home Chooser E2E fixture launcher (QML). One source for both variants: build.sh
-// substitutes the @MARKER@ placeholders. Runs under /usr/bin/qml-runner (appinfo "type": "qml").
-//
-// Imports are deliberately conservative: QtQuick 2.0 plus three LG modules that every
-// firmware dump with QML example apps ships (Eos.Window, PmLog, TextFile). The root must be
-// a WebOSWindow: that is what LG's own type:"qml" apps use (com.webos.exampleapp.nav,
-// com.webos.app.screensaver), and its appId/windowType are what LSM and SAM key on.
+// Home Chooser E2E fixture launcher (QML), run by /usr/bin/qml-runner (appinfo "type": "qml").
+// build.sh fills the @MARKER@ placeholders. The root is a WebOSWindow, as in LG's own type:"qml" apps
+// (com.webos.exampleapp.nav): its appId (must equal the appinfo id) and windowType are what LSM and SAM key on.
 import QtQuick 2.0
 import Eos.Window 0.1
-import PmLog 1.0
-import TextFile 1.0
 
 WebOSWindow {
-    id: win
-
     width: 1920
     height: 1080
     visible: true
     color: "@BGCOLOR@"
-    // Must equal the appinfo id, or SAM never sees the surface of the app it launched.
     appId: "@APPID@"
     title: "@TITLE@"
 @WINDOWTYPE@
-    property string fixtureId: "@APPID@"
-    property string variant: "@VARIANT@"
-    property string stateFile: "file:///tmp/hcfixture-@APPID@.json"
-    property int launchCount: 0
-    property string startedAt: new Date().toISOString()
-
-    PmLog { id: pmLog; context: "hcfixture" }
-    TextFile { id: counter; name: win.stateFile }
-
-    // One record per qml-runner process start, plus one per activation and a 10 s heartbeat.
-    // Sinks: console.log (qml-runner's message handler), PmLog (-> /var/log/messages) and a
-    // counter file in /tmp. All three are best effort; none may break the UI.
-    function record(kind) {
-        var args = [];
-        try { args = Qt.application.arguments; } catch (e) { }
-        var launchParams = "n/a";
-        try {
-            // qml-runner may or may not expose the launch params as a context property.
-            if (typeof params !== "undefined") launchParams = JSON.stringify(params);
-        } catch (e2) { launchParams = "err:" + e2; }
-        var line = "HCFIXTURE " + kind + " id=" + fixtureId + " variant=" + variant
-                 + " count=" + launchCount + " started=" + startedAt
-                 + " active=" + win.active + " params=" + launchParams
-                 + " args=" + JSON.stringify(args);
-        console.log(line);
-        try {
-            pmLog.info("HCFIXTURE_" + kind.toUpperCase(),
-                       { "id": fixtureId, "variant": variant, "count": launchCount,
-                         "params": launchParams }, line);
-        } catch (e3) { console.log("HCFIXTURE pmlog failed: " + e3); }
-        return line;
-    }
-
-    function bump() {
-        try {
-            if (counter.exists) {
-                var old = JSON.parse(counter.read());
-                launchCount = (old.count || 0);
-            }
-        } catch (e) { launchCount = 0; }
-        launchCount += 1;
-        try {
-            counter.write(JSON.stringify({ "id": fixtureId, "variant": variant,
-                                           "count": launchCount, "started": startedAt,
-                                           "args": Qt.application.arguments }));
-        } catch (e2) { console.log("HCFIXTURE counter write failed: " + e2); }
-    }
-
-    Component.onCompleted: { bump(); record("start"); }
-    onActiveChanged: record(active ? "activate" : "deactivate")
-
-    Timer {
-        interval: 10000; running: true; repeat: true
-        onTriggered: win.record("alive")
-    }
-
 @BODY@
 }

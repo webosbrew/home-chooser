@@ -992,9 +992,9 @@ class Scenario:
         a launcher counts when it is running (it was closed first) or in the foreground: a
         launcher bar such as Dock is an overlay window, so the app underneath stays "foreground"."""
         r = self.rec
-        proof = expect == self.launcher and self.L.is_fixture
+        proof = expect == self.launcher
         if proof:
-            rec_before, rec_mark = set(self.launch_records()), self.messages_mark()
+            self.life_begin()
         if expect == STOCK and self.major == 5:
             # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
             # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
@@ -1038,7 +1038,7 @@ class Scenario:
         fg = fg or self.dev.foreground()
         shot_path = self.shot(label)
         if proof:
-            self.fixture_proof(label, rec_before, rec_mark, shot_path)
+            self.launch_proof(label, expect, mark)
         via = 'foreground' if fg[0] == expect else ('sam log' if sam else 'none')
         r.check('%s: Home opens %s (foreground, sam homeKey launch of the stock home in the log, or for a '
                 'launcher: running after being closed first)' % (label, expect), ok,
@@ -1047,62 +1047,64 @@ class Scenario:
                     ('; sam lines:\n' + '\n'.join(sam[:6])) if sam and via == 'sam log' else ''))
         return ok
 
-    # -- the fixture's own launch record (e2e/fixtures/README.md "Launch records")
-    def launch_records(self):
-        """Lines the fixture wrote about itself: HCFIXTURE/hcfixture lines naming its id in
-        /var/log/messages (native: syslog; qml: PmLog; web: console.log where WAM forwards it) and the
-        native fixture's append-only file(s).  Lines are compared as a set before/after, so log
-        rotation does not matter."""
-        i = self.launcher
-        rc, out = self.dev.sh(
-            "grep -i hcfixture /var/log/messages 2>/dev/null | grep -F %s | sed 's/^/messages: /'; "
-            "for f in /media/developer/temp/%s.launches /tmp/%s.launches /tmp/hcfixture-%s.json; do "
-            "[ -f $f ] && sed \"s|^|$f: |\" $f; done; true" % (shlex.quote(i), i, i, i))
-        return [l for l in out.splitlines() if l.strip()]
+    # -- the non-visual launch proof (e2e/README.md "Launch proof"): no screenshot, no on-screen label
+    LIFE_LOG = '/tmp/hc-e2e-life.log'
+    LIFE_PID = '/tmp/hc-e2e-life.pid'
+    LAUNCH_OK = re.compile(r'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|RelaunchAsCommon')
+    LAUNCH_BAD = re.compile(r'APP_LAUNCH_ERR|APP_LAUNCH_WARNING|LAUNCH_FAILED')
 
-    def fixture_expectation(self):
-        """Text citing why the fixture's own record may legitimately be absent (XFAIL), or None."""
-        t = self.L.fixture[0]
-        if t == 'qml':
-            sup, ev = qml_support(self.major)
-            if sup is not True:
-                return 'qml on %d.x is %s: %s' % (self.major, sup, ev)
-            return ('qml: reaching /var/log/messages through PmLog/console.log of qml-runner is not verified '
-                    'on any release (e2e/fixtures/README.md)')
-        if t == 'web':
-            return ('web: WAM forwarding console.log to /var/log/messages is not established; sam logs the '
-                    'launch (e2e/fixtures/README.md)')
-        return None
+    def life_begin(self):
+        """Hold a subscription to applicationManager/getAppLifeEvents on the device across the Home press."""
+        self.dev.sh('kill $(cat %s) 2>/dev/null; rm -f %s %s; '
+                    'nohup sh -c \'luna-send -i luna://com.webos.applicationManager/getAppLifeEvents '
+                    '"{\\"subscribe\\":true}" > %s 2>&1 < /dev/null & echo $! > %s\' > /dev/null 2>&1; sleep 1'
+                    % (self.LIFE_PID, self.LIFE_LOG, self.LIFE_PID, self.LIFE_LOG, self.LIFE_PID))
 
-    def fixture_proof(self, label, before, mark, shot_path):
-        """After a Home press that should open the fixture: its own record gained lines, and the
-        screenshot is described so a reader can compare the picture with the label."""
+    def life_events(self, appid):
+        """(events naming appid, subscription held) from the subscription started by life_begin()."""
+        rc, out = self.dev.sh('cat %s 2>/dev/null' % self.LIFE_LOG)
+        ev = []
+        for line in out.splitlines():
+            if appid in line:
+                m = re.search(r'"event"\s*:\s*"([^"]*)"', line)
+                ev.append((m.group(1) if m else '?', line.strip()))
+        return ev, bool(out.strip())
+
+    def life_end(self):
+        self.dev.sh('kill $(cat %s) 2>/dev/null; rm -f %s %s; true' % (self.LIFE_PID, self.LIFE_LOG, self.LIFE_PID))
+
+    def sam_launch_lines(self, appid, mark):
+        """sam lines in /var/log/messages stamped at or after `mark` that name appid and are launch-related:
+        NL_APP_LAUNCH_BEGIN {"app_id":"<id>",...}, APP_LAUNCHED, RelaunchAsCommon (and the _ERR/_WARNING variants)."""
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | grep -E ' sam ' | tail -n 40"
+                              % (mark, shlex.quote(appid)))
+        return [l for l in out.splitlines() if self.LAUNCH_OK.search(l) or self.LAUNCH_BAD.search(l)]
+
+    def launch_proof(self, label, appid, mark):
+        """After a Home press that should have started or relaunched `appid`: sam's own record of it
+        (a launch line in the log, or a launch/relaunch/foreground event on getAppLifeEvents) and the app
+        in applicationManager/running with a live pid.  Works for every app type; reads no screen."""
         r = self.rec
-        t, w = self.L.fixture
-        new = []
+        got = {}
 
-        def got():
-            nonlocal new
-            new = [l for l in self.launch_records() if l not in before]
-            return new
-        self.wait(got, 20, 2)
-        sources = sorted({l.split(': ', 1)[0].split('/')[-1] if not l.startswith('messages') else 'messages' for l in new})
-        r.check('%s: the fixture %s recorded the launch itself (new HCFIXTURE lines)' % (label, self.launcher),
-                bool(new), '\n'.join(new[-6:]) or 'no new fixture record; sources checked: /var/log/messages, '
-                '/media/developer/temp/<id>.launches, /tmp/<id>.launches, /tmp/hcfixture-<id>.json',
-                expected=self.fixture_expectation())
-        if new:
-            r.say('%s: record sources that gained lines: %s' % (label, sources))
-        sam = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | grep -i -E 'launch|appfocus|NL_APP' | tail -n 5"
-                          % (mark, shlex.quote(self.launcher)))[1].strip()
-        r.note('%s: sam/system log lines naming %s since the press (independent of the fixture)' % (label, self.launcher),
-               sam or 'none')
-        if self.L.overlay:
-            desc = ('transparent window with one visible bar showing "%s" / %s %s and a launch counter; the stock home or '
-                    'the app beneath shows through everywhere else' % (self.launcher, t.upper(), w.upper()))
-        else:
-            desc = 'opaque full-screen card showing "%s" / %s %s and a launch counter' % (self.launcher, t.upper(), w.upper())
-        r.note('%s: expected on screen in %s' % (label, os.path.basename(shot_path)), desc)
+        def check():
+            lines = self.sam_launch_lines(appid, mark)
+            ok_lines = [l for l in lines if self.LAUNCH_OK.search(l)]
+            ev, held = self.life_events(appid)
+            got.update(lines=lines, ok_lines=ok_lines, ev=ev, held=held)
+            return ok_lines or [e for e in ev if e[0] in ('launch', 'relaunch', 'foreground', 'splash')]
+        self.wait(check, 20, 2)
+        running = appid in self.running_ids()
+        lines, ok_lines, ev, held = (got.get(k, []) for k in ('lines', 'ok_lines', 'ev', 'held'))
+        self.life_end()
+        proved = bool(ok_lines) or any(e[0] in ('launch', 'relaunch', 'foreground', 'splash') for e in ev)
+        kinds = sorted({e[0] for e in ev})
+        relaunch = any(e[0] == 'relaunch' for e in ev) or any('RelaunchAsCommon' in l for l in ok_lines)
+        r.check('%s: sam records the launch of %s (log line since %s or a getAppLifeEvents event) and it is running afterwards'
+                % (label, appid, mark), proved and running,
+                'sam log: %d launch line(s); getAppLifeEvents: %s (subscription %s); relaunch seen: %s; running: %s\n%s'
+                % (len(ok_lines), kinds or 'no events', 'received data' if held else 'silent', relaunch, running,
+                   '\n'.join((lines + [e[1] for e in ev])[-8:]) or 'no sam line or event naming the id'))
 
     def messages_mark(self):
         """UTC time on the device as sam stamps its lines (2026-10-23T05:48:12), taken before a press.

@@ -10,46 +10,37 @@ sh e2e/fixtures/build.sh [outdir]      # default build/fixtures/; offline; needs
 
 | Id | Title | Window |
 | --- | --- | --- |
-| `org.webosbrew.hcfixture.native.normal` | HC Fixture native normal | opaque full-screen card |
-| `org.webosbrew.hcfixture.native.overlay` | HC Fixture native overlay | transparent, one orange bar |
-| `org.webosbrew.hcfixture.qml.normal` | HC Fixture qml normal | opaque full-screen card |
-| `org.webosbrew.hcfixture.qml.overlay` | HC Fixture qml overlay | transparent, one red bar |
-| `org.webosbrew.hcfixture.web.normal` | HC Fixture web normal | opaque full-screen card |
-| `org.webosbrew.hcfixture.web.overlay` | HC Fixture web overlay | transparent, one blue bar |
+| `org.webosbrew.hcfixture.native.normal` | HC Fixture native normal | opaque solid colour |
+| `org.webosbrew.hcfixture.native.overlay` | HC Fixture native overlay | transparent, one small orange strip |
+| `org.webosbrew.hcfixture.qml.normal` | HC Fixture qml normal | opaque solid colour |
+| `org.webosbrew.hcfixture.qml.overlay` | HC Fixture qml overlay | transparent, one small red strip |
+| `org.webosbrew.hcfixture.web.normal` | HC Fixture web normal | opaque solid colour |
+| `org.webosbrew.hcfixture.web.overlay` | HC Fixture web overlay | transparent, one small blue strip |
 
-Every fixture draws a large label with its own id and variant and a launch counter, so a `beanjar screenshot` shows
-which one is up. The runner picks one with `--launcher fixture:<type>.<window>` or runs all with
-`--launchers all-fixtures`.
+Nothing on screen identifies a fixture and nothing in them writes a record: no label, counter, log line, file or
+localStorage. The runner proves a launch from sam (below), never from a picture. The runner picks one with
+`--launcher fixture:<type>.<window>` or runs all with `--launchers all-fixtures`.
 
 ## native/
 
 `hcfixture.c`, one source for both variants (`-DHC_VARIANT_NORMAL` or `-DHC_VARIANT_OVERLAY`), built with the SDK
-that builds `service/` (`/opt/arm-webos-linux-gnueabi_sdk-buildroot`). Windowing is SDL2 on the webOS Wayland shell,
-copied from proven code: the normal variant follows `samples/media/common/sdl_shell.c` (EGL/XDG environment, back and
-exit access policy, a `SDL_WINDOW_FULLSCREEN` window at the display-mode size); the overlay variant is Dock's
-(`Dock.app/src/main.c` hints `SDL_HINT_WEBOS_WINDOW_GROUP_TYPE=_WEBOS_WINDOW_TYPE_OVERLAY` and friends, and
-`src/platform/surface.c` sets the overlay type on the `wl_webos_shell_surface`; Dock's working notes record that
-appinfo alone left the window a card on the 6.6 VM). Relaunch is Dock's too: `SDL_HINT_WEBOS_REGISTER_APP=false`, then
-`applicationManager/registerNativeApp` through libhelpers, whose reply carries `relaunch` and `close`.
-
-Linked libraries (`readelf -d`): `libSDL2-2.0.so.0`, `libhelpers.so.2`, `libc.so.6`, and for the overlay
-`libwayland-client.so.0`, `libwayland-webos-client.so.1`; highest glibc version `GLIBC_2.4`. All of them are in the
-firmware roots on this machine for 5.6.1, 5.6.2, 6.6.0, 7.6.0, 8.3.0, 9.2.x and 11.2.0; **10.x and 12.x have no rootfs on
-this machine, so the sonames are unchecked there.** No SDL_ttf: the label is a built-in bitmap font.
-
-Launch record: one line per event (`launch`, `window`, `register`, `relaunch`, `close`, `exit`, `surface`),
-`hcfixture id=<id> variant=<v> event=<e> pid=N t=<epoch> ...`, written to syslog (tag `hcfixture`, so
-`/var/log/messages`, which is where the runner already reads sam's lines and which survives a crash) and appended to
-`/tmp/<id>.launches` and `/media/developer/temp/<id>.launches` (no rotation; a jailed app may see a private `/tmp`).
-The `launch` event carries `argv[1]`, the launch parameters.
+that builds `service/` (`/opt/arm-webos-linux-gnueabi_sdk-buildroot`). What remains is what a native webOS app must
+do: an SDL2 window (normal: `SDL_WINDOW_FULLSCREEN`, solid colour, as `samples/media/common/sdl_shell.c`; overlay:
+the overlay window type through the SDL hints and `wl_webos_shell_surface_set_property`, as Dock's `src/main.c` and
+`src/platform/surface.c`, a transparent window with one orange strip), `registerNativeApp` through libhelpers
+(`SDL_HINT_WEBOS_REGISTER_APP=false`, as Dock) so sam does not kill the app, a `relaunch` reply raising the window and
+a `close` reply or Back/Exit ending the process. Linked libraries: `libSDL2-2.0.so.0`, `libhelpers.so.2`, `libc`, and
+for the overlay `libwayland-client.so.0`, `libwayland-webos-client.so.1`. They are in the firmware roots on this
+machine for 5.6.1, 5.6.2, 6.6.0, 7.6.0, 8.3.0, 9.2.x and 11.2.0; **10.x and 12.x have no rootfs here, so the sonames
+are unchecked there.**
 
 ## qml/
 
-`main.qml.in` and `appinfo.json.in`, filled in by `build.sh`; the package is `type: "qml"`, `main: "main.qml"`, run
-by `/usr/bin/qml-runner`. The root is `WebOSWindow` (`import Eos.Window 0.1`) with the appId hard-coded, as LG's own
-apps do (`com.webos.exampleapp.nav`, whose overlay variant sets `defaultWindowType: "overlay"` and
-`windowType: "_WEBOS_WINDOW_TYPE_OVERLAY"`; the fixture sets both). Only `QtQuick 2.0`, `Eos.Window`, `PmLog` and
-`TextFile` are imported, all present in every dump that has QML apps.
+`main.qml.in` and `appinfo.json.in`, filled in by `build.sh`; the package is `type: "qml"`, `main: "main.qml"`, run by
+`/usr/bin/qml-runner`. The root is a bare `WebOSWindow` (`import Eos.Window 0.1`) with the appId hard-coded, as LG's own
+apps do (`com.webos.exampleapp.nav`); the overlay variant sets `defaultWindowType: "overlay"` and
+`windowType: "_WEBOS_WINDOW_TYPE_OVERLAY"` and has a transparent window with one strip. The normal variant is a solid
+colour.
 
 Is `type: "qml"` supported? `support.json` holds the answer per release, with the evidence, from the firmware dumps
 only. `sam-conf.json` has `QmlRunnerPath: /usr/bin/qml-runner`, the binary exists, `sam` contains `QmlAppLifeHandler`,
@@ -57,24 +48,29 @@ and LG ships `type:"qml"` apps on **5.6.1/5.6.2, 6.3-6.6, 7.4-7.6, 8.3-8.4, 9.2.
 and `QmlRunnerPath` are still there and the schema still allows `qml`, but no shipped app uses it, so it is
 `unknown`; **12.0.0** has no sam or runner in the dump: `unknown`. Nothing is verified on a device for a third-party
 install, on any release. The runner reads `support.json`: `false` for a release skips the fixture with an `XFAIL`;
-`unknown` runs it and records a missing launch record as `XFAIL` with the reason. (`samples/qt` is a `type: "native"`
-binary that borrows the TV's Qt; it is not a qml package.)
-
-Launch record: `HCFIXTURE <start|activate|deactivate|alive> id=... variant=... count=N params=... args=[...]`
-(a 10 s `alive` heartbeat) through `PmLog` (context `hcfixture`, to `/var/log/messages`), `console.log`, and a counter
-file `/tmp/hcfixture-<id>.json`. Whether qml-runner passes the launch parameters to QML is unknown (`params=n/a`).
+otherwise it runs and the launch proof decides.
 
 ## web/
 
-Plain HTML/JS (`index.html`, `app.js`), packaged by `ares-package`. Listens for `webOSRelaunch`. Launch record:
-`HCFIXTURE launch|relaunch id=... params=...` through `console.log`, `webOSSystem.PmLogString` when it exists, and
-`localStorage` (`hcfixture.log`, `hcfixture.count`, readable through the web inspector). **Whether WAM forwards
-`console.log` to `/var/log/messages` is not established** (the Chromium in the firmware has `LogJsConsoleMessages`,
-nothing more was found), and a web app cannot write a file, so this is the weakest record. The runner falls back to
-noting sam's own launch lines.
+`index.html` only: a solid-colour page, or for the overlay a transparent page with one strip. No script: a web app
+needs none to stay registered with sam and WAM. `build.sh` sets the body class per variant.
 
-## Launch records and the runner
+## What the runner proves
 
-The runner (`launch_records`) greps `/var/log/messages` for `hcfixture` lines naming the id and reads the native and
-qml files, before and after each Home press that should open the fixture, and requires new lines. For native a
-missing record is a `FAIL`; for qml and web it is an `XFAIL` with the reason above, until a device run settles it.
+The same for native, qml, web and Dock (`homechooser_e2e.py` `launch_proof`, run after each Home press that should
+open the launcher): sam's own record naming the id, plus the id in `applicationManager/running` with a live pid.
+
+* `/var/log/messages` lines of the form `<UTC ts>Z [<uptime>] user.info sam [] SAM NL_APP_LAUNCH_BEGIN
+  {"app_id":"<id>","caller_app_id":"<caller>","mode":"<mode>"}` (seen in `e2e/results/*/run.log` for the stock home on
+  7.6.0 w22p-mullet, 8.3.0 w22o-number1 and 9.2.1 w22h-ombre; `caller_id`/`bootManager` at boot). The strings
+  `NL_APP_LAUNCH_BEGIN`, `APP_LAUNCHED`, `APP_CLOSED`, `APP_LAUNCH_ERR`, `RelaunchAsCommon` and the Luna method
+  `getAppLifeEvents` are in `/usr/sbin/sam` of 5.6.1 (W20L), 6.6.0 (W21P), 7.6.0 (W22P), 9.2.4 (ombre), 10.3.1
+  (ponytail) and 11.2.0 (W22H); 12.0.0 has no sam in any dump here, and no run log has a sam launch line from a 5.x,
+  10.x, 11.x or 12.x VM. The exact `APP_LAUNCHED` and `RelaunchAsCommon` message layouts are not in any log on this
+  machine (only the bare names), so the runner matches the name plus the id on the line.
+* `getAppLifeEvents` (subscribe) replies `{"returnValue":true,"subscribed":true,"appId":"<id>","event":"<launch|relaunch|
+  foreground|splash|stop|close|...>",...}`; the event names `launch`, `relaunch`, `foreground`, `splash`, `stop` are
+  strings in sam (`reLaunch` also appears in 11.2.0). The key names are LG's documented ones, not captured here.
+* A relaunch of a launcher that is already running (overlay launchers stay running) shows as a `relaunch` event and,
+  where sam logs it, a `RelaunchAsCommon` line naming the id. The runner closes a launcher before each press, so the
+  normal path is a fresh launch; the relaunch signals are accepted too.

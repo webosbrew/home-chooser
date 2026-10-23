@@ -4,18 +4,11 @@
 <meta charset="utf-8">
 <title>HC Fixture web</title>
 <style>
-  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; font-family: sans-serif; color: #fff; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
   body.normal { background: #0a5a2a; }
   body.overlay { background: transparent; }
-  #card { position: absolute; left: 0; right: 0; top: 40%; text-align: center; }
-  body.overlay #card { top: auto; bottom: 0; height: 330px; background: rgba(0, 120, 200, 0.88); border: 6px solid #fff; box-sizing: border-box; }
-  #id { font-size: 84px; font-weight: bold; margin-top: 30px; }
-  #variant { font-size: 120px; font-weight: bold; color: #ffd800; }
-  #count { font-size: 60px; }
+  body.overlay div { position: absolute; left: 0; right: 0; bottom: 0; height: 90px; background: #0078c8; }
 </style>
 </head>
-<body>
-<div id="card"><div id="id"></div><div id="variant"></div><div id="count"></div></div>
-<script src="app.js"></script>
-</body>
+<body class="@VARIANT@"><div></div></body>
 </html>

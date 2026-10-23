@@ -47,46 +47,27 @@ build_variant() { # <normal|overlay>
 		extra=',
   "transparent": true,
   "defaultWindowType": "overlay"'
-		body='    // Transparent window with one visible bar along the bottom third.
+		body='    // Transparent window with one small strip along the bottom.
     Rectangle {
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-        height: 360
-        color: "#e0802020"
-        border.color: "#ffffff"; border.width: 6
-        Column {
-            anchors.centerIn: parent
-            spacing: 12
-            Text { anchors.horizontalCenter: parent.horizontalCenter; color: "#ffffff"
-                   font.pixelSize: 84; font.bold: true; text: win.fixtureId }
-            Text { anchors.horizontalCenter: parent.horizontalCenter; color: "#ffffff"
-                   font.pixelSize: 72; text: "QML OVERLAY  (launch #" + win.launchCount + ")" }
-        }
+        height: 90
+        color: "#e08020"
     }'
 	else
 		title="HC Fixture qml normal"
 		bg="#103060"
 		wtype=
 		extra=
-		body='    // Opaque full-screen card.
-    Column {
-        anchors.centerIn: parent
-        spacing: 24
-        Text { anchors.horizontalCenter: parent.horizontalCenter; color: "#ffffff"
-               font.pixelSize: 96; font.bold: true; text: win.fixtureId }
-        Text { anchors.horizontalCenter: parent.horizontalCenter; color: "#ffd800"
-               font.pixelSize: 120; font.bold: true; text: "QML NORMAL" }
-        Text { anchors.horizontalCenter: parent.horizontalCenter; color: "#ffffff"
-               font.pixelSize: 64; text: "launch #" + win.launchCount }
-    }'
+		body=
 	fi
-	python3 -I - "$HERE/main.qml.in" "$stage/main.qml" "$id" "$title" "$v" "$bg" "$wtype" "$body" <<'PY'
+	python3 -I - "$HERE/main.qml.in" "$stage/main.qml" "$id" "$title" "$bg" "$wtype" "$body" <<'PY'
 import sys
-src, dst, appid, title, variant, bg, wtype, body = sys.argv[1:9]
+src, dst, appid, title, bg, wtype, body = sys.argv[1:8]
 t = open(src).read()
-for k, v in (('@APPID@', appid), ('@TITLE@', title), ('@VARIANT@', variant),
+for k, v in (('@APPID@', appid), ('@TITLE@', title),
              ('@BGCOLOR@', bg), ('@WINDOWTYPE@', wtype), ('@BODY@', body)):
     t = t.replace(k, v)
-assert not [k for k in ('@APPID@', '@TITLE@', '@VARIANT@', '@BGCOLOR@', '@WINDOWTYPE@', '@BODY@') if k in t], 'unfilled marker'
+assert not [k for k in ('@APPID@', '@TITLE@', '@BGCOLOR@', '@WINDOWTYPE@', '@BODY@') if k in t], 'unfilled marker'
 open(dst, 'w').write(t)
 PY
 	python3 -I - "$HERE/appinfo.json.in" "$stage/appinfo.json" "$id" "$title" "$extra" <<'PY'
