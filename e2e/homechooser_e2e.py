@@ -1876,6 +1876,8 @@ class Scenario:
                     guarded(self.step_api)
                 if i == 3 and self.a.reboot_check:
                     guarded(self.step_reboot)
+                    if self.uses_home_key_hook() and not self.a.update_check:
+                        guarded(self.step_cache)
                 if i == 3 and self.a.update_check:
                     guarded(self.step_update)
         finally:
@@ -1901,6 +1903,8 @@ class Scenario:
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
         rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
+        if self.uses_home_key_hook() and self.a.reboot_check and not self.a.update_check:
+            self.cache_prepare_measure()
         r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
         if self.a.api_check:
             rc, out = d.install(self.a.disposable_ipk)
@@ -2373,6 +2377,97 @@ class Scenario:
         self.shot('3r-after-reboot')
         if self.a.api_check:
             self.api_after_reboot()
+
+    def cache_prepare_measure(self):
+        """Prepare once before the first choice, recording the device's elapsed time and Node RSS."""
+        r, d = self.rec, self.dev
+        r.begin('1c prepare Home key hook cache on the TV')
+        script = SCRIPTS_DIR + '/homechooser-homekey'
+        shell = '''
+script=%s
+"$script" clear || exit 1
+if [ -x /usr/bin/time ] && /usr/bin/time -v true >/dev/null 2>&1; then timer=/usr/bin/time
+elif command -v busybox >/dev/null 2>&1 && busybox time -v true >/dev/null 2>&1; then timer='busybox time'
+else timer=; fi
+start=$(cut -d' ' -f1 /proc/uptime)
+if [ -n "$timer" ]; then $timer -v /bin/sh "$script" prepare > /tmp/homechooser-cache-measure 2>&1 &
+else /bin/sh "$script" prepare > /tmp/homechooser-cache-measure 2>&1 & fi
+worker=$!
+peak=0
+while kill -0 "$worker" 2>/dev/null; do
+    for pid in $(pidof node 2>/dev/null); do
+        [ -r "/proc/$pid/cmdline" ] || continue
+        args=$(tr '\\000' ' ' < "/proc/$pid/cmdline")
+        case "$args" in *homechooser-homekey-hook.js*)
+            rss=$(awk '/VmHWM:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
+            [ "${rss:-0}" -le "$peak" ] || peak=$rss
+            ;;
+        esac
+    done
+    sleep 0.05
+done
+wait "$worker"; rc=$?
+end=$(cut -d' ' -f1 /proc/uptime)
+elapsed=$(awk -v a="$start" -v b="$end" 'BEGIN {printf "%%.0f", (b-a)*1000}')
+echo "measure_rc=$rc elapsed_ms=$elapsed sampled_peak_kb=$peak"
+cat /tmp/homechooser-cache-measure
+exit "$rc"
+''' % shlex.quote(script)
+        rc, out = d.sh('sh -c ' + shlex.quote(shell), timeout=180)
+        r.note('TV rewriter time and peak RSS (one preparation)', out[-2500:])
+        peak = re.search(r'Maximum resident set size \(kbytes\):\s*(\d+)', out)
+        sampled = re.search(r'sampled_peak_kb=(\d+)', out)
+        rss = int(peak.group(1)) if peak else int(sampled.group(1)) if sampled else 0
+        r.check('TV rewriter prepared the cache with measured elapsed time and peak RSS',
+                rc == 0 and bool(re.search(r'elapsed_ms=[1-9]\d*', out)) and rss > 0,
+                'peak RSS %d kB; %s' % (rss, out[-1000:]))
+        rc, out = d.sh('test -s /var/lib/webosbrew/homechooser/hook/manifest.tsv && echo ready')
+        r.check('persistent cache exists before the first choice', rc == 0 and out.strip() == 'ready', out)
+
+    def step_cache(self):
+        """Exercise a normal shell-only boot and a firmware checksum change without editing LG files."""
+        r, d = self.rec, self.dev
+        r.begin('3c persistent Home key hook cache')
+        rc, out = d.sh('date -u "+%Y-%m-%dT%H:%M:%SZ"; '
+                       'for p in $(pidof node 2>/dev/null); do '
+                       'tr "\\000" " " < /proc/$p/cmdline 2>/dev/null | grep "homechooser-homekey-hook.js"; done; '
+                       'cat /tmp/homechooser-homekey.log 2>/dev/null')
+        r.check('normal reboot has no hook Node process or rewriter log line',
+                'homechooser-homekey-hook.js' not in out and 'cache generated' not in out,
+                'timestamped boot evidence:\n' + out[-2000:])
+        manifest = '/var/lib/webosbrew/homechooser/hook/manifest.tsv'
+        mutate = ('sed "1s/[0-9a-f]\\{32\\}/00000000000000000000000000000000/" %s > %s.new && '
+                  'mv %s.new %s && head -n 1 %s' % ((manifest,) * 5))
+        rc, out = d.sh(mutate)
+        r.check('test changed only the manifest stock MD5', rc == 0 and '00000000000000000000000000000000' in out, out)
+        if not self.beanjar_reboot('3c stale cache'):
+            return
+        st, raw = self.kf_status()
+        r.check('changed checksum leaves the entire hook unmounted for this boot',
+                st.get('mounted') == 'no' and not d.mounts(), raw)
+        r.check('stock boot reports hook=stale reason=stock-changed',
+                st.get('hook') == 'stale' and st.get('reason') == 'stock-changed', raw)
+        self.home_press(STOCK, '3c-stock-boot')
+        rebuilt = self.wait(lambda: d.sh('test -s %s && echo ready' % manifest)[1].strip() == 'ready', 180, 5)
+        st, raw = self.kf_status()
+        r.check('watcher regenerated the cache after boot', bool(rebuilt), raw)
+        r.check('rebuilt cache requests the next restart with the original stale reason',
+                st.get('hook') == 'stale' and st.get('reason') == 'stock-changed' and st.get('reboot') == 'needed', raw)
+        self.insp = Inspector(self.vm)
+        d.launch(APP_ID)
+        ui = self.wait(lambda: self.ui(), 60, 2) or {}
+        self.shot('3c-restart-after-cache-rebuild')
+        r.check('app shows the restart action after cache rebuild', ui.get('restart') is True, json.dumps(ui))
+        d.close(APP_ID)
+        self.insp.close()
+        self.insp = None
+        if not self.beanjar_reboot('3c rebuilt cache'):
+            return
+        self.after_boot_checks('after cache rebuild reboot')
+        st, raw = self.kf_status()
+        r.check('hook is active again after the next reboot',
+                st.get('mounted') == 'yes' and st.get('reboot') == 'no' and not st.get('hook'), raw)
+        self.home_press(self.launcher, '3c-hook-active')
 
     # -- the launcher API (--api-check; docs/launcher-api.md)
     def api(self, method, payload=None, app='launcher'):

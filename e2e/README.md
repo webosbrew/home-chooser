@@ -71,6 +71,10 @@ runs its reach calls for, not the whole matrix every time:
 
 `--reboot-check` is used where boot behaviour is involved (the watcher, the preload policy, the
 Home key hook mounts). There is no shortened mode; settle and sampling times stay as they are.
+On webOS 6–9 it also measures one cache preparation on the TV (elapsed time and peak Node RSS),
+checks that a normal boot has no rewriter activity, then changes only the cache manifest's stock
+MD5. It verifies a stock boot, watcher regeneration and restart prompt, and an active hook after
+the next reboot. LG firmware files are never edited.
 
 ## Beanjar host abstraction
 
