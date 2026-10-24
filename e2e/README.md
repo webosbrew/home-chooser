@@ -444,6 +444,18 @@ Then steps 4 and 5 run on the updated install.
 
 ## System popups and screenshots
 
+* On `w24g-ombre` (9.2.4), `legacy-broadcast-dvb` has intermittently crashed at
+  `API_SI_GetLinkageUriInfo+0x197`. A full `--reboot-check --api-check` run reproduced the same fault on
+  `main@b472a38` at uptime 38.50 s and on `rename-home-key-hook` at uptime 189.58 s after a Home press.
+  A separate branch boot crashed at 38.52 s. In the main and 38.52 s branch crash logs, the compositor
+  restarted once at about 16 s and TV snapshot/tuner initialization ran again around 37–38 s. A clean
+  hooked boot also had this second initialization. An inspected stock-only boot had only the initial one;
+  no crash occurred in 10 stock-only attempts.
+  Main and branch use executable-identical patched QML/JS on the 9.2.4 corpus. A valid branch cache
+  starts no Node rewriter at boot, and disabling the watcher preload call did not remove the second tuner
+  initialization. The evidence does not isolate a new branch process as the cause or prove which part of
+  the existing restart path triggers the LG fault. The runner keeps this as a `FAIL` and never confirms
+  the LG crash popup.
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
 * Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then `grim` of the whole Pi desktop (`*-viewer.png`), for which the viewer is opened on first use and closed before the stop. Each fallback is logged with the word FALLBACK.
 * On 5.x Home starts `com.webos.app.fullhome` as an overlay over the app in front (foreground stays the app), so step 3/4/5's "Home opens stock" looks for it running.
