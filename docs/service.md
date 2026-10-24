@@ -60,7 +60,7 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `closeById` | `{id, force?}` | `{returnValue, id}`; selected Home only |
 | `uninstall` | `{id}` | `{returnValue, pending:true, id, confirm}` (`alert` or `screen`); selected Home only |
 | `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; internal confirmation only |
-| `rebootPrompt` | `{reason, screen?}` | `{returnValue, pending:true, confirm}` (`alert`, `toast`, or `screen` with `token`); Home Chooser only |
+| `rebootPrompt` | `{reason}` | `{returnValue, pending:true, confirm}` (`alert`, or `toast` when the alert is refused); Home Chooser only |
 | `rebootConfirmed` | `{token}` | `{returnValue}`; internal confirmation only |
 
 Every method except `status`, `quit` and `getInfo` is privileged: when the service is not root it answers
