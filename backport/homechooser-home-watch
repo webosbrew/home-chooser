@@ -24,7 +24,15 @@
 #     next reboot: their sources are under /tmp/homechooser-backport, not in the app directory, and
 #     nothing re-applies them at boot once the init.d link and the flag are gone.
 # An app is taken as gone only if it is still gone HOMECHOOSER_CONFIRM_DELAY seconds (15) later,
-# because an update installs by removing first.
+# because an update installs by removing first. At a watcher start (a boot, where sam may not have
+# loaded every app yet) an app whose appinfo.json is still on disk is not taken as gone either.
+#
+# Without a usable stored choice it does one check and exits 0 (docs/settings-app.md, "A leftover
+# Home"): if the record's home, or on webOS 10 and later the override file's, names an app that is
+# not installed (getAppInfo says so twice, the delay apart, and its files are gone), that is what an
+# earlier Home Chooser left when it could not restore, and the same revert is made. A getAppInfo
+# that does not answer, an installed app, or a stock id leaves it. A choice stored meanwhile turns
+# the run into the ordinary watcher.
 #
 # While a third-party home is chosen (webOS 6 and later) it also keeps LG's stock home,
 # com.webos.app.home, from being preloaded: preloadmanager/setPreloadPolicy with isEnabled false,
@@ -62,6 +70,7 @@
 # HOMECHOOSER_TMP, HOMECHOOSER_RUNTIME, HOMECHOOSER_SHELL, HOMECHOOSER_APPDIR, HOMECHOOSER_KEYFILTER_FLAG,
 # HOMECHOOSER_INITD, HOMECHOOSER_RECHECK, HOMECHOOSER_TIMER_SLEEP, HOMECHOOSER_CONFIRM_DELAY,
 # HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check),
+# HOMECHOOSER_APPS_DIRS, HOMECHOOSER_INSTALL_DIRS (directories of installed apps),
 # HOMECHOOSER_PRELOAD_SETTLE, HOMECHOOSER_PRELOAD_SLEEP, HOMECHOOSER_PRELOAD (0 turns the preload
 # policy off), HOMECHOOSER_NOTIFY (0 turns the removal notifications off).
 
@@ -81,6 +90,8 @@ RT=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
 WSH=${HOMECHOOSER_SHELL:-/bin/sh}
 APPDIR=${HOMECHOOSER_APPDIR:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser}
 APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications /usr/palm/applications"}
+# Where installed apps' files are, for "still on disk": the appinfo directories and the store's.
+INSTALL_DIRS=${HOMECHOOSER_INSTALL_DIRS:-"$APPS_DIRS /media/cryptofs/apps/usr/palm/applications"}
 KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
 GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
@@ -671,6 +682,15 @@ app_state() {
     fi
 }
 
+# on_disk <id>: the app's appinfo.json is in one of INSTALL_DIRS, i.e. it is installed even if sam
+# does not know it yet.
+on_disk() {
+    for d in $INSTALL_DIRS; do
+        [ -f "$d/$1/appinfo.json" ] && return 0
+    done
+    return 1
+}
+
 # hc_gone: Home Chooser is not installed, by getAppInfo or by its directory.
 hc_gone() {
     [ -d "$APPDIR" ] || return 0
@@ -714,6 +734,15 @@ remove_home() {
     log "home cleared (null) in the record"
 }
 
+# drop_override: webOS 10 and later, remove our profile override file and rescan.
+drop_override() {
+    [ "$MAJOR" -ge 10 ] && [ -f "$OVERRIDE" ] || return 0
+    rm -f "$OVERRIDE"
+    log "removed $OVERRIDE"
+    out=$(call "$PROFILE/debug/rescan" '{}' | flatten)
+    log "debug/rescan: $out"
+}
+
 # revert_platform: put the platform back to stock. Idempotent: it only writes what is not stock.
 revert_platform() {
     log "putting the platform back to stock ($1)"
@@ -732,12 +761,7 @@ revert_platform() {
         fi
         return 0
     fi
-    if [ "$MAJOR" -ge 10 ] && [ -f "$OVERRIDE" ]; then
-        rm -f "$OVERRIDE"
-        log "removed $OVERRIDE"
-        out=$(call "$PROFILE/debug/rescan" '{}' | flatten)
-        log "debug/rescan: $out"
-    fi
+    drop_override
     remove_home
 }
 
@@ -780,6 +804,10 @@ check_apps() {
     want=$(read_choice) || finish "choice file is gone, exiting" 0
     [ -n "$MISSING" ] && [ "$MISSING" != "$want" ] && MISSING=
     st=$(app_state "$want")
+    if [ "$st" = no ] && [ "$why" = start ] && on_disk "$want"; then
+        log "getAppInfo does not know $want yet but its files are installed, leaving things as they are"
+        st=unknown
+    fi
     case "$st" in
         no)
             if [ "$MISSING" != "$want" ]; then
@@ -821,6 +849,66 @@ check_apps() {
     preload_follow "$want" "$why"
     [ -n "$CHECK_MARK" ] && echo "$why" >> "$CHECK_MARK"
     return 0
+}
+
+# --- No stored choice: a leftover Home -----------------------------------------------------
+
+# leftover_gone <id>: the id is not installed: getAppInfo says so twice, CONFIRM_DELAY apart, and its
+# files are not on disk. Stock ids, an id getAppInfo does not answer for, and an installed one fail.
+leftover_gone() {
+    case "$1" in "$STOCK_HOME"|"$STOCK_FULLHOME") return 1 ;; esac
+    st=$(app_state "$1")
+    if [ "$st" = unknown ]; then
+        log "getAppInfo did not answer for $1, leaving things as they are"
+        return 1
+    fi
+    [ "$st" = no ] || return 1
+    if on_disk "$1"; then
+        log "getAppInfo does not know $1 yet but its files are installed, leaving things as they are"
+        return 1
+    fi
+    nap "$CONFIRM_DELAY"
+    [ "$(app_state "$1")" = no ] && ! on_disk "$1"
+}
+
+# repair_leftover: no usable stored choice. If the record's home (or, on webOS 10 and later, our
+# override file's) names an app that is not installed, an earlier Home Chooser was removed or stopped
+# while it could not restore: put the platform back to stock the way a removal of the chosen app
+# does. Nothing is written for a choice stored while this confirms, and no notification is sent.
+repair_leftover() {
+    rec=$(current_home)
+    ovr=
+    if [ "$MAJOR" -ge 10 ] && [ -f "$OVERRIDE" ]; then
+        ovr=$(home_of "$(flatten < "$OVERRIDE")")
+    fi
+    [ -n "$rec$ovr" ] || return 0
+    gone_rec=
+    gone_ovr=
+    [ -n "$rec" ] && leftover_gone "$rec" && gone_rec=$rec
+    if [ -n "$ovr" ]; then
+        if [ "$ovr" = "$gone_rec" ] || { [ "$ovr" != "$rec" ] && leftover_gone "$ovr"; }; then gone_ovr=$ovr; fi
+    fi
+    if [ -z "$gone_rec$gone_ovr" ]; then
+        log "no stored choice and the home in use is installed or stock, nothing to repair"
+        return 0
+    fi
+    if read_choice > /dev/null; then
+        log "a choice was stored meanwhile, not repairing"
+        return 0
+    fi
+    log "no stored choice, but the home names ${gone_rec:-$gone_ovr}, which is not installed: a leftover"
+    if [ "$MAJOR" -ge 10 ]; then
+        # the record and the override are repaired each on its own: one may name an installed app
+        [ -n "$gone_ovr" ] && drop_override
+        if [ -n "$gone_rec" ]; then
+            if [ "$(current_home)" = "$gone_rec" ]; then remove_home; else log "home changed meanwhile, record left alone"; fi
+        fi
+    elif [ "$(current_home)" = "$gone_rec" ]; then
+        revert_platform "leftover home $gone_rec not installed"
+    else
+        log "home changed meanwhile, record left alone"
+    fi
+    kf_refresh stock
 }
 
 # handle <reply text>: one complete reply of the settings subscription.
@@ -912,7 +1000,11 @@ TITLE_ID=
 TITLE_VAL=
 NOTIFY_OUT=
 
-want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
+if ! want=$(read_choice); then
+    log "no usable choice file, checking for a leftover home"
+    repair_leftover
+    want=$(read_choice) || { log "no usable choice file, nothing to watch"; exit 0; }
+fi
 log "watching, home=$want, webOS $MAJOR"
 mkdir -p "$TMP" || exit 1
 check_apps start

@@ -177,7 +177,9 @@ Home Chooser keeps its own copy of the choice and enforces it.
   link can clean it up; see [When apps are removed](#when-apps-are-removed)). It does two things: on webOS 6 to 9, when the flag file
   `/var/lib/webosbrew/homechooser/keyfilter` exists, it runs `homechooser-keyfilter apply` (the
   [key filter backport](key-filter-backport.md)); and if the choice file exists it starts the watcher.
-  `homechooser watch` does only the second, which is what the app runs after a choice.
+  `homechooser watch` does only the second, and starts the watcher with or without a stored choice:
+  the app runs it after a choice and each time it opens, so a reinstalled Home Chooser looks for a
+  [leftover Home](#a-leftover-home) without waiting for a choice or a boot.
 * **The watcher** is `backport/homechooser-home-watch`, started as a transient unit,
   `systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
   '<wrapper>' homechooser-home-watch <app>/backport/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
@@ -210,7 +212,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
     [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
   * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
-    subscription ends.
+    subscription ends. Started without a usable choice it makes the one
+    [leftover Home](#a-leftover-home) check and exits 0.
 * **Restoring stock** stops the watcher (`systemctl stop homechooser-home`), removes the choice file,
   then does the platform restore. On 6.x to 9.x it also runs `homechooser-keyfilter refresh`, which
   clears the choice from the mounted `Settings.qml` copy (it does not restart the compositor: the
@@ -239,7 +242,9 @@ file in each form, the override on 10.x; a fake clock and sleep check the rate l
 the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
 are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Home Chooser removed with
 the full restore, both in either order and one removed during the other's confirmation wait with its message delivered or lost, the alert and toast triggers (once, not on a transient absence, not at a start, not after a restore from the app), a transient absence, a silent `getAppInfo`, the periodic
-check, the restore from the runtime copy after the app directory is deleted),
+check, the restore from the runtime copy after the app directory is deleted, the leftover Home
+without a stored choice on 5, 6 to 9 and 10+ with what it leaves alone, and the start-time
+files-on-disk guard),
 `backport/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
 6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone, the unit's wrapper),
 `backport/test-homechooser-keyfilter.sh` and `backport/test-real-roundtrip.sh` (see the
@@ -266,7 +271,11 @@ Unsupported Application Type`). The same look is repeated every 5 min (`HOMECHOO
 the subscription missed something, and once at start. Home Chooser counts as gone when `getAppInfo`
 says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
 (`HOMECHOOSER_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
-compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing. The look at Home
+compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing. At a watcher start
+(a boot, where `sam` may not have loaded every app yet) an app whose `appinfo.json` is still in
+`/media/developer/apps/usr/palm/applications`, `/usr/palm/applications` or
+`/media/cryptofs/apps/usr/palm/applications` is not taken as gone either, whatever `getAppInfo`
+says; after the start a removal is judged by `getAppInfo` alone, as before. The look at Home
 Chooser is repeated after the chosen app's confirmation delay, so a Home Chooser removed while that
 wait lasts is found without depending on a `listApps` message of its own.
 
@@ -376,14 +385,54 @@ state it leaves:
 | 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail. Repair: write `home` as the stock id |
 | 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
 
-Repair: install Home Chooser again (the link in `init.d` is valid again, and the next boot or
-opening the app starts the watcher, which sees the chosen app missing and reverts), or by hand on
+Repair: install Home Chooser again and open it once. Opening it starts the watcher: with the choice
+file still there (the chosen app was removed while the watcher was down) it sees the chosen app
+missing and reverts; without one (Home Chooser itself was removed and its restore could not write,
+e.g. the luna bus was down) it makes the [leftover Home](#a-leftover-home) check. The link in
+`init.d` of a Home Chooser removed without its watcher is valid again after the reinstall, so the
+next boot does the first case too. Or by hand on
 10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.homechooser.json`,
 `luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
 `general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
 entries). On 5.x to 9.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
 choice stored the watcher is not started, so uninstalling Home Chooser then leaves the flag file, a
 dangling link and, until reboot, mounts that behave as stock.
+
+### A leftover Home
+
+Home Chooser removed while its restore could not run or could not write (the watcher stopped, the
+luna bus down during `restore_all`, which still removes the choice file, the flag and the link)
+leaves the record's `home`, and on 10.x and later the override file, naming a launcher, and nothing
+of Home Chooser's to say so. Once that launcher is gone too the Home key is broken (the table above).
+The rule, applied when the watcher starts without a usable stored choice (that is, when the app is
+opened after a reinstall, through `homechooser watch`):
+
+* The ids looked at are the record's `home` and, on 10.x and later, the `categories.home` of
+  `/var/webos-profile/override/org.webosbrew.homechooser.json`. Before 10.x the override file is not
+  read. `null`, `""` and a missing key are no id.
+* An id counts as not installed only if `getAppInfo` answers `returnValue:false` twice,
+  `HOMECHOOSER_CONFIRM_DELAY` (15 s) apart, and its `appinfo.json` is in none of the install
+  directories above. `com.webos.app.home` and `com.webos.app.fullhome` are never acted on, and an
+  id `getAppInfo` does not answer for is left as it is (logged `getAppInfo did not answer`).
+* An id that is installed is left alone even though no choice is stored: someone may have chosen it
+  by other means, and Home Chooser only repairs a name that cannot work.
+* A gone id is reverted the way the removal of a chosen app is, without the notification (it is not
+  a removal the user just made): 5.x to 9.x write `home` as the stock launcher by the merged write
+  (`com.webos.app.fullhome` if installed, else `com.webos.app.home`); 6.x to 9.x also run
+  `homechooser-keyfilter refresh stock`; 10.x and later remove the override and rescan when the
+  override names the gone id, and write `home` as `null` when the record does. On 10.x the two are
+  separate: a stale override with a record naming an installed app removes only the override, and
+  the other way round.
+* The record is read again right before the write, and nothing is written if it changed during the
+  confirmation (`home changed meanwhile`). If a choice is stored during the confirmation (the user
+  picked a launcher), nothing is repaired and the same process goes on as the ordinary watcher of
+  that choice.
+* With a stored choice none of this applies: the choice is enforced, and a record or override
+  naming something else is overwritten by it (the [Persistence](#persistence) rules).
+
+The boot entry does not start the watcher without a choice, so this check does not run at every
+boot: the leftover comes from an uninstall, which removes the `init.d` link, so nothing would run at
+boot anyway until the app is opened again.
 
 What only a live test settles: that
 `getAppInfo` of an uninstalled id answers `returnValue:false` on every release, and that `sam`

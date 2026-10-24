@@ -111,7 +111,12 @@ setup 7
 touch "$T/state/keyfilter"
 run watch
 check "watch never runs the key filter" hasnt keyfilter "$T/cmds"
-check "no choice: nothing started" hasnt systemd-run "$T/cmds"
+check "no choice: the watcher is started for its leftover check" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
+cleanup
+setup 7
+touch "$T/active"
+run watch
+check "no choice, already running: not started twice" hasnt systemd-run "$T/cmds"
 cleanup
 
 echo "== systemd-run fails"

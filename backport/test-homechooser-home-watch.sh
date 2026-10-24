@@ -121,7 +121,7 @@ STUB
     printf '#!/bin/sh\ncat %s/clock\n' "$T" > "$T/bin/clock"
     # The fake sleep advances the clock. A line queued in napq is done inside the sleep, as if it
     # happened while the watcher was waiting: UNINSTALL <id>, INSTALL <id> (each followed by a
-    # listApps message), QUIET-UNINSTALL <id> (no message), or RMCHOICE.
+    # listApps message), QUIET-UNINSTALL <id> (no message), RMCHOICE, or CHOICE <id>.
     cat > "$T/bin/sleep" <<'SLEEPSTUB'
 #!/bin/sh
 T=$T
@@ -145,6 +145,7 @@ if [ -s $T/napq ]; then
             [ "${l#INSTALL }" = org.webosbrew.homechooser ] && mkdir -p $T/app
             echo '{"returnValue":true,"subscribed":true,"apps":[]}' > $T/appsfeed ;;
         RMCHOICE) rm -f $T/home ;;
+        "CHOICE "*) echo "${l#CHOICE }" > $T/home ;;
     esac
 fi
 SLEEPSTUB
@@ -156,7 +157,8 @@ SLEEPSTUB
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
            HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
-           HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark"
+           HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark" \
+           HOMECHOOSER_INSTALL_DIRS="$T/apps"
 }
 run() { $SH "$T/app/backport/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
@@ -323,7 +325,9 @@ cleanup
 setup 8 '  \r\n'
 reply '{"home":"other"}'
 run
-check "blank file: exit 0, no calls" test ! -s "$T/calls"
+check "blank file: exit 0" rc 0
+check "blank file: only the record read for a leftover" test "$(grep -c CALL "$T/calls")" = 1 -a "$(count getSystemSettings "$T/calls")" = 1
+check "blank file: nothing subscribed" hasnt SUB "$T/calls"
 cleanup
 for bad in 'a b' 'x"y' 'x;y' 'a/b' 'a$b' '$(id)' 'a\nb'; do
     setup 8 "$bad"
@@ -338,7 +342,8 @@ setup 8 'my.home\n'
 rm -f "${T:?}/home"
 run
 check "no choice file: exit 0" rc 0
-check "no choice file: no calls" test ! -s "$T/calls"
+check "no choice file: only the record read for a leftover" test "$(grep -c CALL "$T/calls")" = 1 -a "$(count getSystemSettings "$T/calls")" = 1
+check "no choice file: nothing subscribed, no write" test "$(writes)" = 0 -a "$(count SUB "$T/calls")" = 0
 cleanup
 
 echo "== choice file removed while watching"
@@ -1161,6 +1166,187 @@ echo 'UNINSTALL org.webosbrew.homechooser' > "$T/napq"
 HOMECHOOSER_CONFIRM_DELAY=15 run
 check "no alert" test "$(alerts)" = 0
 check "one toast" test "$(toasts)" = 1
+cleanup
+
+# --- A leftover Home: no stored choice, the home names an app that is not installed ----------
+nochoice() { setup "$1" ''; rm -f "$T/home"; }
+
+echo "== leftover: no choice, the record names a missing app, webOS 5 to 9: the stock id"
+for major in 5 6 8 9; do
+    nochoice $major
+    live '{"home":"gone.app","kidsApp":"k.app"}'
+    HOMECHOOSER_CONFIRM_DELAY=15 run
+    check "$major: exit 0" rc 0
+    check "$major: stock id written, other entries kept" has '{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}' "$T/calls"
+    check "$major: one write, by setSystemSettings" test "$(writes)" = 1 -a "$(count setDefaultApp "$T/calls")" = 0
+    check "$major: confirmed after the delay" test "$(count 'getAppInfo {"id":"gone.app"}' "$T/calls")" = 2 -a "$(count 'SLEEP 15' "$T/calls")" = 1
+    check "$major: nothing subscribed" hasnt SUB "$T/calls"
+    check "$major: no alert or toast" test "$(alerts)" = 0 -a "$(toasts)" = 0
+    check "$major: logged as a leftover" has 'a leftover' "$T/log"
+    if [ "$major" -ge 6 ]; then
+        check "$major: baked id emptied" test "$(kfn 'refresh stock')" = 1
+    else
+        check "$major: no key filter" test ! -s "$T/kfcalls"
+    fi
+    cleanup
+done
+nochoice 7
+live '{"home":"gone.app"}'
+printf 'org.webosbrew.homechooser\ncom.webos.app.home\ncom.webos.app.fullhome\n' > "$T/installed"
+run
+check "fullhome named when installed" has '{"defaultApps":{"home":"com.webos.app.fullhome"}}' "$T/calls"
+cleanup
+
+echo "== leftover: webOS 10 and later, record and override name a missing app"
+for major in 10 11; do
+    nochoice $major
+    live '{"home":"gone.app","kidsApp":"k.app"}'
+    mkdir -p "$T/override"
+    echo '{"defaultApps":{"categories":{"home":"gone.app"}}}' > "$T/override/o.json"
+    run
+    check "$major: exit 0" rc 0
+    check "$major: override removed" test ! -f "$T/override/o.json"
+    check "$major: rescan" test "$(count debug/rescan "$T/calls")" = 1
+    check "$major: home written as null" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
+    check "$major: asked once per id" test "$(count 'getAppInfo {"id":"gone.app"}' "$T/calls")" = 2
+    check "$major: no key filter" test ! -s "$T/kfcalls"
+    cleanup
+done
+nochoice 11
+live '{"home":null,"kidsApp":"k.app"}'
+mkdir -p "$T/override"
+echo '{"defaultApps":{"categories":{"home":"gone.app"}}}' > "$T/override/o.json"
+run
+check "override only: removed" test ! -f "$T/override/o.json"
+check "override only: no record write" test "$(writes)" = 0
+cleanup
+nochoice 11
+live '{"home":"my.home"}'
+mkdir -p "$T/override"
+echo '{"defaultApps":{"categories":{"home":"gone.app"}}}' > "$T/override/o.json"
+run
+check "override stale, record installed: override removed" test ! -f "$T/override/o.json"
+check "override stale, record installed: the record is left alone" test "$(writes)" = 0
+cleanup
+nochoice 11
+live '{"home":"gone.app"}'
+mkdir -p "$T/override"
+echo '{"defaultApps":{"categories":{"home":"my.home"}}}' > "$T/override/o.json"
+run
+check "record stale, override installed: override kept" test -f "$T/override/o.json"
+check "record stale, override installed: home null" has '{"defaultApps":{"home":null}}' "$T/calls"
+cleanup
+nochoice 8
+live '{"home":"gone.app"}'
+mkdir -p "$T/override"
+echo '{"defaultApps":{"categories":{"home":"gone.app"}}}' > "$T/override/o.json"
+run
+check "an override file before 10 is not looked at" test -f "$T/override/o.json"
+cleanup
+
+echo "== leftover: what is left alone"
+nochoice 8
+live '{"home":"my.home"}'
+run
+check "an installed app: no write" test "$(writes)" = 0
+check "an installed app: logged" has 'nothing to repair' "$T/log"
+cleanup
+for id in com.webos.app.home com.webos.app.fullhome; do
+    nochoice 8
+    live "{\"home\":\"$id\"}"
+    : > "$T/installed"
+    run
+    check "stock id $id: no write" test "$(writes)" = 0
+    check "stock id $id: not asked about" hasnt "getAppInfo {\"id\":\"$id\"}" "$T/calls"
+    cleanup
+done
+nochoice 8
+live '{"home":"gone.app"}'
+touch "$T/sam-silent"
+run
+check "getAppInfo silent: no write" test "$(writes)" = 0
+check "getAppInfo silent: logged" has 'did not answer for gone.app' "$T/log"
+cleanup
+nochoice 10
+live '{"home":"gone.app"}'
+mkdir -p "$T/override"
+echo '{"defaultApps":{"categories":{"home":"gone.app"}}}' > "$T/override/o.json"
+touch "$T/sam-silent"
+run
+check "getAppInfo silent, 10: override kept" test -f "$T/override/o.json"
+check "getAppInfo silent, 10: no write" test "$(writes)" = 0
+cleanup
+nochoice 8
+live '{"home":"my.home"}'
+echo 1 > "$T/flap-my.home"
+HOMECHOOSER_CONFIRM_DELAY=15 run
+check "a transient absence: no write" test "$(writes)" = 0
+check "a transient absence: asked twice" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 2
+cleanup
+nochoice 8
+live '{"home":"slow.app"}'
+mkdir -p "$T/apps/slow.app"
+echo '{"id":"slow.app"}' > "$T/apps/slow.app/appinfo.json"
+run
+check "files on disk, sam does not know it yet: no write" test "$(writes)" = 0
+check "files on disk: logged" has 'files are installed' "$T/log"
+check "files on disk: no wait" hasnt SLEEP "$T/calls"
+cleanup
+nochoice 8
+live '{"home":null,"kidsApp":"k.app"}'
+run
+check "home null: nothing asked" hasnt getAppInfo "$T/calls"
+cleanup
+
+echo "== leftover: a choice stored during the confirmation takes over"
+nochoice 8
+live '{"home":"gone.app","kidsApp":"k.app"}'
+echo 'CHOICE my.home' > "$T/napq"
+reply '{"home":"gone.app","kidsApp":"k.app"}'
+HOMECHOOSER_CONFIRM_DELAY=15 run
+check "not repaired" hasnt '"home":"com.webos.app.home"' "$T/calls"
+check "logged" has 'a choice was stored meanwhile' "$T/log"
+check "runs as the watcher: subscribed" has 'SUB luna://com.webos.settingsservice/getSystemSettings' "$T/calls"
+check "the choice is written" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
+check "the subscription ends: exit 1" rc 1
+cleanup
+
+echo "== leftover: the record changed during the confirmation is left alone"
+nochoice 8
+live '{"home":"gone.app"}'
+# the stub's sleep cannot rewrite the record, so the change is made by a second sleep stub
+cat > "$T/bin/sleep2" <<EOF
+#!/bin/sh
+"$T/bin/sleep" "\$@"
+echo '{"returnValue":true,"settings":{"defaultApps":{"home":"other.app"}}}' > "$T/record"
+EOF
+chmod +x "$T/bin/sleep2"
+echo other.app >> "$T/installed"
+HOMECHOOSER_SLEEP="$T/bin/sleep2" HOMECHOOSER_CONFIRM_DELAY=15 run
+check "no write" test "$(writes)" = 0
+check "logged" has 'home changed meanwhile' "$T/log"
+cleanup
+
+echo "== a stored choice at start: files on disk keep it from being taken as gone"
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+grep -vx my.home "$T/installed" > "$T/i.new"; mv "$T/i.new" "$T/installed"
+mkdir -p "$T/apps/my.home"
+echo '{"id":"my.home"}' > "$T/apps/my.home/appinfo.json"
+reply '{"home":"my.home"}'
+run
+check "no revert at start" test "$(writes)" = 0
+check "logged" has 'files are installed' "$T/log"
+cleanup
+setup 8 'my.home\n'
+live '{"home":"my.home"}'
+reply '{"home":"my.home"}'
+mkdir -p "$T/apps/my.home"
+echo '{"id":"my.home"}' > "$T/apps/my.home/appinfo.json"
+echo 'UNINSTALL my.home' >> "$T/stream"
+echo APPS >> "$T/stream"
+run
+check "after start the files do not hold back a removal" has '"home":"com.webos.app.home"' "$T/calls"
 cleanup
 
 echo "$PASS passed, $FAIL failed ($SH)"
