@@ -77,13 +77,29 @@ fallback list is webapp-mgr, booster, maliit-server. The compositor's notify-rea
 lsm-ready emit, rather than the existence of the persistent `/tmp/lsm-ready` file.
 
 A bare compositor restart can crash WebAppMgr when it reconnects before outputs are ready. The
-worker keeps these clients stopped on a failed restart. At boot only, a failure unmounts the hook
-and attempts one more restart with stock files, then starts the remembered clients when ready.
-Both the failure and recovery result are logged. The 9.2.4 preflight found that systemd can report
-success even when the root QML fails to compile; this check does not cover that case. Device
-verification stopped for a recovery design decision; see [the evidence](minimal-hook-verification.md). Failed unmounts retain the staged sources and
-manifest for a later stop. The restart sequence runs in a waited child with detached output so an
-app window closing cannot cut the stop/start sequence in half.
+worker keeps clients stopped until both the systemd restart and a functional QML check succeed.
+It calls the stock `com.webos.surfacemanager/getCurrentState` method as root with
+`-a com.webos.applicationManager`, polling against monotonic uptime for up to 24 seconds with each call bounded to two
+seconds. A successful reply must contain both `returnValue:true` and a string `currentState`.
+The method is implemented and registered by the stock StarfishBaseLunaServiceAPI QML object on
+all 19 corpus builds; it does not depend on the tier-2 rewrite being applied. On 9.2.4 it stops
+answering when broken Settings.qml prevents main.qml from loading, even though systemd reports
+an active compositor, and answers again after stock rollback.
+
+At boot only, either restart or QML-readiness failure unmounts the hook and attempts one stock
+restart, including the same readiness check. Remembered clients start only after QML responds.
+There are no further retries. Status preserves `recovered=stock` with the original failure
+`reason=` (or `recovered=failed` if stock recovery also fails); the enable flag remains. Both
+results are logged. Failed unmounts retain staged sources and the manifest for a later stop.
+The restart sequence runs in a waited child with detached output so an app closing cannot cut
+its stop/start sequence in half. See [the dated verification record](research/minimal-hook-verification.md).
+
+For the device recovery test only, `HOMECHOOSER_DEBUG_BREAK_SETTINGS=1` appends invalid QML to the
+staged Settings.qml after the real rewrite and before mounting. The app never sets this environment
+variable. Run it only as an explicit root diagnostic, then remove test apps, flags and temporary
+files. `HOMECHOOSER_READY_WAIT` overrides the polling window for tests. Offline readiness cases
+cover an immediate response, delayed registration, no response, a hung call, malformed success
+and failed replies, successful rollback, and failed stock recovery without a restart loop.
 
 There are no runtime restarts. Choosing another launcher updates the record and staged fallback;
 restoring LG Home removes the enable flag and writes the stock id into the live record. Mounted
@@ -150,4 +166,4 @@ does not mark a build as device verified.
 
 | webOS | VM / build | Minimal hook verified | Evidence |
 | --- | --- | --- | --- |
-| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | Partial probes only; full matrix stopped on recovery gap | [Runtime evidence](minimal-hook-verification.md) |
+| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | Partial probes only; full matrix stopped on recovery gap | [Runtime evidence](research/minimal-hook-verification.md) |

@@ -1,13 +1,13 @@
 #!/bin/sh
 # Minimal Home-key hook for webOS 6-9. Called by homechooser at boot only.
 # Rewrites copies under /tmp, bind-mounts them, then restarts the compositor in firmware order.
-# On restart failure, removes the mounts and tries one stock restart. No runtime restarts.
+# On restart or functional QML readiness failure, removes the mounts and tries one stock restart. No runtime restarts.
 # refresh [stock] rewrites the stored-id fallback in the staged Settings.qml in place.
 # stop and refresh restart retain explicit manual/debug restart support.
 # status reports patch=possible|refused, unpatched-sites=N, skipped=reason and file=/path.
 # Reviewed backport/<release> sets are test references, never used here or shipped.
 # Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,SHA256,UNIT,
-# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,GEN,DEPENDANTS,LOCK_WAIT}.
+# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,GEN,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
 
 ROOT=${HOMECHOOSER_ROOT:-}
 WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-backport}
@@ -23,6 +23,8 @@ CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
 HC_LUNA_IDENTITY=com.webos.applicationManager    # privileged luna calls run with this identity (docs/service.md)
 SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
+READY_WAIT=${HOMECHOOSER_READY_WAIT:-24}
+VERIFY_QML=0
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 KEYFILTER_FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
@@ -68,6 +70,49 @@ detect_timeout() {
     elif "$TIMEOUT" -t 1 true > /dev/null 2>&1; then
         TMO_FORM=old
     fi
+}
+
+# A C++ compositor can report READY=1 even when main.qml failed. getCurrentState is
+# registered by the stock StarfishBaseLunaServiceAPI QML object, independently of tier 2.
+# Require both success and its string-valued currentState, not merely a live Luna service.
+# Each request is bounded to two seconds; the entire polling window is READY_WAIT (24s).
+qml_ready() {
+    detect_timeout
+    deadline=$(($(cut -d. -f1 /proc/uptime) + READY_WAIT))
+    ready_attempt=0
+    reply="$WORK/ready.$$.out"
+    while :; do
+        ready_attempt=$((ready_attempt + 1))
+        case "$TMO_FORM" in
+            new) "$TIMEOUT" 2 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 ;;
+            old) "$TIMEOUT" -t 2 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 ;;
+            *)
+                # No timeout applet: bound the native luna-send child ourselves and reap it.
+                "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 &
+                ready_pid=$!
+                for ready_tick in 1 2; do
+                    kill -0 "$ready_pid" 2>/dev/null || break
+                    sleep 1
+                done
+                kill "$ready_pid" 2>/dev/null
+                wait "$ready_pid" 2>/dev/null
+                ;;
+        esac
+        if grep -q '"returnValue"[[:space:]]*:[[:space:]]*true' "$reply" &&
+           grep -q '"currentState"[[:space:]]*:[[:space:]]*"[^"]*"' "$reply"; then
+            log "QML ready via getCurrentState (attempt $ready_attempt)"
+            rm -f "$reply"
+            return 0
+        fi
+        if [ "$(cut -d. -f1 /proc/uptime)" -ge "$deadline" ]; then
+            reason="QML getCurrentState unavailable after $READY_WAIT s: $(tr '\n\r' '  ' < "$reply" | cut -c1-240)"
+            printf '%s\n' "$reason" > "$WORK/restart-reason"
+            log "ERROR: $reason"
+            rm -f "$reply"
+            return 1
+        fi
+        "$SLEEP" 1
+    done
 }
 
 # app_state <id>: print yes (installed), no (sam answers returnValue false) or unknown (no
@@ -245,8 +290,8 @@ unit_running() {
 
 # restart_sequence <dependants...>: stop the dependants that are running, restart the compositor,
 # start them again. The daemon is Type=notify and its READY=1 is sent by the initctl shim when the
-# compositor emits lsm-ready, so `restart` returns once the compositor is ready, and the clients
-# connect to a compositor that has announced its outputs, as at boot. A client left running while
+# compositor emits lsm-ready. This proves process readiness; the boot path also requires the
+# QML-served method before clients connect. A client left running while
 # the compositor goes away exits on a broken pipe, is respawned by Restart=on-failure while the new
 # compositor is still starting, and WebAppMgr can crash there (9.2.1, scratch/wam-crash/notes.md).
 restart_sequence() {
@@ -266,8 +311,12 @@ restart_sequence() {
         log "$UNIT restarted"
     else
         log "ERROR: could not restart $UNIT"
+        echo "systemctl restart $UNIT failed" > "$WORK/restart-reason"
         # Keep clients stopped until a ready compositor exists; boot recovery retries stock.
         return 1
+    fi
+    if [ "$VERIFY_QML" = 1 ]; then
+        qml_ready || return 1
     fi
     for u in $was; do
         log "starting $u"
@@ -324,7 +373,7 @@ do_apply() {
         return 0
     fi
     rm -rf "$WORK/stage"
-    rm -f "$WORK/manifest.json" "$WORK/applied-status"
+    rm -f "$WORK/manifest.json" "$WORK/applied-status" "$WORK/recovered" "$WORK/restart-reason"
     "$NODE" "$GEN" generate --root "${ROOT:-/}" --out "$WORK/stage" \
         --manifest "$WORK/manifest.json" > "$WORK/plan.$$" 2>&1
     r=$?
@@ -351,6 +400,14 @@ do_apply() {
         fi
     done < "$AENT"
 
+    # Test-only fault injection, after the real rewrite, before any mount. Never enabled by the app.
+    if [ "${HOMECHOOSER_DEBUG_BREAK_SETTINGS:-0}" = 1 ]; then
+        broken="$WORK/stage/usr/lib/qml/WebOSCompositorBase/global/Settings.qml"
+        [ -f "$broken" ] || { log "ERROR: debug Settings.qml target missing"; return 1; }
+        log "DEBUG: injecting a Settings.qml syntax error into the staged copy"
+        printf '\nHOMECHOOSER DEBUG BROKEN QML !!!\n' >> "$broken" || return 1
+    fi
+
     # Bind-mount the copies; if one fails, undo the ones already mounted.
     : > "$WORK/mounted"
     while read -r p && read -r h && read -r d; do
@@ -365,13 +422,18 @@ do_apply() {
         fi
     done < "$AENT"
     rm -f "$AENT"
+    VERIFY_QML=1
     if restart_compositor; then return 0; fi
-    log "ERROR: boot compositor restart failed; unmounting the hook and restarting once to stock"
+    failure=$(cat "$WORK/restart-reason" 2>/dev/null)
+    [ -n "$failure" ] || failure="compositor restart sequence failed"
+    log "ERROR: boot compositor restart failed: $failure; unmounting the hook and restarting once to stock"
     undo_mounts || { log "ERROR: recovery could not unmount all targets; keeping stage"; return 1; }
     if restart_compositor; then
         log "stock compositor recovery succeeded"
+        printf 'recovered=stock\nreason=%s\n' "$failure" > "$WORK/recovered"
     else
-        log "ERROR: stock compositor recovery failed"
+        log "ERROR: stock compositor recovery failed: $(cat "$WORK/restart-reason" 2>/dev/null)"
+        printf 'recovered=failed\nreason=%s; stock recovery: %s\n' "$failure" "$(cat "$WORK/restart-reason" 2>/dev/null)" > "$WORK/recovered"
     fi
     rm -rf "$WORK/stage"
     rm -f "$WORK/manifest.json" "$WORK/applied-status"
@@ -456,6 +518,7 @@ do_status() {
             reboot=needed
         fi
     fi
+    [ ! -f "$WORK/recovered" ] || cat "$WORK/recovered"
     echo "reboot=$reboot"
 }
 

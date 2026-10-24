@@ -80,6 +80,7 @@ STUB
     cat > "$T/bin/luna-send" <<STUB
 #!/bin/sh
 [ "\$1" = -a ] && shift 2
+[ "\$3" = luna://com.webos.surfacemanager/getCurrentState ] && { echo '{"returnValue":true,"currentState":"none"}'; exit; }
 id=\$(echo "\$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
 if grep -qxF "\$id" "$T/installed"; then echo '{"returnValue":true}'; else echo '{"returnValue":false}'; fi
 STUB

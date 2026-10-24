@@ -65,6 +65,17 @@ STUB
 #!/bin/sh
 T=@T@
 if [ "$1" = -a ]; then echo "$2" >> $T/lunaids; shift 2; fi
+if [ "$3" = luna://com.webos.surfacemanager/getCurrentState ]; then
+    echo ready >> "$T/ready-calls"
+    [ -f "$T/ready-hang" ] && { sleep 30; exit; }
+    [ -f "$T/ready-never" ] && exit 0
+    [ -f "$T/ready-error-field" ] && { echo '{"returnValue":false,"currentState":"none"}'; exit; }
+    [ -f "$T/ready-no-field" ] && { echo '{"returnValue":true}'; exit; }
+    if [ -f "$T/ready-patched-only" ] && [ -s "$T/mounts" ]; then echo '{"returnValue":false,"errorText":"Unknown method"}'; exit; fi
+    if [ -f "$T/ready-late" ] && [ "$(wc -l < "$T/ready-calls")" -lt 3 ]; then exit; fi
+    echo '{"returnValue":true,"currentState":"none"}'
+    exit
+fi
 echo "$3 $4" >> $T/lunacalls
 [ -f $T/sam-silent ] && exit 0
 id=$(echo "$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
@@ -450,6 +461,43 @@ check "stock success logged" has 'stock compositor recovery succeeded' "$T/log"
 check "stock has no mounts" test ! -s "$T/mounts"
 check "two compositor restarts" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
 rm -rf "${T:?}"
+
+echo "== functional QML readiness"
+setup
+run apply
+check "stock QML method answers" has 'QML ready via getCurrentState' "$T/log"
+check "one ready call" test "$(wc -l < "$T/ready-calls")" = 1
+check "privileged readiness identity" has com.webos.applicationManager "$T/lunaids"
+rm -rf "${T:?}"
+setup
+touch "$T/ready-late"
+run apply
+check "late QML registration succeeds" rc 0
+check "polls until the third answer" test "$(wc -l < "$T/ready-calls")" = 3
+check "late answer does not restart again" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 1
+rm -rf "${T:?}"
+setup
+touch "$T/keyfilter-flag" "$T/ready-patched-only"
+HOMECHOOSER_READY_WAIT=0 run apply
+check "failed patched QML reports failure" rc 1
+check "functional failure rolls all mounts back" test ! -s "$T/mounts"
+check "exactly one stock recovery restart" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
+check "enable flag retained" test -f "$T/keyfilter-flag"
+run status
+check "status reports stock recovery" has 'recovered=stock' "$T/out"
+check "status reports readiness reason" has 'reason=QML getCurrentState unavailable' "$T/out"
+rm -rf "${T:?}"
+for form in ready-never ready-no-field ready-error-field ready-hang; do
+    setup
+    touch "$T/$form"
+    HOMECHOOSER_READY_WAIT=0 run apply
+    check "$form: bounded failure" rc 1
+    check "$form: no mounts left" test ! -s "$T/mounts"
+    check "$form: no restart loop" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
+    check "$form: failed stock readiness logged" has 'stock compositor recovery failed' "$T/log"
+    check "$form: clients never started without QML" test "$(ncmds 'systemctl start')" = 0
+    rm -rf "${T:?}"
+done
 
 echo "== a worker killed during the restart does not leave the clients stopped"
 setup

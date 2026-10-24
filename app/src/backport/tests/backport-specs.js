@@ -83,6 +83,7 @@ describe('backportApplies', () => {
 
 describe('parseStatus', () => {
 	test('reads repeated files, skips and refusal reasons', () => {
+		expect(parseStatus('mounted=no\nrecovered=stock\nreason=QML unavailable\n')).toMatchObject({recovered: 'stock', reason: 'QML unavailable'});
 		expect(parseStatus('mounted=yes\npatch=possible\nunpatched-sites=1\nskipped=/nudge: anchor\nfile=/a.qml\nfile=/b.js\n')).toMatchObject({mounted: true, patch: 'possible', unpatchedSites: 1, files: ['/a.qml', '/b.js'], skipped: ['/nudge: anchor']});
 		expect(parseStatus('patch=refused\nreason=anchor missing\n')).toMatchObject({patch: 'refused', reason: 'anchor missing'});
 	});

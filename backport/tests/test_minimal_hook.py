@@ -143,6 +143,8 @@ def build(name, version, root, work, harness=True):
     check(name + ': rejects second patch', r.returncode == 2 and 'already' in r.stdout, r.stdout)
     if not harness:
         return
+    stock_api = (root / LUNA).read_text(encoding='latin1')
+    check(name + ': stock QML readiness method exists', 'function getCurrentState(msg)' in stock_api and '"getCurrentState"' in stock_api)
     ref = work / 'ref'
     release = reviewed(root, ref)
     args = ['stock=' + str(root / SUI), 'min=' + str(out / SUI)]
