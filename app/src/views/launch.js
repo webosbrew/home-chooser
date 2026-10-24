@@ -21,12 +21,26 @@ export const parseLaunchParams = (raw) => {
 
 export const readLaunchParams = () => window.PalmSystem && window.PalmSystem.launchParams;
 
+// webOS dispatches webOSRelaunch on `document` (bubbles=false, detail {request}); Enact's own
+// `on('webOSRelaunch', ...)` listens there too (@enact/core/dispatcher: the default target is
+// `document`), as do the stock Enact apps in the firmware. Older releases may use `window`, so
+// both are listened to; an event that reaches both (a bubbling one) is handled once.
+const RELAUNCH_TARGETS = () => [document, window];
+
 export const useLaunchParams = (read = readLaunchParams) => {
 	const [params, setParams] = useState(() => parseLaunchParams(read()));
 	useEffect(() => {
-		const relaunch = (event) => setParams(parseLaunchParams(event.detail || read()));
-		window.addEventListener('webOSRelaunch', relaunch);
-		return () => window.removeEventListener('webOSRelaunch', relaunch);
+		let handled = null;
+		const relaunch = (event) => {
+			if (event === handled) return;
+			handled = event;
+			// The request is in the event detail; otherwise it is in the updated launchParams.
+			const fromDetail = parseLaunchParams(event && event.detail);
+			setParams(Object.keys(fromDetail).length ? fromDetail : parseLaunchParams(read()));
+		};
+		const targets = RELAUNCH_TARGETS();
+		targets.forEach((t) => t.addEventListener('webOSRelaunch', relaunch));
+		return () => targets.forEach((t) => t.removeEventListener('webOSRelaunch', relaunch));
 	}, [read]);
 	return params;
 };

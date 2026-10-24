@@ -82,16 +82,17 @@ describe('Home Chooser screen', () => {
 			expect(screen.queryByRole('dialog')).toBeNull();
 		});
 
-		test('PalmSystem launchParams and webOSRelaunch work repeatedly', async () => {
+		// webOS dispatches webOSRelaunch on document (bubbles=false); older releases may use window.
+		test.each([['document', document], ['window', window]])('PalmSystem launchParams and webOSRelaunch on %s work repeatedly', async (name, target) => {
 			window.PalmSystem = {launchParams: '{"request":"org.plain.launcher"}'};
 			mountApp(makeEnv());
 			await screen.findByText('Use Plain Launcher as Home?');
 			fireEvent.click(screen.getByText('Cancel'));
 			window.PalmSystem.launchParams = '{"request":"org.fancy.launcher"}';
-			fireEvent(window, new CustomEvent('webOSRelaunch'));
+			fireEvent(target, new CustomEvent('webOSRelaunch'));
 			await screen.findByText('Use Fancy Launcher as Home?');
 			fireEvent.click(screen.getByText('Cancel'));
-			fireEvent(window, new CustomEvent('webOSRelaunch', {detail: {request: 'org.plain.launcher'}}));
+			fireEvent(target, new CustomEvent('webOSRelaunch', {detail: {request: 'org.plain.launcher'}}));
 			await screen.findByText('Use Plain Launcher as Home?');
 			delete window.PalmSystem;
 		});

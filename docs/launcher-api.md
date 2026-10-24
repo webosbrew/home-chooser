@@ -90,7 +90,7 @@ The owner decides. This is a request only:
   the service is not elevated yet) or is busy;
 * on webOS 6 to 9 firmware without a reviewed patch, the dialog says so and changes nothing unless
   the owner has turned on the generated patch (see [6.x to 9.x](#6x-to-9x));
-* the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch`, so the
+* the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch` (dispatched on `document`; `window` is listened to as well), so the
   request works whether or not Home Chooser is already open.
 
 ### 4. Check where you stand, then use the API
