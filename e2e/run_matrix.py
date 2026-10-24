@@ -254,9 +254,12 @@ def build_once(args, outroot, cfg):
             rec.say('old Home Chooser ipk (%s): %s' % (args.update_from, args.old_ipk))
         args.dock_ipk = args.dock_ipk or cfg['paths'].get('dock_ipk') or e2e.DOCK_IPK
         specs = (e2e.fixture_specs() if args.launchers == 'all-fixtures' else args.launchers.split(',')) \
-            if args.launchers else [args.launcher or 'dock']
+            if args.launchers else [args.launcher or ('fixture:web.normal' if args.api_check else 'dock')]
         for sp in [s for s in specs if s]:  # builds missing fixture ipks now, not in N runs at once
-            e2e.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say, args.dock_ipk)
+            e2e.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say, args.dock_ipk,
+                              api=args.api_check)
+        if args.api_check:  # the permission-built web fixtures and the disposable app
+            e2e.api_fixture_ipks(rec.say)
     finally:
         counts = rec.finish()
     if counts.get('FAIL'):
@@ -272,7 +275,7 @@ def runner_command(args, rest):
                             ('--old-ipk', args.old_ipk)):
             if value:
                 argv += [flag, value]
-        return argv + (['--update-check'] if args.update_check else []) + rest
+        return argv + (['--update-check'] if args.update_check else []) + (['--api-check'] if args.api_check else []) + rest
     return command
 
 
@@ -298,6 +301,7 @@ def main(argv=None, lister=None, busy=None):
     ap.add_argument('--update-check', action='store_true')
     ap.add_argument('--update-from', default=None)
     ap.add_argument('--old-ipk', default=None)
+    ap.add_argument('--api-check', action='store_true', help='passed to every run; its fixtures are built once first')
     args, rest = ap.parse_known_args(argv)
     bad = [a for a in rest if a.split('=')[0] in REFUSED_FLAGS]
     if bad:
