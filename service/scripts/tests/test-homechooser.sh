@@ -1,8 +1,8 @@
 #!/bin/sh
-# Tests for the init.d entry `homechooser` with stubbed systemd-run, systemctl and key filter worker.
+# Tests for the init.d entry `homechooser` with stubbed systemd-run, systemctl and Home key hook worker.
 # usage: test-homechooser.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT=$HERE/homechooser
 PASS=0
 FAIL=0
@@ -12,41 +12,43 @@ has() { grep -qF -- "$1" "$2"; }
 hasnt() { ! grep -qF -- "$1" "$2"; }
 cleanup() { rm -rf "${T:?}"; }
 
-# setup <major>: a fake app backport directory, with stub worker and watcher, and stub systemd tools
+# setup <major>: a fake app Home key hook directory, with stub worker and watcher, and stub systemd tools
 setup() {
     T=$(mktemp -d)
-    mkdir -p "$T/app/backport" "$T/bin" "$T/state" "$T/init.d"
-    cp "$SCRIPT" "$T/app/backport/homechooser"
-    printf '#!/bin/sh\necho "keyfilter $*" >> %s/cmds\n' "$T" > "$T/app/backport/homechooser-keyfilter"
-    printf '#!/bin/sh\n' > "$T/app/backport/homechooser-home-watch"
-    printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
+    mkdir -p "$T/service/scripts" "$T/bin" "$T/state" "$T/init.d"
+    cp "$SCRIPT" "$T/service/scripts/homechooser"
+    mkdir -p "$T/service/scripts/lib"
+    cp "$HERE/lib/common.sh" "$T/service/scripts/lib/common.sh"
+    printf '#!/bin/sh\necho "homekey $*" >> %s/cmds\n' "$T" > "$T/service/scripts/homechooser-homekey"
+    printf '#!/bin/sh\n' > "$T/service/scripts/homechooser-home-watch"
+    printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"
     printf '#!/bin/sh\necho "systemd-run $*" >> %s/cmds\n' "$T" > "$T/bin/systemd-run"
     cat > "$T/bin/systemctl" <<STUB
 #!/bin/sh
 echo "systemctl \$*" >> $T/cmds
 case "\$1" in is-active) [ -f $T/active ] ;; esac
 STUB
-    chmod +x "$T/app/backport/"* "$T/bin/"*
+    chmod +x "$T/service/scripts/"* "$T/bin/"*
     printf 'VERSION_ID="%s.0.0"\n' "$1" > "$T/os-release"
     : > "$T/cmds"
-    export HOMECHOOSER_CHOICE="$T/state/home" HOMECHOOSER_KEYFILTER_FLAG="$T/state/keyfilter" \
+    export HOMECHOOSER_CHOICE="$T/state/home" HOMECHOOSER_HOMEKEY_FLAG="$T/state/homekey" \
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" \
            HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" HOMECHOOSER_LOG="$T/log"
     unset HOMECHOOSER_DIR
 }
-run() { HOMECHOOSER_DIR="$T/app/backport" $SH "$T/app/backport/homechooser" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
+run() { HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
 RUN_ARGS='systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c [ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0 homechooser-home-watch'
 
 echo "== webOS 5 with a choice: watcher only ($SH)"
 setup 5
 printf 'my.home\n' > "$T/state/home"
-touch "$T/state/keyfilter"
+touch "$T/state/homekey"
 run
 check "exit 0" rc 0
 check "boot applies access" has "access apply" "$T/access"
-check "no key filter on 5" hasnt keyfilter "$T/cmds"
-check "systemd-run with the watcher" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
+check "no Home key hook on 5" hasnt homekey "$T/cmds"
+check "systemd-run with the watcher" has "$RUN_ARGS $T/service/scripts/homechooser-home-watch" "$T/cmds"
 check "checked the unit first" has 'systemctl is-active --quiet homechooser-home' "$T/cmds"
 cleanup
 
@@ -66,35 +68,35 @@ run
 check "no systemd-run" hasnt systemd-run "$T/cmds"
 cleanup
 
-echo "== webOS 6 to 9 with the backport enabled"
+echo "== webOS 6 to 9 with the Home key hook enabled"
 for major in 6 7 8 9; do
     setup $major
-    touch "$T/state/keyfilter"
+    touch "$T/state/homekey"
     run
-    check "$major: key filter applied" has "keyfilter apply" "$T/cmds"
+    check "$major: Home key hook applied" has "homekey apply" "$T/cmds"
     check "$major: no choice, no watcher" hasnt systemd-run "$T/cmds"
     cleanup
     setup $major
     printf 'my.home\n' > "$T/state/home"
     run
-    check "$major: backport not enabled, no key filter" hasnt keyfilter "$T/cmds"
+    check "$major: Home key hook not enabled, no Home key hook" hasnt homekey "$T/cmds"
     check "$major: watcher started" has systemd-run "$T/cmds"
     cleanup
 done
 setup 8
-touch "$T/state/keyfilter"
+touch "$T/state/homekey"
 printf 'my.home\n' > "$T/state/home"
 run
-check "both: key filter before the watcher" test "$(grep -n 'keyfilter apply\|systemd-run' "$T/cmds" | cut -d: -f1 | tr '\n' ' ')" = "1 4 "
+check "both: Home key hook before the watcher" test "$(grep -n 'homekey apply\|systemd-run' "$T/cmds" | cut -d: -f1 | tr '\n' ' ')" = "1 4 "
 cleanup
 
-echo "== webOS 10 and later: no key filter"
+echo "== webOS 10 and later: no Home key hook"
 for major in 10 11 12; do
     setup $major
-    touch "$T/state/keyfilter"
+    touch "$T/state/homekey"
     printf 'my.home\n' > "$T/state/home"
     run
-    check "$major: no key filter" hasnt keyfilter "$T/cmds"
+    check "$major: no Home key hook" hasnt homekey "$T/cmds"
     check "$major: watcher started" has systemd-run "$T/cmds"
     cleanup
 done
@@ -102,16 +104,16 @@ done
 echo "== watch: start the watcher now"
 setup 11
 printf 'my.home\n' > "$T/state/home"
-touch "$T/state/keyfilter"
+touch "$T/state/homekey"
 run watch
 check "exit 0" rc 0
 check "watcher started" has systemd-run "$T/cmds"
 cleanup
 setup 7
-touch "$T/state/keyfilter"
+touch "$T/state/homekey"
 run watch
-check "watch never runs the key filter" hasnt keyfilter "$T/cmds"
-check "no choice: the watcher is started for its leftover check" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
+check "watch never runs the Home key hook" hasnt homekey "$T/cmds"
+check "no choice: the watcher is started for its leftover check" has "$RUN_ARGS $T/service/scripts/homechooser-home-watch" "$T/cmds"
 cleanup
 setup 7
 touch "$T/active"
@@ -131,16 +133,16 @@ cleanup
 echo "== run through the init.d symlink"
 setup 8
 printf 'my.home\n' > "$T/state/home"
-ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
+ln -s "$T/service/scripts/homechooser" "$T/init.d/homechooser"
 $SH -c "\"$T/init.d/homechooser\"" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
-check "data found next to the real script" has "$RUN_ARGS $T/app/backport/homechooser-home-watch" "$T/cmds"
+check "data found next to the real script" has "$RUN_ARGS $T/service/scripts/homechooser-home-watch" "$T/cmds"
 cleanup
 
-echo "== app directory gone: quiet exit"
+echo "== service script directory gone: quiet exit"
 setup 8
 printf 'my.home\n' > "$T/state/home"
-touch "$T/state/keyfilter"
+touch "$T/state/homekey"
 mkdir -p "$T/stray"
 cp "$SCRIPT" "$T/stray/homechooser"
 $SH "$T/stray/homechooser" > "$T/out" 2>&1; echo $? > "$T/rc"
@@ -149,27 +151,27 @@ check "no output" test ! -s "$T/out"
 check "no commands" test ! -s "$T/cmds"
 cleanup
 
-echo "== the unit's wrapper: app copy, else the runtime copy, else nothing"
+echo "== the unit's wrapper: service copy, else the runtime copy, else nothing"
 setup 8
 printf 'my.home\n' > "$T/state/home"
-printf '#!/bin/sh\necho "app watcher" >> %s/ran\n' "$T" > "$T/app/backport/homechooser-home-watch"
+printf '#!/bin/sh\necho "service watcher" >> %s/ran\n' "$T" > "$T/service/scripts/homechooser-home-watch"
 mkdir -p "$T/rt"
 printf '#!/bin/sh\necho "runtime watcher" >> %s/ran\n' "$T" > "$T/rt/homechooser-home-watch"
 # a systemd-run that runs what it is given, after the three --unit/--property options
 printf '#!/bin/sh\nshift 3\nexec "$@"\n' > "$T/bin/systemd-run"
 chmod +x "$T/bin/systemd-run"
 HOMECHOOSER_RUNTIME="$T/rt" run
-check "app copy runs when the app is there" test "$(cat "$T/ran" 2>/dev/null)" = "app watcher"
+check "service copy runs when the app is there" test "$(cat "$T/ran" 2>/dev/null)" = "service watcher"
 rm -f "$T/ran"
-# call the wrapper the way the unit does, with the app copy missing
+# call the wrapper the way the unit does, with the service copy missing
 WRAP=$(sed -n "s/.*\/bin\/sh -c '\(.*\)' \\\\$/\1/p" "$SCRIPT")
 check "wrapper text found in the script" test -n "$WRAP"
-/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/homechooser-home-watch"
-check "runtime copy runs when the app copy is missing" test "$(cat "$T/ran" 2>/dev/null)" = "runtime watcher"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/service/scripts/gone" "$T/rt/homechooser-home-watch"
+check "runtime copy runs when the service copy is missing" test "$(cat "$T/ran" 2>/dev/null)" = "runtime watcher"
 rm -f "$T/ran"
-/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/gone"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/service/scripts/gone" "$T/rt/gone"
 check "neither: exit 0, nothing runs" test ! -f "$T/ran"
-/bin/sh -c "$WRAP" homechooser-home-watch "$T/app/backport/gone" "$T/rt/gone"
+/bin/sh -c "$WRAP" homechooser-home-watch "$T/service/scripts/gone" "$T/rt/gone"
 check "neither: exit status 0" test $? = 0
 cleanup
 

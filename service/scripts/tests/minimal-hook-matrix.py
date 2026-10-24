@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pattern x firmware matrix for the minimal Home-key hook (offline, read-only).
+"""Pattern x firmware matrix for the minimal Home key hook (offline, read-only).
 
 usage: python3 -I matrix.py corpus.tsv > matrix.txt
 
@@ -38,10 +38,10 @@ PATTERNS = [
     ('S3', SET, r'^}\n?\Z', M, 1, 'Settings: file ends with the root object close (insert before it)'),
     ('S4', SET, r'^    id: root$', M, 1, 'Settings: root id'),
     ('S5', SET, r'        return systemSettings\.subscribeOnDemand\(type, method, key, returnRaw\);\n    \}\n\n', 0, 1, 'Settings: today\'s block anchor'),
-    ('K1', KF, r'^[ \t]*readonly property var launch: function\(appId, params, checkUpdateOnLaunch, autoInstallation, reason\) \{$', M, 1, 'KeyFilter: applicationManager.launch header'),
-    ('K2', KF, r'^[ \t]*readonly property var checkLaunch:[ \t]+function\(appId, params, checkUpdateOnLaunch, autoInstallation\) \{$', M, 1, 'KeyFilter: applicationManager.checkLaunch header'),
-    ('K3', KF, r'^[ \t]*readonly property QtObject applicationManager: QtObject \{$', M, 1, 'KeyFilter: applicationManager group'),
-    ('K4', KF, r'^import WebOSCompositorBase 1\.0$', M, 1, 'KeyFilter: imports WebOSCompositorBase (Settings visible)'),
+    ('K1', KF, r'^[ \t]*readonly property var launch: function\(appId, params, checkUpdateOnLaunch, autoInstallation, reason\) \{$', M, 1, 'HomeKey: applicationManager.launch header'),
+    ('K2', KF, r'^[ \t]*readonly property var checkLaunch:[ \t]+function\(appId, params, checkUpdateOnLaunch, autoInstallation\) \{$', M, 1, 'HomeKey: applicationManager.checkLaunch header'),
+    ('K3', KF, r'^[ \t]*readonly property QtObject applicationManager: QtObject \{$', M, 1, 'HomeKey: applicationManager group'),
+    ('K4', KF, r'^import WebOSCompositorBase 1\.0$', M, 1, 'HomeKey: imports WebOSCompositorBase (Settings visible)'),
     ('U1', SUI, r'^var HOME_APP_ID = ' + LIT + r';$', M, 1, 'systemUi: HOME_APP_ID definition'),
     ('U2', SUI, r'^function handleHomeKeys\([^)]*\) \{$', M, 1, 'systemUi: handleHomeKeys header'),
     ('U4', SUI, r'applicationManager\.(?:launch|checkLaunch)\(\s*' + LIT, 0, 1, 'systemUi: launches of the stock id (covered by K1/K2)'),
@@ -51,7 +51,7 @@ PATTERNS = [
     ('B1', BLS, r'views\.fullscreen\.currentItem\.appId === ' + LIT, 0, 2, 'BaseLuna: getCurrentState "launcher"'),
     ('R1', REC, r'[\w.]+\.appId !== ' + LIT, 0, 2, 'Recents: spare home from cleanup kills'),
     ('L1', FSC, r'supportNMRM \? ' + LIT + ' :', 0, 2, 'FullscreenController: NMRM last-input = home'),
-    ('L2', VSC, r'supportNMRM \? ' + LIT + ' :', 0, 3, 'VSC: lastInputApp (exposed to key filters as a param)'),
+    ('L2', VSC, r'supportNMRM \? ' + LIT + ' :', 0, 3, 'VSC: lastInputApp (exposed to Home key handlers as a param)'),
     ('L3', REC, r'supportNMRM \? ' + LIT + ' :', 0, 3, 'Recents 7.6: __lastInputApp'),
     # --- tier 3: cosmetic / dead on 6-9 ----------------------------------------------------
     ('G1', GES, r'focusedFullscreenInfo\.appId === ' + LIT, 0, 3, 'Gesture: swipe icon'),

@@ -1,6 +1,6 @@
-# Minimal Home-key hook, webOS 6–9
+# Minimal Home key hook, webOS 6–9
 
-Home Chooser runs one structural rewriter against the stock compositor at boot. The same guarded
+Home Chooser runs a structural rewriter against the stock compositor when preparing the persistent hook cache. The same guarded
 rules apply to webOS 6 through 9. A core mismatch leaves the device stock and logs the failed anchor. webOS 5 and 10 or later are refused.
 
 ## The hook
@@ -18,7 +18,7 @@ rules apply to webOS 6 through 9. A core mismatch leaves the device stock and lo
 The two core files are all or nothing. The other five files are independent: a missing file or
 unexpected anchor skips that complete file and reports the reason in `unpatched-sites` and `skipped`. Everything outside this table stays stock, including the fallback
 Home view, splash/spinner logic, gestures, home-type window metadata and the multiview toolbar's
-literal case comparison. Launches through the key filter's applicationManager still use the redirect.
+literal case comparison. Launches through the Home key hook's applicationManager still use the redirect.
 
 The helper reads `general/defaultApps.home` live, then the stored id baked into Settings.qml, then
 `com.webos.app.home`. A property binding starts the settings subscription with the compositor.
@@ -32,9 +32,9 @@ own behavior when Home is already in front, when voice UI is running, and when o
 
 ## Guards and runtime
 
-`backport/homechooser-keyfilter-rewrite.js` is compatible with Node 8.12, the webOS 6 runtime: no
-lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. The worker uses `node`
-from PATH, falling back to `/usr/bin/node`, as before.
+`service/scripts/homechooser-homekey-hook.js` is compatible with Node 8.12, the webOS 6 runtime: no
+lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. Preparation uses `node`
+from PATH, falling back to `/usr/bin/node`. Boot and status never start Node.
 
 Every core anchor must occur exactly once: the singleton pragma, Settings root id, subscribe
 signature and import, and the applicationManager group, launch and checkLaunch headers. Both
@@ -55,24 +55,42 @@ Settings.qml must contain exactly one stored-id placeholder. The entire plan is 
 writing output; the worker stages everything before mounting anything.
 
 ```
-node backport/homechooser-keyfilter-rewrite.js check --root /path/to/rootfs
-node backport/homechooser-keyfilter-rewrite.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/hook.json
+node service/scripts/homechooser-homekey-hook.js check --root /path/to/rootfs
+node service/scripts/homechooser-homekey-hook.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/manifest.json --version 0.1.0
 ```
 
 Exit status is 0 for success, 2 for a guarded refusal (`ABORT: <specific reason>`), and 1 for usage
 or I/O failure. `--skip-version-gate` is for offline negative controls only; the worker never uses it.
-The manifest records the staged target paths. Status checks the current stock files directly.
+The manifest records each target path, stock and patched MD5, tier, skipped sites, and the
+Home Chooser version. The companion tab-separated index lets BusyBox shell validate it without
+starting Node. These hashes are per-TV cache keys, not a list of approved firmware hashes.
 
 ## Deployment
 
-The installed `backport/homechooser` entry is linked from Homebrew Channel's
-`/var/lib/webosbrew/init.d/homechooser`. The `keyfilter` enable flag controls boot application.
-Packaging copies only the five runtime scripts. Offline tests are kept in the source tree.
+The installed `service/scripts/homechooser` entry is linked from Homebrew Channel's
+`/var/lib/webosbrew/init.d/homechooser`. The `homekey` enable flag controls boot application.
+Packaging places the five runtime scripts beside the service binary; the app bundle carries none. Offline tests are kept in the source tree.
+The entry scripts source shared helpers from `scripts/lib/`: common paths, logging, Luna calls,
+timeouts and locking; watcher record, preload, notifications, restore and events; and hook cache,
+restart and mount logic. The watcher copies `lib/` with itself into `/tmp/homechooser-runtime`,
+so it can restore stock after the installed service directory disappears.
 
-At boot the worker generates files under `/tmp/homechooser-backport/stage`, writes the configured
+On first installation or after an update, `homekeyPrepare` generates copies under
+`/var/lib/webosbrew/homechooser/hook/`. Preparation validates every generated copy, builds in a
+temporary directory and renames it into place. At boot the worker checks the installed version,
+the cached copies and the MD5 of each stock file. It copies a valid cache to
+`/tmp/homechooser-homekey/stage`, writes the configured
 id into the staged Settings.qml, bind-mounts the files, then restarts the compositor once. An id is
 baked only if applicationManager confirms that app is installed; an absent or unanswered app uses
 an empty fallback until the watcher refreshes it. The underlying rootfs is never written.
+
+When the cache is absent, corrupt, or based on changed stock files, boot leaves Home stock and
+logs the reason. It removes the stale cache. The watcher regenerates it after boot, then status
+reports `hook=stale`, the reason and `reboot=needed`; the hook becomes active on the next restart.
+The app opens the existing restart alert once per cache generation when the user opens Home Chooser,
+and keeps the “Restart now” action visible. A version change also invalidates the cache. `status`
+reads the manifest and mounts without invoking Node. Removing the hook or uninstalling Home
+Chooser deletes the persistent cache.
 
 The boot hook runs after the compositor has already loaded stock QML. The restart follows the
 firmware's `lsm-ready.service` order: read its systemctl start lines (`/etc/systemd/system` before
@@ -113,26 +131,25 @@ files remain until reboot. The app asks the owner to restart when enabling or re
 For explicit manual/debug use:
 
 ```
-homechooser-keyfilter status
-homechooser-keyfilter refresh
-homechooser-keyfilter refresh stock
-homechooser-keyfilter stop
+homechooser-homekey status
+homechooser-homekey refresh
+homechooser-homekey refresh stock
+homechooser-homekey stop
 ```
 
 `refresh` changes the staged Settings.qml in place, retaining its inode and bind mount. It never
 restarts the compositor. `refresh stock` clears the baked id regardless of the stored choice.
 The live record still takes priority. `stop` unmounts and restarts; `refresh restart` and
 `apply samfirst` remain manual debugging commands. The app and watcher never call these restart
-commands. Logs are in `/tmp/homechooser-backport.log`.
+commands. Logs are in `/tmp/homechooser-homekey.log`.
 
 Status reports `mounted=yes|no`, `patch=possible|refused`, `reason=` on refusal,
 `unpatched-sites=N` for skipped best-effort files, repeated `skipped=<file>: <reason>` and
-`file=<patched path>` lines, and `reboot=needed|no`. The structural check is cached by the rules,
-version metadata and QML/JS content; it is recomputed after input changes.
+`file=<patched path>` lines, `hook=stale` when applicable, and `reboot=needed|no`.
 
 ## Offline verification
 
-Run every `backport/test-*.sh` under both sh and busybox sh; pass a one-line executable wrapper
+Run every `service/scripts/tests/test-*.sh` under both sh and busybox sh; pass a one-line executable wrapper
 (`exec busybox sh "$@"`) as the shell argument to worker suites. Also run `make -C service test`,
 `cd app && npm ci && npm run lint && CI=true npm test`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
@@ -148,7 +165,7 @@ The harness emulates QML service boundaries; VM checks remain necessary for QML/
 and settings subscription timing. Synthetic anchor skeletons test failures even without a corpus.
 
 `test-real-roundtrip.sh` exercises the real rewriter and worker with mount, systemctl and Luna
-stubs. `test-homechooser-keyfilter.sh` tests refusal and I/O failure, partial mounts, boot recovery,
+stubs. `test-homechooser-homekey.sh` tests refusal and I/O failure, partial mounts, boot recovery,
 refresh inode preservation, install checks, restart order, locking and concurrent status calls.
 
 Corpus locations are overridable:
@@ -159,7 +176,7 @@ Corpus locations are overridable:
 | `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-hypervisor` |
 | `OPENHOUSE_STOCK_COPIES` | `scratch/hk-universal/rw/stock`, saved target files from deleted roots |
 | `OPENHOUSE_WEBOS71` | `~/Temp/webos-7.1.0`, partial QML tree |
-| `OPENHOUSE_CORPUS` | `backport/tests/corpus.tsv`; id, version, kind, root in tab-separated columns |
+| `OPENHOUSE_CORPUS` | `service/scripts/tests/corpus.tsv`; id, version, kind, root in tab-separated columns |
 | `NODE` | Node executable for offline checks (use a Node 8.12 executable for compatibility) |
 
 Missing roots are skipped with a notice. No LG files are copied into the repository. Saved per-file

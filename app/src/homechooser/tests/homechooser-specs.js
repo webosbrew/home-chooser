@@ -15,7 +15,7 @@ const STOCK = 'com.webos.app.home';
 const ENSURE = ensureEntryCommand();
 const WATCH = startWatcherCommand();
 const STOP = stopWatcherCommand();
-const REFRESH = 'keyfilterRefresh';
+const REFRESH = 'homekeyRefresh';
 
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const UNKNOWN = {returnValue: false, errorText: 'Unknown method "setDefaultApp" for category "/"'};
@@ -113,8 +113,8 @@ describe('releaseInfo', () => {
 		[9, true, false, true],
 		[10, false, true, true],
 		[11, false, true, true]
-	])('webOS TV %i', (major, backport, profile, setter) => {
-		expect(releaseInfo([major, 0, 0])).toMatchObject({needsKeyFilterBackport: backport, usesProfile: profile, hasSetDefaultApp: setter});
+	])('webOS TV %i', (major, homeKeyHook, profile, setter) => {
+		expect(releaseInfo([major, 0, 0])).toMatchObject({needsHomeKeyHook: homeKeyHook, usesProfile: profile, hasSetDefaultApp: setter});
 	});
 });
 
@@ -191,7 +191,7 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'}), CLOSE('com.webos.app.fullhome')]);
 		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
-		expect(res.needsKeyFilterBackport).toBe(false);
+		expect(res.needsHomeKeyHook).toBe(false);
 		expect(res.restartedSam).toBe(false);
 	});
 
@@ -205,7 +205,7 @@ describe('apply', () => {
 		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'restartSam']);
 		expect(notices).toHaveLength(1);
 		expect(res.restartedSam).toBe(true);
-		expect(res.needsKeyFilterBackport).toBe(true);
+		expect(res.needsHomeKeyHook).toBe(true);
 	});
 
 	test('6.6.0, record absent, sam restart deferred (a TV restart follows): nothing restarts, the caller is told', async () => {
@@ -263,7 +263,7 @@ describe('apply', () => {
 		expect(tv.record()).toEqual({kidsApp: 'k', home: MINE});
 		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
-		expect(res.needsKeyFilterBackport).toBe(true);
+		expect(res.needsHomeKeyHook).toBe(true);
 	});
 
 	test('9.2.1: Unknown method falls back to setSystemSettings with the other entries', async () => {
@@ -287,7 +287,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {kidsApp: 'k'}, profile: profileReply()});
 		const res = await chooser(tv, version).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(res.needsKeyFilterBackport).toBe(false);
+		expect(res.needsHomeKeyHook).toBe(false);
 		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, ...(version[0] >= 11 ? [CLOSE(STOCK)] : [])]);
 		expect(tv.files).toHaveLength(2);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
@@ -533,7 +533,7 @@ describe('persistence', () => {
 		expect(res.warnings).toContain('Could not stop the watcher: boom');
 	});
 
-	test('restore on 10.x and later does not touch the key filter', async () => {
+	test('restore on 10.x and later does not touch the Home key hook', async () => {
 		const tv = fakeTV({record: {home: MINE}, profile: profileReply(MINE)});
 		await chooser(tv, [11, 2, 0]).restoreStock();
 		expect(tv.commands).toEqual([STOP]);
@@ -550,20 +550,20 @@ describe('persistence', () => {
 		const tv = fakeTV({record: {}});
 		tv.exec = async (c) => ({
 			stdout: c === persistenceStatusCommand()
-				? `entry=link:${ENTRY_SCRIPT}\nactive=active\nstored=my.home\nkeyfilter=yes\n--log\nline one\nline two\n`
+				? `entry=link:${ENTRY_SCRIPT}\nactive=active\nstored=my.home\nhomekey=yes\n--log\nline one\nline two\n`
 				: '',
 			stderr: ''
 		});
 		const res = await chooser(tv, [8, 3, 0]).readPersistence();
 		expect(res.ok).toBe(true);
-		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']});
+		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', homekeyEnabled: true, log: ['line one', 'line two']});
 	});
 
 	test.each([
-		['entry=link:/somewhere/else\nactive=inactive\nstored=\nkeyfilter=no\n--log\n', 'other'],
-		['entry=dangling:/gone\nactive=\nstored=\nkeyfilter=no\n--log\n', 'dangling'],
-		['entry=file\nactive=\nstored=\nkeyfilter=no\n--log\n', 'file'],
-		['entry=none\nactive=\nstored=\nkeyfilter=no\n--log\n', 'none']
+		['entry=link:/somewhere/else\nactive=inactive\nstored=\nhomekey=no\n--log\n', 'other'],
+		['entry=dangling:/gone\nactive=\nstored=\nhomekey=no\n--log\n', 'dangling'],
+		['entry=file\nactive=\nstored=\nhomekey=no\n--log\n', 'file'],
+		['entry=none\nactive=\nstored=\nhomekey=no\n--log\n', 'none']
 	])('entry state of %j is %s', (text, entry) => {
 		expect(parsePersistenceStatus(text).entry).toBe(entry);
 	});

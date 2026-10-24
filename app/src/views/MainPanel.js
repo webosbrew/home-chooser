@@ -24,12 +24,12 @@ export const rootReason = (kind) => {
 	return title + '. ' + body;
 };
 
-// The Home key patch exists on webOS 6 to 9 only (patch is null elsewhere).
+// The Home key hook exists on webOS 6 to 9 only (patch is null elsewhere).
 export const patchFooter = (patch) => {
 	if (patch === null) return null;
-	if (patch === 'active') return 'Home key patch: active';
-	if (patch === 'nomatch') return "Home key patch: not available for this TV's software";
-	return 'Home key patch: not active';
+	if (patch === 'active') return 'Home key hook: active';
+	if (patch === 'nomatch') return "Home key hook: not available for this TV's software";
+	return 'Home key hook: not active';
 };
 
 const MainPanel = ({model, launchParams, ...rest}) => {

@@ -1,0 +1,49 @@
+#!/bin/sh
+# Home key hook cache, boot mounts, refresh, status and rollback for webOS 6-9.
+# HOMECHOOSER_* variables override paths and commands in offline tests.
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+. "$SCRIPT_DIR/lib/common.sh"
+HC_LOG_ECHO=1
+
+ROOT=${HOMECHOOSER_ROOT:-}
+WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-homekey}
+LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-homekey.log}
+MOUNTS=${HOMECHOOSER_MOUNTS:-/proc/mounts}
+MOUNT=${HOMECHOOSER_MOUNT:-mount}
+UMOUNT=${HOMECHOOSER_UMOUNT:-umount}
+SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
+UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
+DEPENDANTS_DEFAULT="webapp-mgr.service booster.service maliit-server.service"
+CHOICE=${HOMECHOOSER_CHOICE:-$HC_STATE_DIR/home}
+LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
+SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
+READY_WAIT=${HOMECHOOSER_READY_WAIT:-24}
+VERIFY_QML=0
+SLEEP=${HOMECHOOSER_SLEEP:-sleep}
+TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
+HOMEKEY_FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-$HC_STATE_DIR/homekey}
+NODE=${HOMECHOOSER_NODE:-node}
+command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
+REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-homekey-hook.js}
+CACHE=${HOMECHOOSER_CACHE:-$HC_STATE_DIR/hook}
+APPINFO=${HOMECHOOSER_APPINFO:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/appinfo.json}
+STALE=${HOMECHOOSER_STALE:-$HC_STATE_DIR/hook-stale}
+TMO_FORM=
+
+
+. "$SCRIPT_DIR/lib/homekey-base.sh"
+. "$SCRIPT_DIR/lib/homekey-cache.sh"
+. "$SCRIPT_DIR/lib/homekey-restart.sh"
+. "$SCRIPT_DIR/lib/homekey-mount.sh"
+. "$SCRIPT_DIR/lib/homekey-status.sh"
+
+case "$1" in
+    ""|apply) [ $# -gt 0 ] && shift; take_lock; do_apply "$@" ;;
+    stop)     take_lock; do_stop ;;
+    refresh)  shift; take_lock; do_refresh "$@" ;;
+    status)   do_status ;;
+    prepare)  take_lock; do_prepare ;;
+    clear)    take_lock; rm -rf "$CACHE"; rm -f "$STALE" ;;
+    *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [restart]|status|prepare|clear]" >&2; exit 2 ;;
+esac

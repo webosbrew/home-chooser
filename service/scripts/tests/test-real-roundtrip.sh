@@ -1,6 +1,6 @@
 #!/bin/sh
-# Round trip of the key filter backport against the REAL stock files of each release, with the
-# worker (homechooser-keyfilter) run for real and only mount, umount, systemctl and luna-send
+# Round trip of the Home key hook against the REAL stock files of each release, with the
+# worker (homechooser-homekey) run for real and only mount, umount, systemctl and luna-send
 # stubbed. For each release it checks that status accepts structural anchors; that apply patches
 # copies and mounts them over every target; that the id baked into Settings.qml follows the
 # installed state of the stored choice (installed, not installed); that refresh and refresh stock
@@ -13,7 +13,7 @@
 #   with a notice. Explicit pairs must exist (a missing root fails).
 SH=${1:-sh}
 [ $# -gt 0 ] && shift
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")/.." && pwd)
 PASS=0
 SKIPPED=0
 DEFAULTS=
@@ -29,7 +29,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # seq: the systemctl calls that change something, in order; RESTART: what every release's
-# lsm-ready.service gives (docs/key-filter-backport.md, "Restarting the compositor")
+# lsm-ready.service gives (docs/home-key-hook.md, "Restarting the compositor")
 seq() { grep '^systemctl ' "$T/cmds" | grep -v '^systemctl is-active '; }
 RESTART="systemctl stop webapp-mgr.service
 systemctl stop booster.service
@@ -62,7 +62,7 @@ for pair in "$@"; do
 
     : > "$T/mounts"; : > "$T/cmds"
     printf 'my.home\n' > "$T/home"; echo my.home > "$T/installed"
-    node "$HERE/homechooser-keyfilter-rewrite.js" generate --root "$root" --out "$T/expected" --manifest "$T/expected.json" > /dev/null || { FAIL=$((FAIL + 1)); rm -rf "$T"; continue; }
+    node "$HERE/homechooser-homekey-hook.js" generate --root "$root" --out "$T/expected" --manifest "$T/expected.json" > /dev/null || { FAIL=$((FAIL + 1)); rm -rf "$T"; continue; }
     entries "$T/expected.json" > "$T/entries"
     : > "$T/before"
     while read -r p; do sha256sum "$root$p" >> "$T/before"; done < "$T/entries"
@@ -88,12 +88,16 @@ STUB
     export HOMECHOOSER_ROOT="$root" HOMECHOOSER_WORK="$T/work" HOMECHOOSER_LOG="$T/log" \
            HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" HOMECHOOSER_UMOUNT="$T/bin/umount" \
            HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" \
-           HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
+           HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_HOMEKEY_FLAG="$T/homekey-flag"
+    export HOMECHOOSER_CACHE="$T/hook" HOMECHOOSER_STALE="$T/hook-stale" HOMECHOOSER_APPINFO="$T/appinfo.json"
+    printf '{"version":"1.0"}\n' > "$T/appinfo.json"
     SETTINGS=/usr/lib/qml/WebOSCompositorBase/global/Settings.qml
     stage=$T/work/stage$SETTINGS
-    export HOMECHOOSER_NODE="${NODE:-node}" HOMECHOOSER_REWRITER="$HERE/homechooser-keyfilter-rewrite.js"
-    w() { $SH "$HERE/homechooser-keyfilter" "$@" > "$T/out" 2>&1; }
+    export HOMECHOOSER_NODE="${NODE:-node}" HOMECHOOSER_REWRITER="$HERE/homechooser-homekey-hook.js"
+    w() { $SH "$HERE/homechooser-homekey" "$@" > "$T/out" 2>&1; }
 
+    w prepare
+    check "$rel: cache prepared" test -f "$T/hook/manifest.tsv"
     w status
     check "$rel: status accepts structural anchors" has 'patch=possible' "$T/out"
     w apply

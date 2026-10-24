@@ -149,7 +149,7 @@ class Texts(unittest.TestCase):
         self.assertNotIn('restart', e2e.UNINSTALL_TOAST.lower())
 
     def test_the_old_restart_wording_is_gone_from_the_product(self):
-        for rel in ('backport/homechooser-home-watch', 'app/src/views/useHomeChooser.js', 'app/src/views/MainPanel.js',
+        for rel in ('service/scripts/homechooser-home-watch', 'app/src/views/useHomeChooser.js', 'app/src/views/MainPanel.js',
                     'service/src/policy.c'):
             body = self.read(rel)
             for old in e2e.OLD_RESTART_TEXTS:

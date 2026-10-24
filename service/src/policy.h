@@ -8,26 +8,20 @@
 
 #define HC_APP_ID "org.webosbrew.homechooser"
 #define HC_SERVICE_ID "org.webosbrew.homechooser.service"
+#define HC_SERVICE_DIR "/media/developer/apps/usr/palm/services/" HC_SERVICE_ID
 #ifndef HC_APP_DIR
 #define HC_APP_DIR "/media/developer/apps/usr/palm/applications/" HC_APP_ID
-/* The keyfilter worker's `status` output holds a line that is exactly `reboot=needed` (CR and
- * blanks at the line ends are ignored; a substring of a longer line does not count). NULL: no. */
-bool hc_reboot_needed(const char *status_text);
-/* The text of the restart prompt for rebootPrompt's reason ("apply" or "remove"); NULL otherwise. */
-const char *hc_reboot_message(const char *reason);
-
 #endif
 #define HC_STATE_DIR "/var/lib/webosbrew/homechooser"
 #define HC_HOME_FILE HC_STATE_DIR "/home"
-#define HC_KEYFILTER_FLAG HC_STATE_DIR "/keyfilter"
+#define HC_HOMEKEY_FLAG HC_STATE_DIR "/homekey"
 #define HC_OVERRIDE_FILE "/var/webos-profile/override/" HC_APP_ID ".json"
 #define HC_INIT_DIR "/var/lib/webosbrew/init.d"
 #define HC_INIT_LINK HC_INIT_DIR "/homechooser"
-#define HC_OLD_INIT_LINK HC_INIT_DIR "/homechooser-keyfilter"
-#define HC_ENTRY_SCRIPT HC_APP_DIR "/backport/homechooser"
-#define HC_KEYFILTER_SCRIPT HC_APP_DIR "/backport/homechooser-keyfilter"
-#define HC_WATCH_SCRIPT HC_APP_DIR "/backport/homechooser-home-watch"
-#define HC_ACCESS_SCRIPT HC_APP_DIR "/backport/homechooser-access"
+#define HC_ENTRY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser"
+#define HC_HOMEKEY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-homekey"
+#define HC_WATCH_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-home-watch"
+#define HC_ACCESS_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-access"
 #define HC_OSRELEASE "/etc/os-release"
 #define HC_OSRELEASE_REAL "/usr/lib/os-release"
 #define HC_WATCH_LOG "/tmp/homechooser-home.log"
@@ -152,7 +146,7 @@ bool hc_luna_uri_allowed(const char *uri);
 /* A one-shot uninstall token: exactly HC_TOKEN_LEN lowercase hex digits. */
 bool hc_token_ok(const char *token);
 
-/* The keyfilter worker's `status` output holds a line that is exactly `reboot=needed` (CR and
+/* The Home key hook worker's `status` output holds a line that is exactly `reboot=needed` (CR and
  * blanks at the line ends are ignored; a substring of a longer line does not count). NULL: no. */
 bool hc_reboot_needed(const char *status_text);
 /* The text of the restart prompt for rebootPrompt's reason ("apply" or "remove"); NULL otherwise. */

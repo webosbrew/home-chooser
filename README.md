@@ -6,7 +6,7 @@ Home Chooser lets the owner of a rooted LG webOS TV choose which app the Home bu
 homebrew app with three parts:
 
 * a small settings app that lists the installed launchers and applies the choice;
-* a key filter backport for webOS 6 to 9 (webOS 22 to 24), whose Home key path names the stock
+* a Home key hook for webOS 6 to 9 (webOS 22 to 24), whose Home key path names the stock
   launcher, so that the Home key follows the platform's default app as webOS 25 and later do;
 * one launcher contract across releases: a launcher declares `appCategory: ["home"]` and needs no
   per-release variant.
@@ -25,21 +25,21 @@ homebrew app with three parts:
   requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
   calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
   again.
-* The webOS 6 to 9 Home-key hook uses one guarded rewriter on stock compositor files at boot.
-  Settings and key-filter hooks apply together; systemUi and four supporting files are patched
-  independently when their anchors match. A core refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/key-filter-backport.md).
+* The webOS 6 to 9 Home key hook uses one guarded rewriter on stock compositor files at boot.
+  Settings and Home key QML edits apply together; systemUi and four supporting files are patched
+  independently when their anchors match. A core refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/home-key-hook.md).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.
 * The choice persists through Home Chooser's own file, `/var/lib/webosbrew/homechooser/home` (the app
   id alone), which a watcher (a transient systemd unit started from the init.d entry) enforces
   against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
-  entry is a symlink into the installed app, never a copy. See
+  entry is a symlink into the installed service's scripts directory, never a copy. See
   [Persistence](docs/settings-app.md#persistence).
 * The stock launcher keeps working when apps are removed. The watcher notices that the chosen app
   is uninstalled and puts the platform back to stock until it returns; when Home Chooser itself is
-  uninstalled it undoes everything it wrote (record, override, choice, boot entry, backport
-  mounts) from a copy of its scripts in `/tmp`. Each of the two tells the user once, with an alert
+  uninstalled it undoes everything it wrote (record, override, choice, boot entry, Home key hook
+  flag) from a copy of its scripts in `/tmp`. Each of the two tells the user once, with an alert
   (the chosen app) or a toast (Home Chooser), that the Home button opens LG Home again. See
   [When apps are removed](docs/settings-app.md#when-apps-are-removed), including what is left if
   the watcher was not running at the time; opening a reinstalled Home Chooser repairs a Home that
@@ -81,5 +81,5 @@ firmware evidence, in `e2e/fixtures/qml/support.json`.
   each release picks and launches the home app, verified against the firmware and on emulator
   VMs, with the mod map and the remaining tests.
 * [The root service](docs/service.md): `org.webosbrew.homechooser.service`, its methods, allow-lists, sender check, elevation and logs.
-* [The key filter backport, webOS 6 to 9](docs/key-filter-backport.md): the home id the
+* [The Home key hook, webOS 6 to 9](docs/home-key-hook.md): the home id the
   compositor shares, the structural guards and verification, the boot script and the install sequence.

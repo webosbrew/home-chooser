@@ -1,0 +1,77 @@
+#!/bin/sh
+# Homebrew Channel init.d entry: apply the prepared hook and start the watcher.
+# The watcher unit uses its /tmp copy if the service is removed after a crash.
+
+SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
+CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
+FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
+OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
+SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
+SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
+LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-boot.log}
+UNIT=homechooser-home
+RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
+
+# The directory this script really lives in: follow the symlink (readlink -f, else one readlink),
+# then the fixed app path. Exit quietly when the app is gone.
+locate() {
+    if [ -n "$HOMECHOOSER_DIR" ]; then
+        HERE=$HOMECHOOSER_DIR
+    else
+        real=$(readlink -f "$0" 2>/dev/null)
+        if [ -z "$real" ]; then
+            real=$(readlink "$0" 2>/dev/null)
+            [ -n "$real" ] || real=$0
+        fi
+        HERE=$(dirname "$real")
+        [ -f "$HERE/homechooser-home-watch" ] || HERE=$SERVICE_SCRIPTS
+    fi
+    if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-homekey" ]; then
+        exit 0
+    fi
+}
+
+# start_watcher [any]: start the unit if a choice is stored, or with `any` in any case.
+start_watcher() {
+    [ -f "$CHOICE" ] || [ "$1" = any ] || return 0
+    [ -f "$HERE/homechooser-home-watch" ] || { log "no watcher script in $HERE"; return 0; }
+    if "$SYSTEMCTL" is-active --quiet "$UNIT"; then
+        log "$UNIT is already running"
+        return 0
+    fi
+    "$SYSTEMCTL" reset-failed "$UNIT" 2>/dev/null
+    if "$SYSTEMD_RUN" --unit="$UNIT" --property=Restart=on-failure --property=RestartSec=5 \
+            /bin/sh -c '[ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0' \
+            homechooser-home-watch "$HERE/homechooser-home-watch" "$RUNTIME/homechooser-home-watch" >> "$LOG" 2>&1; then
+        log "started $UNIT"
+    else
+        log "ERROR: could not start $UNIT"
+        return 1
+    fi
+}
+
+locate
+. "$HERE/lib/common.sh"
+
+case "$1" in
+    watch)
+        start_watcher any
+        exit $?
+        ;;
+    "")
+        if [ -f "$HERE/homechooser-access" ]; then
+            sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
+        fi
+        major=$(major_version)
+        if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-homekey" ]; then
+            log "applying the Home key hook"
+            sh "$HERE/homechooser-homekey" apply >> "$LOG" 2>&1
+        fi
+        start_watcher
+        ;;
+    *)
+        echo "usage: $0 [watch]" >&2
+        exit 2
+        ;;
+esac
+exit 0

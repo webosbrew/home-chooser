@@ -1,9 +1,9 @@
 #!/bin/sh
-# Tests for homechooser-keyfilter against a fake root with stubbed mount, umount and systemctl.
-# usage: test-homechooser-keyfilter.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
+# Tests for homechooser-homekey against a fake root with stubbed mount, umount and systemctl.
+# usage: test-homechooser-homekey.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
-HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=${KF_SCRIPT:-$HERE/homechooser-keyfilter}
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT=${KF_SCRIPT:-$HERE/homechooser-homekey}
 PASS=0
 FAIL=0
 
@@ -103,6 +103,7 @@ while [ "$#" -gt 0 ]; do
         --root) root=$2;;
         --out) out=$2;;
         --manifest) manifest=$2;;
+        --version) version=$2;;
     esac
     shift 2
 done
@@ -112,7 +113,10 @@ if [ "$mode" = generate ]; then
     mkdir -p "$out/usr/lib/qml"
     cp "$T/new-a" "$out/usr/lib/qml/a.qml"
     cp "$T/new-b" "$out/usr/lib/qml/b.js"
-    printf '{"files":[{"path":"/usr/lib/qml/a.qml"},{"path":"/usr/lib/qml/b.js"}]}\n' > "$manifest"
+    printf '{"version":"%s","files":[{"path":"/usr/lib/qml/a.qml","tier":"core"},{"path":"/usr/lib/qml/b.js","tier":"best-effort"}],"skipped":[]}\n' "$version" > "$manifest"
+    printf '/usr/lib/qml/a.qml\t%s\t%s\tcore\n/usr/lib/qml/b.js\t%s\t%s\tbest-effort\n' \
+        "$(md5sum "$root/usr/lib/qml/a.qml" | cut -d' ' -f1)" "$(md5sum "$out/usr/lib/qml/a.qml" | cut -d' ' -f1)" \
+        "$(md5sum "$root/usr/lib/qml/b.js" | cut -d' ' -f1)" "$(md5sum "$out/usr/lib/qml/b.js" | cut -d' ' -f1)" > "$(dirname "$manifest")/manifest.tsv"
 fi
 echo 'patch=possible'
 echo 'unpatched-sites=0'
@@ -121,12 +125,15 @@ echo 'file=/usr/lib/qml/b.js'
 STUB
     sed -i "s|@T@|$T|" "$T/bin/node"
     : > "$T/rewriter.js"
-    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_REWRITER="$T/rewriter.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
+    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_REWRITER="$T/rewriter.js" HOMECHOOSER_HOMEKEY_FLAG="$T/homekey-flag"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
     export HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
            HOMECHOOSER_LOG="$T/log" HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" \
            HOMECHOOSER_UMOUNT="$T/bin/umount" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home"
+    export HOMECHOOSER_CACHE="$T/hook" HOMECHOOSER_STALE="$T/hook-stale" HOMECHOOSER_APPINFO="$T/appinfo.json"
+    printf '{"version":"1.0"}\n' > "$T/appinfo.json"
+    $SH "$SCRIPT" prepare > "$T/prepare-out" 2>&1 || cat "$T/prepare-out"
 }
 
 run() { $SH "$SCRIPT" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
@@ -220,10 +227,14 @@ rm -rf "${T:?}"
 echo "== refusal and I/O error mount nothing"
 for failure in refuse error; do
     setup
+    run clear
     touch "$T/rewriter-$failure"
-    run
+    run prepare
     if [ "$failure" = refuse ]; then expected=0; else expected=1; fi
-    check "$failure: worker exit" rc "$expected"
+    [ "$failure" = refuse ] && expected=2
+    check "$failure: preparation exit" rc "$expected"
+    run apply
+    check "$failure: stock boot exits cleanly" rc 0
     check "$failure: no mounts" test "$(ncmds mount)" = 0
     check "$failure: no restart" test "$(ncmds systemctl)" = 0
     check "$failure: stage discarded" test ! -d "$T/work/stage"
@@ -477,12 +488,12 @@ check "polls until the third answer" test "$(wc -l < "$T/ready-calls")" = 3
 check "late answer does not restart again" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 1
 rm -rf "${T:?}"
 setup
-touch "$T/keyfilter-flag" "$T/ready-patched-only"
+touch "$T/homekey-flag" "$T/ready-patched-only"
 HOMECHOOSER_READY_WAIT=0 run apply
 check "failed patched QML reports failure" rc 1
 check "functional failure rolls all mounts back" test ! -s "$T/mounts"
 check "exactly one stock recovery restart" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
-check "enable flag retained" test -f "$T/keyfilter-flag"
+check "enable flag retained" test -f "$T/homekey-flag"
 run status
 check "status reports stock recovery" has 'recovered=stock' "$T/out"
 check "status reports readiness reason" has 'reason=QML getCurrentState unavailable' "$T/out"
@@ -528,12 +539,12 @@ reboot_of() { run status; grep '^reboot=' "$T/out"; }
 setup
 check "no flag, unmounted: no" test "$(reboot_of)" = reboot=no
 check "status prints the line once" test "$(grep -c '^reboot=' "$T/out")" = 1
-touch "$T/keyfilter-flag"
+touch "$T/homekey-flag"
 check "flag, unmounted, anchors match: needed" test "$(reboot_of)" = reboot=needed
 check "existing lines unchanged" has 'patch=possible' "$T/out"
 run apply
 check "flag, mounted: no" test "$(reboot_of)" = reboot=no
-rm "$T/keyfilter-flag"
+rm "$T/homekey-flag"
 check "no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
 check "mounted lines unchanged" has 'patch=possible' "$T/out"
 run stop
@@ -599,6 +610,54 @@ echo "== usage"
 setup
 run bogus
 check "exit 2" rc 2
+rm -rf "${T:?}"
+
+echo "== persistent cache and shell-only boot/status"
+setup
+calls=$(wc -l < "$T/node-calls")
+mv "$T/bin/node" "$T/bin/node.real"
+printf '#!/bin/sh\necho unexpected-node >&2; exit 99\n' > "$T/bin/node"
+chmod +x "$T/bin/node"
+run status
+check "status does not start Node" test "$(wc -l < "$T/node-calls")" = "$calls"
+check "status identifies the cache generation" has 'cache-generation=' "$T/out"
+run apply
+check "cache hit mounts without Node" test "$(ncmds mount)" = 2
+check "boot did not start Node" test "$(wc -l < "$T/node-calls")" = "$calls"
+run stop
+mv "$T/bin/node.real" "$T/bin/node"
+rm -rf "${T:?}"
+
+setup
+printf 'firmware change\n' >> "$T/root/usr/lib/qml/a.qml"
+touch "$T/homekey-flag"
+run apply
+check "changed stock keeps all targets unmounted" test "$(ncmds mount)" = 0
+run status
+check "changed stock reports stale" has 'hook=stale' "$T/out"
+check "changed stock reason preserved" has 'reason=stock-changed' "$T/out"
+run prepare
+check "regenerated after boot" test -f "$T/hook/manifest.tsv"
+run status
+check "regenerated cache needs restart" has 'reboot=needed' "$T/out"
+rm -rf "${T:?}"
+
+setup
+printf 'corrupt\n' >> "$T/hook/stage/usr/lib/qml/a.qml"
+run apply
+check "corrupt cached file is not mounted" test "$(ncmds mount)" = 0
+run status
+check "corruption reason preserved" has 'reason=cache-corrupt' "$T/out"
+rm -rf "${T:?}"
+
+setup
+printf '{"version":"2.0"}\n' > "$T/appinfo.json"
+run apply
+check "version change is not mounted" test "$(ncmds mount)" = 0
+run status
+check "version change reported" has 'reason=version-changed' "$T/out"
+run prepare
+check "new version generated" test "$(cat "$T/hook/version")" = 2.0
 rm -rf "${T:?}"
 
 echo "$PASS passed, $FAIL failed ($SH)"

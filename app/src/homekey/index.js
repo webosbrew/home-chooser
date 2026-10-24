@@ -1,23 +1,23 @@
-// The key filter backport for webOS 6 to 9: status, install and remove. Pure over injected
-// {rootLuna, exec, writeFile, removeFile, version}. See docs/key-filter-backport.md.
+// The Home key hook for webOS 6 to 9: status, install and remove. Pure over injected
+// {rootLuna, exec, writeFile, removeFile, version}. See docs/home-key-hook.md.
 import {errorMessage} from '../platform/errors';
 import {
-	KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
+	HOMEKEY_FLAG, HOMEKEY_SCRIPT, ensureEntryCommand, homekeyCommand, parsePersistenceStatus,
 	persistenceStatusCommand
 } from '../homechooser/persistence';
 import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
 
 export {APP_DIR, INIT_PATH} from '../homechooser/persistence';
-export const SCRIPT_PATH = KEYFILTER_SCRIPT;
-export const LOG_PATH = '/tmp/homechooser-backport.log';
+export const SCRIPT_PATH = HOMEKEY_SCRIPT;
+export const LOG_PATH = '/tmp/homechooser-homekey.log';
 
 // The worker checks unique structural anchors on webOS 6-9.
-export const backportApplies = (version) => {
+export const homeKeyHookApplies = (version) => {
 	const major = majorOf(version);
 	return major >= 6 && major <= 9;
 };
 
-// Parse the `key=value` lines of `homechooser-keyfilter status`.
+// Parse the `key=value` lines of `homechooser-homekey status`.
 export const parseStatus = (text) => {
 	const out = {};
 	const files = [], skipped = [];
@@ -31,6 +31,8 @@ export const parseStatus = (text) => {
 		dataMissing: out.data === 'missing',
 		mounted: out.mounted === 'yes',
 		patch: out.patch || null,
+		hook: out.hook || null,
+		cacheGeneration: out['cache-generation'] || null,
 		recovered: out.recovered || null,
 		reason: out.reason || null,
 		unpatchedSites: Number(out['unpatched-sites'] || 0),
@@ -39,15 +41,15 @@ export const parseStatus = (text) => {
 	};
 };
 
-export const createBackport = ({rootLuna, exec, writeFile, removeFile, version}) => {
+export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, version}) => {
 	const runner = createRunner({rootLuna, exec, writeFile, removeFile});
-	const script = keyfilterCommand;
+	const script = homekeyCommand;
 
 	// `enabled`: the flag file the boot entry checks; `entry`: the state of the init.d link.
 	const readStatus = async (run) => {
 		const persistence = parsePersistenceStatus((await run.run(persistenceStatusCommand())).stdout);
 		const state = parseStatus((await run.run(script('status'))).stdout);
-		return Object.assign({enabled: persistence.keyfilterEnabled, entry: persistence.entry}, state);
+		return Object.assign({enabled: persistence.homekeyEnabled, entry: persistence.entry}, state);
 	};
 
 	const result = (log) => ({ok: true, steps: log, warnings: [], errors: []});
@@ -58,7 +60,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 	};
 
 	return {
-		applies: backportApplies(version),
+		applies: homeKeyHookApplies(version),
 
 		async status() {
 			const log = [];
@@ -72,7 +74,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 		},
 
 		// 1. make sure general/defaultApps exists, so the compositor's and sam's subscriptions see later writes
-		// 2. enable the backport (flag file) and link the boot entry into init.d
+		// 2. enable the Home key hook (flag file) and link the boot entry into init.d
 		// Nothing is mounted and nothing restarts: the boot entry mounts the patch on the next boot, and
 		// `rebootNeeded` in the result says whether a restart is what finishes the change (the patch is
 		// enabled but not mounted).
@@ -81,10 +83,11 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			const run = runner(log);
 			const res = Object.assign(result(log), {status: null, createdKey: false, rebootNeeded: false});
 			try {
+				await run.run(script('prepare'));
 				const before = await readStatus(run);
-				if (before.dataMissing) throw new Error('The backport files are missing from the app package');
+				if (before.dataMissing) throw new Error('The Home key hook files are missing from the service package');
 				if (!before.mounted && before.patch !== 'possible') {
-					throw new Error('The Home-key hook refused this firmware: ' + (before.reason || 'unknown reason'));
+					throw new Error('The Home key hook refused this firmware: ' + (before.reason || 'unknown reason'));
 				}
 
 				const record = await readDefaultApps(run);
@@ -93,7 +96,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 					res.createdKey = true;
 				}
 
-				await run.write(KEYFILTER_FLAG, '');
+				await run.write(HOMEKEY_FLAG, '');
 				await run.run(ensureEntryCommand());
 
 				res.status = await readStatus(run);
@@ -104,7 +107,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			return res;
 		},
 
-		// Disable the backport: delete the flag file, so the next boot does not mount it again, and bake
+		// Disable the Home key hook: delete the flag file, so the next boot does not mount it again, and bake
 		// the empty home id into the mounted copy (the worker's refresh, which never restarts the
 		// compositor). Nothing is unmounted: a mounted patch stays until the next boot, and
 		// `rebootNeeded` says so. The init.d link stays: the watcher needs it while a choice is stored.
@@ -113,7 +116,8 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			const run = runner(log);
 			const res = Object.assign(result(log), {status: null, rebootNeeded: false});
 			try {
-				await run.remove(KEYFILTER_FLAG);
+				await run.remove(HOMEKEY_FLAG);
+				await run.run(script('clear'));
 			} catch (e) {
 				fail(res, e);
 			}

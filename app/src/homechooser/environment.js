@@ -1,9 +1,9 @@
 // Connects the pieces for one session: makes sure Home Chooser's service runs as root (elevating
 // it through Homebrew Channel when it does not), reads the release, and builds the chooser and
-// (webOS 6 to 9) the key filter backport.
+// (webOS 6 to 9) the Home key hook.
 import {createPlatform, errorMessage, FatalError} from '../platform';
 import {createHomeChooser} from '.';
-import {createBackport} from '../backport';
+import {createHomeKeyHook} from '../homekey';
 import {classifyExecFailure} from './diagnose';
 import {startWatcherCommand} from './persistence';
 
@@ -39,11 +39,11 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 		removeFile: platform.removeFile,
 		version: release.version
 	};
-	const backport = createBackport(deps);
+	const homeKeyHook = createHomeKeyHook(deps);
 	return {
 		version: release.version,
 		chooser: createHomeChooser(deps),
-		backport: backport.applies ? backport : null,
+		homeKeyHook: homeKeyHook.applies ? homeKeyHook : null,
 		readIcon: platform.readIcon,
 		rootLuna: platform.rootLuna,
 		uninstallConfirmed: platform.uninstallConfirmed,

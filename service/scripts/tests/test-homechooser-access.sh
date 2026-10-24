@@ -2,7 +2,7 @@
 # Host-only manifest/permission tests. Optional shell argument, e.g. "busybox sh".
 set -eu
 SH=${1:-sh}
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT HUP INT TERM
 export HOMECHOOSER_LUNA_ROOTS="$T/dev $T/system $T/absent"

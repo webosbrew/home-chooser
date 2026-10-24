@@ -1,11 +1,11 @@
 import {ServiceError} from '../../platform/errors';
-import {backportApplies, createBackport, parseStatus} from '..';
-import {ENTRY_SCRIPT, KEYFILTER_FLAG, ensureEntryCommand, keyfilterCommand, persistenceStatusCommand} from '../../homechooser/persistence';
+import {homeKeyHookApplies, createHomeKeyHook, parseStatus} from '..';
+import {ENTRY_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
-const RUN_WORKER = 'keyfilterApply';
-const RUN_WORKER_SAM = 'keyfilterApplySam';
-const STOP = 'keyfilterStop';
-const REFRESH = 'keyfilterRefresh';
+const RUN_WORKER = 'homekeyApply';
+const RUN_WORKER_SAM = 'homekeyApplySam';
+const STOP = 'homekeyStop';
+const REFRESH = 'homekeyRefresh';
 const ENSURE = ensureEntryCommand();
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
@@ -42,9 +42,10 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 		calls.push(['exec', command]);
 		if (command === persistenceStatusCommand()) {
 			const entry = tv.entry === 'ok' ? `link:${ENTRY_SCRIPT}` : tv.entry;
-			return {stdout: `entry=${entry}\nactive=\nstored=\nkeyfilter=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
+			return {stdout: `entry=${entry}\nactive=\nstored=\nhomekey=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
-		if (command === keyfilterCommand('status')) return {stdout: statusText(), stderr: ''};
+		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};
+		if (command === homekeyCommand('prepare') || command === homekeyCommand('clear')) return {stdout: '', stderr: ''};
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
@@ -58,26 +59,26 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 	};
 	const writeFile = async (path, text) => {
 		calls.push(['write', path, text]);
-		if (path === KEYFILTER_FLAG) tv.installed = true;
+		if (path === HOMEKEY_FLAG) tv.installed = true;
 		else throw new Error('unexpected writeFile ' + path);
 	};
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
-		if (path === KEYFILTER_FLAG) tv.installed = false;
+		if (path === HOMEKEY_FLAG) tv.installed = false;
 	};
 	return {rootLuna, exec, writeFile, removeFile, calls, tv, record: () => record};
 };
 
-const backport = (tv, version = [6, 6, 0]) => createBackport({
+const homeKeyHook = (tv, version = [6, 6, 0]) => createHomeKeyHook({
 	rootLuna: tv.rootLuna, exec: tv.exec, writeFile: tv.writeFile, removeFile: tv.removeFile, version
 });
 
 const kinds = (tv) => tv.calls.map((c) => c[0] === 'luna' ? c[1].split('/').pop() : c[0] === 'exec' ? c[1] : (c[0] === 'write' ? 'write ' : 'rm ') + c[1]);
 
-describe('backportApplies', () => {
+describe('homeKeyHookApplies', () => {
 	test.each([[5, false], [6, true], [7, true], [9, true], [10, false], [11, false]])('webOS TV %i', (major, applies) => {
-		expect(backportApplies([major, 0, 0])).toBe(applies);
-		expect(backport(fakeTV(), [major, 0, 0]).applies).toBe(applies);
+		expect(homeKeyHookApplies([major, 0, 0])).toBe(applies);
+		expect(homeKeyHook(fakeTV(), [major, 0, 0]).applies).toBe(applies);
 	});
 });
 
@@ -86,6 +87,7 @@ describe('parseStatus', () => {
 		expect(parseStatus('mounted=no\nrecovered=stock\nreason=QML unavailable\n')).toMatchObject({recovered: 'stock', reason: 'QML unavailable'});
 		expect(parseStatus('mounted=yes\npatch=possible\nunpatched-sites=1\nskipped=/nudge: anchor\nfile=/a.qml\nfile=/b.js\n')).toMatchObject({mounted: true, patch: 'possible', unpatchedSites: 1, files: ['/a.qml', '/b.js'], skipped: ['/nudge: anchor']});
 		expect(parseStatus('patch=refused\nreason=anchor missing\n')).toMatchObject({patch: 'refused', reason: 'anchor missing'});
+		expect(parseStatus('hook=stale\ncache-generation=123-45\nreboot=needed\n')).toMatchObject({hook: 'stale', cacheGeneration: '123-45', rebootNeeded: true});
 	});
 });
 
@@ -94,7 +96,7 @@ describe('status', () => {
 		const tv = fakeTV();
 		tv.tv.installed = true;
 		tv.tv.entry = 'ok';
-		const res = await backport(tv).status();
+		const res = await homeKeyHook(tv).status();
 		expect(res.ok).toBe(true);
 		expect(res.status).toMatchObject({enabled: true, entry: 'ok', dataMissing: false, mounted: false, patch: 'possible'});
 		expect(res.steps.map((s) => s.kind)).toEqual(['exec', 'exec']);
@@ -104,7 +106,7 @@ describe('status', () => {
 describe('install', () => {
 	test('absent key: create it, enable and link; no worker run, no restart; a reboot finishes it', async () => {
 		const tv = fakeTV();
-		const res = await backport(tv).install();
+		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(true);
 		expect(res.rebootNeeded).toBe(true);
@@ -113,8 +115,8 @@ describe('install', () => {
 		const seq = kinds(tv);
 		const at = (s) => seq.findIndex((x) => x === s || (x.startsWith && x.startsWith(s)));
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
-		expect(at('setSystemSettings')).toBeLessThan(at('write ' + KEYFILTER_FLAG));
-		expect(at('write ' + KEYFILTER_FLAG)).toBeLessThan(at(ENSURE));
+		expect(at('setSystemSettings')).toBeLessThan(at('write ' + HOMEKEY_FLAG));
+		expect(at('write ' + HOMEKEY_FLAG)).toBeLessThan(at(ENSURE));
 		[RUN_WORKER, RUN_WORKER_SAM, STOP, REFRESH, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
 		expect(tv.tv.installed).toBe(true);
@@ -124,7 +126,7 @@ describe('install', () => {
 
 	test('record present: no write, no worker run, no sam restart', async () => {
 		const tv = fakeTV({record: {home: 'x.y', kidsApp: 'k'}});
-		const res = await backport(tv, [9, 2, 1]).install();
+		const res = await homeKeyHook(tv, [9, 2, 1]).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(false);
 		expect(res.rebootNeeded).toBe(true);
@@ -138,7 +140,7 @@ describe('install', () => {
 		const tv = fakeTV({record: {}, patch: 'possible'});
 		tv.tv.mounted = true;
 		tv.tv.release = '8.3.0';
-		const res = await backport(tv, [8, 3, 0]).install();
+		const res = await homeKeyHook(tv, [8, 3, 0]).install();
 		expect(res.ok).toBe(true);
 		expect(tv.tv.installed).toBe(true);
 		expect(res.rebootNeeded).toBe(false);
@@ -147,9 +149,9 @@ describe('install', () => {
 
 	test('anchor mismatch: fails before changing anything', async () => {
 		const tv = fakeTV({patch: 'refused'});
-		const res = await backport(tv).install();
+		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(false);
-		expect(res.errors[0]).toMatch(/Home-key hook refused/);
+		expect(res.errors[0]).toMatch(/Home key hook refused/);
 		expect(kinds(tv)).not.toContain('setSystemSettings');
 		expect(tv.tv.installed).toBe(false);
 		expect(tv.tv.entry).toBe('none');
@@ -157,9 +159,9 @@ describe('install', () => {
 
 	test('data missing from the package: fails before changing anything', async () => {
 		const tv = fakeTV({dataMissing: true});
-		const res = await backport(tv).install();
+		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(false);
-		expect(res.errors[0]).toMatch(/missing from the app package/);
+		expect(res.errors[0]).toMatch(/missing from the service package/);
 		expect(tv.tv.installed).toBe(false);
 	});
 
@@ -167,14 +169,14 @@ describe('install', () => {
 		const tv = fakeTV({record: {}, patch: 'possible'});
 		tv.tv.mounted = true;
 		tv.tv.release = '8.3.0';
-		const res = await backport(tv, [8, 3, 0]).install();
+		const res = await homeKeyHook(tv, [8, 3, 0]).install();
 		expect(res.ok).toBe(true);
 		expect(res.status.mounted).toBe(true);
 	});
 
 	test('a settings error other than an absent key stops before the copy', async () => {
 		const tv = fakeTV({failLuna: {returnValue: false, errorText: 'Access denied'}});
-		const res = await backport(tv).install();
+		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(false);
 		expect(res.errors[0]).toMatch(/Access denied/);
 		expect(tv.tv.installed).toBe(false);
@@ -186,34 +188,35 @@ describe('install', () => {
 describe('remove', () => {
 	test('delete the flag, refresh the baked id, never stop; the init.d link stays; a mounted patch needs a reboot', async () => {
 		const tv = fakeTV({record: {}});
-		await backport(tv).install();
+		await homeKeyHook(tv).install();
 		tv.tv.mounted = true; // the next boot mounted it
 		tv.tv.release = '9.2.1';
 		tv.calls.length = 0;
-		const res = await backport(tv).remove();
+		const res = await homeKeyHook(tv).remove();
 		expect(res.ok).toBe(true);
 		const seq = kinds(tv);
-		expect(seq[0]).toBe('rm ' + KEYFILTER_FLAG);
-		expect(seq[1]).toBe(REFRESH);
+		expect(seq[0]).toBe('rm ' + HOMEKEY_FLAG);
+		expect(seq[1]).toBe(homekeyCommand('clear'));
+		expect(seq[2]).toBe(REFRESH);
 		expect(seq).not.toContain(STOP);
 		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
-		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + KEYFILTER_FLAG]);
+		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + HOMEKEY_FLAG]);
 		expect(res.rebootNeeded).toBe(true);
 		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: true, rebootNeeded: true});
 	});
 
 	test('nothing mounted: no reboot needed', async () => {
 		const tv = fakeTV({record: {}});
-		await backport(tv).install();
-		const res = await backport(tv).remove();
+		await homeKeyHook(tv).install();
+		const res = await homeKeyHook(tv).remove();
 		expect(res.ok).toBe(true);
 		expect(res.rebootNeeded).toBe(false);
 	});
 
 	test('a failed refresh is reported but the flag is still deleted', async () => {
 		const tv = fakeTV({record: {}, refreshFails: true});
-		await backport(tv).install();
-		const res = await backport(tv).remove();
+		await homeKeyHook(tv).install();
+		const res = await homeKeyHook(tv).remove();
 		expect(res.ok).toBe(false);
 		expect(res.errors[0]).toMatch(/refresh failed/);
 		expect(tv.tv.installed).toBe(false);

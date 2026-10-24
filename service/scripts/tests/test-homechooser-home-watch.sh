@@ -3,7 +3,7 @@
 # and records the calls, a fake clock and a fake sleep.
 # usage: test-homechooser-home-watch.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
-HERE=$(cd "$(dirname "$0")" && pwd)
+HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT=$HERE/homechooser-home-watch
 PASS=0
 FAIL=0
@@ -25,13 +25,14 @@ setup() {
     : > "$T/mark"
     : > "$T/kfcalls"
     mkfifo "$T/appsfeed"
-    mkdir -p "$T/app/backport" "$T/init.d"
-    cp "$SCRIPT" "$T/app/backport/homechooser-home-watch"
-    printf '#!/bin/sh\necho "keyfilter $* from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/app/backport/homechooser-keyfilter"
-    printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
-    printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
+    mkdir -p "$T/app" "$T/service/scripts" "$T/init.d"
+    cp "$SCRIPT" "$T/service/scripts/homechooser-home-watch"
+    cp -R "$HERE/lib" "$T/service/scripts/lib"
+    printf '#!/bin/sh\necho "homekey $* from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/service/scripts/homechooser-homekey"
+    printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"
+    printf '#!/bin/sh\n' > "$T/service/scripts/homechooser"
     touch "$T/flag"
-    ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
+    ln -s "$T/service/scripts/homechooser" "$T/init.d/homechooser"
     : > "$T/calls"
     : > "$T/stream"
     echo '{"returnValue":true}' > "$T/r-setdefault"
@@ -155,11 +156,11 @@ SLEEPSTUB
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
-           HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
+           HOMECHOOSER_HOMEKEY_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
            HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark" \
            HOMECHOOSER_INSTALL_DIRS="$T/apps"
 }
-run() { $SH "$T/app/backport/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
+run() { $SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
 writes() { grep -c ' CALL .*/set\(DefaultApp\|SystemSettings\)' "$T/calls"; }
 mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form, and records its use
@@ -421,8 +422,8 @@ for major in 6 8; do
     check "$major: home written as the stock id (not null), other entries kept" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}}' "$T/calls"
     check "$major: no home written while the app is missing, then once when it is back" test "$(writes)" = 2
     check "$major: written again with home" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
-    check "$major: backport refreshed to stock" test "$(kfn 'refresh stock')" = 1
-    check "$major: backport refreshed to the choice after" test "$(kfn 'refresh from')" -ge 2
+    check "$major: Home key hook refreshed to stock" test "$(kfn 'refresh stock')" = 1
+    check "$major: Home key hook refreshed to the choice after" test "$(kfn 'refresh from')" -ge 2
     check "$major: choice file kept" test -f "$T/home"
     check "$major: logged" has 'my.home is not installed, stock Home in use' "$T/log"
     check "$major: logged return" has 'my.home is installed again' "$T/log"
@@ -444,7 +445,7 @@ run
 check "stock fullhome named while missing" has '{"defaultApps":{"home":"com.webos.app.fullhome","kidsApp":"k.app"}}' "$T/calls"
 check "re-applied after" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
 check "two writes" test "$(writes)" = 2
-check "no key filter on 5" test ! -s "$T/kfcalls"
+check "no Home key hook on 5" test ! -s "$T/kfcalls"
 cleanup
 setup 5 'my.home\n'
 live '{"home":"my.home"}'
@@ -501,7 +502,7 @@ for major in 10 11; do
     check "$major: rescan after removing the override" test "$(count debug/rescan "$T/calls")" -ge 2
     check "$major: override rebuilt when it came back" has '"home":"my.home"' "$T/override/o.json"
     check "$major: setDefaultApp when it came back" has 'setDefaultApp {"category":"home","appId":"my.home"}' "$T/calls"
-    check "$major: no key filter" test ! -s "$T/kfcalls"
+    check "$major: no Home key hook" test ! -s "$T/kfcalls"
     # the order: override removed (rescan) before the record is written
     first=$(grep -n 'debug/rescan\|setSystemSettings' "$T/calls" | head -n 1)
     check "$major: rescan before the record write" test "${first#*CALL }" != "${first}" -a "$(echo "$first" | grep -c rescan)" = 1
@@ -590,7 +591,7 @@ reply '{"kidsApp":"k.app"}'
 run
 check "the new choice is written at once" has '{"defaultApps":{"home":"other.home","kidsApp":"k.app"}}' "$T/calls"
 check "two writes: the removal and the new choice" test "$(writes)" = 2
-check "backport refreshed for the new choice" test "$(kfn 'refresh from')" = 2
+check "Home key hook refreshed for the new choice" test "$(kfn 'refresh from')" = 2
 cleanup
 
 echo "== choice changed while the app is installed: baked id refreshed without a restart"
@@ -606,8 +607,8 @@ for major in 6 8 9; do
     check "$major: record carries the new choice" has '"home":"other.home"' "$T/record"
     check "$major: the start refresh and the one for the new choice" test "$(kfn 'refresh from')" = 2
     check "$major: no refresh asks for a restart" hasnt restart "$T/kfcalls"
-    check "$major: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
-    check "$major: the refresh ran from the runtime copy" has "refresh from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
+    check "$major: no stop" hasnt 'homekey stop' "$T/kfcalls"
+    check "$major: the refresh ran from the runtime copy" has "refresh from=$T/rt/homechooser-homekey" "$T/kfcalls"
     cleanup
 done
 
@@ -630,7 +631,7 @@ run
 check "only the start refresh for an uninstalled app" test "$(kfn 'refresh from')" = 1
 cleanup
 
-echo "== choice changed on webOS 5 and 10: the backport is not involved"
+echo "== choice changed on webOS 5 and 10: the Home key hook is not involved"
 for major in 5 10; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
@@ -639,7 +640,7 @@ for major in 5 10; do
     echo 'CHOICE other.home' >> "$T/stream"
     reply '{"home":"my.home","kidsApp":"k.app"}'
     run
-    check "$major: no key filter call" test "$(kfn refresh)" = 0
+    check "$major: no Home key hook call" test "$(kfn refresh)" = 0
     cleanup
 done
 
@@ -656,27 +657,27 @@ for major in 6 9; do
     check "$major: home is the stock id in the record, not null" stockhome
     check "$major: other entries kept" has 'kidsApp' "$T/record"
     check "$major: choice file removed" test ! -f "$T/home"
-    check "$major: backport flag removed" test ! -f "$T/flag"
+    check "$major: Home key hook flag removed" test ! -f "$T/flag"
     check "$major: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$major: app directory is gone" test ! -d "$T/app"
-    check "$major: no key filter stop, no unmount, no restart" hasnt 'keyfilter stop' "$T/kfcalls"
+    check "$major: no Home key hook stop, no unmount, no restart" hasnt 'homekey stop' "$T/kfcalls"
     check "$major: the worker was not asked to restart anything" hasnt restart "$T/kfcalls"
-    check "$major: no worker call after the revert" hasnt 'keyfilter apply' "$T/kfcalls"
+    check "$major: no worker call after the revert" hasnt 'homekey apply' "$T/kfcalls"
     check "$major: the watcher itself ran from the runtime" test -f "$T/rt/homechooser-home-watch"
     check "$major: logged" has 'stock Home restored' "$T/log"
     check "$major: nothing written after the restore" test "$(writes)" = 1
     cleanup
 done
 setup 8 'my.home\n'
-printf '#!/bin/sh\n' > "$T/init.d/homechooser-keyfilter-x"
-ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser-keyfilter"
+printf '#!/bin/sh\n' > "$T/init.d/other-entry"
+ln -s "$T/service/scripts/homechooser" "$T/init.d/other-link"
 live '{"home":"my.home"}'
 reply '{"home":"my.home"}'
 echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "the older keyfilter link goes too" test ! -L "$T/init.d/homechooser-keyfilter"
-check "a regular file in init.d is left alone" test -f "$T/init.d/homechooser-keyfilter-x"
+check "an unrelated init.d link is left alone" test -L "$T/init.d/other-link"
+check "a regular file in init.d is left alone" test -f "$T/init.d/other-entry"
 cleanup
 
 echo "== Home Chooser uninstalled, webOS 5"
@@ -690,7 +691,7 @@ check "exit 0" rc 0
 check "home names the stock launcher" has '"home":"com.webos.app.home"' "$T/record"
 check "choice removed" test ! -f "$T/home"
 check "link removed" test ! -L "$T/init.d/homechooser"
-check "no key filter on 5" test ! -s "$T/kfcalls"
+check "no Home key hook on 5" test ! -s "$T/kfcalls"
 cleanup
 
 echo "== Home Chooser uninstalled, webOS 10 and later"
@@ -708,7 +709,7 @@ check "rescanned" has debug/rescan "$T/calls"
 check "home removed" nohome
 check "access removed from runtime after uninstall" has "access remove from=$T/rt/homechooser-access" "$T/access"
 check "choice, flag and link removed" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
-check "no key filter on 11" test ! -s "$T/kfcalls"
+check "no Home key hook on 11" test ! -s "$T/kfcalls"
 cleanup
 
 echo "== both removed, either order"
@@ -737,7 +738,7 @@ check "both at once: exit 0" rc 0
 check "both at once: one write" test "$(writes)" = 1
 check "both at once: stock state, nothing left for a later removal to break" stockhome
 check "both at once: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
-check "both at once: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
+check "both at once: no stop" hasnt 'homekey stop' "$T/kfcalls"
 cleanup
 setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
@@ -756,6 +757,9 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
+check "first run staged sourced helpers" test -f "$T/rt/lib/watch-restore.sh"
+check "first run staged the rewriter dependency" test -f "$T/rt/lib/homekey-settings.js"
+rm -rf "$T/service/scripts"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
 touch "$T/flag"
@@ -765,7 +769,7 @@ check "exit 0" rc 0
 check "record is stock" stockhome
 check "choice removed" test ! -f "$T/home"
 check "link removed" test ! -L "$T/init.d/homechooser"
-check "no stop from the runtime copy either" hasnt 'keyfilter stop' "$T/kfcalls"
+check "no stop from the runtime copy either" hasnt 'homekey stop' "$T/kfcalls"
 cleanup
 
 echo "== idempotent: a second restore changes nothing"
@@ -1119,7 +1123,7 @@ HOMECHOOSER_NOTIFY=0 run
 check "none sent" test "$(alerts)$(toasts)" = 00
 cleanup
 
-echo "== Home Chooser uninstalled: one toast, the backport left mounted (6 to 9)"
+echo "== Home Chooser uninstalled: one toast, the Home key hook left mounted (6 to 9)"
 for major in 5 6 9 10; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
@@ -1136,7 +1140,7 @@ for major in 5 6 9 10; do
     check "$major: fixed identity, one reply" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the record revert" test "$(lineof createToast)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
     check "$major: no worker stop, no restart" hasnt 'KF stop' "$T/calls"
-    check "$major: the only worker calls are refreshes" test "$(grep -vc '^keyfilter refresh' "$T/kfcalls")" = 0
+    check "$major: the only worker calls are refreshes" test "$(grep -vc '^homekey refresh' "$T/kfcalls")" = 0
     check "$major: files gone before the toast is the last word" test ! -f "$T/home"
     cleanup
 done
@@ -1183,7 +1187,7 @@ for major in 5 6 8 9; do
     if [ "$major" -ge 6 ]; then
         check "$major: baked id emptied" test "$(kfn 'refresh stock')" = 1
     else
-        check "$major: no key filter" test ! -s "$T/kfcalls"
+        check "$major: no Home key hook" test ! -s "$T/kfcalls"
     fi
     cleanup
 done
@@ -1206,7 +1210,7 @@ for major in 10 11; do
     check "$major: rescan" test "$(count debug/rescan "$T/calls")" = 1
     check "$major: home written as null" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
     check "$major: asked once per id" test "$(count 'getAppInfo {"id":"gone.app"}' "$T/calls")" = 2
-    check "$major: no key filter" test ! -s "$T/kfcalls"
+    check "$major: no Home key hook" test ! -s "$T/kfcalls"
     cleanup
 done
 nochoice 11

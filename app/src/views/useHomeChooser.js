@@ -1,5 +1,5 @@
 // The session controller behind the screen: loads the environment, keeps the home list and the
-// key filter patch state, and runs the apply / restore flows one at a time. Every step of every
+// Home key hook patch state, and runs the apply / restore flows one at a time. Every step of every
 // operation goes to console.log with an [HomeChooser] prefix, never to the screen.
 import {useCallback, useEffect, useRef, useState} from 'react';
 
@@ -14,6 +14,7 @@ export const LOG_PREFIX = '[HomeChooser]';
 const DONE_TEXT = 'Done. Press Home to try it.';
 const RESTART_ASKED_TEXT = 'Done. Restart the TV to finish.';
 const RESTART_FAILED_TEXT = 'Restart the TV to finish.';
+const CACHE_PROMPT_KEY = 'homechooser.hookCachePrompt';
 
 // The line above the "Restart now" row while a restart is pending, by reason ('apply' or 'remove').
 export const RESTART_NOTE = {
@@ -44,11 +45,13 @@ export const logResult = (label, res) => {
 };
 
 // The structural hook is either mounted, available for the next boot, or refused.
-export const patchStateOf = (backport, status) => {
-	if (!backport) return null;
+export const patchStateOf = (homeKeyHook, status) => {
+	if (!homeKeyHook) return null;
 	if (!status) return 'unknown';
 	if (status.mounted) return 'active';
-	return status.patch === 'possible' ? 'ready' : 'nomatch';
+	// A missing or stale cache has not been checked against this firmware yet. The first choice
+	// calls install(), which prepares and validates it before enabling the boot entry.
+	return status.patch === 'possible' || status.hook === 'stale' ? 'ready' : 'nomatch';
 };
 
 // What a marker left by an earlier window means now. The marker is only written after the apply
@@ -88,6 +91,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [icons, setIcons] = useState({});
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
+	const stalePrompted = useRef(false);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -97,7 +101,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const readInto = async (e) => {
 		const [list, st, per, patchRes] = await Promise.all([
 			e.chooser.listCandidates(), e.chooser.readState(), e.chooser.readPersistence(),
-			e.backport ? e.backport.status() : null
+			e.homeKeyHook ? e.homeKeyHook.status() : null
 		]);
 		[['candidates', list], ['state', st], ['persistence', per], ['patch', patchRes]].forEach(([l, r]) => r && logResult(l, r));
 		if (!mounted.current) return;
@@ -178,7 +182,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		return () => { cancelled = true; };
 	}, [env, candidates]);
 
-	const patch = env ? patchStateOf(env.backport, patchStatus) : null;
+	const patch = env ? patchStateOf(env.homeKeyHook, patchStatus) : null;
 
 	const run = useCallback(async (label, work) => {
 		if (!env || busy) return;
@@ -213,6 +217,20 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	// the patch mounted is an apply, the patch mounted without the flag file is a remove.
 	const restartPending = Boolean(patchStatus && patchStatus.rebootNeeded);
 	const restartReason = patchStatus && patchStatus.enabled ? 'apply' : 'remove';
+	useEffect(() => {
+		if (!env || busy || phase !== 'ready' || !restartPending || !patchStatus.enabled ||
+			patchStatus.hook !== 'stale' || !patchStatus.cacheGeneration || stalePrompted.current) return;
+		stalePrompted.current = true;
+		try {
+			if (window.localStorage.getItem(CACHE_PROMPT_KEY) === patchStatus.cacheGeneration) return;
+			window.localStorage.setItem(CACHE_PROMPT_KEY, patchStatus.cacheGeneration);
+		} catch (err) {
+			// The prompt still appears once in this window when storage is unavailable.
+		}
+		askRestart(env, 'apply').then((asked) => {
+			if (mounted.current) setToast({ok: asked, text: asked ? RESTART_ASKED_TEXT : RESTART_FAILED_TEXT});
+		});
+	}, [env, busy, phase, restartPending, patchStatus]);
 	const askReboot = useCallback(async () => {
 		if (!env || busy || !restartPending) return;
 		const asked = await askRestart(env, restartReason);
@@ -226,10 +244,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		const res = await e.chooser.restoreStock();
 		logResult('restore', res);
 		if (!res.ok) return {ok: false, text: plainFailure('restore LG Home', res.errors)};
-		// restoring stock takes the key filter patch out as well
+		// restoring stock takes the Home key hook patch out as well
 		// (the flag goes; the mounted copy stays until the next boot, so a restart finishes it)
-		if (e.backport && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
-			const rem = await e.backport.remove();
+		if (e.homeKeyHook && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
+			const rem = await e.homeKeyHook.remove();
 			logResult('remove patch', rem);
 			if (!rem.ok) return {ok: false, text: plainFailure('restore LG Home', rem.errors)};
 			if (rem.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'remove'};
@@ -242,7 +260,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		// The patch is needed unless it is mounted and enabled (mounted but disabled: a restore was done
 		// and no restart yet; the install just sets the flag again).
 		const mountedNow = Boolean(patchStatus && patchStatus.mounted);
-		const needPatch = Boolean(e.backport) && !(mountedNow && patchStatus.enabled);
+		const needPatch = Boolean(e.homeKeyHook) && !(mountedNow && patchStatus.enabled);
 		if (needPatch && !mountedNow && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
 		// Nothing restarts the compositor while the TV runs, so no step here can close this window.
 		// Only a patch that is not mounted yet needs a TV restart (the boot entry mounts it), and
@@ -252,7 +270,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		logResult('apply', res);
 		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
 		if (needPatch) {
-			const inst = await e.backport.install();
+			const inst = await e.homeKeyHook.install();
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
 			if (inst.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'apply'};
@@ -280,7 +298,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	}), [run]);
 
 	return {
-		phase, rootError, hasPatch: Boolean(env && env.backport), patch,
+		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
 		patchMounted: Boolean(patchStatus && patchStatus.mounted),
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
 		restartPending, restartReason, askReboot,
