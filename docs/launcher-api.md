@@ -54,9 +54,8 @@ A complete, minimal web launcher `appinfo.json`:
 * `"requiredPermissions": ["homechooser.applications"]` opts into the API below. Leave it out if
   you only want to be selectable. Merge both entries with your other categories and permissions.
 * **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Add
-  `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. Home
-  Chooser reads `defaultWindowType` to decide how to treat LG's own home app; see
-  [Overlay launchers and the stock home](#overlay-launchers-and-the-stock-home).
+  `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. See
+  [The stock home](#the-stock-home) for what happens to LG's own home app.
 
 The permission is read from the appinfo the app was installed with, so reinstall after any change
 to `requiredPermissions`. Install Home Chooser, and open it once, before you install a launcher
@@ -384,18 +383,18 @@ Home Chooser's service from an ordinary app (`Denied method call`), so `root` st
 owner elevates it by other means or a newer Homebrew Channel allows it. The layout of the access
 files is in [the service reference](service.md#launcher-access-files).
 
-### Overlay launchers and the stock home
+### The stock home
 
 LG's stock home (`com.webos.app.home`) normally stays resident (70 to 105 MB). While a third-party
-home is selected, Home Chooser keeps it from being preloaded, once per boot, and force-closes it
-so that the memory stays free. This is not permanent: nothing is written, and a reboot starts with
-the stock policy until Home Chooser sets it again. 5.x is left alone.
+home is selected, Home Chooser keeps it from being preloaded, once per boot. This is not permanent:
+nothing is written, and a reboot starts with the stock policy until Home Chooser sets it again. 5.x
+is left alone.
 
-An overlay launcher is the exception on 6.x to 10.x: nothing else takes the foreground from the
-stock home, so the system relaunches it as soon as it is closed. Home Chooser does not close it for
-an overlay launcher there, and `running` will list `com.webos.app.home` (and a `closeById` of it
-by your launcher will not stick). On 11.x and 12.x the close sticks. Home Chooser decides by
-`defaultWindowType: "overlay"` in your appinfo. Details are in
+On 11.x and 12.x Home Chooser also force-closes it, and the close sticks. On 6.x to 10.x it does not,
+for any launcher, overlay or not: the system relaunches the stock home at once as the last-input
+app, so a close frees nothing. The stock home can therefore stay resident until the next reboot, and
+`running` will list `com.webos.app.home` (a `closeById` of it by your launcher will not stick
+either). After a reboot it is gone, because its preload is off from boot. Details are in
 [The stock home is not preloaded](settings-app.md#the-stock-home-is-not-preloaded).
 
 ## Testing your launcher
