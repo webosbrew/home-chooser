@@ -267,7 +267,15 @@ var TIER2 = [
 		t = t.replace(new RegExp(spare.source, 'g'), function (all, x) {
 			return x + '.appId !== "' + STOCK + '" && !Settings.isHomeApp(' + x + '.appId)';
 		});
-		return t.replace(new RegExp(nmrm.source, 'g'), '$1Settings.getHomeAppId()$2');
+		if (nn > 0) {
+			if (nn !== 1) abort('expected one recents NMRM default');
+			// Older recents excludes its last input instead of naming LG Home at the kill site.
+			// Keep that input and its stock default, and explicitly spare both homes there.
+			t = exactSub(t, /([A-Za-z_][\w.]*)\.appId !== __lastInputApp/,
+				function (all, x) { return all + ' && ' + x + '.appId !== "' + STOCK + '" && !Settings.isHomeApp(' + x + '.appId)'; },
+				1, 'recents last-input exclusion');
+		}
+		return t;
 	}},
 	{file: F.fullscreen, name: 'lastInputApp', fn: function (t) {
 		needImport(t);

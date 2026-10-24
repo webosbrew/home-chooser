@@ -13,7 +13,7 @@ leaves the device stock and logs the exact failed anchor. webOS 5 and 10 or late
 | 1 | `KeyFilters/systemUi.js`, when it defines `HOME_APP_ID` | Refresh that variable at the start of `handleHomeKeys`. Existing comparisons stay intact. |
 | 2 | `StarfishNudgeView.qml` | Suppress nudges over the chosen home. |
 | 2 | `StarfishBaseLunaServiceAPI.qml` | Report the chosen home as the launcher in `getCurrentState`. |
-| 2 | `StarfishRecents.qml` | Spare both the chosen launcher and LG Home during cleanup; use the chosen home for NMRM last-input. |
+| 2 | `StarfishRecents.qml` | Spare both the chosen launcher and LG Home during cleanup, retaining the firmware's last-input exclusion and default. |
 | 2 | `StarfishFullscreenController.qml` | Use the chosen home for NMRM last-input. |
 
 Tier 1 is all or nothing. Tier 2 is independent per file: an unexpected anchor skips that file

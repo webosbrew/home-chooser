@@ -144,3 +144,18 @@ Offline follow-up checks passed: 202 worker checks under each shell, 521 matrix 
 shell and Node 8.12, 399 real roundtrip checks per shell, 551 watcher checks per shell, 50 boot-entry
 checks per shell, and the access suite under both shells. App lint and all 213 Jest tests passed;
 298 native service checks and 62 Python runner tests passed.
+
+## Recents cleanup correction
+
+The older 7.4/7.6 Recents implementation excludes `item.appId !== __lastInputApp` at its
+cleanup kill site. Replacing only that property's NMRM default with the chosen home would
+stop sparing LG Home on NMRM firmware. The prototype's claim that this spared both homes
+was therefore incomplete for those builds.
+
+The rewriter now retains the stock last-input property and exclusion, adding explicit guards
+for both LG Home and the chosen home at the kill site. A missing or ambiguous last-input
+exclusion skips the complete Recents file. Tests execute the actual firmware kill predicates
+with both home ids, ordinary apps, last-input apps and homeconnect, checking both app-existence
+states and stock/chosen configurations. The 541 checks pass under sh, BusyBox sh and Node 8.12;
+all 16 Home-key reviewed comparisons still match. On 9.2.4 all seven staged files are byte-identical
+before and after this correction.

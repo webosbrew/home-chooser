@@ -69,7 +69,7 @@ def synthetic(root):
     put(root, SUI, 'var HOME_APP_ID = "com.webos.app.home";\nfunction handleHomeKeys(key, pressed, autoRepeat) {\n    if (fullscreenView.appId !== HOME_APP_ID) applicationManager.launch("com.webos.app.home", JSON.stringify({}));\n}\n')
     for file in [NUDGE, LUNA]:
         put(root, file, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property bool home: views.fullscreen.currentItem.appId === "com.webos.app.home"\n}\n')
-    put(root, RECENTS, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property bool keep: item.appId !== "com.webos.app.home"\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
+    put(root, RECENTS, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property bool keep: item.appId !== "com.webos.app.home"\n    property bool candidate: item.appId !== __lastInputApp\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
     put(root, FSC, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
 
 
@@ -100,6 +100,7 @@ def restore(file, text):
         return text.replace('import WebOSServices 1.0\n', '', 1)
     if file in [KF, SUI]:
         return ''.join(line for line in text.splitlines(True) if '// Home Chooser' not in line)
+    text = re.sub(r'(\b([\w.]+)\.appId !== __lastInputApp) && \2\.appId !== "com.webos.app.home" && !Settings.isHomeApp\(\2\.appId\)', r'\1', text)
     text = re.sub(r' && !Settings.isHomeApp\([\w.]+\)', '', text)
     text = re.sub(r'Settings.isHomeApp\(([\w.]+)\)', r'\1 === "com.webos.app.home"', text)
     return text.replace('Settings.getHomeAppId()', '"com.webos.app.home"')
@@ -135,6 +136,36 @@ def build(name, version, root, work, harness=True):
         if shutil.which(tool[0]):
             lint = run(*tool, out / f)
             check(name + ': syntax ' + f, lint.returncode == 0, lint.stdout)
+    if RECENTS in files and harness:
+        stock = (root / RECENTS).read_text(encoding='latin1')
+        patched = (out / RECENTS).read_text(encoding='latin1')
+        pattern = r'if \((!appExist && [^\n]*)\) \{'
+        before, after = re.search(pattern, stock), re.search(pattern, patched)
+        if before and after:
+            # Execute the actual kill predicate; LG Home and the chosen home must survive
+            # regardless of the NMRM/record last input. Other apps retain the stock predicate.
+            script = '''var old = new Function('item','appExist','__lastInputApp','Settings','return '+process.argv[1]);
+var hook = new Function('item','appExist','__lastInputApp','Settings','return '+process.argv[2]);
+var stock='com.webos.app.home', chosen='org.example.launcher';
+[stock,chosen].forEach(function(home) {
+  [stock,'com.webos.app.livetv'].forEach(function(input) {
+    [stock,chosen,input,'org.example.other','com.webos.app.homeconnect'].forEach(function(id) {
+      [false,true].forEach(function(exists) {
+        var item={appId:id}, settings={isHomeApp:function(app){return app===home;}};
+        var expected=old(item,exists,input,settings) && id!==stock && id!==home;
+        if (hook(item,exists,input,settings)!==expected) throw Error(id+' home='+home+' input='+input);
+      });
+    });
+  });
+});'''
+            result = run(NODE, '-e', script, before[1], after[1])
+            check(name + ': recents spares both homes and preserves other exclusions', result.returncode == 0, result.stdout)
+            if '__lastInputApp' in before[1]:
+                default = r'property string __lastInputApp:[^\n]*'
+                check(name + ': recents last-input property stays stock',
+                      re.search(default, stock)[0] == re.search(default, patched)[0])
+        else:
+            check(name + ': recents kill predicate found', False)
     # Whole output plus a version lets a second run exercise the double-patch guard.
     put(out, 'etc/os-release', 'VERSION_ID="' + version + '"\n')
     if not (out / SUI).exists():
@@ -182,6 +213,11 @@ def mutations(root, work):
     put(dest, NUDGE, (dest / NUDGE).read_text().replace('views.fullscreen.currentItem.appId === "com.webos.app.home"', '"com.webos.app.home" === views.fullscreen.currentItem.appId'))
     r = run(NODE, GEN, 'generate', '--root', dest, '--out', dest / 'out')
     check('tier-2 drift skips only its file', r.returncode == 0 and 'unpatched-sites=1' in r.stdout and NUDGE in r.stdout and not (dest / 'out' / NUDGE).exists(), r.stdout)
+    dest = work / 'recents-drift'
+    shutil.copytree(root, dest)
+    put(dest, RECENTS, (dest / RECENTS).read_text().replace('item.appId !== __lastInputApp', 'item.appId != __lastInputApp'))
+    r = run(NODE, GEN, 'generate', '--root', dest, '--out', dest / 'out')
+    check('recents last-input drift skips its whole file', r.returncode == 0 and 'unpatched-sites=1' in r.stdout and not (dest / 'out' / RECENTS).exists(), r.stdout)
     for major in [5, 10, 11]:
         put(root, 'etc/os-release', 'VERSION_ID="%d.0.0"\n' % major)
         r = run(NODE, GEN, 'generate', '--root', root, '--out', work / ('v%d' % major))
