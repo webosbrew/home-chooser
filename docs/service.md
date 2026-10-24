@@ -96,12 +96,12 @@ refused by launcher gates.
 ## Restarting the TV
 
 No step restarts the compositor while the TV runs. When the patch needs a restart to take effect
-(first apply) or to go away (restore), the app asks the user to reboot the TV, through two
+(first apply) or to go away (restore), the app asks the user to reboot the TV with a system alert, through two
 methods. `keyfilterApplySam` (`apply samfirst`, which restarted `sam` first) is removed: the app
 no longer restarts anything, so there is no such command. `keyfilterApply` and `keyfilterStop`
 stay for manual and debugging use only.
 
-`rebootPrompt {reason, screen}` (Home Chooser only, root). `reason` is `apply` or `remove`.
+`rebootPrompt {reason}` (Home Chooser only, root). `reason` is `apply` or `remove`.
 
 1. The pending check runs the worker's `status` (`keyfilterStatus`, 20 s) and requires a line
    exactly `reboot=needed` (`hc_reboot_needed`: CR and blanks at line ends are ignored, a longer
@@ -109,20 +109,25 @@ stay for manual and debugging use only.
 2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
    `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish removing the Home button patch.`
 3. A random 128-bit token is minted (32 hex digits from `/dev/urandom`, own table of four slots,
-   one shot, 10 minute lifetime).
-4. `screen: true` answers `{returnValue: true, pending: true, confirm: "screen", token}` and the
-   app shows its own dialog. Otherwise the service raises a `createAlert` (as
-   `com.webos.applicationManager`, source Home Chooser) with the message and the buttons
-   `Reboot` (onclick `luna://org.webosbrew.homechooser.service/rebootConfirmed`, params `{token}`)
-   and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`, with no
-   token. If the alert is refused the token is killed and a `createToast` (`noaction`) shows the
-   message: `confirm: "toast"`. If the toast is refused too: `confirmFailed`.
+   one shot, 10 minute lifetime). It is never sent to the app.
+4. The service raises a `createAlert` (as `com.webos.applicationManager`, source Home Chooser) with
+   the message and the buttons `Reboot` (onclick `luna://org.webosbrew.homechooser.service/rebootConfirmed`,
+   params `{token}`) and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`.
+   There is no on-screen variant: the app is an overlay that surface-manager closes after a stretch
+   without a key press, and the alert is not. If the alert is refused the token is killed and a
+   `createToast` (`noaction`) shows the message: `confirm: "toast"`. If the toast is refused too:
+   `confirmFailed`.
+
+The PmLog id `REBOOT_ASK` records the request (`createAlert request: message "...", buttons Reboot
+(rebootConfirmed) and Later (focused)`, without the token) and the notification service's reply to
+each call (`... createAlert accepted (exit 0): {...,"alertId":"..."}` or `refused`, then the
+`createToast` line when it falls back). The E2E runner reads these lines.
 
 `rebootConfirmed {token}` accepts Home Chooser or a sender without an application id (the
 notification service runs the alert's onclick); any other application id gets `forbidden`, the same
-rule as `uninstallConfirmed`. Root is required. The token must be live and unexpired and is
-consumed (`badToken` otherwise). The pending check runs again (`notPending` when the state has
-changed, for example the user restored in the meantime). Then
+rule as `uninstallConfirmed`. The app does not call it. Root is required. The token must be live and
+unexpired and is consumed (`badToken` otherwise). The pending check runs again (`notPending` when the
+state has changed, for example the user restored in the meantime). Then
 `luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.tvpower/power/reboot
 '{"reason":"remoteKey"}'`. A true `returnValue` answers `{returnValue: true}`; anything else is
 `rebootFailed` and the reply text goes to the log.
@@ -130,7 +135,7 @@ changed, for example the user restored in the meantime). Then
 Abuse: only the Home Chooser app can mint a token, and only while the worker reports
 `reboot=needed`, so the service cannot be used to reboot a TV in a normal state. A caller without an
 application id (the notification service path) needs the 128-bit token, which only appears in the
-alert it raised for Home Chooser (or in the reply to the app). The reboot is checked again at
+alert it raised for Home Chooser. The reboot is checked again at
 confirm time, so an old alert cannot reboot the TV after the state has settled.
 
 There is no fallback to `systemctl reboot` or `reboot`. That skips tvpowerd's power-off sequence

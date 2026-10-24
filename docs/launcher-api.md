@@ -343,7 +343,7 @@ a key filter patch that makes the Home key follow the record, and mounts patched
 system files at boot. For a launcher this means:
 
 * **Restart on first setup.** The first selection stores the choice and enables the patch, then
-  asks the owner to restart the TV ("Restart the TV?", Reboot or Later). The Home button opens your
+  asks the owner to restart the TV with a system alert (Reboot or Later). The Home button opens your
   launcher after that restart. Until then the choice is stored (`isHome` is true) but the Home
   button still opens LG Home. Later changes between launchers need no restart. Nothing restarts the
   compositor while the TV runs, so setup never closes your window.

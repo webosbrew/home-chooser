@@ -138,21 +138,32 @@ and runs no worker, so there is nothing that could close the panel between the c
 
 ### Restart prompt
 
-After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the screen asks for a TV
-restart (the choose, restore and generated patch flows alike). The reason is `apply` after an install and
-`remove` after a restore or after disabling the generated patch.
+After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the choose, restore and
+generated patch flows ask for a TV restart. The reason is `apply` after an install and `remove` after a
+restore or after disabling the generated patch. Only webOS 6 to 9 have a patch, so only they ever ask;
+on 5.x and 10 and later `backport` is null, no step reports `rebootNeeded` and nothing changes.
 
-* Screen visible (`document.hidden` is not `true`): the app calls the service's
-  `rebootPrompt {"reason", "screen": true}` ([service](service.md)), keeps the one-shot `token` of the
-  reply and shows its own dialog, "Restart the TV?", with "The Home button changes after a restart."
-  (`apply`) or "LG Home is on the Home button now. A restart removes the patch." (`remove`) and the buttons
-  "Reboot" and "Later" (Back is Later). "Reboot" calls `rebootConfirmed {token}`, and the TV restarts; a
-  failure toasts "Couldn't restart the TV. Restart it to finish." "Later" toasts "Restart the TV later to
-  finish." Focus returns to the list when the dialog closes.
-* Screen hidden: the app calls `rebootPrompt {reason, "screen": false}`; the service puts up a system
-  alert with "Reboot" and "Later" (or a toast when the alert is refused), and the app shows nothing.
-* `rebootPrompt` failing (the status no longer says a restart is needed, the notification service
-  refuses both): the toast is "Restart the TV to finish."
+The prompt is always the service's system alert, never a dialog of the app. Home Chooser is an overlay
+window and surface-manager closes an overlay after about 90 to 120 s without a key press
+(`userTimeout`, measured on 6.5.2 and 9.2.1), so a restart dialog inside the app is lost on an idle
+user, while the alert belongs to the notification service and stays.
+
+* The app calls `rebootPrompt {"reason"}` ([service](service.md)). The service raises the alert (title
+  "Home Chooser", the message for the reason, buttons "Reboot" and "Later"); the Reboot button calls
+  `rebootConfirmed` with a one-shot token that only the alert holds. If the alert is refused the service
+  shows a toast with the message instead.
+* The screen shows only its normal result toast, "Done. Restart the TV to finish." (no focus change, no
+  spinner left). If `rebootPrompt` fails (nothing pending any more, or the notification service refuses
+  both), the toast is "Restart the TV to finish."
+* While a restart is pending (`status` says `reboot=needed`, read at startup and after every run) the
+  list ends with a note, "The Home button changes after a restart." (`apply`: the flag file is set and
+  nothing is mounted) or "LG Home is on the Home button now. A restart removes the patch." (`remove`:
+  the patch is mounted and the flag file is gone), and a "Restart now" row. The row calls `rebootPrompt`
+  again with the same reason and toasts "Check the restart prompt on the screen."; a refusal toasts
+  "Restart the TV to finish." and re-reads the state. This is what a user gets after pressing Later,
+  after the alert was closed by something else, or on opening Home Chooser later. Opening the screen does
+  not raise the alert by itself: an alert out of nowhere on every launch would be a nag, and the row is
+  one key press away.
 
 The service re-checks that a restart is needed before it asks and again before it restarts the TV.
 
