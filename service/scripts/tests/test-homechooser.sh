@@ -17,6 +17,8 @@ setup() {
     T=$(mktemp -d)
     mkdir -p "$T/service/scripts" "$T/bin" "$T/state" "$T/init.d"
     cp "$SCRIPT" "$T/service/scripts/homechooser"
+    mkdir -p "$T/service/scripts/lib"
+    cp "$HERE/lib/common.sh" "$T/service/scripts/lib/common.sh"
     printf '#!/bin/sh\necho "homekey $*" >> %s/cmds\n' "$T" > "$T/service/scripts/homechooser-homekey"
     printf '#!/bin/sh\n' > "$T/service/scripts/homechooser-home-watch"
     printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"

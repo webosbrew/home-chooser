@@ -70,6 +70,10 @@ starting Node. These hashes are per-TV cache keys, not a list of approved firmwa
 The installed `service/scripts/homechooser` entry is linked from Homebrew Channel's
 `/var/lib/webosbrew/init.d/homechooser`. The `homekey` enable flag controls boot application.
 Packaging places the five runtime scripts beside the service binary; the app bundle carries none. Offline tests are kept in the source tree.
+The entry scripts source shared helpers from `scripts/lib/`: common paths, logging, Luna calls,
+timeouts and locking; watcher record, preload, notifications, restore and events; and hook cache,
+restart and mount logic. The watcher copies `lib/` with itself into `/tmp/homechooser-runtime`,
+so it can restore stock after the installed service directory disappears.
 
 On first installation or after an update, `homekeyPrepare` generates copies under
 `/var/lib/webosbrew/homechooser/hook/`. Preparation validates every generated copy, builds in a

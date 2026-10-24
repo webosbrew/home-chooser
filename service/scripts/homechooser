@@ -1,36 +1,6 @@
 #!/bin/sh
-# Home Chooser boot entry. /var/lib/webosbrew/init.d/homechooser is a symlink to this file inside
-# the installed service; Homebrew Channel's run-parts runs it as root once per boot.
-#
-#   homechooser         boot: on webOS 6 to 9, when the Home key hook is enabled, apply it
-#                     (homechooser-homekey); if a home choice is stored, start the watcher
-#   homechooser watch   start the watcher now unless it is running, with or without a stored choice
-#                     (without one it checks once for a leftover home and exits; the app runs this
-#                     when it opens, so a reinstall repairs what an earlier Home Chooser left)
-#
-# The watcher is a transient systemd unit, homechooser-home, made with systemd-run: no unit file
-# is written and no other service is touched. The flags used (--unit, --property=Restart,
-# --property=RestartSec) exist in systemd 230 and later, which is what is assumed for webOS 5.
-# Restart=on-failure, not always: the watcher exits 0 when the choice is removed and has to stay
-# stopped then.
-#
-# The unit runs a small wrapper rather than the script itself: if the service scripts directory is gone when
-# the unit restarts (the package was uninstalled after a crash of the watcher), it runs the copy the
-# watcher left in /tmp/homechooser-runtime, so the restore to stock still happens; with neither,
-# it exits 0 and the unit stays stopped.
-#
-# The Home key hook is applied here, at boot, because this hook runs after the compositor has
-# started (systemd starts it long before devmode's startup.sh); the worker's apply therefore mounts
-# and restarts the compositor. The app never does that while the TV runs: it writes the flag and
-# asks for a reboot, and this entry applies the patch on that boot. Home Chooser's uninstall removes
-# the flag and the link, so nothing re-applies after it.
-#
-# Files, all under /var/lib/webosbrew/homechooser/: `home` is the stored choice, the app id alone;
-# `homekey` exists while the Home key hook is enabled.
-#
-# Overrides, for tests: HOMECHOOSER_DIR (the Home key hook directory), HOMECHOOSER_CHOICE,
-# HOMECHOOSER_HOMEKEY_FLAG, HOMECHOOSER_OSRELEASE, HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_SYSTEMD_RUN,
-# HOMECHOOSER_LOG.
+# Homebrew Channel init.d entry: apply the prepared hook and start the watcher.
+# The watcher unit uses its /tmp copy if the service is removed after a crash.
 
 SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
@@ -41,10 +11,6 @@ SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
 LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-boot.log}
 UNIT=homechooser-home
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
-
-log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null
-}
 
 # The directory this script really lives in: follow the symlink (readlink -f, else one readlink),
 # then the fixed app path. Exit quietly when the app is gone.
@@ -63,14 +29,6 @@ locate() {
     if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-homekey" ]; then
         exit 0
     fi
-}
-
-major_version() {
-    for key in VERSION_ID VERSION PRETTY_NAME; do
-        v=$(sed -n "s/^$key=//p" "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
-        if [ -n "$v" ]; then echo "$v"; return 0; fi
-    done
-    echo 0
 }
 
 # start_watcher [any]: start the unit if a choice is stored, or with `any` in any case.
@@ -93,6 +51,7 @@ start_watcher() {
 }
 
 locate
+. "$HERE/lib/common.sh"
 
 case "$1" in
     watch)

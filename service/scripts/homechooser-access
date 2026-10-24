@@ -1,26 +1,13 @@
 #!/bin/sh
-# Install the launcher API group in package manifests already created by the installer.
-# Test overrides: HOMECHOOSER_LUNA_ROOTS (space-separated), HOMECHOOSER_LS_CONTROL,
-# HOMECHOOSER_OSRELEASE. No jq or service changes outside Home Chooser's own files.
-#
-# The group exists only through our own api-permissions file, the way the installer declares
-# <service>.group for every developer service. It is never declared through groupsFiles: on
-# webOS 9.2.1 (and 11.2.0) ls-hubd segfaults in g_hash_table_iter_next when appinstalld unloads a
-# /var/luna-service2*/manifests.d manifest that has a groupsFiles entry (removeOneManifest at
-# "removing service files"), and appinstalld retries that removal at every boot. Our api file
-# also has its own name: org.webosbrew.homechooser.service.api.json is the installer's file (the
-# first version overwrote it; it is left to the installer now). Every run strips the first
-# version's groupsFiles entry and deletes its groups.d file.
+# Maintain the launcher API group in installer-owned manifests.
+
 set -eu
+. "$(dirname "$0")/lib/common.sh"
 ROOTS=${HOMECHOOSER_LUNA_ROOTS:-'/var/luna-service2-dev /var/luna-service2'}
 CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 changed=0
-major=0
-for key in VERSION_ID VERSION PRETTY_NAME; do
-    v=$(sed -n "s/^$key=//p" "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
-    if [ -n "$v" ]; then major=$v; break; fi
-done
+major=$(major_version)
 
 # Strip JSON whitespace outside strings, preserving escaped quotes and spaces in values.
 compact() {

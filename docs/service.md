@@ -10,8 +10,9 @@ the [README](../README.md#decisions) and [Root access](settings-app.md#root-acce
 
 `ares-package dist build/service-pkg` packs the app and the service together
 (`npm run package` in `app/` builds the service with `make -C service`, stages
-`services.json` and the binary with `app/scripts/stage-service.js`, then packages). The ipk holds
-`usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,services.json}` (binary mode
+`services.json`, the binary, five entry scripts and their `scripts/lib/` helpers with
+`app/scripts/stage-service.js`, then packages). The ipk holds
+`usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,services.json,scripts/}` (binary mode
 755) next to the app. `services.json` has `"engine": "native"` and `"executable":
 "homechooser-service"`, so `ares-package` marks the ipk `arm`. The SDK and firmware paths of the
 build, and the one source of the version, are in
@@ -306,6 +307,8 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 | `restartSam` | `/bin/systemctl restart sam` | 60 s |
 | `watch` | `/bin/sh <service>/scripts/homechooser watch` | 20 s |
 | `homekeyStatus` | `/bin/sh <service>/scripts/homechooser-homekey status` | 20 s |
+| `homekeyPrepare` | same with `prepare` (generates the persistent hook cache) | 120 s |
+| `homekeyClear` | same with `clear` (removes the hook cache) | 20 s |
 | `homekeyApply` | same with `apply` (restarts the compositor; debug only, the app does not call it) | 90 s |
 | `homekeyStop` | same with `stop` (unmounts and restarts the compositor; debug only) | 90 s |
 | `homekeyRefresh` | same with `refresh` (never restarts the compositor unless given `restart`) | 90 s |

@@ -113,8 +113,8 @@ TEXT_SOURCES = [
     (RESTART_NOW, 'app/src/views/MainPanel.js'),
     (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
-    ('$name' + REMOVAL_ALERT[2:], 'service/scripts/homechooser-home-watch'),
-    (UNINSTALL_TOAST, 'service/scripts/homechooser-home-watch'),
+    ('$name' + REMOVAL_ALERT[2:], 'service/scripts/lib/watch-notify.sh'),
+    (UNINSTALL_TOAST, 'service/scripts/lib/watch-restore.sh'),
 ]
 
 

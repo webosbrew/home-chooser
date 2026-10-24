@@ -24,4 +24,10 @@ fs.mkdirSync(packagedScripts, {recursive: true});
 	fs.copyFileSync(path.join(sourceScripts, name), path.join(packagedScripts, name));
 	fs.chmodSync(path.join(packagedScripts, name), 0o755);
 });
+const sourceLib = path.join(sourceScripts, 'lib');
+const packagedLib = path.join(packagedScripts, 'lib');
+fs.mkdirSync(packagedLib, {recursive: true});
+fs.readdirSync(sourceLib).filter((name) => /\.(sh|js)$/.test(name)).forEach((name) => {
+	fs.copyFileSync(path.join(sourceLib, name), path.join(packagedLib, name));
+});
 console.log('stage-service: ' + out);

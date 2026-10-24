@@ -27,6 +27,7 @@ setup() {
     mkfifo "$T/appsfeed"
     mkdir -p "$T/app" "$T/service/scripts" "$T/init.d"
     cp "$SCRIPT" "$T/service/scripts/homechooser-home-watch"
+    cp -R "$HERE/lib" "$T/service/scripts/lib"
     printf '#!/bin/sh\necho "homekey $* from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/service/scripts/homechooser-homekey"
     printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"
     printf '#!/bin/sh\n' > "$T/service/scripts/homechooser"
@@ -756,6 +757,8 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
+check "first run staged sourced helpers" test -f "$T/rt/lib/watch-restore.sh"
+rm -rf "$T/service/scripts"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
 touch "$T/flag"
