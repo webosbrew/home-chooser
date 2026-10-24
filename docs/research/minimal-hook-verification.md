@@ -214,3 +214,57 @@ reader changed to numeric suffix sorting, and the complete rerun passed. Artifac
 `e2e/results/w21a-kisscurl-20261024-213346/`. No product assertion failed in these attempts.
 The 6.5.2 firmware accepted Power Off but did not exit QEMU within 90 seconds; Beanjar synced
 the disks and stopped it on each shutdown. No crash was observed during these full runs.
+
+## Final VM matrix and scope of the result
+
+The 7.6.0 `w22p-mullet` lane completed its full E2E run with 106 PASS and no FAIL in
+`e2e/results/w22p-mullet-20261024-220405/`. Both boots mounted all seven staged files;
+the QML readiness check answered on its first attempt. The captured Recents kill predicate
+retained its stock last-input exclusion and explicitly spared LG Home and the chosen launcher.
+Cleanup removed both test apps, restored the original choice and left only the pre-existing
+Homebrew Channel developer app. Beanjar reported the VM Off.
+
+The 8.3.0 `w22o-number1` lane did not reach hook activation. Its first attempt recorded
+16 PASS and two FAIL in `e2e/results/w22o-number1-20261024-221553/`: remote navigation
+could not reach Home Chooser, so the scenario failed before selecting a launcher. Screenshot
+`03-keys-blocked.png` shows an LG country-change confirmation covering the UI. No confirmation
+was sent. A clean boot and second attempt in
+`e2e/results/w22o-number1-20261024-221953/` again showed the same prompt in
+`paused-screen.png`. The runner was paused before its first probe key and interrupted through
+its normal cleanup path. That attempt recorded 12 PASS before interruption. Neither attempt
+enabled the hook or restarted the compositor. Both removed their test apps and restored the
+original null default home, absent choice, absent enable flag and absent mounts. Only the
+pre-existing Homebrew Channel developer app remained. This is a firmware UI blocker; the
+8.3.0 product behavior is unverified, not a product assertion failure.
+
+The completed full runs have no crashd `CRASHED` or WebAppMgr crash evidence; the known
+`keyCheck2` fault entries remain boot noise. Manual diagnostic compositor restarts on 9.2.4
+produced native Qt input-app crashes, a separate firmware race outside the single boot-time
+restart in the full-run contract. The earlier 9.2.4 alert-log rotation and 6.5.2 BusyBox
+`sort -V` failures were runner defects corrected before passing reruns. The 6.5.2 slow
+shutdown was a firmware/VM shutdown behavior; Beanjar's disk-sync stop completed safely.
+
+The 9.2.4 preflight evidence in
+`e2e/results/w24g-ombre-minimal-preflight-20261024/preflight-final-home-console.log`
+answers the four device questions. `hcMember:true` and `hcType:function` show the new
+applicationManager group member reaches the script; `hcId` equaled the selected fixture id
+and the fixture's launch event had `reason:hotKey`, showing systemUi.js used the reassigned
+HOME_APP_ID. The compositor's own messages show its defaultApps subscription registering at
+startup, and `hcBound` followed the live fixture selection. The deliberately broken root QML
+left systemd's compositor unit active but removed the QML-served getCurrentState response;
+the worker timed out, unmounted all seven files, restarted stock once, and Home then launched
+LG Home. The real-worker rollback trace is under
+`e2e/results/w24g-ombre-minimal-recovery-20261024/`.
+
+At the end, `beanjar list --local --json` showed all 25 VMs Off. Each of the five named
+matrix VMs had its original developer-app set (Homebrew Channel only), no test apps, no
+Home Chooser choice, flag, watcher or mounts. No E2E or ares process remained running.
+
+The final source-size comparison against `911ffde` is: patch mechanism, 99 files / 3,797
+lines / 191,048 bytes before and two files / 874 lines / 37,087 bytes after; packaged
+backport, 102 files / 5,029 lines / 242,186 bytes before and five files / 2,100 lines /
+87,773 bytes after; tracked backport source, 109 files / 7,809 lines / 363,469 bytes
+before and 16 files / 5,132 lines / 225,647 bytes after. Removed content includes the
+eight obsolete per-release directories, their reviewed-set comparison tests,
+`test-generated.sh`, the old generated opt-in and hash-selection code, and stale
+manifest fields. The new rewriter keeps the live settings read and stored-id fallback.

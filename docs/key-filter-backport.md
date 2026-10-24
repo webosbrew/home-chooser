@@ -176,3 +176,8 @@ does not mark a build as device verified.
 | 9.2.4 | w24g-ombre / 33.20.23.01 W24G | 154 full E2E checks; API, reboot and automatic rollback verified | [Runtime evidence](research/minimal-hook-verification.md) |
 | 9.2.1 | w22h-ombre / 23.21.20.01 W22H | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
 | 6.5.2 | w21a-kisscurl / 03.53.25.01 W21A | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
+| 7.6.0 | w22p-mullet / 04.60.90.01 W22P | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
+
+The 8.3.0 VM is not yet device verified. An LG country-change confirmation held key focus
+before Home Chooser could select a launcher; the hook was never enabled. See the dated
+[verification record](research/minimal-hook-verification.md).
