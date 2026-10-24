@@ -1976,8 +1976,17 @@ class Scenario:
         our own screen, and the TV restarts through tvpower; --reboot-via later presses Later and the VM
         is restarted with beanjar stop/start.  Then the boot hook mounts the patch."""
         r, d = self.rec, self.dev
-        ui = self.wait(lambda: (lambda u: u if u.get('dialog') == REBOOT_TITLE else None)(self.ui() or {}), 90, 1)
+        toasts = []
+
+        def dialog_up():
+            u = self.ui() or {}
+            if u.get('toast') and u['toast'] not in toasts:
+                toasts.append(u['toast'])  # a failure is told in a toast that is gone by the time the wait ends
+            return u if u.get('dialog') == REBOOT_TITLE else None
+        ui = self.wait(dialog_up, 90, 1)
         dialog_mark = self.messages_mark()
+        if not ui:
+            r.note('no restart dialog: toasts seen while waiting for it', '\n'.join(toasts) or 'none')
         if not ui and self.a.update_check and d.mounts():
             r.note('no restart dialog and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
             return
