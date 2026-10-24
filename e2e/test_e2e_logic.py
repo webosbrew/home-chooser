@@ -7,6 +7,7 @@ launcher-API reply checks of --api-check, and the restart/crash detection.  No d
 """
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -220,6 +221,40 @@ class StockLeftRunning(unittest.TestCase):
         import types
         got = {m: e2e.Scenario.stock_left_running(types.SimpleNamespace(major=m)) for m in range(5, 13)}
         self.assertEqual(got, {5: False, 6: True, 7: True, 8: True, 9: True, 10: True, 11: False, 12: False})
+
+
+class FaultPopups(unittest.TestCase):
+    """foreign_popup: keyCheck2 is boot noise (triage 2026-10-24); a fault raised after the mark counts."""
+    KEYCHECK = ('{ "returnValue": true, "faultDetectedStatus": { "detected": 1, "detectedFaults": [ { "faultType": '
+                '"general", "faultContent": "keyCheck2_4415_sysfaultdetector", "faultTime": "30.448679184" } ] } }')
+
+    def test_keycheck_is_noise(self):
+        real, noise = e2e.classify_faults(self.KEYCHECK, 300.0)
+        self.assertEqual(real, [])
+        self.assertEqual(len(noise), 1)
+        # noise even without a mark
+        self.assertEqual(e2e.classify_faults(self.KEYCHECK, None)[0], [])
+
+    def test_new_crash_counts(self):
+        # 9.2.1 2026-10-23T04:26:50: crashd CRASHED WebAppMgr at [194.278], a fault entry at 194.292
+        reply = json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': 2, 'detectedFaults': [
+            {'faultTime': '31.319272907', 'faultType': 'general', 'faultContent': 'keyCheck2_4629_sysfaultdetector'},
+            {'faultTime': '194.292195087', 'faultType': 'crash', 'faultContent': 'WebAppMgr'}]}})
+        real, noise = e2e.classify_faults(reply, 150.0)
+        self.assertEqual([f['faultContent'] for f in real], ['WebAppMgr'])
+        # the same crash, raised before this step's mark: noted, not counted
+        real, noise = e2e.classify_faults(reply, 200.0)
+        self.assertEqual(real, [])
+        self.assertEqual(len(noise), 2)
+
+    def test_bad_reply(self):
+        self.assertEqual(e2e.classify_faults('Error: timeout', 10.0), ([], []))
+
+    def test_line_pattern(self):
+        rx = re.compile(e2e.POPUP_LINE_RE)
+        self.assertTrue(rx.search('2026-10-23T04:26:50Z [194.2] user.info crashd [] crashd CRASHED {"process":"WebAppMgr.5823"}'))
+        self.assertFalse(rx.search('2026-10-23T04:26:47Z [191.6] user.info faultmanager [] faultmanager FAULT_RESPONSE {} '
+                                   '[general]/tmp/faultmanager/general/keyCheck2_4629_sysfaultdetector(none)'))
 
 
 class FakeRec:

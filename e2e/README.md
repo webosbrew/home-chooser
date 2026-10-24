@@ -213,9 +213,13 @@ and backport docs.
    closes it with `notification/closeAlert` (alertId from the accepted reply, `luna-send -a
    com.webos.applicationManager`; no key is pressed, an LG popup on top would take it), and takes
    `4-alert-dismissed`. Before the alert screenshot and before each Home press that proves a launch,
-   the runner notes `foreign popup present: ...` when faultmanager's `getFaultDetectedStatus` lists a
-   detected fault or `/var/log/messages` has faultmanager crash-popup lines since the step start (the
-   LG "[crash] Fault Occured" popup); it never presses keys at it. Reinstall: the
+   the runner notes `foreign popup present: ...` (the LG "[crash] Fault Occured" popup) and, before a Home
+   proof, stops with a FAIL, when since the step's mark (messages time and uptime, taken when the step or the
+   press begins) `/var/log/messages` has a `crashd CRASHED` or faultmanager `createNotiPopup`/`sendCreateAlert`
+   line, or faultmanager's `getFaultDetectedStatus` lists a fault whose `faultTime` (seconds since boot) is after
+   the mark. `general` / `keyCheck2_<N>_sysfaultdetector` (one per boot, 27-34 s after it, constant within the
+   boot, seen on passing steps; only `faultmanager FAULT_RESPONSE` lines, no crashd line) and faults raised
+   before the mark are noted, never counted. It never presses keys at a popup. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
 5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the

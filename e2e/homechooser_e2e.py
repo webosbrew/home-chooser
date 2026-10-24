@@ -179,6 +179,38 @@ def crash_lines(text):
     return [l for l in (text or '').splitlines() if CRASH_RE.search(l)]
 
 
+# LG fault popups (foreign_popup).  faultmanager's getFaultDetectedStatus lists every fault of the boot with
+# its faultTime in seconds since boot (the [uptime] stamp of /var/log/messages: a WebAppMgr crash at
+# [194.278] gave faultTime 194.292 on 9.2.1).  `general` / keyCheck2_<N>_sysfaultdetector is boot-time noise:
+# one per boot, faultTime 27-34 s, constant within the boot, present on passing steps (7 distinct N in the
+# 2026-10-24 12.0 run, also 9.2.1 w22h-ombre and 7.x w22p-mullet), logged only as repeated `faultmanager
+# FAULT_RESPONSE` lines and never with a crashd CRASHED line.  A real crash adds a crashd CRASHED line and a
+# new fault entry at the crash time.
+FAULT_NOISE_RE = re.compile(r'^keyCheck2_\d+_sysfaultdetector$')
+POPUP_LINE_RE = r'crashd.*CRASHED|faultmanager.*(createNotiPopup|sendCreateAlert)|\[crash\] Fault'
+
+
+def classify_faults(reply, since_uptime):
+    """(real, noise) lists of getFaultDetectedStatus detectedFaults entries.  Real: not keyCheck2 noise and
+    raised after `since_uptime` (seconds since boot at the step's mark; None counts every entry as new).
+    Noise: keyCheck2 entries, and entries from before the mark (shown before this step began)."""
+    real, noise = [], []
+    try:
+        faults = (json.loads(reply).get('faultDetectedStatus') or {}).get('detectedFaults') or []
+    except (ValueError, AttributeError):
+        return real, noise
+    for f in faults:
+        if not isinstance(f, dict):
+            continue
+        try:
+            t = float(f.get('faultTime'))
+        except (TypeError, ValueError):
+            t = None
+        old = since_uptime is not None and t is not None and t <= since_uptime
+        (noise if FAULT_NOISE_RE.match(str(f.get('faultContent') or '')) or old else real).append(f)
+    return real, noise
+
+
 # ---------------------------------------------------------------------------------------------
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
@@ -1232,26 +1264,40 @@ class Scenario:
         rc, out = self.dev.exec("luna-send -a com.webos.applicationManager -n 1 %s '%s' 2>&1" % (uri, payload))
         return out.strip()
 
+    def popup_mark_now(self):
+        """The mark foreign_popup reads from: (messages time, seconds since boot), taken when a step begins."""
+        rc, out = self.dev.sh('cut -d" " -f1 /proc/uptime')
+        try:
+            up = float(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            up = None
+        return self.messages_mark(), up
+
     def foreign_popup(self, label):
         """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
         faultmanager (9.2.1 rootfs: /usr/sbin/faultmanager) raises the "[crash] Fault Occured" popup through
         notificationmgr and answers luna://com.webos.service.faultmanager/getFaultDetectedStatus with
-        detectedFaults; its crash lines (faultmanager/crashd/CRASHED/createNotiPopup) are in /var/log/messages.
-        notificationmgr has no list-alerts method.  Returns the evidence string or ''."""
+        detectedFaults; its crash lines (crashd CRASHED, faultmanager createNotiPopup) are in /var/log/messages.
+        notificationmgr has no list-alerts method.  Only what appeared since the step's mark (popup_mark,
+        set when the step began) counts: a crashd/faultmanager popup line since then, or a fault entry raised
+        since then that is not keyCheck2 boot noise (classify_faults).  Noise is noted.  Returns the evidence
+        of a real popup, or ''."""
         mark = getattr(self, 'popup_mark', None)
         if not mark:
-            mark = self.popup_mark = self.messages_mark()
-        ev = []
+            mark = self.popup_mark = self.popup_mark_now()
+        t_mark, up_mark = mark
         reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
-        flat = reply.replace(' ', '')
-        m = re.search(r'"detectedFaults":\[(.+?)\]', flat)
-        if m and m.group(1).strip():
-            ev.append('getFaultDetectedStatus: ' + reply[:300])
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E 'faultmanager.*(createNotiPopup|sendCreateAlert|detected)|crashd.*CRASHED|\\[crash\\] Fault' | tail -n 4" % mark)
+        real, noise = classify_faults(reply, up_mark)
+        ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4" % (t_mark, POPUP_LINE_RE))
         ev += [l for l in out.splitlines() if l.strip()]
+        if noise:
+            self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
+                          % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))
         if ev:
             self.rec.note('%s: foreign popup present: %s' % (label, ' | '.join(ev)),
                           'an LG system popup may hold key focus; no key is pressed at it')
+            self.shot(label + '-foreign-popup')
         return ' | '.join(ev)
 
     def notif_wait(self, method, before, timeout, every=3):
@@ -1459,6 +1505,7 @@ class Scenario:
         r = self.rec
         proof = expect == self.launcher
         if proof:
+            self.popup_mark = self.popup_mark_now()
             self.life_begin()
         if expect == STOCK and (self.major == 5 or self.stock_id == FULLHOME):
             # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
@@ -2425,7 +2472,7 @@ class Scenario:
     def step4(self):
         r, d = self.rec, self.dev
         r.begin('4 sudden launcher uninstall')
-        self.popup_mark = self.messages_mark()
+        self.popup_mark = self.popup_mark_now()
         alerts_before = len(self.notif_lines('createAlert'))
         comp0 = self.compositor_snapshot() if self.uses_backport() else None
         rc, out = d.remove(self.launcher)
