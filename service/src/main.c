@@ -22,8 +22,9 @@
 
 #include "policy.h"
 
+/* From app/package.json, the one source of the version (service/Makefile). */
 #ifndef HC_VERSION
-#define HC_VERSION "0.1.0"
+#error "HC_VERSION is set by service/Makefile from app/package.json"
 #endif
 
 #define CALL_TIMEOUT_S 20

@@ -27,9 +27,10 @@ check() { d=$1; shift; if "$@"; then PASS=$((PASS + 1)); else FAIL=$((FAIL + 1))
 
 if [ $# -eq 0 ]; then
     DEFAULTS=1
+    # where the roots live on this machine: OPENHOUSE_FIRMWARES and OPENHOUSE_HYPERVISOR override
     P=$HOME/Projects
-    H=$P/webos-hypervisor
-    F=$P/webos-firmwares
+    H=${OPENHOUSE_HYPERVISOR:-$P/webos-hypervisor}
+    F=${OPENHOUSE_FIRMWARES:-$P/webos-firmwares}
     set -- "5.6.1=$F/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs" \
            "5.6.2=$F/04.74.00.01-HE_DTV_W20H_AFADABAA/rootfs" \
            "6.3.1-W21Z=$H/scratch/firmware/03.00.27.01-HE_PJT_W21Z_AAAAGLAA/rootfs" \

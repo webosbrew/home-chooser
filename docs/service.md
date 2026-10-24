@@ -13,7 +13,9 @@ the [README](../README.md#decisions) and [Root access](settings-app.md#root-acce
 `services.json` and the binary with `app/scripts/stage-service.js`, then packages). The ipk holds
 `usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,services.json}` (binary mode
 755) next to the app. `services.json` has `"engine": "native"` and `"executable":
-"homechooser-service"`, so `ares-package` marks the ipk `arm`.
+"homechooser-service"`, so `ares-package` marks the ipk `arm`. The SDK and firmware paths of the
+build, and the one source of the version, are in
+[Build and test](settings-app.md#build-and-test).
 
 The binary is C, linked against `libluna-service2.so.3`, `libpbnjson_c.so.2` (all JSON in the
 service is pbnjson), `libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. `make -C service

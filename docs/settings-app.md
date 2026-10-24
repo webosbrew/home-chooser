@@ -544,6 +544,33 @@ npm run pack-p          # production build into app/dist
 npm run package         # ares-package into build/ipk (git-ignored)
 ```
 
+The paths of the build machine are variables. Their defaults are one developer's layout; set them on
+the `make` command line (`make -C service SDK=/opt/sdk`) or in the environment, which `npm run
+package` passes through to `make -C service`:
+
+| Variable | Default | Used by |
+| --- | --- | --- |
+| `SDK` | `/opt/arm-webos-linux-gnueabi_sdk-buildroot` | `service/Makefile`: the webOS buildroot SDK |
+| `SYSROOT` | `$(SDK)/arm-webos-linux-gnueabi/sysroot` | `service/Makefile` |
+| `CROSS` | `$(SDK)/bin/arm-webos-linux-gnueabi-` | `service/Makefile` (gcc, strip) and `service/test/check-abi.sh` (readelf, nm; `READELF` and `NM` override one tool) |
+| `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
+| `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
+| `OUT` | `../build/service` | `service/Makefile`: where the binary goes |
+| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `backport/test-real-roundtrip.sh` and `backport/test-generated.sh`: the firmware roots they try (a root that is missing is skipped) |
+| `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
+
+`make -C service test` and the Jest specs need none of them.
+
+The version has one source, `"version"` in `app/package.json`. `app/appinfo.json` (what
+`ares-package` and the TV read) must carry the same: `npm run check-version`
+(`app/scripts/check-version.js`) fails on a mismatch, `npm run package` runs it first, a Jest spec
+checks it with the other tests, and `npm version <x.y.z>` rewrites `appinfo.json` through the
+`version` script. The service binary gets it from `service/Makefile` (`VERSION`, read from
+`package.json`, compiled in as `HC_VERSION`; `main.c` has no copy of its own and an empty version
+fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
+version. The ipk's control file is written by `ares-package`, which fills in
+`Maintainer: N/A <nobody@example.com>` itself; that placeholder is left as it is.
+
 Enact copies all of iLib's locale data (83 MB, a 15 MB package) and its CLI has no switch to
 limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the build and
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale

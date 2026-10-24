@@ -433,7 +433,8 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
   closed during the restart.
 * `backport/test-real-roundtrip.sh [shell] [release=rootfs ...]` runs the worker against the
   real stock files of every set (the firmware roots are listed in the script; a set whose root is
-  not on the machine is skipped with a notice, and `OPENHOUSE_S23Z_ROOTFS` points at an unpacked
+  not on the machine is skipped with a notice; `OPENHOUSE_FIRMWARES` and `OPENHOUSE_HYPERVISOR`
+  move the two directories they are under, and `OPENHOUSE_S23Z_ROOTFS` points at an unpacked
   S23Z image; other roots can be given as `release=rootfs` arguments), with only `mount`,
   `umount`, `systemctl` and `luna-send` stubbed: the set is found by hash, every target is
   patched and mounted from sources under the work directory, the baked id follows the installed

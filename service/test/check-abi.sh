@@ -3,10 +3,11 @@
 # Lists the SONAMEs the binary needs and the highest GLIBC / GLIBCXX / GLIB version it asks of
 # each, then checks that the rootfs (the oldest supported release) has the libraries and offers
 # those versions. Exits non-zero on a miss.
+# The tools: READELF and NM, else CROSS (the Makefile's tool prefix) followed by the tool name.
 BIN=$1
 ROOT=$2
-OBJDUMP=${OBJDUMP:-/opt/arm-webos-linux-gnueabi_sdk-buildroot/bin/arm-webos-linux-gnueabi-objdump}
-READELF=${READELF:-/opt/arm-webos-linux-gnueabi_sdk-buildroot/bin/arm-webos-linux-gnueabi-readelf}
+CROSS=${CROSS:-/opt/arm-webos-linux-gnueabi_sdk-buildroot/bin/arm-webos-linux-gnueabi-}
+READELF=${READELF:-${CROSS}readelf}
 fail=0
 
 echo "== NEEDED"
@@ -28,7 +29,7 @@ done < /tmp/hc-abi-required.$$
 rm -f /tmp/hc-abi-required.$$
 
 echo "== undefined symbols the rootfs libraries do not define (weak toolchain stubs are fine)"
-NM=${NM:-/opt/arm-webos-linux-gnueabi_sdk-buildroot/bin/arm-webos-linux-gnueabi-nm}
+NM=${NM:-${CROSS}nm}
 $NM -D --undefined-only "$BIN" | awk '$1 != "w" {print $2}' | sed 's/@.*//' | sort -u > /tmp/hc-need.$$
 for so in $needed; do
 	f=$(find "$ROOT/lib" "$ROOT/usr/lib" -name "$so" 2>/dev/null | head -1)
