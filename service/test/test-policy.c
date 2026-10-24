@@ -285,6 +285,29 @@ static void test_luna_run(void)
 	CHECK(!hc_token_ok(NULL));
 }
 
+static int list_field_index(const char *name)
+{
+	for (int i = 0; hc_launcher_list_fields[i]; i++)
+		if (strcmp(hc_launcher_list_fields[i], name) == 0) return i;
+	return -1;
+}
+
+static void test_list_fields(void)
+{
+	/* the apiVersion 1 fields stay; appCategory is added so a launcher can find the other launchers */
+	static const char *const v1[] = {"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory"};
+	int n = 0;
+	while (hc_launcher_list_fields[n]) n++;
+	CHECK(n == (int)(sizeof v1 / sizeof v1[0]));
+	for (size_t i = 0; i < sizeof v1 / sizeof v1[0]; i++) CHECK(list_field_index(v1[i]) >= 0);
+	for (int i = 0; i < n; i++)
+		for (int j = i + 1; j < n; j++) CHECK(strcmp(hc_launcher_list_fields[i], hc_launcher_list_fields[j]) != 0);
+	/* nothing that reveals more than an app list needs */
+	CHECK(list_field_index("requiredPermissions") < 0);
+	CHECK(list_field_index("main") < 0);
+	CHECK(list_field_index("trustLevel") < 0);
+}
+
 static void test_reboot(void)
 {
 	CHECK(hc_reboot_needed("mounted=no\nreboot=needed\n"));
@@ -326,6 +349,7 @@ int main(void)
 	test_remove();
 	test_luna_run();
 	test_reboot();
+	test_list_fields();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }
