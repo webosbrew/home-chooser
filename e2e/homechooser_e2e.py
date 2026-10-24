@@ -952,6 +952,7 @@ class Recorder:
         self.log = open(os.path.join(outdir, 'run.log'), 'w')
 
     def say(self, text):
+        text = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(text))
         line = '%s %s' % (time.strftime('%H:%M:%S'), text)
         print(line, flush=True)
         self.log.write(line + '\n')
@@ -966,6 +967,7 @@ class Recorder:
 
     def check(self, name, ok, evidence='', expected=None):
         """expected: text citing the documented limitation; a failing check then records XFAIL."""
+        evidence = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(evidence))
         status = 'PASS' if ok else ('XFAIL' if expected else 'FAIL')
         self.results.append({'step': self.step, 'name': name, 'status': status,
                              'evidence': str(evidence), 'expected': expected})
