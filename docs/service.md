@@ -118,8 +118,8 @@ stay for manual and debugging use only.
    `createToast` (`noaction`) shows the message: `confirm: "toast"`. If the toast is refused too:
    `confirmFailed`.
 
-The PmLog id `REBOOT_ASK` records the request (`createAlert request: message "...", buttons Reboot
-(rebootConfirmed) and Later (focused)`, without the token) and the notification service's reply to
+The PmLog id `REBOOT_ASK` records the request (`createAlert request: message: <text>; buttons: Reboot
+(rebootConfirmed), Later (focused)`, without the token) and the notification service's reply to
 each call (`... createAlert accepted (exit 0): {...,"alertId":"..."}` or `refused`, then the
 `createToast` line when it falls back). The E2E runner reads these lines.
 

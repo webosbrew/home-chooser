@@ -18,8 +18,9 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
 `--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via dialog|later`
-(webOS 6-9, how the restart the first choice asks for is done; see "webOS 6-9: no restart while the TV runs");
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
+(webOS 6-9, how the restart the first choice asks for is done: `later`, the default, closes our alert and restarts the VM with
+beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart while the TV runs");
 `--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
 (below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
@@ -241,28 +242,34 @@ and backport docs.
 Since 144ef21 nothing restarts the compositor on a running TV (a bare restart crashed WebAppMgr;
 `docs/key-filter-backport.md` "Restarting the compositor"). The runner follows that:
 
-* Step 2, patch not mounted: the choice mounts nothing. The app shows its own dialog "Restart the
-  TV?" ("The Home button changes after a restart.", Reboot and Later). Asserted before the restart:
-  `homechooser-keyfilter status` says `mounted=no` and `reboot=needed`, nothing is mounted, the flag
-  and the `init.d` entry are written, the record names the launcher, and the compositor was not
-  restarted. With `--reboot-via dialog` (the default) the runner checks, through the inspector, that the
-  Home Chooser page (its URL) shows "Restart the TV?" and has key focus (`document.hasFocus()`,
-  `visibilityState` visible). sam's foreground app is not used: Home Chooser's window is an overlay
-  (appinfo `defaultWindowType`), so on 9.x `getForegroundAppInfo` keeps naming the card beneath,
-  `com.webos.app.home`, while our dialog has the keys. It checks RIGHT (Later) and LEFT (Reboot), re-reads
-  the page before every key and presses nothing once the page is gone, checks the key focus again and
-  presses OK on Reboot, on its own screen. If the page goes away under the dialog, the runner records why:
-  the inspector's reason, whether sam still runs the app, and sam/WAM close lines. On 9.2.1 (2026-10-24)
-  surface-manager closed our overlay with `close ... reason:"windowPolicy"` when sam relaunched a
-  force-closed stock home as the last-input app; WAM also closes it with `userTimeout` after a few minutes
-  without input. That is a `FAIL`, and the VM is restarted with beanjar so the run can go on. The TV then restarts through
-  `rebootConfirmed` and `tvpower/power/reboot`, which this exercises. The runner waits for a new
-  `boot_id`. If none comes in 240 s that is a `FAIL`, and the VM is restarted with beanjar so the
-  run can go on; a VM that Beanjar shows off is started again. With `--reboot-via later` it presses
-  Later, checks the "Restart the TV later to finish." toast and restarts the VM with `beanjar stop`
-  and `start`. After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`,
-  `reboot=no`, at least 9 mounts), and the backport log of that boot (its firmware-order compositor
-  restart is the only one allowed) is noted; the generated-patch status checks come here.
+* Step 2, patch not mounted: the choice mounts nothing. The app asks the service for a system alert
+  (Reboot and Later; the app has no restart dialog of its own, because surface-manager closes an overlay
+  after about 90 to 120 s without a key press, `userTimeout`, and the alert survives that) and toasts "Done.
+  Restart the TV to finish."; while the restart is pending it also lists a "Restart now" row under the note
+  "The Home button changes after a restart.". The runner reads the service's `REBOOT_ASK` PmLog lines
+  (since the confirmation was pressed) and checks: a `createAlert` request with the apply message and the
+  buttons Reboot and Later, and the notification service's reply. An accepted alert is the pass (screenshot
+  `2-reboot-alert`: look for the message and the two buttons, focus on Later). A refused alert passes only
+  with the fallback: an accepted `createToast` with the message. Through the inspector it also checks that
+  the page shows no dialog, lists the "Restart now" row and showed the toast (a page that an overlay timeout
+  closed is noted, not failed). Asserted before the restart: `homechooser-keyfilter status` says
+  `mounted=no` and `reboot=needed`, nothing is mounted, the flag and the `init.d` entry are written, the
+  record names the launcher, and the compositor was not restarted.
+  * `--reboot-via later` (the default): our alert is closed with `notification/closeAlert` (the `alertId`
+    from the accepted `createAlert` reply in the `REBOOT_ASK` line, `luna-send -a com.webos.applicationManager`,
+    as the removal alert is closed) and the VM is restarted with `beanjar stop` and `start`. No key is pressed.
+  * `--reboot-via alert`: pressing Reboot is `MANUAL`. The runner presses no key at the alert because it
+    cannot prove, without reading the picture, that the alert in front is ours and that focus is on Reboot:
+    notificationmgr has no list-alerts method, `createAlert` answers only an `alertId`, the alert's default
+    focus is Later, and the inspector page that proved ownership of the old in-app dialog is not in front of a
+    system alert (nor does a foreign popup, such as the LG fault popup, announce itself). A person presses
+    Reboot; the runner waits 240 s for a new `boot_id` and, on one, checks that the TV restarted through
+    `rebootConfirmed` and `tvpower/power/reboot` (a VM that Beanjar shows off is started again). With no new
+    boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
+  After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
+  least 9 mounts), and the backport log of that boot (its firmware-order compositor restart is the only
+  one allowed) is noted; the generated-patch status checks come here. The `rebootConfirmed` path (the
+  alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
 * No compositor restart: `surface-manager-daemon` keeps its `MainPID` and `NRestarts`, and no new
@@ -272,7 +279,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
 * No crash: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
   line and no WebAppMgr crash line, and within one boot `webapp-mgr` keeps its `MainPID` and `NRestarts`.
 * `--update-check` from a build older than 144ef21: that build mounts live and asks nothing; with no
-  dialog and the patch mounted the runner notes it and goes on.
+  restart prompt and the patch mounted the runner notes it and goes on.
 
 Measured on 2026-10-23: 10.3.1 accepted the alert from a plain root `luna-send` without `-a` (the watcher now sends with `-a com.webos.applicationManager`); 5.6.1
 and 9.2.1 answer `Alert is blocked by [ system ]` on every try (why is not established; on the 9.2.1

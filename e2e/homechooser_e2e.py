@@ -79,26 +79,28 @@ FULLHOME = 'com.webos.app.fullhome'
 # What the product says and writes (pure; e2e/test_e2e_logic.py checks them against the sources)
 # ---------------------------------------------------------------------------------------------
 DONE_TEXT = 'Done. Press Home to try it.'
-REBOOT_TITLE = 'Restart the TV?'
-REBOOT_LATER_TEXT = 'Restart the TV later to finish.'
-# the app's own restart dialog (app/src/views/useHomeChooser.js REBOOT_BODY)
-REBOOT_BODY = {'apply': 'The Home button changes after a restart.',
-               'remove': 'LG Home is on the Home button now. A restart removes the patch.'}
-# the service's system alert/toast when the screen is hidden (service/src/policy.c hc_reboot_message)
+# The app has no restart dialog of its own: the service raises a system alert, the app toasts this and,
+# while a restart is pending, shows RESTART_NOTE and a "Restart now" row (app/src/views/useHomeChooser.js).
+REBOOT_ASKED_TEXT = 'Done. Restart the TV to finish.'
+RESTART_NOTE = {'apply': 'The Home button changes after a restart.',
+                'remove': 'LG Home is on the Home button now. A restart removes the patch.'}
+RESTART_NOW = 'Restart now'
+REBOOT_BUTTONS = ('Reboot', 'Later')
+# the service's system alert (or the toast when the alert is refused; service/src/policy.c hc_reboot_message)
 REBOOT_PROMPT = {'apply': 'Restart the TV to finish setting up the Home button.',
                  'remove': 'Restart the TV to finish removing the Home button patch.'}
 # the watcher (backport/homechooser-home-watch): the same on every release, no restart mentioned
 REMOVAL_ALERT = '%s was removed, so the Home button opens LG Home again.'
 UNINSTALL_TOAST = 'Home Chooser was removed. The Home button opens LG Home again.'
 OLD_RESTART_TEXTS = ('Restart the TV to finish the change.', 'Restart the TV to put LG Home back on the Home button.',
-                     'The screen will blink once.')
+                     'The screen will blink once.', 'Restart the TV later to finish.', 'Restart the TV?')
 # (text, file relative to the repo that must contain it)
 TEXT_SOURCES = [
     (DONE_TEXT, 'app/src/views/useHomeChooser.js'),
-    (REBOOT_TITLE, 'app/src/views/MainPanel.js'),
-    (REBOOT_LATER_TEXT, 'app/src/views/useHomeChooser.js'),
-    (REBOOT_BODY['apply'], 'app/src/views/useHomeChooser.js'),
-    (REBOOT_BODY['remove'], 'app/src/views/useHomeChooser.js'),
+    (REBOOT_ASKED_TEXT, 'app/src/views/useHomeChooser.js'),
+    (RESTART_NOTE['apply'], 'app/src/views/useHomeChooser.js'),
+    (RESTART_NOTE['remove'], 'app/src/views/useHomeChooser.js'),
+    (RESTART_NOW, 'app/src/views/MainPanel.js'),
     (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
     ('$name' + REMOVAL_ALERT[2:], 'backport/homechooser-home-watch'),
@@ -141,6 +143,31 @@ def expects_reboot_dialog(major, mounted_before):
     """6.x to 9.x: choosing a launcher with the patch not mounted asks for a restart; with the patch
     already mounted (an earlier choice this boot) the switch is live and nothing is asked."""
     return uses_backport(major) and not mounted_before
+
+
+def parse_reboot_ask(text):
+    """The service's REBOOT_ASK PmLog lines (service/src/main.c on_reboot_prompt) -> what was asked and how
+    the notification service answered:
+    {'message', 'buttons' (list), 'alert' ('accepted'|'refused'|None), 'alert_id', 'toast' ('accepted'|'refused'|None)}.
+    The request line carries no token; the replies are the createAlert / createToast lines with their JSON."""
+    out = {'message': None, 'buttons': [], 'alert': None, 'alert_id': None, 'toast': None}
+    for line in (text or '').splitlines():
+        if 'REBOOT_ASK' not in line:
+            continue
+        m = re.search(r'createAlert request: message: (.*?); buttons: (.*)$', line)
+        if m:
+            out['message'] = m.group(1).strip()
+            out['buttons'] = [re.sub(r'\s*\(.*$', '', b).strip() for b in m.group(2).split(',')]
+            continue
+        m = re.search(r'notification/(createAlert|createToast) (accepted|refused)', line)
+        if m:
+            kind = 'alert' if m.group(1) == 'createAlert' else 'toast'
+            out[kind] = m.group(2)
+            if kind == 'alert':
+                a = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', line)
+                if a:
+                    out['alert_id'] = a[-1]
+    return out
 
 
 def parse_status(text):
@@ -896,6 +923,7 @@ FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.clos
             "dialog:(function(){var d=document.querySelector('[role=dialog]');return d?d.getAttribute('aria-label'):null})(),"
             "dialogText:(function(){var d=document.querySelector('[role=dialog]');return d?(d.textContent||'').trim().slice(0,300):null})(),"
             "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
+            "restart:!!document.querySelector('[data-spotlight-id=restart-now]'),"
             "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
 # Key focus of the Home Chooser page: on 9.x its window is an overlay (appinfo defaultWindowType), so sam's
 # foreground app stays the card beneath (com.webos.app.home) while our dialog has the keys; the page's own
@@ -1846,8 +1874,9 @@ class Scenario:
         mounted_before = bool(d.mounts()) if self.uses_backport() else False
         comp0 = self.compositor_snapshot() if self.uses_backport() else None
         if self.uses_backport():
-            r.note('patch mounted before choosing: %s (a restart dialog is %s)' % (
+            r.note('patch mounted before choosing: %s (a restart prompt is %s)' % (
                 mounted_before, 'expected' if expects_reboot_dialog(self.major, mounted_before) else 'not expected'), '')
+        self.ask_mark = self.messages_mark()
         self.press('OK')
         # the choice is applied; nothing restarts the compositor any more, so the panel stays open
         toasts = []
@@ -1999,35 +2028,82 @@ class Scenario:
             page.get('url') if page else None, title, ui.get('text'), ps.get('focus'), ps.get('visibility'),
             self.dev.foreground()[0])
 
+    def reboot_ask_log(self):
+        """The REBOOT_ASK lines of the service since the choice was confirmed (PmLog -> /var/log/messages)."""
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8"
+                              % getattr(self, 'ask_mark', ''))
+        return out
+
+    def close_reboot_alert(self, label, info):
+        """Our restart alert: closed over luna with the alertId from its createAlert reply (the same as the
+        removal alert; no key is pressed, so no foreign popup can take it).  True when closeAlert was accepted."""
+        r = self.rec
+        if info['alert'] != 'accepted' or not info['alert_id']:
+            r.note('%s: no accepted createAlert with an alertId in the REBOOT_ASK log; nothing to close' % label,
+                   json.dumps(info))
+            return False
+        out = self.priv_luna('luna://com.webos.notification/closeAlert', '{"alertId":"%s"}' % info['alert_id'])
+        good = '"returnValue":true' in out.replace(' ', '')
+        r.check('%s: closeAlert on our restart alert (-a com.webos.applicationManager) was accepted' % label, good,
+                'alertId %s\nreply: %s' % (info['alert_id'], out))
+        return good
+
     def reboot_after_choice(self, comp0):
-        """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks
-        "Restart the TV?" (Reboot / Later).  --reboot-via dialog (default) presses Reboot on that dialog,
-        our own screen, and the TV restarts through tvpower; --reboot-via later presses Later and the VM
-        is restarted with beanjar stop/start.  Then the boot hook mounts the patch."""
+        """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks the
+        service for a system alert (Reboot / Later) and says so in a toast.  The runner checks, from the
+        service's REBOOT_ASK log lines, that a createAlert for the restart prompt was sent with the buttons
+        Reboot and Later (or, when the alert was refused, that the toast fallback was shown).
+
+        --reboot-via later (default): our alert is closed with closeAlert and the VM is restarted with
+        beanjar stop/start.  No key is pressed.
+        --reboot-via alert: pressing Reboot on the alert is MANUAL.  The runner cannot prove, without
+        reading the picture, that the alert in front is ours and that focus is on Reboot: no luna method
+        lists or reports the focused alert (notificationmgr has no list-alerts; the createAlert reply is only
+        an alertId), the alert's own default focus is Later, and the inspector page of Home Chooser, which
+        proved ownership of the old in-app dialog, is not in front of a system alert.  So it presses nothing;
+        a person presses Reboot (the runner waits for the new boot id), else the alert is closed and the VM is
+        restarted with beanjar, like the default."""
         r, d = self.rec, self.dev
         toasts = []
 
-        def dialog_up():
+        def asked():
             u = self.ui() or {}
             if u.get('toast') and u['toast'] not in toasts:
-                toasts.append(u['toast'])  # a failure is told in a toast that is gone by the time the wait ends
-            return u if u.get('dialog') == REBOOT_TITLE else None
-        ui = self.wait(dialog_up, 90, 1)
-        dialog_mark = self.messages_mark()
-        if not ui:
-            r.note('no restart dialog: toasts seen while waiting for it', '\n'.join(toasts) or 'none')
-        if not ui and self.a.update_check and d.mounts():
-            r.note('no restart dialog and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
+                toasts.append(u['toast'])  # gone after 6 s
+            info = parse_reboot_ask(self.reboot_ask_log())
+            return info if info['alert'] else None
+        info = self.wait(asked, 90, 2) or parse_reboot_ask(self.reboot_ask_log())
+        if info['alert'] == 'refused':
+            self.wait(lambda: parse_reboot_ask(self.reboot_ask_log())['toast'] == 'accepted', 40, 3)
+            info = parse_reboot_ask(self.reboot_ask_log())
+        ui = self.ui()
+        if not info['alert'] and self.a.update_check and d.mounts():
+            r.note('no restart prompt and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
             return
-        self.shot('2-reboot-dialog')
-        ui = ui or self.ui() or {}
-        r.check('6-9, patch not mounted: the app asks "%s" (Reboot / Later)' % REBOOT_TITLE, ui.get('dialog') == REBOOT_TITLE,
-                json.dumps(ui))
-        r.check('the restart dialog says "%s"' % REBOOT_BODY['apply'], REBOOT_BODY['apply'] in (ui.get('dialogText') or ''),
-                repr(ui.get('dialogText')))
+        self.shot('2-reboot-alert')
+        raw_log = self.reboot_ask_log()
+        r.check('6-9, patch not mounted: the service sent a createAlert for the restart prompt with the buttons %s and %s'
+                % REBOOT_BUTTONS, info['message'] is not None and info['buttons'] == list(REBOOT_BUTTONS) and bool(info['alert']),
+                raw_log or 'no REBOOT_ASK line')
+        r.check('the restart prompt says "%s"' % REBOOT_PROMPT['apply'], info['message'] == REBOOT_PROMPT['apply'], repr(info['message']))
+        if info['alert'] == 'accepted':
+            r.check('the user was told: the restart alert was accepted by the notification service', True, raw_log)
+            r.note('look at screenshot 2-reboot-alert: an alert "Home Chooser" with "%s" and the buttons Reboot and Later '
+                   '(focus on Later)' % REBOOT_PROMPT['apply'], '')
+        else:
+            r.check('the alert was refused, so the fallback toast was shown (createToast accepted)',
+                    info['alert'] == 'refused' and info['toast'] == 'accepted', raw_log)
+        if ui is None:
+            r.note('Home Chooser page not readable after the choice (an overlay is closed after a stretch without keys)',
+                   self.page_gone_evidence(getattr(self, 'launch_mark', '') or ''))
+        else:
+            r.check('the app shows no restart dialog of its own', not ui.get('dialog'), json.dumps(ui))
+            r.check('the app lists a "%s" row while the restart is pending' % RESTART_NOW, ui.get('restart') is True, json.dumps(ui))
+            r.check('the app told "%s" in a toast (toasts seen: %s)' % (REBOOT_ASKED_TEXT, toasts),
+                    REBOOT_ASKED_TEXT in toasts or ui.get('toast') == REBOOT_ASKED_TEXT, repr(toasts))
         s = self.state()
         st, raw = self.kf_status()
-        r.note('state with the restart dialog up', json.dumps(s))
+        r.note('state with the restart prompt up', json.dumps(s))
         r.check('before the reboot: keyfilter status says mounted=no and reboot=needed',
                 st.get('mounted') == 'no' and st.get('reboot') == 'needed', raw)
         r.check('before the reboot: nothing is mounted', not s['mounts'], 'mounts: %s' % s['mounts'])
@@ -2036,65 +2112,29 @@ class Scenario:
         r.check('before the reboot: the record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         self.check_no_compositor_restart('choosing the launcher', comp0)
         boot0 = d.boot_id()
-        ok, why = self.ours_in_front(REBOOT_TITLE)
-        r.check('a key is pressed on OUR dialog only: Home Chooser in front showing "%s"' % REBOOT_TITLE, ok, why)
-        if not ok:
-            raise RuntimeError('not pressing a key: the restart dialog in front is not ours')
-        if self.a.reboot_via == 'later':
-            ok = self.focus_button('Later', first=False)
-            r.check('focus is on "Later"', ok, json.dumps(self.ui()))
-            if not ok:
-                raise RuntimeError('focus is not on Later; not pressing OK')
-            self.press('OK')
-            seen = self.wait(lambda: (lambda t: t if t == REBOOT_LATER_TEXT else None)((self.ui() or {}).get('toast')), 15, 1)
-            r.check('Later: the toast says "%s"' % REBOOT_LATER_TEXT, seen == REBOOT_LATER_TEXT, repr((self.ui() or {}).get('toast')))
-            self.close_insp()
-            up = self.beanjar_reboot('2 reboot (Later, then beanjar stop/start)')
-        else:
-            # Verify both directions on Home Chooser's own dialog before pressing OK. Besides
-            # exercising LEFT=confirm and RIGHT=cancel, this proves remote keys are reaching the
-            # inspected app rather than a popup that may have taken global key focus.
-            cancel_ok = self.focus_button('Later', first=False)
-            ui = self.ui()
-            r.check('RIGHT moves focus to "Later" (cancel)', cancel_ok,
-                    json.dumps(ui) if ui is not None else self.page_gone_evidence(dialog_mark))
-            ok = cancel_ok and self.focus_button('Reboot')
-            if cancel_ok:
-                ui = self.ui()
-                r.check('LEFT moves focus to "Reboot" (confirm)', ok,
-                        json.dumps(ui) if ui is not None else self.page_gone_evidence(dialog_mark))
-            if not ok and (ui is None or ui.get('dialog') != REBOOT_TITLE):
-                # our dialog is gone (the app closed under it): no key is pressed any more; the restart
-                # still has to happen for the rest of the run, so it is done with Beanjar
-                r.check('our "%s" dialog stayed up while its keys were checked' % REBOOT_TITLE, False,
-                        self.page_gone_evidence(dialog_mark))
-                self.close_insp()
-                up = self.beanjar_reboot('2 reboot (fallback: our dialog was closed, beanjar stop/start)')
-                if not up:
-                    raise RuntimeError('the VM did not come back after the reboot')
-                self.after_boot_checks('after the reboot')
-                return
-            if not ok:
-                raise RuntimeError('focus is not on Reboot; not pressing OK')
-            ps = self.page_state() or {}
-            r.check('just before OK: our page has key focus (document.hasFocus) and is visible',
-                    ps.get('focus') is True and ps.get('visibility') == 'visible', json.dumps(ps))
-            if not (ps.get('focus') is True and ps.get('visibility') == 'visible'):
-                raise RuntimeError('our page does not have key focus; not pressing OK')
-            self.press('OK')
-            self.close_insp()
+        self.close_insp()
+        if self.a.reboot_via == 'alert':
+            r.manual('press Reboot on the restart alert', 'the runner cannot prove that the alert in front is ours with focus on '
+                     'Reboot without reading the picture (see 2-reboot-alert), so it presses no key. Press Reboot by hand within '
+                     '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
             how = self.wait_reboot(boot0)
-            r.check('Reboot restarted the TV (rebootConfirmed -> tvpower/power/reboot; a VM that powers off counts)',
-                    how in ('rebooted', 'off'), how or 'no new boot id within 240 s')
-            if how == 'off':
-                r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
-                self.host.start(self.vm)
-                up = self.await_boot('2 reboot (Reboot button; VM started again)', boot0)
-            elif how == 'rebooted':
-                up = self.await_boot('2 reboot (Reboot button)', boot0)
+            if how in ('rebooted', 'off'):
+                r.check('Reboot restarted the TV (rebootConfirmed -> tvpower/power/reboot; a VM that powers off counts)', True, how)
+                if how == 'off':
+                    r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
+                    self.host.start(self.vm)
+                    up = self.await_boot('2 reboot (Reboot on the alert; VM started again)', boot0)
+                else:
+                    up = self.await_boot('2 reboot (Reboot on the alert)', boot0)
             else:
-                r.say('the Reboot button did not restart the TV: falling back to beanjar stop/start')
-                up = self.beanjar_reboot('2 reboot (fallback: beanjar stop/start)')
+                r.manual('Reboot on the alert restarted the TV', 'no new boot id within 240 s: nobody pressed Reboot')
+                self.close_reboot_alert('2 reboot', info)
+                up = self.beanjar_reboot('2 reboot (alert left alone, beanjar stop/start)')
+        else:
+            self.close_reboot_alert('2 reboot (Later)', info)
+            time.sleep(3)
+            self.shot('2-reboot-alert-closed')
+            up = self.beanjar_reboot('2 reboot (alert closed, then beanjar stop/start)')
         if not up:
             raise RuntimeError('the VM did not come back after the reboot')
         self.after_boot_checks('after the reboot')
@@ -2136,9 +2176,11 @@ class Scenario:
         for reason, text in sorted(REBOOT_PROMPT.items()):
             got = has(text, [svcdir])
             r.check('device texts: the service reboot prompt (%s) is "%s"' % (reason, text), bool(got), 'found in %s' % got)
-        for reason, text in sorted(REBOOT_BODY.items()):
+        for reason, text in sorted(RESTART_NOTE.items()):
             got = has(text, [APPDIR])
-            r.check('device texts: the app restart dialog (%s) says "%s"' % (reason, text), bool(got), 'found in %s' % got)
+            r.check('device texts: the app restart note (%s) says "%s"' % (reason, text), bool(got), 'found in %s' % got)
+        got = has(REBOOT_ASKED_TEXT, [APPDIR])
+        r.check('device texts: the app toast says "%s"' % REBOOT_ASKED_TEXT, bool(got), 'found in %s' % got)
 
     def step3(self):
         self.rec.begin('3 Home opens the launcher')
@@ -2897,9 +2939,11 @@ def main():
                          'the stock-home preload policy and the stock home is not running')
     ap.add_argument('--keyfilter-generated', action='store_true',
                     help='opt in to the generated keyfilter patch for a webOS 6-9 device run')
-    ap.add_argument('--reboot-via', choices=['dialog', 'later'], default='dialog',
-                    help="webOS 6-9, the restart the first choice asks for: press Reboot on Home Chooser's own dialog "
-                         "(default; tvpower) or press Later and restart the VM with beanjar stop/start")
+    ap.add_argument('--reboot-via', choices=['later', 'alert'], default='later',
+                    help="webOS 6-9, the restart the first choice asks for (the service's system alert): close our alert "
+                         "with closeAlert and restart the VM with beanjar stop/start (default; no key is pressed), or "
+                         "'alert': Reboot is pressed by a person (a MANUAL check; the runner presses no key at an alert "
+                         "it cannot prove is ours with focus on Reboot) and the runner waits for the new boot")
     ap.add_argument('--api-check', action='store_true',
                     help='the launcher-API contract (docs/launcher-api.md): calls as the launcher before and after it is '
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '

@@ -1370,7 +1370,7 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	jarray_append(buttons, no);
 	jobject_set(a, key_buf("buttons"), buttons);
 	/* The payload holds the token, so it is not logged; this line says what was asked (the e2e runner reads it). */
-	LOGI("REBOOT_ASK", "createAlert request: message \"%s\", buttons Reboot (rebootConfirmed) and Later (focused)", message);
+	LOGI("REBOOT_ASK", "createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)", message);
 	bool alert = reboot_notify("REBOOT_ASK", "luna://com.webos.notification/createAlert", a, 8);
 	j_release(&a);
 	const char *how = "alert";

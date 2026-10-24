@@ -104,7 +104,7 @@ class Texts(unittest.TestCase):
 
     def test_the_new_texts(self):
         self.assertEqual(e2e.UNINSTALL_TOAST, 'Home Chooser was removed. The Home button opens LG Home again.')
-        self.assertEqual(e2e.REBOOT_BODY['remove'], 'LG Home is on the Home button now. A restart removes the patch.')
+        self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the patch.')
         self.assertEqual(e2e.REBOOT_PROMPT, {'apply': 'Restart the TV to finish setting up the Home button.',
                                              'remove': 'Restart the TV to finish removing the Home button patch.'})
         self.assertNotIn('restart', (e2e.REMOVAL_ALERT % 'Dock').lower())
@@ -117,11 +117,53 @@ class Texts(unittest.TestCase):
             for old in e2e.OLD_RESTART_TEXTS:
                 self.assertNotIn(old, body, '%r still in %s' % (old, rel))
 
-    def test_app_reboot_body_matches(self):
+    def test_app_restart_note_matches(self):
         body = self.read('app/src/views/useHomeChooser.js')
-        m = re.search(r"REBOOT_BODY = \{(.*?)\};", body, re.S)
+        m = re.search(r"RESTART_NOTE = \{(.*?)\};", body, re.S)
         found = dict(re.findall(r"(\w+): '([^']*)'", m.group(1)))
-        self.assertEqual(found, e2e.REBOOT_BODY)
+        self.assertEqual(found, e2e.RESTART_NOTE)
+
+    def test_the_app_has_no_restart_dialog_and_the_service_says_what_it_logs(self):
+        self.assertNotIn('rebootAsk', self.read('app/src/views/useHomeChooser.js'))
+        self.assertNotIn('Restart the TV?', self.read('app/src/views/MainPanel.js'))
+        main = self.read('service/src/main.c')
+        self.assertIn('createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)', main)
+
+
+class RebootAsk(unittest.TestCase):
+    APPLY = e2e.REBOOT_PROMPT['apply']
+    REQUEST = ('2026-10-24T05:48:12 user.info org.webosbrew.homechooser.service [] REBOOT_ASK {} '
+               'createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)' % APPLY)
+
+    def test_accepted_alert(self):
+        text = self.REQUEST + '\n' + ('2026-10-24T05:48:12 user.info svc [] REBOOT_ASK {} luna://com.webos.notification/'
+                                      'createAlert accepted (exit 0): {"returnValue":true,"alertId":"com.x-1234"}')
+        got = e2e.parse_reboot_ask(text)
+        self.assertEqual(got['message'], self.APPLY)
+        self.assertEqual(got['buttons'], ['Reboot', 'Later'])
+        self.assertEqual((got['alert'], got['alert_id'], got['toast']), ('accepted', 'com.x-1234', None))
+
+    def test_escaped_json_in_the_log(self):
+        text = self.REQUEST + '\n' + 'REBOOT_ASK {} luna://com.webos.notification/createAlert accepted (exit 0): {\\"returnValue\\":true,\\"alertId\\":\\"a-9\\"}'
+        self.assertEqual(e2e.parse_reboot_ask(text)['alert_id'], 'a-9')
+
+    def test_refused_alert_then_toast(self):
+        text = '\n'.join([self.REQUEST,
+                          'REBOOT_ASK {} luna://com.webos.notification/createAlert refused (exit 0): {"returnValue":false,"errorText":"Alert is blocked by [ system ]"}',
+                          'REBOOT_ASK {} luna://com.webos.notification/createToast accepted (exit 0): {"returnValue":true,"toastId":"t1"}'])
+        got = e2e.parse_reboot_ask(text)
+        self.assertEqual((got['alert'], got['alert_id'], got['toast']), ('refused', None, 'accepted'))
+
+    def test_nothing_logged_and_foreign_lines(self):
+        for text in ('', None, 'UNINSTALL_ASK luna://com.webos.notification/createAlert accepted (exit 0): {"alertId":"u1"}'):
+            got = e2e.parse_reboot_ask(text)
+            self.assertEqual((got['message'], got['buttons'], got['alert'], got['alert_id'], got['toast']), (None, [], None, None, None))
+
+    def test_the_reboot_via_choices(self):
+        with open(os.path.join(REPO, 'e2e/homechooser_e2e.py'), encoding='utf-8') as f:
+            src = f.read()
+        self.assertIn("'--reboot-via', choices=['later', 'alert'], default='later'", src)
+        self.assertNotIn("'dialog'", src.split("'--reboot-via'")[1].split('add_argument')[0])
 
 
 class Luna(unittest.TestCase):
