@@ -41,7 +41,9 @@ HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.se
 def messages_command(path='/var/log/messages'):
     """Read retained rotations oldest first, then the active syslog (webOS uses .N.gz)."""
     quoted = shlex.quote(path)
-    return ("{ for log in $(ls %s.[0-9]*.gz 2>/dev/null | sort -Vr); do "
+    # BusyBox 1.29 on webOS 6 has no sort -V. Sort the numeric rotation suffix instead.
+    return ("{ for log in $(ls %s.[0-9]*.gz 2>/dev/null | "
+            "awk -F. '{print $(NF-1), $0}' | sort -rn | cut -d' ' -f2-); do "
             "zcat \"$log\" 2>/dev/null; done; cat %s; }" % (quoted, quoted))
 
 

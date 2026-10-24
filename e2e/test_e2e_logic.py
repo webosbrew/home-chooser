@@ -11,6 +11,8 @@ import io
 import json
 import os
 import re
+import shlex
+import shutil
 import sys
 import subprocess
 import tempfile
@@ -28,6 +30,16 @@ FULL, HOME = e2e.FULLHOME, e2e.STOCK
 class LogMark(unittest.TestCase):
     def test_rotated_messages_preserve_alert_and_crash_evidence(self):
         with tempfile.TemporaryDirectory() as root:
+            # webOS 6's BusyBox 1.29.3 rejects sort -V (observed on w21a-kisscurl).
+            # Exercise that constraint as well as numeric archive ordering.
+            bindir = os.path.join(root, 'bin')
+            os.mkdir(bindir)
+            sort = os.path.join(bindir, 'sort')
+            with open(sort, 'w') as script:
+                script.write('#!/bin/sh\ncase "$*" in *V*) exit 2;; esac\nexec %s "$@"\n'
+                             % shlex.quote(shutil.which('sort')))
+            os.chmod(sort, 0o755)
+            env = dict(os.environ, PATH=bindir + os.pathsep + os.environ['PATH'])
             path = os.path.join(root, 'messages')
             for suffix, content in [('.12.gz', 'a old\n'),
                                     ('.2.gz', 'b REBOOT_ASK createAlert\n'),
@@ -37,7 +49,7 @@ class LogMark(unittest.TestCase):
             with open(path, 'w') as log:
                 log.write('d current\n')
             cmd = e2e.messages_command(path) + " | awk '$1 >= \"b\"'"
-            result = subprocess.run(['sh', '-c', cmd], capture_output=True, text=True, check=True)
+            result = subprocess.run(['sh', '-c', cmd], capture_output=True, text=True, check=True, env=env)
             self.assertEqual(result.stdout, 'b REBOOT_ASK createAlert\nc crashd CRASHED\nd current\n')
 
     def test_messages_without_archives(self):
