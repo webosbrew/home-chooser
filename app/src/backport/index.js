@@ -2,7 +2,7 @@
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/key-filter-backport.md.
 import {errorMessage} from '../platform/errors';
 import {
-	GENERATED_FLAG, KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
+	KEYFILTER_FLAG, KEYFILTER_SCRIPT, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus,
 	persistenceStatusCommand
 } from '../homechooser/persistence';
 import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
@@ -11,7 +11,7 @@ export {APP_DIR, INIT_PATH} from '../homechooser/persistence';
 export const SCRIPT_PATH = KEYFILTER_SCRIPT;
 export const LOG_PATH = '/tmp/homechooser-backport.log';
 
-// The release gate is the major version; which diff set applies is decided by the script, by hash.
+// The worker checks unique structural anchors on webOS 6-9.
 export const backportApplies = (version) => {
 	const major = majorOf(version);
 	return major >= 6 && major <= 9;
@@ -20,22 +20,21 @@ export const backportApplies = (version) => {
 // Parse the `key=value` lines of `homechooser-keyfilter status`.
 export const parseStatus = (text) => {
 	const out = {};
-	const hashes = [];
+	const files = [], skipped = [];
 	String(text || '').split('\n').forEach((line) => {
-		const m = /^([a-z]+)=(.*)$/.exec(line.trim());
-		if (m && m[1] === 'hash') hashes.push(m[2]);
+		const m = /^([a-z-]+)=(.*)$/.exec(line.trim());
+		if (m && m[1] === 'file') files.push(m[2]);
+		else if (m && m[1] === 'skipped') skipped.push(m[2]);
 		else if (m) out[m[1]] = m[2];
 	});
 	return {
 		dataMissing: out.data === 'missing',
 		mounted: out.mounted === 'yes',
-		release: out.release && out.release !== 'unknown' ? out.release : null,
-		match: out.match && out.match !== 'none' ? out.match : null,
-		generated: out.generated || null,
+		patch: out.patch || null,
 		reason: out.reason || null,
-		optin: out.optin === 'yes',
+		unpatchedSites: Number(out['unpatched-sites'] || 0),
 		rebootNeeded: out.reboot === 'needed',
-		hashes
+		files, skipped
 	};
 };
 
@@ -47,7 +46,7 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 	const readStatus = async (run) => {
 		const persistence = parsePersistenceStatus((await run.run(persistenceStatusCommand())).stdout);
 		const state = parseStatus((await run.run(script('status'))).stdout);
-		return Object.assign({enabled: persistence.keyfilterEnabled, generatedOptIn: persistence.keyfilterGenerated, entry: persistence.entry}, state);
+		return Object.assign({enabled: persistence.keyfilterEnabled, entry: persistence.entry}, state);
 	};
 
 	const result = (log) => ({ok: true, steps: log, warnings: [], errors: []});
@@ -59,19 +58,6 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 
 	return {
 		applies: backportApplies(version),
-
-		async setGenerated(enabled) {
-			const log = [];
-			const run = runner(log);
-			const res = result(log);
-			try {
-				if (enabled) await run.write(GENERATED_FLAG, '');
-				else await run.remove(GENERATED_FLAG);
-			} catch (e) {
-				fail(res, e);
-			}
-			return res;
-		},
 
 		async status() {
 			const log = [];
@@ -96,8 +82,8 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 			try {
 				const before = await readStatus(run);
 				if (before.dataMissing) throw new Error('The backport files are missing from the app package');
-				if (!before.mounted && !before.match && !(before.generated === 'possible' && before.optin && before.generatedOptIn)) {
-					throw new Error('No backport set matches this firmware\'s key filter files, so nothing was installed');
+				if (!before.mounted && before.patch !== 'possible') {
+					throw new Error('The Home-key hook refused this firmware: ' + (before.reason || 'unknown reason'));
 				}
 
 				const record = await readDefaultApps(run);

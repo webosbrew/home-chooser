@@ -1,457 +1,367 @@
 #!/usr/bin/env node
 'use strict';
-// Home Chooser key filter backport, generated variant: rewrites the live stock compositor files so
-// the Home key follows the chosen home app, on a firmware that has no reviewed diff set.
+// the minimal, hash-free Home-key hook for webOS 6 to 9.
 //
-// One definition of the rules, two uses:
-//   - on the TV, homechooser-keyfilter runs `generate` as root (webOS 6 to 9, with /usr/bin/node,
-//     8.12 or later, which every 6.x to 9.x image ships) when no reviewed set matches and the user
-//     has switched the generated patch on; the output goes through the same stage, mount and
-//     refresh steps as a reviewed set;
-//   - in the lab, `lab-set` turns the same rules into a reviewed set (manifest.json and diffs) for
-//     a new firmware, to be read by a person before it is committed under backport/<release>/.
+//   node homechooser-keyfilter-gen.js check    --root DIR [--skip-version-gate]
+//   node homechooser-keyfilter-gen.js generate --root DIR --out DIR
 //
-//   node homechooser-keyfilter-gen.js check    [--root DIR]
-//   node homechooser-keyfilter-gen.js generate [--root DIR] --out DIR [--manifest FILE]
-//   node homechooser-keyfilter-gen.js lab-set  [--root DIR] --release NAME --out DIR
-//
-//   Any command also takes --skip-version-gate, which only the tests use, to prove that the
-//   structural checks refuse webOS 5 and 10 without the os-release check; the worker never passes it.
-//
-//   check     run every rule in memory, write nothing; exit 0 and print `ok files=N` when the rules
-//             and all post-conditions hold on the files under DIR (default /)
-//   generate  as check, then write the patched files to OUT/<absolute path> and a manifest (path,
-//             sha256 of the stock file, sha256 of the generated file) to FILE
-//   lab-set   as check, then write OUT/manifest.json and OUT/<path under usr/lib/qml, / as _>.diff
-//             (unified diffs against the stock files, applied with `patch -p0` from the root), the
-//             layout of backport/<release>/. Needs diff(1); lab use only.
-//
-// Exit status: 0 done, 2 the rules refuse this firmware (ABORT line on stderr, nothing written),
-// 1 usage or I/O error. Written for Node 8.12 (webOS 6): no named groups, lookbehind, dotAll,
-// replaceAll or recursive mkdir.
-//
-// Rules, in short (details in docs/key-filter-backport.md):
-//   - targets are discovered: every .qml/.js under usr/lib/qml/{WebOSCompositor,KeyFilters,
-//     WebOSCompositorBase/global} that names the stock id (the literal "com.webos.app.home" or
-//     HOME_APP_ID), plus Settings.qml and StarfishKeyFilter.qml, which carry the new functions;
-//   - comparisons with the stock id become isHomeApp(x); launches of it go through launchHome();
-//     values that carry it become getHomeAppId();
-//   - Settings.qml gets getHomeAppId, isHomeApp and launchHome, exactly the text of the reviewed
-//     sets; StarfishKeyFilter.qml exposes them to the key filter scripts.
-// Post-conditions (any failure aborts the whole run, and nothing is mounted): the firmware is
-// webOS 6 to 9; no target already routes through isHomeApp/getHomeAppId; every anchor and every
-// counted rule fires exactly its expected number of times; no stock literal or HOME_APP_ID is
-// left except the one stockHomeAppId in Settings.qml; no stock literal sits in the rest of the
-// WebOSCompositorBase tree; files that call Settings.* import WebOSCompositorBase; the brackets
-// of every output balance as in the stock file; Settings.qml has its placeholder line once.
+// Tier 1 (all or nothing; any failed guard -> exit 2, nothing written, stock stays):
+//   Settings.qml          one constant block before the root's closing brace + one import line
+//   StarfishKeyFilter.qml applicationManager.launch / checkLaunch redirect the stock id, and expose getHomeAppId
+//   systemUi.js           only where `var HOME_APP_ID = "com.webos.app.home";` exists: one line at the top of
+//                         handleHomeKeys refreshes HOME_APP_ID from the live home id
+// Tier 2 (each file on its own; a file whose anchors do not match exactly is left stock and reported):
+//   StarfishNudgeView, StarfishBaseLunaServiceAPI, StarfishRecents, StarfishFullscreenController
+// Written for Node 8.12: no named groups, lookbehind, dotAll, replaceAll or recursive mkdir.
 
 var fs = require('fs');
-var os = require('os');
 var path = require('path');
 var crypto = require('crypto');
 
-var BASE = 'usr/lib/qml/';
-var SCAN_DIRS = ['WebOSCompositor', 'KeyFilters', 'WebOSCompositorBase/global'];
-var OTHER_DIRS = ['WebOSCompositorBase']; // read for stray stock ids only
+var Q = 'usr/lib/qml/';
+var STOCK = 'com.webos.app.home';
 var LIT = '"com\\.webos\\.app\\.home"';
-var LIT_RE = new RegExp(LIT + '|HOME_APP_ID\\b');
-var PLACEHOLDER = 'configuredHomeAppId: "@HOMECHOOSER_HOME@"';
+var F = {
+	settings: Q + 'WebOSCompositorBase/global/Settings.qml',
+	keyfilter: Q + 'WebOSCompositor/controllers/StarfishKeyFilter.qml',
+	systemui: Q + 'KeyFilters/systemUi.js',
+	nudge: Q + 'WebOSCompositor/views/StarfishNudgeView.qml',
+	baseluna: Q + 'WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml',
+	recents: Q + 'WebOSCompositor/controllers/fullscreen/StarfishRecents.qml',
+	fullscreen: Q + 'WebOSCompositor/controllers/StarfishFullscreenController.qml'
+};
+var MARK = 'Home Chooser';
+var PLACEHOLDER = '@HOMECHOOSER_HOME@';
 
-var SETTINGS_IMPORT = 'import WebOSServices 1.0';
-// The text the reviewed sets add to Settings.qml after subscribe(); identical in every set.
+// The one block of new logic. Settings.qml is byte-identical on every 6.x-9.x build seen, so this
+// text never varies with the firmware; only where it is inserted is matched.
 var SETTINGS_BLOCK = [
-	"    // Home Chooser: the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.",
-	"    readonly property string stockHomeAppId: \"com.webos.app.home\"",
-	"    // Set at boot by homechooser-keyfilter from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.",
-	"    readonly property string configuredHomeAppId: \"@HOMECHOOSER_HOME@\"",
-	"",
-	"    function getHomeAppId() {",
-	"        var apps = root.subscribe(\"com.webos.settingsservice\", \"getSystemSettings\",",
-	"                                  {\"category\": \"general\", \"keys\": [\"defaultApps\"]});",
-	"        if (apps && typeof apps.home === \"string\" && apps.home !== \"\")",
-	"            return apps.home;",
-	"        if (root.configuredHomeAppId !== \"\")",
-	"            return root.configuredHomeAppId;",
-	"        return root.stockHomeAppId;",
-	"    }",
-	"",
-	"    function isHomeApp(appId) {",
-	"        return appId === root.getHomeAppId();",
-	"    }",
-	"",
-	"    // Launch the home app with the extra fields of the stock call (params, reason, ...).",
-	"    // When the chosen app is not the stock one and the launch fails, launch the stock one the same way.",
-	"    property var __homeLaunch: null",
-	"",
-	"    function launchHome(request) {",
-	"        var id = root.getHomeAppId();",
-	"        request = request || {};",
-	"        root.__homeLaunch = (id !== root.stockHomeAppId) ? request : null;",
-	"        root.__launchApp(id, request);",
-	"    }",
-	"",
-	"    function __launchApp(id, request) {",
-	"        var payload = {\"id\": id};",
-	"        for (var key in request)",
-	"            payload[key] = request[key];",
-	"        homeLaunchService.callService(payload);",
-	"    }",
-	"",
-	"    Service {",
-	"        id: homeLaunchService",
-	"        appId: root.appId",
-	"        service: \"com.webos.applicationManager\"",
-	"        method: \"launch\"",
-	"        onResponse: {",
-	"            var request = root.__homeLaunch;",
-	"            root.__homeLaunch = null;",
-	"            var reply;",
-	"            try {",
-	"                reply = JSON.parse(payload);",
-	"            } catch (e) {",
-	"                return;",
-	"            }",
-	"            if (request && reply.returnValue === false) {",
-	"                console.warn(\"Home app launch failed, launching \" + root.stockHomeAppId + \": \" + payload);",
-	"                root.__launchApp(root.stockHomeAppId, request);",
-	"            }",
-	"        }",
-	"    }",
-	""
-].join('\n') + '\n';
+	'',
+	'    // ' + MARK + ': the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.',
+	'    readonly property string stockHomeAppId: "' + STOCK + '"',
+	'    // Set at boot by homechooser-keyfilter from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.',
+	'    readonly property string configuredHomeAppId: "' + PLACEHOLDER + '"',
+	'    // Starts the defaultApps subscription with the compositor, so the first Home press sees the record.',
+	'    readonly property string homeAppId: root.getHomeAppId()',
+	'',
+	'    function getHomeAppId() {',
+	'        var apps = root.subscribe("com.webos.settingsservice", "getSystemSettings",',
+	'                                  {"category": "general", "keys": ["defaultApps"]});',
+	'        if (apps && typeof apps.home === "string" && apps.home !== "")',
+	'            return apps.home;',
+	'        if (root.configuredHomeAppId !== "")',
+	'            return root.configuredHomeAppId;',
+	'        return root.stockHomeAppId;',
+	'    }',
+	'',
+	'    function isHomeApp(appId) {',
+	'        return appId === root.getHomeAppId();',
+	'    }',
+	'',
+	'    // Key filter launches of the stock id: false when the stock home is the home (the stock path runs);',
+	'    // otherwise the chosen home is launched with the same params, falling back to the stock one.',
+	'    function redirectHomeLaunch(appId, params, reason) {',
+	'        if (appId !== root.stockHomeAppId || root.getHomeAppId() === root.stockHomeAppId)',
+	'            return false;',
+	'        var p = params;',
+	'        if (typeof p === "string") {',
+	'            try {',
+	'                p = (p === "") ? {} : JSON.parse(p);',
+	'            } catch (e) {',
+	'                return false;',
+	'            }',
+	'        }',
+	'        root.launchHome({"params": p || {}, "checkUpdateOnLaunch": false, "autoInstallation": false,',
+	'                         "reason": typeof reason === "string" ? reason : "hotKey"});',
+	'        return true;',
+	'    }',
+	'',
+	'    property var __homeLaunch: null',
+	'',
+	'    function launchHome(request) {',
+	'        var id = root.getHomeAppId();',
+	'        request = request || {};',
+	'        root.__homeLaunch = (id !== root.stockHomeAppId) ? request : null;',
+	'        root.__launchApp(id, request);',
+	'    }',
+	'',
+	'    function __launchApp(id, request) {',
+	'        var payload = {"id": id};',
+	'        for (var key in request)',
+	'            payload[key] = request[key];',
+	'        homeLaunchService.callService(payload);',
+	'    }',
+	'',
+	'    Service {',
+	'        id: homeLaunchService',
+	'        appId: root.appId',
+	'        service: "com.webos.applicationManager"',
+	'        method: "launch"',
+	'        onResponse: {',
+	'            var request = root.__homeLaunch;',
+	'            root.__homeLaunch = null;',
+	'            var reply;',
+	'            try {',
+	'                reply = JSON.parse(payload);',
+	'            } catch (e) {',
+	'                return;',
+	'            }',
+	'            if (request && reply.returnValue === false) {',
+	'                console.warn("Home app launch failed, launching " + root.stockHomeAppId + ": " + payload);',
+	'                root.__launchApp(root.stockHomeAppId, request);',
+	'            }',
+	'        }',
+	'    }',
+	''
+].join('\n');
 
-var FILE_SETTINGS = BASE + 'WebOSCompositorBase/global/Settings.qml';
-var FILE_KEYFILTER = BASE + 'WebOSCompositor/controllers/StarfishKeyFilter.qml';
-var FILE_SYSTEMUI = BASE + 'KeyFilters/systemUi.js';
-var CORE = [FILE_SETTINGS, FILE_KEYFILTER, FILE_SYSTEMUI];
+function Abort(m) { this.message = m; }
+function abort(m) { throw new Abort(m); }
 
-function Abort(message) {
-	this.message = message;
+function count(re, t) {
+	var g = new RegExp(re.source, re.flags.indexOf('g') < 0 ? re.flags + 'g' : re.flags);
+	return (t.match(g) || []).length;
 }
 
-function abort(message) {
-	throw new Abort(message);
+// exactly one match of re in t, or abort(what)
+function one(t, re, what) {
+	var n = count(re, t);
+	if (n !== 1) abort(what + ': anchor matched ' + n + ' times, expected 1');
+	return re.exec(t);
 }
 
-// ---------------------------------------------------------------------------------------------
-// The rules. applyRules takes a file's relative path and text and returns the new text.
-// fire(rel, name, n, expected) records how often a rule fired; an `expected` makes any other
-// count an abort. A rule without one may fire any number of times: the residual check in plan()
-// is what proves nothing was missed.
-
-function applyRules(rel, text, fire) {
-	var base = path.basename(rel);
-	var isJs = /\.js$/.test(rel);
-	var isc = isJs ? 'global.isHomeApp' : 'Settings.isHomeApp';
-	var idc = isJs ? 'global.getHomeAppId()' : 'Settings.getHomeAppId()';
-	var t = text;
-
-	function sub(name, re, repl, expected) {
-		var k = 0;
-		t = t.replace(re, function () {
-			k++;
-			return typeof repl === 'function' ? repl.apply(null, arguments) : repl;
-		});
-		fire(rel, name, k, expected);
+// index of the brace that closes the one at i (no string/comment awareness; guarded by balance()).
+function closeOf(t, i) {
+	var d = 0;
+	for (var k = i; k < t.length; k++) {
+		if (t[k] === '{') d++;
+		else if (t[k] === '}' && --d === 0) return k;
 	}
-
-	function once(name, re, repl) {
-		sub(name, re, repl, 1);
-	}
-
-	// A. comparisons: x == "com.webos.app.home", x !== HOME_APP_ID
-	sub('cmp', new RegExp('([A-Za-z_][\\w.\\[\\]]*)\\s*(===|!==|==|!=)\\s*(?:HOME_APP_ID\\b|' + LIT + ')', 'g'),
-		function (all, lhs, op) {
-			return (op.charAt(0) === '!' ? '!' : '') + isc + '(' + lhs + ')';
-		});
-
-	// B. the key filter launches
-	if (base === 'systemUi.js') {
-		sub('launch', new RegExp('applicationManager\\.launch\\(\\s*' + LIT + ',\\s*JSON\\.stringify\\((\\{[^;]*?\\})\\)\\);', 'g'),
-			function (all, opts) {
-				return 'applicationManager.launchHome(' + opts + ');';
-			}, 1);
-		sub('checkLaunch', new RegExp('(applicationManager\\.checkLaunch\\()' + LIT + ',\\s*', 'g'),
-			function (all, head) {
-				return head + 'global.getHomeAppId(), ';
-			});
-		sub('defHOME', /^var HOME_APP_ID = "com\.webos\.app\.home";\n/gm, '');
-	}
-	if (base === 'appLaunch.js') {
-		var head = new RegExp('([ \\t]*)switch \\(targetAppId\\) \\{\\n\\s*case "com\\.webos\\.app\\.home":\\n\\s*applicationManager\\.launch\\("com\\.webos\\.app\\.home",\\n\\s*JSON\\.stringify\\((\\{"activateType": "showOption"\\})\\)\\);\\n\\s*break;\\n\\s*default:\\n');
-		var m = head.exec(t);
-		var n = 0;
-		if (m) {
-			var indent = m[1];
-			var rest = t.slice(m.index + m[0].length);
-			var m2 = /^([\s\S]*?)\n[ \t]*break;\n([ \t]*\}\n[ \t]*return KeyPolicy\.Accepted;)/.exec(rest);
-			if (!m2) abort(rel + ': the end of the switch is not where expected');
-			t = t.slice(0, m.index) + indent + 'if (global.isHomeApp(targetAppId)) {\n' + indent +
-				'    applicationManager.launchHome(' + m[2] + ');\n' + indent + '} else {\n' + m2[1] + '\n' + m2[2] +
-				rest.slice(m2[0].length);
-			n = 1;
-		}
-		fire(rel, 'switch', n);
-	}
-
-	// H. object values: appId: "com.webos.app.home"
-	sub('objval', new RegExp('("?appId"?\\s*:\\s*)' + LIT, 'g'), function (all, lead) {
-		return lead + idc;
-	});
-	// G1. a default: supportNMRM ? "com.webos.app.home" :
-	sub('ternary', new RegExp('(supportNMRM \\? )' + LIT + '( :)', 'g'), function (all, a, b) {
-		return a + idc + b;
-	});
-
-	// I. the home view
-	if (base === 'StarfishHomeView.qml') {
-		sub('hv-open', /LS\.adhoc\.call\("luna:\/\/com\.webos\.applicationManager", "\/launch", "\{\\"id\\":\\"com\.webos\.app\.home\\"\}"\);/g,
-			'Settings.launchHome({});', 1);
-		sub('hv-close', new RegExp('(closeWindowByAppId\\()' + LIT, 'g'), function (all, lead) {
-			return lead + 'Settings.getHomeAppId()';
-		}, 1);
-	}
-	// G2. the view state controller keeps the home app subscribed
-	if (base === 'StarfishViewStateController.qml') {
-		once('homeAppId-anchor', /^([ \t]*)(property string lastInputApp:)/gm, function (all, ind, prop) {
-			return ind + '// Home Chooser: start the home app subscription with the compositor\n' + ind +
-				'property string homeAppId: Settings.getHomeAppId()\n' + ind + prop;
-		});
-	}
-	// E. what the key filter scripts can see
-	if (rel === FILE_KEYFILTER) {
-		once('kf-global', /^([ \t]*)(readonly property var closeOverlaidItems: viewState\.closeOverlaidItems\n)/gm,
-			function (all, ind, line) {
-				return ind + line + ind + 'readonly property var getHomeAppId: function() { return Settings.getHomeAppId(); }\n' +
-					ind + 'readonly property var isHomeApp: function(appId) { return Settings.isHomeApp(appId); }\n';
-			});
-		once('kf-am', /(readonly property QtObject applicationManager: QtObject \{\n([ \t]*)\/\/ functions\n)/g,
-			function (all, lead, ind) {
-				return lead + ind + 'readonly property var launchHome: function(params) {\n' + ind +
-					'    Settings.launchHome({"params": params, "checkUpdateOnLaunch": false,\n' + ind +
-					'                         "autoInstallation": false, "reason": "hotKey"});\n' + ind + '}\n\n';
-			});
-	}
-	// F. the new functions
-	if (rel === FILE_SETTINGS) {
-		once('s-import', /^(import WebOSCompositorBase 1\.0\n)/gm, function (all, line) {
-			return line + SETTINGS_IMPORT + '\n';
-		});
-		once('s-block', /(        return systemSettings\.subscribeOnDemand\(type, method, key, returnRaw\);\n    \}\n\n)/g,
-			function (all, line) {
-				return line + SETTINGS_BLOCK;
-			});
-	}
-	return t;
+	return -1;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Files and checks
-
-function readText(file) {
-	return fs.readFileSync(file, 'latin1'); // bytes in, bytes out: the rules are ASCII
-}
-
-function sha256(text) {
-	return crypto.createHash('sha256').update(Buffer.from(text, 'latin1')).digest('hex');
-}
-
-function rel(root, full) {
-	return path.relative(root, full).split(path.sep).join('/');
-}
-
-function walk(dir, out) {
-	var entries;
-	try {
-		entries = fs.readdirSync(dir);
-	} catch (e) {
-		return out;
-	}
-	entries.sort();
-	entries.forEach(function (name) {
-		var full = path.join(dir, name);
-		var st = fs.lstatSync(full);
-		if (st.isDirectory()) walk(full, out);
-		else if (st.isFile() && /\.(qml|js)$/.test(name)) out.push(full);
-	});
-	return out;
-}
-
-function mkdirp(dir) {
-	if (fs.existsSync(dir)) return;
-	mkdirp(path.dirname(dir));
-	fs.mkdirSync(dir);
-}
-
-// opens minus closes of {}, () and [], as one string
-function balance(text) {
-	function n(c) {
-		return text.split(c).length - 1;
-	}
+function balance(t) {
+	function n(c) { return t.split(c).length - 1; }
 	return [n('{') - n('}'), n('(') - n(')'), n('[') - n(']')].join(',');
 }
 
-function osMajor(root) {
-	var text;
-	try {
-		text = readText(path.join(root, 'etc/os-release'));
-	} catch (e) {
-		return null;
+function insertAt(t, i, s) { return t.slice(0, i) + s + t.slice(i); }
+
+// ------------------------------------------------------------------------------------------
+// Tier 1
+
+function patchSettings(t) {
+	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('Settings.qml already has home helpers');
+	one(t, /^pragma Singleton$/m, 'Settings.qml singleton');
+	one(t, /^    id: root$/m, 'Settings.qml id: root');
+	one(t, /^    function subscribe\(type, method, key, returnRaw\) \{$/m, 'Settings.qml subscribe()');
+	var imp = one(t, /^import WebOSCompositorBase 1\.0\n/m, 'Settings.qml import');
+	if (!/^import WebOSServices /m.test(t)) {
+		t = insertAt(t, imp.index + imp[0].length, 'import WebOSServices 1.0\n');
 	}
-	var m = /^VERSION_ID="?(\d+)\./m.exec(text);
+	var end = one(t, /\n\}\n?$/, 'Settings.qml closing brace');
+	return insertAt(t, end.index + 1, SETTINGS_BLOCK);
+}
+
+function patchKeyFilter(t, needCheckLaunch) {
+	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('StarfishKeyFilter.qml already routes the home id');
+	one(t, /^import WebOSCompositorBase 1\.0$/m, 'StarfishKeyFilter.qml import');
+	var g = one(t, /^[ \t]*readonly property QtObject applicationManager: QtObject \{$/m, 'applicationManager group');
+	var gOpen = g.index + g[0].length - 1;
+	var gEnd = closeOf(t, gOpen);
+	if (gEnd < 0) abort('applicationManager group does not close');
+	var reL = /^([ \t]*)readonly property var launch: function\(appId, params, checkUpdateOnLaunch, autoInstallation, reason\) \{\n/m;
+	var reC = /^([ \t]*)readonly property var checkLaunch:[ \t]+function\(appId, params, checkUpdateOnLaunch, autoInstallation\) \{\n/m;
+	var l = one(t, reL, 'applicationManager.launch');
+	if (l.index < gOpen || l.index > gEnd) abort('applicationManager.launch is outside its group');
+	var c = null;
+	var nc = count(reC, t);
+	if (nc === 1) {
+		c = reC.exec(t);
+		if (c.index < gOpen || c.index > gEnd) abort('applicationManager.checkLaunch is outside its group');
+	} else if (nc > 1 || needCheckLaunch) {
+		abort('applicationManager.checkLaunch matched ' + nc + ' times');
+	}
+	var ind = l[1];
+	// edits from the end backwards so indices stay valid
+	var edits = [];
+	edits.push([l.index + l[0].length, ind + '    if (Settings.redirectHomeLaunch(appId, params, reason)) return; // ' + MARK + '\n']);
+	edits.push([l.index, ind + 'readonly property var getHomeAppId: function() { return Settings.getHomeAppId(); } // ' + MARK + '\n']);
+	if (c) {
+		edits.push([c.index + c[0].length, c[1] + '    if (appId === Settings.stockHomeAppId) appId = Settings.getHomeAppId(); // ' + MARK + '\n']);
+	}
+	edits.sort(function (a, b) { return b[0] - a[0]; });
+	edits.forEach(function (e) { t = insertAt(t, e[0], e[1]); });
+	return t;
+}
+
+// returns {text, changed, checkLaunch} ; text === null when the file is left stock
+function patchSystemUi(t) {
+	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('systemUi.js already routes the home id');
+	var defRe = /^var HOME_APP_ID = "com\.webos\.app\.home";\n/m;
+	var nDef = count(defRe, t);
+	var usesAll = count(/\bHOME_APP_ID\b/, t);
+	// every literal must be the definition or the first argument of a key filter launch/checkLaunch
+	var lits = count(new RegExp(LIT), t);
+	var launches = count(new RegExp('applicationManager\\.launch\\(\\s*' + LIT + ',\\s*JSON\\.stringify\\('), t);
+	var checks = count(new RegExp('applicationManager\\.checkLaunch\\(\\s*' + LIT + ',\\s*JSON\\.stringify\\('), t);
+	if (launches < 1) abort('systemUi.js: no launch of the stock home found');
+	if (lits !== nDef + launches + checks) abort('systemUi.js: a stock id is used other than in HOME_APP_ID or a launch (' + lits + ' literals)');
+	if (nDef === 0) {
+		if (usesAll !== 0) abort('systemUi.js uses HOME_APP_ID without the expected definition');
+		return {text: null, checkLaunch: checks > 0};
+	}
+	if (nDef > 1) abort('systemUi.js defines HOME_APP_ID ' + nDef + ' times');
+	var h = one(t, /^function handleHomeKeys\([^)]*\) \{\n/m, 'handleHomeKeys');
+	var open = h.index + h[0].length - 2;
+	var close = closeOf(t, open);
+	if (close < 0) abort('handleHomeKeys does not close');
+	var re = /\bHOME_APP_ID\b/g, m, inside = 0, outside = 0;
+	var defAt = defRe.exec(t).index + 4;
+	while ((m = re.exec(t))) {
+		if (m.index === defAt) continue;
+		if (m.index > open && m.index < close) inside++; else outside++;
+	}
+	if (outside) abort('systemUi.js uses HOME_APP_ID outside handleHomeKeys (' + outside + ')');
+	// every use must be a comparison of an app id with it; anything else has unknown meaning
+	var cmpUses = count(/[A-Za-z_][\w.]*\s*(?:===|!==|==|!=)\s*HOME_APP_ID\b/, t);
+	if (cmpUses !== inside) abort('systemUi.js uses HOME_APP_ID other than in a comparison (' + (inside - cmpUses) + ')');
+	if (!inside) abort('systemUi.js defines HOME_APP_ID but handleHomeKeys does not use it');
+	var line = '    if (applicationManager.getHomeAppId) HOME_APP_ID = applicationManager.getHomeAppId(); // ' + MARK + ': the live home id\n';
+	return {text: insertAt(t, h.index + h[0].length, line), checkLaunch: checks > 0};
+}
+
+// ------------------------------------------------------------------------------------------
+// Tier 2: each returns new text or throws Abort (caller leaves the file stock)
+
+function needImport(t) {
+	if (!/^import WebOSCompositorBase 1\.0$/m.test(t)) abort('does not import WebOSCompositorBase');
+}
+
+function exactSub(t, re, repl, n, what) {
+	var k = count(re, t);
+	if (k !== n) abort(what + ' matched ' + k + ' times, expected ' + n);
+	return t.replace(new RegExp(re.source, 'g'), repl);
+}
+
+var TIER2 = [
+	{file: F.nudge, name: 'nudge', fn: function (t) {
+		needImport(t);
+		if (count(new RegExp(LIT), t) !== 1) abort('expected one stock id');
+		return exactSub(t, new RegExp('views\\.fullscreen\\.currentItem\\.appId === ' + LIT),
+			'Settings.isHomeApp(views.fullscreen.currentItem.appId)', 1, 'nudge compare');
+	}},
+	{file: F.baseluna, name: 'currentState', fn: function (t) {
+		needImport(t);
+		if (count(new RegExp(LIT), t) !== 1) abort('expected one stock id');
+		return exactSub(t, new RegExp('views\\.fullscreen\\.currentItem\\.appId === ' + LIT),
+			'Settings.isHomeApp(views.fullscreen.currentItem.appId)', 1, 'currentState compare');
+	}},
+	{file: F.recents, name: 'recents', fn: function (t) {
+		needImport(t);
+		var spare = new RegExp('([A-Za-z_][\\w.]*)\\.appId !== ' + LIT);
+		var nmrm = new RegExp('(supportNMRM \\? )' + LIT + '( :)');
+		var ns = count(spare, t), nn = count(nmrm, t);
+		if (count(new RegExp(LIT), t) !== ns + nn || ns + nn === 0) abort('stock id in an unexpected form');
+		// spare the chosen home as well as the stock one (sam brings the stock home back anyway)
+		t = t.replace(new RegExp(spare.source, 'g'), function (all, x) {
+			return x + '.appId !== "' + STOCK + '" && !Settings.isHomeApp(' + x + '.appId)';
+		});
+		return t.replace(new RegExp(nmrm.source, 'g'), '$1Settings.getHomeAppId()$2');
+	}},
+	{file: F.fullscreen, name: 'lastInputApp', fn: function (t) {
+		needImport(t);
+		if (count(new RegExp(LIT), t) !== 1) abort('expected one stock id');
+		return exactSub(t, new RegExp('(supportNMRM \\? )' + LIT + '( :)'), '$1Settings.getHomeAppId()$2', 1, 'NMRM default');
+	}}
+];
+
+// ------------------------------------------------------------------------------------------
+
+function read(root, rel) {
+	try { return fs.readFileSync(path.join(root, rel), 'latin1'); } catch (e) { return null; }
+}
+
+function osMajor(root) {
+	var t = read(root, 'etc/os-release') || read(root, 'usr/lib/os-release');
+	var m = t && /^VERSION_ID="?(\d+)\./m.exec(t);
 	return m ? Number(m[1]) : null;
 }
 
-// Run all rules over the tree under `root`. Returns {targets: [{path, stock, text, stockSha, sha}]}
-// or throws Abort.
-function plan(root, skipVersionGate) {
+function plan(root, opt) {
 	var major = osMajor(root);
-	if (!skipVersionGate && major === null) abort('cannot read the webOS version from etc/os-release');
-	if (!skipVersionGate && (major < 6 || major > 9)) abort('webOS ' + major + ' is outside 6 to 9, where the generated patch applies');
-
-	function fire(file, name, k, expected) {
-		if (expected !== undefined && k !== expected) abort(file + ': rule ' + name + ' fired ' + k + ' times, expected ' + expected);
-	}
-
-	var targets = [];
-	var seen = {};
-	SCAN_DIRS.forEach(function (d) {
-		walk(path.join(root, BASE, d), []).forEach(function (full) {
-			var r = rel(root, full);
-			if (seen[r]) return;
-			var text = readText(full);
-			if (LIT_RE.test(text) || CORE.indexOf(r) >= 0) {
-				seen[r] = true;
-				targets.push({path: r, stock: text});
+	if (!opt.skip && (major === null || major < 6 || major > 9)) abort('webOS ' + major + ' is outside 6 to 9');
+	var out = [], skipped = [];
+	var s = read(root, F.settings), k = read(root, F.keyfilter), u = read(root, F.systemui);
+	if (s === null || k === null || u === null) abort('a tier-1 file is missing');
+	var su = patchSystemUi(u);
+	var kk = patchKeyFilter(k, su.checkLaunch);
+	var ss = patchSettings(s);
+	out.push({path: F.settings, stock: s, text: ss});
+	out.push({path: F.keyfilter, stock: k, text: kk});
+	if (su.text !== null) out.push({path: F.systemui, stock: u, text: su.text});
+	if (opt.tier2) {
+		TIER2.forEach(function (r) {
+			var t = read(root, r.file);
+			if (t === null) return;
+			if (!new RegExp(LIT).test(t)) return;
+			try {
+				var patched = r.fn(t);
+				if (patched === t || balance(patched) !== balance(t)) abort('unchanged output or bracket mismatch');
+				out.push({path: r.file, stock: t, text: patched, tier: 2});
+			} catch (e) {
+				if (!(e instanceof Abort)) throw e;
+				skipped.push(r.file + ': ' + e.message);
 			}
 		});
-	});
-	CORE.forEach(function (r) {
-		if (!seen[r]) abort(r + ' is missing: this is not the compositor the rules were written for');
-	});
-
-	// a stock id in the compositor tree outside the directories the rules read
-	OTHER_DIRS.forEach(function (d) {
-		walk(path.join(root, BASE, d), []).forEach(function (full) {
-			var r = rel(root, full);
-			if (seen[r]) return;
-			if (LIT_RE.test(readText(full))) abort(r + ' names the stock home id outside the directories the rules cover');
-		});
-	});
-
-	targets.forEach(function (tg) {
-		if (/\b(isHomeApp|getHomeAppId)\b/.test(tg.stock)) {
-			abort(tg.path + ' already routes the home id through isHomeApp/getHomeAppId; refusing to patch it twice');
-		}
-		tg.text = applyRules(tg.path, tg.stock, fire);
-		tg.stockSha = sha256(tg.stock);
-		tg.sha = sha256(tg.text);
-		// no stock id left, except Settings.qml's own stockHomeAppId
-		tg.text.split('\n').forEach(function (line) {
-			if (LIT_RE.test(line) && line.indexOf('stockHomeAppId') < 0) {
-				abort(tg.path + ': a stock home id is left after the rewrite: ' + line.trim().slice(0, 80));
-			}
-		});
-		if (tg.text === tg.stock) abort(tg.path + ' was not changed by any rule');
-		if (balance(tg.text) !== balance(tg.stock)) abort(tg.path + ': the brackets no longer balance as in the stock file');
-		if (/\.qml$/.test(tg.path) && tg.path !== FILE_SETTINGS && /\bSettings\.(isHomeApp|getHomeAppId|launchHome)\b/.test(tg.text) &&
-			!/^import WebOSCompositorBase /m.test(tg.text)) {
-			abort(tg.path + ' calls Settings.* but does not import WebOSCompositorBase');
-		}
-	});
-
-	var settings = targets.filter(function (tg) { return tg.path === FILE_SETTINGS; })[0];
-	if (settings.text.split(PLACEHOLDER).length !== 2) abort(FILE_SETTINGS + ': the placeholder line is not there exactly once');
-	var stockLines = settings.text.split('\n').filter(function (l) { return LIT_RE.test(l); });
-	if (stockLines.length !== 1 || stockLines[0].indexOf('stockHomeAppId') < 0) {
-		abort(FILE_SETTINGS + ': the stock id must appear once, as stockHomeAppId');
 	}
-	targets.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
-	return {targets: targets};
-}
-
-function manifestOf(p, release) {
-	return JSON.stringify({
-		release: release,
-		files: p.targets.map(function (tg) {
-			return {path: '/' + tg.path, sha256: tg.stockSha, generated: tg.sha, diff: 'generated'};
-		})
-	}, null, 2) + '\n';
-}
-
-function writeTree(p, out) {
-	p.targets.forEach(function (tg) {
-		var dest = path.join(out, tg.path);
-		mkdirp(path.dirname(dest));
-		fs.writeFileSync(dest, Buffer.from(tg.text, 'latin1'));
+	out.forEach(function (o) {
+		if (o.text === o.stock) abort(o.path + ' unchanged');
+		if (balance(o.text) !== balance(o.stock)) abort(o.path + ': brackets no longer balance as in stock');
+		if (/\.qml$/.test(o.path) && o.path !== F.settings && /\bSettings\./.test(o.text) && !/^import WebOSCompositorBase /m.test(o.text)) {
+			abort(o.path + ' uses Settings without importing WebOSCompositorBase');
+		}
+		o.stockSha = crypto.createHash('sha256').update(Buffer.from(o.stock, 'latin1')).digest('hex');
 	});
+	if (ss.split(PLACEHOLDER).length !== 2) abort('placeholder not once');
+	return {targets: out, skipped: skipped};
 }
 
-function labSet(p, root, release, out) {
-	var cp = require('child_process');
-	mkdirp(out);
-	var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hk-gen-'));
-	var newFile = path.join(tmp, 'new');
-	var files = [];
-	p.targets.forEach(function (tg) {
-		var diffName = tg.path.slice(BASE.length).split('/').join('_') + '.diff';
-		fs.writeFileSync(newFile, Buffer.from(tg.text, 'latin1'));
-		var r = cp.spawnSync('diff', ['-u', '--label', tg.path, '--label', tg.path, path.join(root, tg.path), newFile], {maxBuffer: 1 << 26});
-		if (r.status !== 1) throw new Error('diff failed for ' + tg.path);
-		fs.writeFileSync(path.join(out, diffName), r.stdout);
-		files.push({path: '/' + tg.path, sha256: tg.stockSha, diff: diffName});
-	});
-	fs.unlinkSync(newFile);
-	fs.rmdirSync(tmp);
-	fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify({release: release, files: files}, null, 2) + '\n');
-}
+function mkdirp(d) { if (!fs.existsSync(d)) { mkdirp(path.dirname(d)); fs.mkdirSync(d); } }
 
-var USAGE = 'usage: homechooser-keyfilter-gen.js check|generate|lab-set [--root DIR] [--out DIR] [--manifest FILE] [--release NAME] [--skip-version-gate]\n';
-
+// check and generate share the same plan; a refusal writes no staged files.
 function main(argv) {
-	var cmd = argv[0];
-	var opt = {root: '/'};
-	for (var i = 1; i < argv.length; i += 2) {
-		var key = argv[i];
-		if (key === '--skip-version-gate') {
-			opt.skip = true;
-			i--;
-			continue;
-		}
-		if (!/^--(root|out|manifest|release)$/.test(key) || i + 1 >= argv.length) {
-			process.stderr.write(USAGE);
-			return 1;
-		}
-		opt[key.slice(2)] = argv[i + 1];
+	var cmd = argv[0], opt = {root: '/', tier2: true};
+	for (var i = 1; i < argv.length; i++) {
+		if (argv[i] === '--skip-version-gate') opt.skip = true; // offline negative controls only
+		else if (/^--(root|out|manifest)$/.test(argv[i]) && i + 1 < argv.length) opt[argv[i].slice(2)] = argv[++i];
+		else { process.stderr.write('bad argument ' + argv[i] + '\n'); return 1; }
 	}
-	if (['check', 'generate', 'lab-set'].indexOf(cmd) < 0 || (cmd !== 'check' && !opt.out) || (cmd === 'lab-set' && !opt.release)) {
-		process.stderr.write(USAGE);
-		return 1;
-	}
-	var p;
-	try {
-		p = plan(opt.root, opt.skip);
-	} catch (e) {
-		if (e instanceof Abort) {
-			process.stderr.write('ABORT: ' + e.message + '\n');
-			return 2;
-		}
-		process.stderr.write('ERROR: ' + (e && e.message) + '\n');
+	if (['check', 'generate'].indexOf(cmd) < 0 || (cmd === 'generate' && !opt.out)) {
+		process.stderr.write('usage: homechooser-keyfilter-gen.js check|generate [--root DIR] [--out DIR] [--manifest FILE]\n');
 		return 1;
 	}
 	try {
+		var p = plan(opt.root, opt);
 		if (cmd === 'generate') {
-			writeTree(p, opt.out);
-			if (opt.manifest) fs.writeFileSync(opt.manifest, manifestOf(p, 'generated'));
-		} else if (cmd === 'lab-set') {
-			labSet(p, opt.root, opt.release, opt.out);
+			p.targets.forEach(function (o) {
+				var d = path.join(opt.out, o.path);
+				mkdirp(path.dirname(d));
+				fs.writeFileSync(d, Buffer.from(o.text, 'latin1'));
+			});
+			if (opt.manifest) fs.writeFileSync(opt.manifest, JSON.stringify({
+				files: p.targets.map(function (o) { return {path: '/' + o.path, sha256: o.stockSha, diff: 'minimal'}; }),
+				skipped: p.skipped
+			}, null, 2) + '\n');
 		}
+		process.stdout.write('patch=possible\nunpatched-sites=' + p.skipped.length + '\n');
+		p.skipped.forEach(function (s) { process.stdout.write('skipped=' + s + '\n'); });
+		p.targets.forEach(function (o) { process.stdout.write('file=/' + o.path + '\n'); });
+		return 0;
 	} catch (e) {
-		process.stderr.write('ERROR: ' + (e && e.message) + '\n');
-		return 1;
+		process.stderr.write((e instanceof Abort ? 'ABORT: ' : 'ERROR: ') + e.message + '\n');
+		return e instanceof Abort ? 2 : 1;
 	}
-	process.stdout.write('ok files=' + p.targets.length + '\n');
-	return 0;
 }
 
 process.exitCode = main(process.argv.slice(2));

@@ -3,8 +3,6 @@ import BodyText from '@enact/moonstone/BodyText';
 import SlotItem from '@enact/moonstone/SlotItem';
 import Scroller from '@enact/moonstone/Scroller';
 import Spinner from '@enact/moonstone/Spinner';
-import ToggleItem from '@enact/moonstone/ToggleItem';
-import Switch from '@enact/moonstone/Switch';
 import {Header, Panel} from '@enact/moonstone/Panels';
 import Spotlight from '@enact/spotlight';
 
@@ -27,11 +25,9 @@ export const rootReason = (kind) => {
 };
 
 // The Home key patch exists on webOS 6 to 9 only (patch is null elsewhere).
-export const patchFooter = (patch, mounted = false) => {
+export const patchFooter = (patch) => {
 	if (patch === null) return null;
 	if (patch === 'active') return 'Home key patch: active';
-	if (patch === 'unreviewed') return 'Home key patch: no reviewed set for this firmware';
-	if (patch === 'generated') return mounted ? 'Home key patch: active (generated, not reviewed)' : 'Home key patch: generated, not reviewed (not active)';
 	if (patch === 'nomatch') return "Home key patch: not available for this TV's software";
 	return 'Home key patch: not active';
 };
@@ -102,11 +98,10 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		else model.choose(item);
 	}, [pending, model]);
 
-	const toggleGenerated = useCallback(({selected}) => model.toggleGenerated(selected), [model]);
-	const footer = patchFooter(patch, model.patchMounted);
+	const footer = patchFooter(patch);
 	const uninstall = pending && pending.uninstall;
 	const stock = pending && pending.id === STOCK_HOME;
-	const blocked = !uninstall && !stock && model.hasPatch && patch !== 'active' && patch !== 'ready' && patch !== 'generated';
+	const blocked = !uninstall && !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
 
 	return (
 		<Panel {...rest}>
@@ -139,15 +134,6 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 							</SlotItem>
 						</>
 					) : null}
-					{model.showGenerated && !rootError ? (
-						<ToggleItem
-							iconComponent={Switch} iconPosition="after"
-							selected={model.generatedOptIn} disabled={busy}
-							onToggle={toggleGenerated}
-						>
-							Use a patch generated for this firmware (not reviewed)
-						</ToggleItem>
-					) : null}
 					<div className={css.footerSpace} />
 				</Scroller>
 			)}
@@ -161,7 +147,7 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 				onConfirm={blocked ? null : confirm}
 				onCancel={cancel}
 			>
-				{uninstall ? 'This app will be removed from the TV.' : blocked ? (patch === 'unreviewed' ? 'This firmware has no reviewed patch. Turn on "Use a patch generated for this firmware (not reviewed)" to change the Home button.' : "The Home button can't be changed on this TV's software.")
+				{uninstall ? 'This app will be removed from the TV.' : blocked ? "The Home button can't be changed on this TV's software."
 					: stock ? 'The Home button will open the LG Home again.'
 						: 'The Home button will open this app.'}
 			</ConfirmDialog>
