@@ -37,6 +37,14 @@ OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
 
+
+def messages_command(path='/var/log/messages'):
+    """Read retained rotations oldest first, then the active syslog (webOS uses .N.gz)."""
+    quoted = shlex.quote(path)
+    return ("{ for log in $(ls %s.[0-9]*.gz 2>/dev/null | sort -Vr); do "
+            "zcat \"$log\" 2>/dev/null; done; cat %s; }" % (quoted, quoted))
+
+
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
 #   verified  = booted and os-release read by a run of this runner
@@ -1186,7 +1194,7 @@ class Scenario:
         if not self.uses_backport() or not before:
             return
         d = self.dev
-        rc, out = d.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20"
+        rc, out = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20")
                        % (before['mark'], shlex.quote(CRASH_RE.pattern)))
         bad = crash_lines(out)
         self.rec.check(label + ': no crashd CRASHED or WebAppMgr crash line in /var/log/messages since %s' % before['mark'],
@@ -1336,7 +1344,7 @@ class Scenario:
         reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
         real, noise = classify_faults(reply, up_mark)
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4" % (t_mark, POPUP_LINE_RE))
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
         ev += [l for l in out.splitlines() if l.strip()]
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
@@ -1464,7 +1472,7 @@ class Scenario:
             r.note('%s: stock home %s after the reboot (open risk: a boot-time launch outside the preload '
                    'manager would keep it resident; recorded, not asserted)'
                    % (label, 'RUNNING' if running else 'not running'),
-                   self.dev.sh("grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' /var/log/messages | "
+                   self.dev.sh(messages_command() + " | grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' | "
                                "grep 'com.webos.app.home' | head -n 8")[1].strip() or 'no launch line for the stock home')
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
@@ -1506,7 +1514,7 @@ class Scenario:
             self.residency(label + ': stock home came back')
             r.note(label + ': whole watcher log', self.dev.sh('cat /tmp/homechooser-home.log 2>&1 | tail -n 40')[1])
             r.note(label + ': sam lines about the stock home', self.dev.sh(
-                "grep -E 'com.webos.app.home' /var/log/messages | grep -E 'close|Close|launch|Launch|NL_APP' | tail -n 15")[1])
+                messages_command() + " | grep -E 'com.webos.app.home' | grep -E 'close|Close|launch|Launch|NL_APP' | tail -n 15")[1])
 
     def check_preload_on(self, label, wait_for=120):
         """The policy is back to enabled (launcher uninstalled, choice stock, Home Chooser uninstalled)."""
@@ -1641,7 +1649,7 @@ class Scenario:
     def sam_launch_lines(self, appid, mark):
         """sam lines in /var/log/messages stamped at or after `mark` that name appid and are launch-related:
         NL_APP_LAUNCH_BEGIN {"app_id":"<id>",...}, APP_LAUNCHED, RelaunchAsCommon (and the _ERR/_WARNING variants)."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | grep -E ' sam ' | tail -n 40"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -F %s | grep -E ' sam ' | tail -n 40")
                               % (mark, shlex.quote(appid)))
         return [l for l in out.splitlines() if self.LAUNCH_OK.search(l) or self.LAUNCH_BAD.search(l)]
 
@@ -1683,7 +1691,7 @@ class Scenario:
         relaunch of com.webos.app.home."""
         pattern = pattern or ('launchDefaultApp.*homeKey|homeKey.*launchDefaultApp|'
                               'RelaunchAsCommon.*com.webos.app.home')
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8")
                               % (mark, pattern))
         return [l for l in out.splitlines() if l.strip()]
 
@@ -1981,8 +1989,8 @@ class Scenario:
         why = getattr(self.insp, 'last_error', None) if self.insp else 'no inspector'
         running = APP_ID in self.running_ids()
         rc, out = self.dev.sh(
-            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s.*(killApp|windowPolicy|userTimeout|\"event\":\"close\")"
-            "|com.webos.app.home.*(kill_process|APP_CLOSED)|NL_APP_LAUNCH_BEGIN.*com.webos.app.home' | tail -n 10" % (mark, APP_ID))
+            (messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s.*(killApp|windowPolicy|userTimeout|\"event\":\"close\")"
+            "|com.webos.app.home.*(kill_process|APP_CLOSED)|NL_APP_LAUNCH_BEGIN.*com.webos.app.home' | tail -n 10") % (mark, APP_ID))
         return 'inspector: %s; %s running: %s\n%s' % (why, APP_ID, running, out.strip() or 'no close/kill line since %s' % mark)
 
     def ours_in_front(self, dialog):
@@ -2007,7 +2015,7 @@ class Scenario:
 
     def reboot_ask_log(self):
         """The REBOOT_ASK lines of the service since the choice was confirmed (PmLog -> /var/log/messages)."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8")
                               % getattr(self, 'ask_mark', ''))
         return out
 
@@ -2343,7 +2351,7 @@ class Scenario:
 
     def uninstall_alert_id(self):
         """The alertId of the service's createAlert, from its UNINSTALL_ASK log line (PmLog), if logged."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3")
                               % self.uninstall_mark)
         m = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', out)
         return (m[-1] if m else None), out.strip()
@@ -2420,7 +2428,7 @@ class Scenario:
         self.shot('3a-uninstalled')
         r.check('confirm on our screen: uninstallConfirmed removed %s' % DISPOSABLE_ID, bool(gone),
                 'installed: %s; service log: %s' % (d.app_installed(DISPOSABLE_ID), d.sh(
-                    "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E 'UNINSTALL' | tail -n 4" % self.uninstall_mark)[1].strip()))
+                    (messages_command() + " | awk '$1 >= \"%s\"' | grep -E 'UNINSTALL' | tail -n 4") % self.uninstall_mark)[1].strip()))
         d.close(APP_ID)
         self.close_insp()
 
@@ -2589,7 +2597,7 @@ class Scenario:
             self.strat.verify(d, r)
         self.open_app_check('3u-app')
         r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
-            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12" % (t_install, APP_ID))[1])
+            (messages_command() + " | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12") % (t_install, APP_ID))[1])
 
     def step4(self):
         r, d = self.rec, self.dev

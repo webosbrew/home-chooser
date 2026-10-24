@@ -6,11 +6,13 @@ launcher-API reply checks of --api-check, and the restart/crash detection.  No d
     python3 -I -m unittest discover -s e2e -p 'test_*.py'
 """
 import contextlib
+import gzip
 import io
 import json
 import os
 import re
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -24,6 +26,30 @@ FULL, HOME = e2e.FULLHOME, e2e.STOCK
 
 
 class LogMark(unittest.TestCase):
+    def test_rotated_messages_preserve_alert_and_crash_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, 'messages')
+            for suffix, content in [('.12.gz', 'a old\n'),
+                                    ('.2.gz', 'b REBOOT_ASK createAlert\n'),
+                                    ('.0.gz', 'c crashd CRASHED\n')]:
+                with gzip.open(path + suffix, 'wt') as log:
+                    log.write(content)
+            with open(path, 'w') as log:
+                log.write('d current\n')
+            cmd = e2e.messages_command(path) + " | awk '$1 >= \"b\"'"
+            result = subprocess.run(['sh', '-c', cmd], capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, 'b REBOOT_ASK createAlert\nc crashd CRASHED\nd current\n')
+
+    def test_messages_without_archives(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, 'messages')
+            with open(path, 'w') as log:
+                log.write('only current\n')
+            result = subprocess.run(['sh', '-c', e2e.messages_command(path)],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, 'only current\n')
+            self.assertEqual(result.stderr, '')
+
     def test_only_lines_after_the_mark(self):
         log = ['a closeByAppId x', 'b', 'c']
         self.assertEqual(e2e.lines_after(log, 2), ['c'])
