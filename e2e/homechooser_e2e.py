@@ -189,7 +189,7 @@ API_VERSION = 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'group', 'permitted', 'isHome')
-API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible')
+API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory')
 API_RUNNING_FIELDS = ('id', 'instanceId', 'processid', 'webprocessid')
 
 
@@ -1442,7 +1442,10 @@ class Scenario:
         if from_app:
             self.front_app()
         if proof:
-            self.foreign_popup(label)
+            popup = self.foreign_popup(label)
+            if popup:
+                r.check('%s: no foreign LG fault popup before the Home-key proof' % label, False, popup)
+                raise RuntimeError('foreign LG fault popup detected; not sending keys')
         mark = self.messages_mark()
         self.press('HOME')
         time.sleep(6)
@@ -1826,13 +1829,20 @@ class Scenario:
         return (self.ui() or {}).get('text') == label
 
     def ours_in_front(self, dialog):
-        """Home Chooser is the foreground app and shows `dialog` (its own ConfirmDialog, by aria-label):
-        only then is a key pressed at a dialog."""
-        fg = self.dev.foreground()
+        """The Home Chooser inspector page shows its own ConfirmDialog by aria-label.
+
+        On webOS 9 the app's dialog is rendered over the stock home, so the foreground app id can
+        remain com.webos.app.home even while the Home Chooser screen and its focused dialog are
+        visibly on screen. The inspector selects the page by Home Chooser's app id; use that page's
+        dialog DOM as the ownership check, then verify directional focus movement before OK.
+        """
+        page = self.insp._page() if self.insp else None
         ui = self.ui() or {}
         title = ui.get('dialog') or ''
-        ok = fg[0] == APP_ID and (title == dialog if not dialog.endswith('*') else title.startswith(dialog[:-1]))
-        return ok, 'foreground %s; dialog %r; focus %r' % (fg[0], title, ui.get('text'))
+        matches = title == dialog if not dialog.endswith('*') else title.startswith(dialog[:-1])
+        ok = bool(page and APP_ID in page.get('url', '') and matches)
+        return ok, 'inspector page %r; dialog %r; focus %r; foreground %s' % (
+            page.get('url') if page else None, title, ui.get('text'), self.dev.foreground()[0])
 
     def reboot_after_choice(self, comp0):
         """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks
@@ -1876,8 +1886,15 @@ class Scenario:
             self.close_insp()
             up = self.beanjar_reboot('2 reboot (Later, then beanjar stop/start)')
         else:
+            # Verify both directions on Home Chooser's own dialog before pressing OK. Besides
+            # exercising LEFT=confirm and RIGHT=cancel, this proves remote keys are reaching the
+            # inspected app rather than a popup that may have taken global key focus.
+            cancel_ok = self.focus_button('Later', first=False)
+            r.check('RIGHT moves focus to "Later" (cancel)', cancel_ok, json.dumps(self.ui()))
+            if not cancel_ok:
+                raise RuntimeError('RIGHT did not focus Later; not pressing OK')
             ok = self.focus_button('Reboot')
-            r.check('focus is on "Reboot"', ok, json.dumps(self.ui()))
+            r.check('LEFT moves focus to "Reboot" (confirm)', ok, json.dumps(self.ui()))
             if not ok:
                 raise RuntimeError('focus is not on Reboot; not pressing OK')
             self.press('OK')
@@ -1941,14 +1958,12 @@ class Scenario:
 
     def step3(self):
         self.rec.begin('3 Home opens the launcher')
-        # Observation, not an assertion: Home with the stock home already in front.
+        # Record the current foreground without sending a key. A Home-key proof follows only after
+        # the usual foreign-popup check in home_press().
         fg0 = self.dev.foreground()
-        self.press('HOME')
-        time.sleep(6)
-        fg1 = self.dev.foreground()
         self.shot('3-home-from-stock-home')
-        self.rec.note('Home pressed with the stock home in front (observation only): before %s, after %s'
-                      % (fg0[0], fg1[0]), 'see screenshot 3-home-from-stock-home')
+        self.rec.note('foreground before the Home-key proof: %s' % fg0[0],
+                      'see screenshot 3-home-from-stock-home')
         self.home_press(self.launcher, '3-home')
         self.residency('after the Home press')
         r, d = self.rec, self.dev
