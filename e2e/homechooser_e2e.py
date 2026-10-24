@@ -64,13 +64,11 @@ MATRIX = [
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
 # Stock-home preload policy (backport/homechooser-home-watch; docs/settings-app.md "The stock home is
-# not preloaded").  Launchers that are overlay windows take nothing from the stock home's foreground, so
-# on 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app (measured on 9.2.1,
-# 8.3.0 and 10.3.1, 75 to 89 MB with Dock chosen).  The watcher therefore does not close it there: the expected result
-# is the stock home running, the skip line in the watcher log and no closeByAppId for it.
-# Whether a launcher is an overlay is read from the defaultWindowType in the appinfo.json inside its
-# ipk (Launcher.overlay), never from an id: the watcher decides the same way for any id
-# (backport/homechooser-home-watch overlay_check: getAppInfo, else the installed appinfo.json).
+# not preloaded").  On 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app,
+# whatever the launcher (measured on 9.2.1, 8.3.0 and 10.3.1, 75 to 89 MB), so since 8791f6e neither the
+# watcher nor the app closes it there: the expected result is the preload policy off, the skip line in
+# the watcher log, no closeByAppId for it, and the stock home possibly running until the next reboot.
+# On 11.x and 12.x the watcher closes it and it must stay closed.  On 5.x there is no preload call.
 SKIP_LINE = 'stock home left running'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
@@ -1331,11 +1329,11 @@ class Scenario:
 
     # -- the stock home's preload policy
     def preload_log(self):
-        return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|overlay launcher' /tmp/homechooser-home.log 2>&1 | tail -n 6")[1].strip()
+        return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|%s' /tmp/homechooser-home.log 2>&1 | tail -n 6" % SKIP_LINE)[1].strip()
 
-    def overlay_skip(self):
-        """6.x to 10.x with an overlay launcher: the watcher leaves the stock home running."""
-        return self.L.overlay and 6 <= self.major <= 10
+    def stock_left_running(self):
+        """6.x to 10.x, any launcher: the watcher leaves the stock home running (8791f6e)."""
+        return 6 <= self.major <= 10
 
     def mark_log(self):
         """Remember how long the watcher log is now: /tmp/homechooser-home.log accumulates across the
@@ -1347,25 +1345,34 @@ class Scenario:
         return lines_after(self.log_lines(), getattr(self, 'log_mark', 0))
 
     def check_stock_left_running(self, label, samples):
-        """Overlay launcher on 6.x to 10.x: the stock home is running, the watcher logged the skip and
-        never called closeByAppId for it (only the log lines since the mark, i.e. since this switch)."""
+        """6.x to 10.x, any launcher: the watcher logged the skip and never called closeByAppId for the
+        stock home (only the log lines since the mark, i.e. since this switch or boot).  Whether the stock
+        home runs is recorded, not asserted."""
         r = self.rec
         self.wait(lambda: any(SKIP_LINE in l for l in self.log_since_mark()), 120, 5)
         log = self.log_since_mark()
         skips = [l for l in log if SKIP_LINE in l]
         closes = [l for l in log if 'closeByAppId ' + STOCK in l]
         r.note(label + ': watcher skip lines', '\n'.join(skips))
-        r.check(label + ': watcher log has the overlay skip line naming %s (stock home left running)' % self.launcher,
-                any(self.launcher in l for l in skips) if skips else False,
-                skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
+        r.check(label + ': watcher log has the skip line (webOS %d: stock home left running)' % self.major,
+                bool(skips), skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
         r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
         running = bool(samples) and samples[-1][1]
         detail = 'running at t=%s s of %d samples' % ([t for t, run_ in samples if run_], len(samples))
         # "Left alone" means the watcher did not close it (the two checks above). Whether the stock home
         # is running then is up to the platform: with the preload policy off nothing may start it again
         # (6.5.2 after the switch, 10.x after a reboot), which only saves memory. Recorded, not asserted.
-        r.note(label + ': %s running=%s (overlay launcher %s, defaultWindowType=%s; left alone either way)'
+        r.note(label + ': %s running=%s (launcher %s, defaultWindowType=%s; left alone either way)'
                % (STOCK, running, self.launcher, self.L.appinfo.get('defaultWindowType')), detail)
+        if label.startswith('after the reboot'):
+            # Open risk (orchestrator, 2026-10-24): snapshot-boot-components may launch the stock home at
+            # boot outside the preload manager, so with no close it could stay resident after the reboot
+            # that applies the patch.  Who launched it this boot is recorded.
+            r.note('%s: stock home %s after the reboot (open risk: a boot-time launch outside the preload '
+                   'manager would keep it resident; recorded, not asserted)'
+                   % (label, 'RUNNING' if running else 'not running'),
+                   self.dev.sh("grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' /var/log/messages | "
+                               "grep 'com.webos.app.home' | head -n 8")[1].strip() or 'no launch line for the stock home')
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""
@@ -1378,8 +1385,8 @@ class Scenario:
         return out
 
     def check_preload_off(self, label, settle=PRELOAD_SETTLE):
-        """A third-party home is chosen: the watcher disabled the stock home's preload and the stock
-        home stays closed.  5.x: the watcher leaves the policy alone (settings-app.md), so it must not
+        """A third-party home is chosen: the watcher disabled the stock home's preload; on 11.x and 12.x the
+        stock home stays closed, on 6.x to 10.x it is left alone (check_stock_left_running).  5.x: the watcher leaves the policy alone (settings-app.md), so it must not
         read false; the stock home is only observed (com.webos.app.home is not running on 5.x)."""
         r = self.rec
         enabled, raw = self.dev.preload_policy()
@@ -1396,7 +1403,7 @@ class Scenario:
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
         time.sleep(settle)
         samples = self.stock_running_samples()
-        if self.overlay_skip():
+        if self.stock_left_running():
             self.check_stock_left_running(label, samples)
             return
         ok = not any(run_ for _, run_ in samples)
@@ -2017,7 +2024,7 @@ class Scenario:
                 s['choice'] == self.launcher and s['record_home'] == self.launcher, s['record_raw'])
         if self.major >= 6:
             # the call comes at once, the close after the 45 s settle
-            self.wait(lambda: ('closeByAppId' in self.preload_log()) or (self.overlay_skip() and SKIP_LINE in self.preload_log()), 150, 5)
+            self.wait(lambda: ('closeByAppId' in self.preload_log()) or (self.stock_left_running() and SKIP_LINE in self.preload_log()), 150, 5)
             log = self.preload_log()
             r.check('after the boot the watcher called setPreloadPolicy isEnabled=false (log is from this boot: /tmp)',
                     'isEnabled=false' in log, log)

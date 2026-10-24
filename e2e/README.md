@@ -272,12 +272,12 @@ the watcher makes no preload call, so the checks only assert the policy is not d
 
 * after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
   `com.webos.app.home`, then after a 60 s settle `com.webos.app.home` is not in `applicationManager/running`
-  in any of the samples taken every 5 s over 60 s. With an overlay launcher (Dock) on 6.x to 10.x the
-  watcher deliberately leaves the stock home running (sam would relaunch it at once as the last-input app,
-  75 to 89 MB measured on 10.3.1, 9.2.1 and 8.3.0), so the expected result is explicit: the stock home is running, the
-  watcher log has the `overlay launcher ... stock home left running` line and no `closeByAppId
-  com.webos.app.home` line; on 11.x and 12.x, or with a non-overlay launcher, the stock home must not run
-  and a running one is a `FAIL`;
+  in any of the samples taken every 5 s over 60 s on 11.x and 12.x (a running one is a `FAIL`). On 6.x to 10.x, for
+  every launcher (8791f6e), the stock home is not closed (sam would relaunch it at once as the last-input app, 75 to
+  89 MB measured on 10.3.1, 9.2.1 and 8.3.0): the policy must still read `isEnabled:false`, the watcher log must have
+  the `webOS N: stock home left running` line and no `closeByAppId com.webos.app.home` line, and whether the stock
+  home runs is recorded, not asserted. After the `--reboot-check` boot the runner notes whether it runs and sam's
+  launch lines for it (`snapshot-boot-components` may launch it at boot outside the preload manager: an open risk);
 * after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
   after the launcher is reinstalled, `isEnabled:false` again;
 * with `--reboot-check` (after step 3, launcher chosen): the VM is stopped and started with Beanjar;
@@ -362,12 +362,10 @@ UI). The run removes your launcher at the end like any other.
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
 
-* **Overlay expectations come from the ipk.** `Launcher.overlay` is `defaultWindowType == "overlay"` in the
-  `appinfo.json` inside the launcher's ipk (any id, any launcher). It drives the 6.x to 10.x preload expectations
-  (steps 2, 3r: the stock home left running, the skip line `overlay launcher <id> on webOS N: stock home left running`
-  must name that id, no `closeByAppId com.webos.app.home`); a normal-window launcher must see the stock home closed. The
-  watcher decides the same way for any id (`overlay_check` in `backport/homechooser-home-watch`: `getAppInfo`, else the
-  installed `appinfo.json`), so the two are independent readings of the same declaration.
+* **Overlay or not no longer changes the preload expectations** (8791f6e): on 6.x to 10.x the stock home is left
+  running for every launcher, on 11.x and 12.x it is closed for every launcher. `Launcher.overlay`
+  (`defaultWindowType == "overlay"` in the ipk's `appinfo.json`) is still logged and still decides how "Home opens
+  the launcher" is observed (an overlay leaves the app underneath in the foreground).
 * **Launch proof** (every Home press that should open the launcher, for Dock, any `--launcher-ipk` app and the
   fixtures alike: steps 3, 4 and 3u). Nothing visual is evidence; `beanjar screenshot` pictures are kept as artefacts
   only. The check passes when both hold:

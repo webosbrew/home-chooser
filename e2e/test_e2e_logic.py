@@ -213,6 +213,15 @@ class WaitForDevice(unittest.TestCase):
         self.assertIn('no-root-ssh', said[0])
 
 
+class StockLeftRunning(unittest.TestCase):
+    """8791f6e: on 6-10 the stock home is left running for every launcher; 11/12 close it; 5 is not touched."""
+
+    def test_releases(self):
+        import types
+        got = {m: e2e.Scenario.stock_left_running(types.SimpleNamespace(major=m)) for m in range(5, 13)}
+        self.assertEqual(got, {5: False, 6: True, 7: True, 8: True, 9: True, 10: True, 11: False, 12: False})
+
+
 class FakeRec:
     def __init__(self):
         self.checks, self.notes = [], []
