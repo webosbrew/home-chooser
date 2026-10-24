@@ -320,6 +320,16 @@ describe('Home Chooser screen', () => {
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
 		});
 
+		test('first choice can prepare a missing hook cache', async () => {
+			const homeKeyHook = homeKeyHookOf({mounted: false, enabled: false, hook: 'stale', patch: 'refused', reason: 'missing'});
+			const env = makeEnv({version: [9, 2, 4], homeKeyHook});
+			mountApp(env);
+			await chooseOn('Plain Launcher');
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await screen.findByText('Done. Restart the TV to finish.');
+			expect(homeKeyHook.install).toHaveBeenCalledTimes(1);
+		});
+
 		test('the prompt is the same whether the document is hidden or not', async () => {
 			const hidden = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
 			try {
@@ -488,6 +498,7 @@ describe('Home Chooser screen', () => {
 
 	test.each([
 		[{mounted: false, patch: 'possible'}, 'ready'],
+		[{mounted: false, hook: 'stale', patch: 'refused', reason: 'missing'}, 'ready'],
 		[{mounted: true}, 'active'],
 		[{mounted: false, patch: 'refused'}, 'nomatch']
 	])('patch state of %j is %s', (status, expected) => {

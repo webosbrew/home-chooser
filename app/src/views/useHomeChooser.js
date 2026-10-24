@@ -49,7 +49,9 @@ export const patchStateOf = (homeKeyHook, status) => {
 	if (!homeKeyHook) return null;
 	if (!status) return 'unknown';
 	if (status.mounted) return 'active';
-	return status.patch === 'possible' ? 'ready' : 'nomatch';
+	// A missing or stale cache has not been checked against this firmware yet. The first choice
+	// calls install(), which prepares and validates it before enabling the boot entry.
+	return status.patch === 'possible' || status.hook === 'stale' ? 'ready' : 'nomatch';
 };
 
 // What a marker left by an earlier window means now. The marker is only written after the apply
