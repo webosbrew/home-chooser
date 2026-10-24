@@ -74,6 +74,159 @@ KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 SKIP_LINE = 'stock home left running'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
+FULLHOME = 'com.webos.app.fullhome'
+
+
+# ---------------------------------------------------------------------------------------------
+# What the product says and writes (pure; e2e/test_e2e_logic.py checks them against the sources)
+# ---------------------------------------------------------------------------------------------
+DONE_TEXT = 'Done. Press Home to try it.'
+REBOOT_TITLE = 'Restart the TV?'
+REBOOT_LATER_TEXT = 'Restart the TV later to finish.'
+# the app's own restart dialog (app/src/views/useHomeChooser.js REBOOT_BODY)
+REBOOT_BODY = {'apply': 'The Home button changes after a restart.',
+               'remove': 'LG Home is on the Home button now. A restart removes the patch.'}
+# the service's system alert/toast when the screen is hidden (service/src/policy.c hc_reboot_message)
+REBOOT_PROMPT = {'apply': 'Restart the TV to finish setting up the Home button.',
+                 'remove': 'Restart the TV to finish removing the Home button patch.'}
+# the watcher (backport/homechooser-home-watch): the same on every release, no restart mentioned
+REMOVAL_ALERT = '%s was removed, so the Home button opens LG Home again.'
+UNINSTALL_TOAST = 'Home Chooser was removed. The Home button opens LG Home again.'
+OLD_RESTART_TEXTS = ('Restart the TV to finish the change.', 'Restart the TV to put LG Home back on the Home button.',
+                     'The screen will blink once.')
+# (text, file relative to the repo that must contain it)
+TEXT_SOURCES = [
+    (DONE_TEXT, 'app/src/views/useHomeChooser.js'),
+    (REBOOT_TITLE, 'app/src/views/MainPanel.js'),
+    (REBOOT_LATER_TEXT, 'app/src/views/useHomeChooser.js'),
+    (REBOOT_BODY['apply'], 'app/src/views/useHomeChooser.js'),
+    (REBOOT_BODY['remove'], 'app/src/views/useHomeChooser.js'),
+    (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
+    (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
+    ('$name' + REMOVAL_ALERT[2:], 'backport/homechooser-home-watch'),
+    (UNINSTALL_TOAST, 'backport/homechooser-home-watch'),
+]
+
+
+def uses_backport(major):
+    return 6 <= major <= 9
+
+
+def stock_home_id(major, fullhome_installed):
+    """The id restore/removal/uninstall write as `home` on 5.x to 9.x (docs/settings-app.md): fullhome
+    if it is installed, else com.webos.app.home.  10+ write null: None."""
+    if 5 <= major <= 9:
+        return FULLHOME if fullhome_installed else STOCK
+    return None
+
+
+def stock_record_ok(major, home, stock_id=None):
+    """The record's `home` after a restore, a launcher removal or a Home Chooser uninstall.
+    5.x: a stock launcher (unchanged).  6.x to 9.x: the stock id, not null (34a4ff9); exactly
+    `stock_id` when it is known.  10+: null or unset."""
+    if major == 5:
+        return home in (FULLHOME, STOCK)
+    if uses_backport(major):
+        return home == stock_id if stock_id else home in (FULLHOME, STOCK)
+    return home in (None, '', 'null')
+
+
+def stock_baseline_ok(major, home):
+    """A stock image before Home Chooser: on 6.x to 9.x the record may be unset (fresh image) or the
+    stock id an earlier uninstall left (it stays: stock firmware ignores it)."""
+    if uses_backport(major):
+        return home in (None, '', 'null', FULLHOME, STOCK)
+    return stock_record_ok(major, home)
+
+
+def expects_reboot_dialog(major, mounted_before):
+    """6.x to 9.x: choosing a launcher with the patch not mounted asks for a restart; with the patch
+    already mounted (an earlier choice this boot) the switch is live and nothing is asked."""
+    return uses_backport(major) and not mounted_before
+
+
+def parse_status(text):
+    """`homechooser-keyfilter status` output -> {key: value} of its key=value lines."""
+    out = {}
+    for line in (text or '').splitlines():
+        k, sep, v = line.strip().partition('=')
+        if sep and k and ' ' not in k:
+            out.setdefault(k, v)
+    return out
+
+
+def parse_luna(text):
+    """The JSON object of a luna-send reply (the first {...} line or the whole text); None if none."""
+    text = (text or '').strip()
+    for cand in [text] + [l.strip() for l in text.splitlines()]:
+        i = cand.find('{')
+        if i < 0:
+            continue
+        try:
+            v = json.loads(cand[i:])
+            if isinstance(v, dict):
+                return v
+        except ValueError:
+            pass
+    return None
+
+
+# a plain stop/start of webapp-mgr (the boot apply's firmware-order sequence) matches none of these
+CRASH_RE = re.compile(r'crashd.*CRASHED|CRASHED.*WebAppMgr|WebAppMgr.*(SIGSEGV|core dump|dumped core|segfault)'
+                      r"|webapp-mgr\.service: (Main process exited, code=dumped|Failed with result .core-dump)", re.I)
+
+
+def crash_lines(text):
+    """The lines of a /var/log/messages excerpt that report a crash (crashd, a WebAppMgr fault)."""
+    return [l for l in (text or '').splitlines() if CRASH_RE.search(l)]
+
+
+# ---------------------------------------------------------------------------------------------
+# The launcher API (docs/launcher-api.md) as the runner checks it
+# ---------------------------------------------------------------------------------------------
+API_GROUP = 'homechooser.applications'
+API_VERSION = 1
+DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
+API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
+API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'group', 'permitted', 'isHome')
+API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible')
+API_RUNNING_FIELDS = ('id', 'instanceId', 'processid', 'webprocessid')
+
+
+def api_reply_problems(method, reply):
+    """What a successful launcher-API reply lacks or carries beyond the contract; [] when it conforms."""
+    if not isinstance(reply, dict):
+        return ['no JSON reply']
+    if reply.get('returnValue') is not True:
+        return ['returnValue is not true: %s %s' % (reply.get('errorCode'), reply.get('errorText'))]
+    p = []
+    if method == 'getInfo':
+        p += ['missing %s' % f for f in API_INFO_FIELDS if f not in reply]
+        if reply.get('apiVersion') != API_VERSION:
+            p.append('apiVersion %r, expected %d' % (reply.get('apiVersion'), API_VERSION))
+        if 'group' in reply and reply['group'] != API_GROUP:
+            p.append('group %r' % reply['group'])
+        p += ['%s is not a boolean' % f for f in ('root', 'permitted', 'isHome') if f in reply and not isinstance(reply[f], bool)]
+        return p
+    key, allowed = {'listApps': ('apps', API_LIST_FIELDS), 'running': ('running', API_RUNNING_FIELDS)}[method]
+    if reply.get('apiVersion') != API_VERSION:
+        p.append('apiVersion %r, expected %d' % (reply.get('apiVersion'), API_VERSION))
+    items = reply.get(key)
+    if not isinstance(items, list):
+        return p + ['%s is not an array' % key]
+    for it in items:
+        if not isinstance(it, dict) or not it.get('id'):
+            p.append('an item without id: %r' % (it,))
+            continue
+        extra = sorted(set(it) - set(allowed))
+        if extra:
+            p.append('%s carries fields beyond the contract: %s' % (it['id'], ', '.join(extra)))
+    return p
+
+
+def api_refused(reply):
+    """A refusal: a JSON reply with returnValue false (the service's errorCode, or the hub's denial)."""
+    return isinstance(reply, dict) and reply.get('returnValue') is False
 
 
 # ---------------------------------------------------------------------------------------------
@@ -81,7 +234,7 @@ PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 # {normal,overlay}), or any app id with --launcher-ipk.
 # ---------------------------------------------------------------------------------------------
 DOCK_ID = 'org.webosbrew.dock'
-DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'
+DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'  # default; hosts.toml [paths] dock_ipk, --dock-ipk
 FIXTURE_TYPES = ('native', 'qml', 'web')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
@@ -139,14 +292,50 @@ def fixture_specs():
     return ['fixture:%s.%s' % (t, w) for t in FIXTURE_TYPES for w in FIXTURE_WINDOWS]
 
 
-def make_launcher(spec, ipk_override=None, announce=print):
+def api_fixture_ipks(announce=print):
+    """--api-check: the web fixtures built with requiredPermissions ["homechooser.applications"] and the
+    disposable non-home app, in build/fixtures-api/ (offline, built once).  {app id: ipk}."""
+    def found():
+        out = {}
+        for ident in [FIXTURE_ID % ('web', w) for w in FIXTURE_WINDOWS] + [DISPOSABLE_ID]:
+            g = sorted(glob.glob(os.path.join(API_FIXTURE_DIR, ident + '_*.ipk')))
+            if g:
+                out[ident] = g[-1]
+        return out
+    have = found()
+    if len(have) < len(FIXTURE_WINDOWS) + 1:
+        announce('API fixtures missing: building the web fixtures with %s and the disposable app into %s (offline)'
+                 % (API_GROUP, API_FIXTURE_DIR))
+        os.makedirs(API_FIXTURE_DIR, exist_ok=True)
+        env = dict(os.environ, HC_FIXTURE_PERMISSION=API_GROUP)
+        for script in ('web', 'disposable'):
+            try:
+                p = subprocess.run(['sh', os.path.join(HERE, 'fixtures', script, 'build.sh'), API_FIXTURE_DIR],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600, env=env)
+                announce(p.stdout.decode('utf-8', 'replace').strip()[-400:])
+            except subprocess.TimeoutExpired:
+                announce('%s/build.sh timed out' % script)
+        have = found()
+    if len(have) < len(FIXTURE_WINDOWS) + 1:
+        raise SystemExit('could not build the API fixtures in %s' % API_FIXTURE_DIR)
+    return have
+
+
+def make_launcher(spec, ipk_override=None, announce=print, dock_ipk=DOCK_IPK, api=False):
+    """api (--api-check): a web fixture comes from the build with the permission; native and qml
+    fixtures cannot declare it."""
     if spec == 'dock':
-        return Launcher(spec, DOCK_ID, ipk_override or DOCK_IPK, 'dock')
+        return Launcher(spec, DOCK_ID, ipk_override or dock_ipk, 'dock')
     if spec.startswith('fixture:'):
         t, _, w = spec[8:].partition('.')
         if t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS:
             raise SystemExit('unknown fixture %r; use fixture:<native|qml|web>.<normal|overlay>' % spec)
         ident = FIXTURE_ID % (t, w)
+        if api:
+            if t != 'web':
+                raise SystemExit('--api-check needs a launcher that declares %s: fixture:web.<normal|overlay>, '
+                                 'or your own launcher with --launcher-ipk' % API_GROUP)
+            return Launcher(spec, ident, api_fixture_ipks(announce)[ident], 'fixture')
         found = sorted(glob.glob(os.path.join(FIXTURE_DIR, ident + '_*.ipk')))
         if not found:
             announce('fixture ipk for %s missing: running e2e/fixtures/build.sh (offline)' % ident)
@@ -222,6 +411,37 @@ def entry(release_or_vm):
 
 
 # ---------------------------------------------------------------------------------------------
+# Beanjar machines: e2e/hosts.toml, then the git-ignored e2e/hosts.local.toml over it.  Without
+# either file the one machine is today's: `pi`, reached with `ssh raspberrypi`.
+# ---------------------------------------------------------------------------------------------
+HOSTS_FILE = os.path.join(HERE, 'hosts.toml')
+HOSTS_LOCAL_FILE = os.path.join(HERE, 'hosts.local.toml')
+DEFAULT_HOSTS = {'default': 'pi', 'hosts': {'pi': {'ssh': 'raspberrypi'}}, 'paths': {}}
+
+
+def load_hosts(path=None):
+    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]},
+    'paths': {...}}.  path: one file instead of hosts.toml + hosts.local.toml."""
+    import tomllib
+    files = [path] if path else [f for f in (HOSTS_FILE, HOSTS_LOCAL_FILE) if os.path.exists(f)]
+    if not files:
+        return json.loads(json.dumps(DEFAULT_HOSTS))
+    cfg = {'default': None, 'hosts': {}, 'paths': {}}
+    for f in files:
+        with open(f, 'rb') as fh:
+            d = tomllib.load(fh)
+        cfg['default'] = d.get('default', cfg['default'])
+        for name, h in d.get('hosts', {}).items():
+            cfg['hosts'].setdefault(name, {}).update(h)
+        cfg['paths'].update(d.get('paths', {}))
+    for name, h in cfg['hosts'].items():
+        if not h.get('local') and not h.get('ssh'):
+            raise SystemExit('host %s in %s has neither ssh = "<alias>" nor local = true' % (name, ', '.join(files)))
+    cfg['default'] = cfg['default'] or next(iter(cfg['hosts']), None)
+    return cfg
+
+
+# ---------------------------------------------------------------------------------------------
 # Running things
 # ---------------------------------------------------------------------------------------------
 def run(argv, timeout=120, input=None):
@@ -239,13 +459,21 @@ class BeanjarHost:
 
     local mode: beanjar and friends run as local commands.  remote mode: each command line is
     run with `ssh <host>` (an ssh config alias; BatchMode, so it never prompts) and files come
-    back with scp.  The rest of the runner never quotes for the remote.
+    back with scp.  The rest of the runner never quotes for the remote.  The mode comes from the
+    host's entry in hosts.toml, never from `beanjar` being on PATH: this PC has Beanjar's own
+    multi-host CLI, which is not the machine the VMs and their QMP sockets are on.
     """
 
-    def __init__(self, mode='auto', device='raspberrypi'):
-        if mode == 'auto':
-            mode = 'local' if shutil.which('beanjar') else 'remote'
-        self.mode, self.device = mode, device
+    def __init__(self, mode='remote', device='raspberrypi', name='pi'):
+        self.mode, self.device, self.name = mode, device, name
+        self._dirs = {}
+
+    @classmethod
+    def from_config(cls, cfg, name, mode=None, device=None):
+        h = cfg['hosts'].get(name)
+        if h is None:
+            raise SystemExit('unknown Beanjar host %r; hosts: %s (e2e/hosts.toml)' % (name, ', '.join(cfg['hosts'])))
+        return cls(mode or ('local' if h.get('local') else 'remote'), device or h.get('ssh') or 'localhost', name)
 
     # -- plumbing
     def sh(self, cmd, timeout=120):
@@ -268,17 +496,29 @@ class BeanjarHost:
         return self.sh('beanjar ' + self._q(*args), timeout)
 
     # -- Beanjar
-    def vm_table(self):
-        rc, out = self.beanjar('list')
-        rows = {}
-        for line in out.splitlines()[1:]:
-            f = line.split()
-            if len(f) >= 3:
-                rows[f[0]] = {'state': f[1], 'line': line}
-        return rows
+    def list_vms(self):
+        """[{name, state, ...}] of this machine's own VMs (`beanjar list --local --json`; a host whose
+        beanjar has remote hosts configured would otherwise list theirs too).  Raises on failure, so an
+        unreachable host never reads as an idle one."""
+        rc, out = self.beanjar('list', '--local', '--json', timeout=60)
+        if rc == 2:  # a beanjar without --local: no remote hosts there either
+            rc, out = self.beanjar('list', '--json', timeout=60)
+        try:
+            rows = json.loads(out[re.search(r'^\[', out, re.M).start():]) if rc == 0 else None
+        except (ValueError, AttributeError):
+            rows = None
+        if not isinstance(rows, list):
+            raise RuntimeError('beanjar list on %s failed (rc=%s): %s' % (self.name, rc, out.strip()[-300:]))
+        return [r for r in rows if r.get('host') in (None, 'local')]
 
     def running_vms(self):
-        return [n for n, r in self.vm_table().items() if r['state'] not in ('Off', 'off')]
+        """Every VM that is not Off (Starting, Running, Stopping all hold the machine)."""
+        return [r['name'] for r in self.list_vms() if r.get('state') not in ('Off', 'off')]
+
+    def vm_dir(self, vm):
+        if vm not in self._dirs:
+            self._dirs[vm] = self.info(vm).get('dir') or '$HOME/.local/share/beanjar/vms/' + vm
+        return self._dirs[vm]
 
     def info(self, vm):
         rc, out = self.beanjar('info', vm)
@@ -304,7 +544,7 @@ class BeanjarHost:
 
     # -- input and capture
     def sendkey(self, vm, key):
-        sock = '$HOME/.local/share/beanjar/vms/%s/run/qmp.sock' % vm
+        sock = self.vm_dir(vm) + '/run/qmp.sock'
         cmd = ('(echo \'{"execute":"qmp_capabilities"}\'; echo \'{"execute":"human-monitor-command",'
                '"arguments":{"command-line":"sendkey %s"}}\'; sleep 0.5) | socat - UNIX-CONNECT:%s | tail -1'
                % (key, sock))
@@ -319,7 +559,7 @@ class BeanjarHost:
     def tv_screenshot(self, vm, local_path):
         """`beanjar screenshot` (0.3.1+): the TV picture of the running VM, headless or through a viewer.
         Returns (ok, detail); detail is the command's output (--json: path, taken_by)."""
-        tmp = '/tmp/e2e-tv-%d.png' % os.getpid()
+        tmp = '/tmp/e2e-tv-%s-%d.png' % (vm, os.getpid())
         rc, out = self.beanjar('screenshot', vm, tmp, '--json', timeout=60)
         ok = rc == 0 and self.fetch(tmp, local_path)
         self.sh('rm -f ' + tmp)
@@ -363,8 +603,8 @@ class Device:
         rc, out = run(['ares-install', '-d', self.vm, '-l'], 60)
         return out.split()
 
-    def launch(self, appid):
-        return run(['ares-launch', '-d', self.vm, appid], 60)
+    def launch(self, appid, params=None):
+        return run(['ares-launch', '-d', self.vm, appid] + (['-p', json.dumps(params)] if params else []), 60)
 
     def close(self, appid):
         return run(['ares-launch', '-d', self.vm, '-c', appid], 60)
@@ -412,6 +652,29 @@ class Device:
     def mounts(self):
         rc, out = self.sh("awk '$2 ~ /^\\/usr\\/lib\\/qml\\// {print $2}' /proc/mounts")
         return [l for l in out.split() if l.startswith('/usr/lib/qml/')]
+
+    def luna_as(self, app, uri, payload='{}', timeout=60):
+        """(rc, raw, parsed) of a root `luna-send -a <app>`: the hub takes the caller to be that installed app
+        with its own client permissions (docs/launcher-api.md).  app None: no application id at all.  Through
+        exec, since luna-send under ares-shell -r prints nothing."""
+        ident = ('-a %s ' % shlex.quote(app)) if app else ''
+        rc, out = self.exec('luna-send %s-n 1 %s %s 2>&1' % (ident, uri, shlex.quote(payload)), timeout)
+        return rc, out.strip(), parse_luna(out)
+
+    def boot_id(self):
+        rc, out = self.sh('cat /proc/sys/kernel/random/boot_id', 20)
+        m = re.search(r'[0-9a-f]{8}-[0-9a-f-]{27}', out)
+        return m.group(0) if m else ''
+
+    def unit(self, name):
+        """{MainPID, NRestarts, ActiveState} of a systemd unit."""
+        rc, out = self.sh('systemctl show %s -p MainPID -p NRestarts -p ActiveState 2>&1' % name)
+        return dict(l.strip().split('=', 1) for l in out.splitlines() if '=' in l)
+
+    def app_installed(self, appid):
+        """By getAppInfo as root (ares-install -l lists only developer apps on some releases)."""
+        r = parse_luna(self.luna('luna://com.webos.applicationManager/getAppInfo', json.dumps({'id': appid})))
+        return bool(r) and r.get('returnValue') is True
 
     def service_root(self):
         rc, out = self.sh("ps -eo user,args | grep '[h]omechooser-service'")
@@ -470,14 +733,19 @@ ELEVATIONS = {'luna': LunaElevation, 'root-shell': RootShellElevation}
 # ---------------------------------------------------------------------------------------------
 class Inspector:
     def __init__(self, vm):
-        s = socket.socket()
-        s.bind(('127.0.0.1', 0))
-        self.port = s.getsockname()[1]
-        s.close()
-        self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     start_new_session=True)
-        time.sleep(2)
+        # A free port is picked and released before ares-novacom binds it, so a parallel run can take
+        # it in between; then our forward exits at once and another port is tried.
+        for _ in range(3):
+            s = socket.socket()
+            s.bind(('127.0.0.1', 0))
+            self.port = s.getsockname()[1]
+            s.close()
+            self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+            time.sleep(2)
+            if self.proc.poll() is None:
+                break
 
     def close(self):
         try:
@@ -567,6 +835,7 @@ FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.clos
             "return JSON.stringify({row:r?r.getAttribute('data-app-id'):null,"
             "text:e?(e.textContent||'').trim().slice(0,80):null,"
             "dialog:(function(){var d=document.querySelector('[role=dialog]');return d?d.getAttribute('aria-label'):null})(),"
+            "dialogText:(function(){var d=document.querySelector('[role=dialog]');return d?(d.textContent||'').trim().slice(0,300):null})(),"
             "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
             "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
 PLANT_JS = ("(function(){localStorage.setItem('homechooser.pending',JSON.stringify("
@@ -611,6 +880,11 @@ class Recorder:
                                       '\n    expected: ' + expected if expected and not ok else ''))
         return ok
 
+    def manual(self, name, why):
+        """A check the runner cannot make without pressing a key at a popup that is not ours: MANUAL."""
+        self.results.append({'step': self.step, 'name': name, 'status': 'MANUAL', 'evidence': str(why), 'expected': None})
+        self.say('MANUAL  %s\n    %s' % (name, str(why).replace('\n', '\n    ')))
+
     def finish(self):
         with open(os.path.join(self.outdir, 'results.json'), 'w') as f:
             json.dump(self.results, f, indent=2)
@@ -638,6 +912,7 @@ class Scenario:
         self.viewer_opened = False
         self.major = 0  # webOS TV release, 5..12
         self.generated_markers_cleaned = False
+        self.stock_id = None  # what restore/removal/uninstall write as home (stock_home_id), from the baseline
 
     # -- helpers
     def shot(self, label):
@@ -674,10 +949,12 @@ class Scenario:
     def press(self, *keys):
         for k in keys:
             if self.a.input == 'qmp':
-                qk = {'DOWN': 'down', 'UP': 'up', 'OK': 'ret', 'HOME': 'meta_l', 'BACK': 'esc'}[k]
+                qk = {'DOWN': 'down', 'UP': 'up', 'LEFT': 'left', 'RIGHT': 'right', 'OK': 'ret', 'HOME': 'meta_l',
+                      'BACK': 'esc'}[k]
                 self.host.sendkey(self.vm, qk)
             else:
-                ak = {'DOWN': 'DOWN', 'UP': 'UP', 'OK': 'ENTER', 'HOME': 'LEFTMETA', 'BACK': 'ESC'}[k]
+                ak = {'DOWN': 'DOWN', 'UP': 'UP', 'LEFT': 'LEFT', 'RIGHT': 'RIGHT', 'OK': 'ENTER', 'HOME': 'LEFTMETA',
+                      'BACK': 'ESC'}[k]
                 self.dev.key(ak)
             time.sleep(0.8)
 
@@ -758,7 +1035,7 @@ class Scenario:
         return s
 
     def uses_backport(self):
-        return 6 <= self.major <= 9
+        return uses_backport(self.major)
 
     def uses_override(self):
         return self.major >= 10
@@ -767,6 +1044,105 @@ class Scenario:
         rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
         self.rec.check('%s: generated keyfilter is mounted' % label,
                        rc == 0 and 'mounted=yes' in out and 'match=generated' in out, out.strip())
+
+    def kf_status(self):
+        """(parsed, raw) of `homechooser-keyfilter status` (6.x to 9.x)."""
+        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        return parse_status(out), out.strip()
+
+    # -- nothing restarts while the TV runs (6.x to 9.x; 144ef21)
+    BACKPORT_LOG = '/tmp/homechooser-backport.log'
+    COMPOSITOR = 'surface-manager-daemon'
+
+    def compositor_snapshot(self):
+        d = self.dev
+        u = d.unit(self.COMPOSITOR)
+        n = d.sh("grep -c 'restarting %s' %s 2>/dev/null || true" % (self.COMPOSITOR, self.BACKPORT_LOG))[1].strip()
+        return {'boot': d.boot_id(), 'pid': u.get('MainPID'), 'restarts': u.get('NRestarts'),
+                'log_restarts': n.splitlines()[-1] if n else '0', 'wam': d.unit('webapp-mgr'), 'mark': self.messages_mark()}
+
+    def check_no_compositor_restart(self, label, before):
+        """The compositor was not restarted since `before` (same boot): same MainPID and NRestarts and no new
+        `restarting surface-manager-daemon` line in the backport log (a /tmp file: it starts empty each boot)."""
+        if not self.uses_backport() or not before:
+            return
+        now = self.compositor_snapshot()
+        if now['boot'] != before['boot']:
+            self.rec.note(label + ': a reboot came in between; the compositor check does not apply', '')
+            return
+        ok = (now['pid'] == before['pid'] and now['restarts'] == before['restarts']
+              and now['log_restarts'] == before['log_restarts'])
+        self.rec.check(label + ': no compositor restart (surface-manager-daemon MainPID/NRestarts unchanged, '
+                       'no new "restarting %s" line in %s)' % (self.COMPOSITOR, self.BACKPORT_LOG), ok,
+                       'before pid=%s NRestarts=%s log=%s; after pid=%s NRestarts=%s log=%s' % (
+                           before['pid'], before['restarts'], before['log_restarts'],
+                           now['pid'], now['restarts'], now['log_restarts']))
+
+    def check_no_crash(self, label, before):
+        """6.x to 9.x: no crashd CRASHED / WebAppMgr crash line since `before`, and within one boot WebAppMgr
+        kept its MainPID and NRestarts.  The boot-time apply's restart is the only restart allowed."""
+        if not self.uses_backport() or not before:
+            return
+        d = self.dev
+        rc, out = d.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20"
+                       % (before['mark'], shlex.quote(CRASH_RE.pattern)))
+        bad = crash_lines(out)
+        self.rec.check(label + ': no crashd CRASHED or WebAppMgr crash line in /var/log/messages since %s' % before['mark'],
+                       not bad, '\n'.join(bad[-6:]) or 'none')
+        if d.boot_id() == before['boot']:
+            wam = d.unit('webapp-mgr')
+            self.rec.check(label + ': WebAppMgr not restarted (webapp-mgr MainPID/NRestarts unchanged)',
+                           wam.get('MainPID') == before['wam'].get('MainPID')
+                           and wam.get('NRestarts') == before['wam'].get('NRestarts'),
+                           'before %s; after %s' % (before['wam'], wam))
+
+    # -- reboots
+    def await_boot(self, label, boot0):
+        """After a reboot (any route): LAN address, device entries, Homebrew Channel, a new boot id."""
+        r, host = self.rec, self.host
+        end = time.time() + 120
+        while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
+            time.sleep(3)
+        ensure_devices(host, self.vm, r)
+        up = wait_for_device(self.vm, r)
+        r.check(label + ': the VM is back with Homebrew Channel', up, 'wait_for_device')
+        if up:
+            b = self.dev.boot_id()
+            r.check(label + ': it is a new boot (boot_id changed)', bool(b) and b != boot0, '%s -> %s' % (boot0, b))
+        return up
+
+    def beanjar_reboot(self, label):
+        boot0 = self.dev.boot_id()
+        rc, out = self.host.stop(self.vm)
+        self.rec.say('beanjar stop: %s' % out.strip()[-200:])
+        rc, out = self.host.start(self.vm)
+        self.rec.say('beanjar start: %s' % out.strip()[-200:])
+        return self.await_boot(label, boot0)
+
+    def wait_reboot(self, boot0, timeout=240):
+        """Wait for the TV to restart by itself (tvpower): 'rebooted' when a new boot id is read, 'off' when
+        Beanjar shows the VM off (QEMU may power off on a guest reboot), '' when nothing happened."""
+        end = time.time() + timeout
+        gone = False
+        while time.time() < end:
+            time.sleep(10)
+            try:
+                if self.vm not in self.host.running_vms():
+                    return 'off'
+            except RuntimeError:
+                pass
+            b = self.dev.boot_id()
+            if not b:
+                gone = True
+                continue
+            if b != boot0:
+                return 'rebooted'
+            if gone:  # answering again with the old id: the address may have moved; fix the entries
+                try:
+                    ensure_devices(self.host, self.vm, self.rec)
+                except SystemExit:
+                    pass
+        return ''
 
     def cleanup_generated_markers(self):
         if not self.a.keyfilter_generated or self.generated_markers_cleaned:
@@ -778,9 +1154,7 @@ class Scenario:
         self.generated_markers_cleaned = rc == 0
 
     def stock_record_ok(self, home):
-        if self.major == 5:
-            return home in ('com.webos.app.fullhome', STOCK)
-        return home in (None, '', 'null')
+        return stock_record_ok(self.major, home, self.stock_id)
 
     def residency(self, point):
         """Observation only: are the previous (stock) and the new home app running, pids and RSS."""
@@ -813,19 +1187,23 @@ class Scenario:
         rc, out = self.dev.sh("grep -h configuredHomeAppId /usr/lib/qml/WebOSCompositorBase/global/Settings.qml | head -2")
         return out.strip()
 
-    def assert_stock(self, label, s, mounts_stay=False):
+    def assert_stock(self, label, s, baked_emptied=True):
+        """The platform is back to stock.  6.x to 9.x: the record names the stock id (not null) and the
+        patch stays mounted until the next boot (nothing unmounts or restarts while the TV runs);
+        baked_emptied: the watcher ran `refresh stock` (a launcher removal; not after an uninstall,
+        where the worker went with the app directory).  10+: null/unset and no override."""
         r = self.rec
-        r.check(label + ': record home is stock/unset', self.stock_record_ok(s['record_home']), s['record_raw'])
+        want = {5: 'a stock launcher (%s or %s)' % (FULLHOME, STOCK)}.get(self.major) or (
+            'the stock id %s, not null' % self.stock_id if self.uses_backport() else 'null or unset')
+        r.check(label + ': record home is %s' % want, self.stock_record_ok(s['record_home']), s['record_raw'])
         if self.uses_override():
             r.check(label + ': profile override absent', s['override'] == 'no', 'override exists: ' + s['override'])
-        if self.uses_backport() and mounts_stay:
-            r.check(label + ': backport stays mounted (docs: "the backport stays mounted until reboot")',
-                    bool(s['mounts']), 'mounts: %s' % s['mounts'])
-            baked = self.baked_id()
-            r.check(label + ': baked id in the mounted Settings.qml is emptied (refresh stock)',
-                    '""' in baked and self.launcher not in baked, baked)
-        elif self.uses_backport():
-            r.check(label + ': no backport mounts', not s['mounts'], 'mounts: %s' % s['mounts'])
+        if self.uses_backport():
+            r.check(label + ': backport stays mounted until the next boot', len(s['mounts']) >= 1, 'mounts: %s' % s['mounts'])
+            if baked_emptied:
+                baked = self.baked_id()
+                r.check(label + ': baked id in the mounted Settings.qml is emptied (refresh stock)',
+                        '""' in baked and self.launcher not in baked, baked)
 
     # -- the removal notifications (docs/settings-app.md "When apps are removed")
     def notif_lines(self, method):
@@ -901,8 +1279,8 @@ class Scenario:
         time.sleep(2)
         self.foreign_popup('4-alert')
         self.shot('4-alert')
-        r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "<launcher title> was removed, '
-               'so the Home button opens LG Home again." and one OK button', '')
+        r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "%s" and one OK button '
+               '(no restart is mentioned on any release)' % (REMOVAL_ALERT % self.L.title), '')
         fg0 = d.foreground()
         m = re.search(r'"alertId"\s*:\s*"([^"]+)"', reply)
         if m:
@@ -931,8 +1309,8 @@ class Scenario:
                 bool(new) and len(new) <= 8 and (not ok_ix or ok_ix == [len(new) - 1]), '\n'.join(new) or 'no createToast line in the log')
         if new:
             r.check('the notification service accepted the toast', '"returnValue":true' in new[-1].replace(' ', ''), new[-1])
-        r.note('look at screenshot 5-toast: a toast "Home Chooser was removed. The Home button opens LG Home again." '
-               '(it may already be gone: the log reply is the evidence)', '')
+        r.note('look at screenshot 5-toast: a toast "%s" (it may already be gone: the log reply is the evidence)'
+               % UNINSTALL_TOAST, '')
 
     # -- the stock home's preload policy
     def preload_log(self):
@@ -1049,11 +1427,12 @@ class Scenario:
         proof = expect == self.launcher
         if proof:
             self.life_begin()
-        if expect == STOCK and self.major == 5:
+        if expect == STOCK and (self.major == 5 or self.stock_id == FULLHOME):
             # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
             # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
-            # a launcher: closed first, running afterwards.
-            expect = 'com.webos.app.fullhome'
+            # a launcher: closed first, running afterwards.  6.x to 9.x with fullhome installed: the
+            # record names it, so it is what opens (not seen on a device yet).
+            expect = FULLHOME
         if expect != STOCK:
             self.dev.close(expect)
             time.sleep(3)
@@ -1190,6 +1569,10 @@ class Scenario:
         r.begin('0 baseline')
         r.check('device release matches the matrix (%s)' % self.release,
                 '%d.' % self.major == self.release[:-1], 'os-release: ' + osr)
+        fullhome = d.app_installed(FULLHOME)
+        self.stock_id = stock_home_id(self.major, fullhome)
+        r.note('stock home id written by restore/removal/uninstall: %s (%s installed: %s)'
+               % (self.stock_id or 'null (10+)', FULLHOME, fullhome), '')
         base = self.state()
         r.note('baseline state (a stale record home is image state, not ours)', json.dumps(base))
         r.check('baseline: nothing of Home Chooser is installed',
@@ -1198,10 +1581,11 @@ class Scenario:
         if self.a.keyfilter_generated:
             rc, markers = d.sh('test ! -e %s && test ! -e %s' % (NO_SETS_FLAG, GENERATED_FLAG))
             stock_baseline = (APP_ID not in d.installed() and 'No such' in base['choice']
-                              and self.stock_record_ok(base['record_home'])
+                              and stock_baseline_ok(self.major, base['record_home'])
                               and base['watcher'] != 'active'
                               and ('No such' in base['initd'] or not base['initd'])
-                              and not base['mounts'] and base['flag'] == 'no'
+                              # 6-9: an earlier run's patch stays mounted until the next boot
+                              and (not base['mounts'] or self.uses_backport()) and base['flag'] == 'no'
                               and rc == 0)
             r.check('generated-patch run starts from a stock baseline', stock_baseline,
                     'state: %s; markers: %s' % (json.dumps(base), markers.strip() or 'absent'))
@@ -1220,15 +1604,23 @@ class Scenario:
                 r.check('qml fixtures run on %d.x' % self.major, False, ev, expected=ev)
                 return
         steps = [self.step1, self.step2, self.step3, self.step4, self.step5]
+
+        def guarded(fn, *a):
+            # 6.x to 9.x: no crash of WebAppMgr (or anything crashd reports) during the step
+            snap = self.compositor_snapshot() if self.uses_backport() else None
+            fn(*a)
+            self.check_no_crash('end of step', snap)
         try:
             for i, fn in enumerate(steps, 1):
                 if i > self.a.until:
                     break
-                fn(strat) if i == 1 else fn()
+                guarded(fn, strat) if i == 1 else guarded(fn)
+                if i == 3 and self.a.api_check:
+                    guarded(self.step_api)
                 if i == 3 and self.a.reboot_check:
-                    self.step_reboot()
+                    guarded(self.step_reboot)
                 if i == 3 and self.a.update_check:
-                    self.step_update()
+                    guarded(self.step_update)
         finally:
             try:
                 if self.a.until >= 5:
@@ -1259,6 +1651,10 @@ class Scenario:
         rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
         r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
+        if self.a.api_check:
+            rc, out = d.install(self.a.disposable_ipk)
+            r.check('--api-check: install the disposable app %s' % DISPOSABLE_ID, rc == 0 and 'Installed package' in out,
+                    out.strip())
         r.check('both apps are listed', APP_ID in d.installed() and self.launcher in d.installed(),
                 str(d.installed()))
         strat.prepare(d, r)
@@ -1277,6 +1673,9 @@ class Scenario:
         first = self.ui() or {}
         r.check('first open after a fresh install: no error toast (a marker left by an earlier install is dropped)',
                 not (first.get('toast') or '').startswith("Couldn't"), 'toast: %r' % first.get('toast'))
+        if self.a.api_check:
+            self.api_before_selection()
+            r.begin('2 choose the launcher through the UI (continued)')
         # a marker as an earlier install's cut-short run leaves it (WAM keeps localStorage across an
         # uninstall; the choice was removed with it): the next open must drop it without a toast
         r.note('planted stale marker', self.insp.evaluate(PLANT_JS % self.launcher))
@@ -1329,14 +1728,42 @@ class Scenario:
             self.press('UP')
             ui = self.ui() or {}
         r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
+        mounted_before = bool(d.mounts()) if self.uses_backport() else False
+        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        if self.uses_backport():
+            r.note('patch mounted before choosing: %s (a restart dialog is %s)' % (
+                mounted_before, 'expected' if expects_reboot_dialog(self.major, mounted_before) else 'not expected'), '')
         self.press('OK')
-        # the choice is applied; on 6-9 the compositor restart may close the panel
-        self.wait(lambda: self.state()['choice'] == self.launcher, 90)
-        time.sleep(10)
-        toast = (self.ui() or {}).get('toast')
-        self.shot('after-confirm')
-        r.note('toast after confirming (None if the panel was restarted/closed)', toast)
-        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or self.dev.mounts()), 90)
+        # the choice is applied; nothing restarts the compositor any more, so the panel stays open
+        toasts = []
+
+        def chosen():
+            u = self.ui() or {}
+            if u.get('toast'):
+                toasts.append(u['toast'])
+            return self.state()['choice'] == self.launcher
+        self.wait(chosen, 90, 2)
+        if expects_reboot_dialog(self.major, mounted_before):
+            self.reboot_after_choice(comp0)
+            toast = None
+        else:
+            if not toasts:
+                self.wait(lambda: (lambda u: (toasts.append(u['toast']) or True) if u.get('toast') else False)(self.ui() or {}), 30, 1)
+            toast = next((t for t in toasts if t), None)
+            self.shot('after-confirm')
+            r.note('toasts after confirming', repr(toasts))
+            r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast))
+            if self.uses_backport():
+                # the patch was mounted already (an earlier choice in this boot): a live switch
+                self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
+                st, raw = self.kf_status()
+                r.check('keyfilter status: mounted=yes and reboot=no (nothing to ask)',
+                        st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
+                self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
+                baked = self.baked_id()
+                r.check('the watcher baked the launcher id into the mounted Settings.qml (refresh, no restart)',
+                        self.launcher in baked, baked)
+        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or len(self.dev.mounts()) >= 9), 90)
         self.residency('right after "Use as Home" (settled)')
         s = self.state()
         r.note('state after choosing', json.dumps(s))
@@ -1346,19 +1773,22 @@ class Scenario:
         r.check('init.d entry is a symlink into the installed app',
                 s['initd'] == APPDIR + '/backport/homechooser', s['initd'])
         if self.uses_backport():
-            r.check('backport mounts are present (webOS 6-9)', len(s['mounts']) >= 9, 'mounts: %s' % s['mounts'])
+            r.check('backport mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
+                    len(s['mounts']) >= 9, 'mounts: %s' % s['mounts'])
             r.check('backport flag file exists', s['flag'] == 'yes', s['flag'])
             if self.a.keyfilter_generated:
-                self.check_generated_status('after selection')
+                self.check_generated_status('after selection' + (' and the boot' if not mounted_before else ''))
         else:
             r.check('no backport on this release', not s['mounts'] and s['flag'] == 'no',
                     'mounts: %s flag: %s' % (s['mounts'], s['flag']))
         if self.uses_override():
             r.check('profile override exists (webOS 10+)', s['override'] == 'yes', s['override'])
             r.note('override', d.sh('cat %s' % OVERRIDE)[1])
-        r.check('the toast said Done (or the panel restarted)', toast in (None, 'Done. Press Home to try it.'),
-                repr(toast))
+        if not self.a.update_check:  # --update-check: step 1 installed the old build; checked in 3u
+            self.check_device_texts()
         # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
+        if not self.insp:
+            self.insp = Inspector(self.vm)
         d.close(APP_ID)
         time.sleep(3)
         d.launch(APP_ID)
@@ -1386,6 +1816,129 @@ class Scenario:
             self.insp = None
         self.check_preload_off('after the switch')
 
+    def focus_button(self, label, first=True):
+        """Move focus inside our dialog to the button `label` (buttons sit in a row: the confirm one
+        first, LEFT; the cancel one last, RIGHT).  True when focus is on it."""
+        for k in ['LEFT', 'UP'] if first else ['RIGHT', 'DOWN']:
+            if (self.ui() or {}).get('text') == label:
+                return True
+            self.press(k)
+        return (self.ui() or {}).get('text') == label
+
+    def ours_in_front(self, dialog):
+        """Home Chooser is the foreground app and shows `dialog` (its own ConfirmDialog, by aria-label):
+        only then is a key pressed at a dialog."""
+        fg = self.dev.foreground()
+        ui = self.ui() or {}
+        title = ui.get('dialog') or ''
+        ok = fg[0] == APP_ID and (title == dialog if not dialog.endswith('*') else title.startswith(dialog[:-1]))
+        return ok, 'foreground %s; dialog %r; focus %r' % (fg[0], title, ui.get('text'))
+
+    def reboot_after_choice(self, comp0):
+        """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks
+        "Restart the TV?" (Reboot / Later).  --reboot-via dialog (default) presses Reboot on that dialog,
+        our own screen, and the TV restarts through tvpower; --reboot-via later presses Later and the VM
+        is restarted with beanjar stop/start.  Then the boot hook mounts the patch."""
+        r, d = self.rec, self.dev
+        ui = self.wait(lambda: (lambda u: u if u.get('dialog') == REBOOT_TITLE else None)(self.ui() or {}), 90, 1)
+        if not ui and self.a.update_check and d.mounts():
+            r.note('no restart dialog and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
+            return
+        self.shot('2-reboot-dialog')
+        ui = ui or self.ui() or {}
+        r.check('6-9, patch not mounted: the app asks "%s" (Reboot / Later)' % REBOOT_TITLE, ui.get('dialog') == REBOOT_TITLE,
+                json.dumps(ui))
+        r.check('the restart dialog says "%s"' % REBOOT_BODY['apply'], REBOOT_BODY['apply'] in (ui.get('dialogText') or ''),
+                repr(ui.get('dialogText')))
+        s = self.state()
+        st, raw = self.kf_status()
+        r.note('state with the restart dialog up', json.dumps(s))
+        r.check('before the reboot: keyfilter status says mounted=no and reboot=needed',
+                st.get('mounted') == 'no' and st.get('reboot') == 'needed', raw)
+        r.check('before the reboot: nothing is mounted', not s['mounts'], 'mounts: %s' % s['mounts'])
+        r.check('before the reboot: the flag file and the init.d entry are written',
+                s['flag'] == 'yes' and s['initd'] == APPDIR + '/backport/homechooser', 'flag %s; init.d %s' % (s['flag'], s['initd']))
+        r.check('before the reboot: the record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
+        self.check_no_compositor_restart('choosing the launcher', comp0)
+        boot0 = d.boot_id()
+        ok, why = self.ours_in_front(REBOOT_TITLE)
+        r.check('a key is pressed on OUR dialog only: Home Chooser in front showing "%s"' % REBOOT_TITLE, ok, why)
+        if not ok:
+            raise RuntimeError('not pressing a key: the restart dialog in front is not ours')
+        if self.a.reboot_via == 'later':
+            ok = self.focus_button('Later', first=False)
+            r.check('focus is on "Later"', ok, json.dumps(self.ui()))
+            if not ok:
+                raise RuntimeError('focus is not on Later; not pressing OK')
+            self.press('OK')
+            seen = self.wait(lambda: (lambda t: t if t == REBOOT_LATER_TEXT else None)((self.ui() or {}).get('toast')), 15, 1)
+            r.check('Later: the toast says "%s"' % REBOOT_LATER_TEXT, seen == REBOOT_LATER_TEXT, repr((self.ui() or {}).get('toast')))
+            self.close_insp()
+            up = self.beanjar_reboot('2 reboot (Later, then beanjar stop/start)')
+        else:
+            ok = self.focus_button('Reboot')
+            r.check('focus is on "Reboot"', ok, json.dumps(self.ui()))
+            if not ok:
+                raise RuntimeError('focus is not on Reboot; not pressing OK')
+            self.press('OK')
+            self.close_insp()
+            how = self.wait_reboot(boot0)
+            r.check('Reboot restarted the TV (rebootConfirmed -> tvpower/power/reboot; a VM that powers off counts)',
+                    how in ('rebooted', 'off'), how or 'no new boot id within 240 s')
+            if how == 'off':
+                r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
+                self.host.start(self.vm)
+                up = self.await_boot('2 reboot (Reboot button; VM started again)', boot0)
+            elif how == 'rebooted':
+                up = self.await_boot('2 reboot (Reboot button)', boot0)
+            else:
+                r.say('the Reboot button did not restart the TV: falling back to beanjar stop/start')
+                up = self.beanjar_reboot('2 reboot (fallback: beanjar stop/start)')
+        if not up:
+            raise RuntimeError('the VM did not come back after the reboot')
+        self.after_boot_checks('after the reboot')
+
+    def after_boot_checks(self, label):
+        """6.x to 9.x after a boot with a launcher chosen: the init.d hook started the watcher and mounted
+        the patch (the boot apply, with its one firmware-order compositor restart)."""
+        r = self.rec
+        active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
+        r.check(label + ': the watcher is active (started from init.d)', bool(active), self.watcher_active())
+        self.wait(lambda: len(self.dev.mounts()) >= 9, 180, 5)
+        st, raw = self.kf_status()
+        r.check(label + ': the boot hook mounted the patch: status mounted=yes and reboot=no',
+                st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
+        r.note(label + ': backport log of the boot apply (its compositor restart is the one allowed)',
+               self.dev.sh('tail -n 20 %s 2>&1' % self.BACKPORT_LOG)[1])
+
+    def close_insp(self):
+        if self.insp:
+            self.insp.close()
+            self.insp = None
+
+    def check_device_texts(self):
+        """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:
+        the watcher (app copy and the running /tmp copy), the service binary, the app bundle."""
+        r, d = self.rec, self.dev
+        watch = [APPDIR + '/backport/homechooser-home-watch', '/tmp/homechooser-runtime/homechooser-home-watch']
+        svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
+
+        def has(text, paths):
+            rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(text), ' '.join(paths)))
+            return [l for l in out.split() if l.startswith('/')]
+        for text in (REMOVAL_ALERT[2:], UNINSTALL_TOAST):
+            got = has(text, watch)
+            r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
+        old = [(t, has(t, watch + [APPDIR])) for t in OLD_RESTART_TEXTS]
+        r.check('device texts: no old restart wording in the watcher or the app', not any(g for _, g in old),
+                '; '.join('%r in %s' % (t, g) for t, g in old if g) or 'none')
+        for reason, text in sorted(REBOOT_PROMPT.items()):
+            got = has(text, [svcdir])
+            r.check('device texts: the service reboot prompt (%s) is "%s"' % (reason, text), bool(got), 'found in %s' % got)
+        for reason, text in sorted(REBOOT_BODY.items()):
+            got = has(text, [APPDIR])
+            r.check('device texts: the app restart dialog (%s) says "%s"' % (reason, text), bool(got), 'found in %s' % got)
+
     def step3(self):
         self.rec.begin('3 Home opens the launcher')
         # Observation, not an assertion: Home with the stock home already in front.
@@ -1409,20 +1962,14 @@ class Scenario:
         watcher's delayed close (45 s) is what removes it.  5.x: no policy call is expected."""
         r, d, host = self.rec, self.dev, self.host
         r.begin('3r reboot with the launcher chosen (--reboot-check)')
-        rc, out = host.stop(self.vm)
-        r.say('beanjar stop: %s' % out.strip()[-200:])
-        rc, out = host.start(self.vm)
-        r.say('beanjar start: %s' % out.strip()[-200:])
-        end = time.time() + 120
-        while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
-            time.sleep(3)
-        ensure_devices(host, self.vm, r)
-        up = wait_for_device(self.vm, r)
-        r.check('the VM is back with Homebrew Channel', up, 'wait_for_device')
+        up = self.beanjar_reboot('3r')
         if not up:
             return
-        active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
-        r.check('after the boot the watcher is active (started from init.d)', bool(active), self.watcher_active())
+        if self.uses_backport():
+            self.after_boot_checks('after the boot')  # the watcher, the boot hook's mounts, status
+        else:
+            active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
+            r.check('after the boot the watcher is active (started from init.d)', bool(active), self.watcher_active())
         s = self.state()
         r.check('after the boot the choice and the record are still the launcher',
                 s['choice'] == self.launcher and s['record_home'] == self.launcher, s['record_raw'])
@@ -1440,6 +1987,245 @@ class Scenario:
             self.check_generated_status('after reboot')
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
+        if self.a.api_check:
+            self.api_after_reboot()
+
+    # -- the launcher API (--api-check; docs/launcher-api.md)
+    def api(self, method, payload=None, app='launcher'):
+        """(parsed reply, raw) of a launcher-API call as `app` (default: the launcher under test; None: no
+        application id, as a plain shell luna-send)."""
+        app = self.launcher if app == 'launcher' else app
+        rc, raw, rep = self.dev.luna_as(app, 'luna://%s/%s' % (SVC_ID, method), json.dumps(payload or {}))
+        return rep, raw
+
+    def api_conforms(self, method, label, payload=None):
+        rep, raw = self.api(method, payload)
+        probs = api_reply_problems(method, rep)
+        self.rec.check('%s: %s as %s succeeds with the documented fields only' % (label, method, self.launcher), not probs,
+                       '%s\n%s' % ('; '.join(probs) or 'conforms', raw[:800]))
+        return rep or {}
+
+    def api_kit_note(self):
+        if self.L.is_fixture:
+            return 'the web fixture built with requiredPermissions [%s]' % API_GROUP
+        return 'an author launcher (%s, ipk %s): fixture-only parts are skipped' % (self.launcher, self.L.ipk)
+
+    def api_before_selection(self):
+        """Home Chooser open and elevated, the launcher installed but not chosen."""
+        r, d = self.rec, self.dev
+        r.begin('2a launcher API before the launcher is chosen (--api-check)')
+        r.note('API caller: ' + self.api_kit_note(), '')
+        ai = self.L.appinfo
+        perm, home = API_GROUP in (ai.get('requiredPermissions') or []), 'home' in (ai.get('appCategory') or [])
+        r.check('the launcher appinfo declares requiredPermissions ["%s"] and appCategory "home"' % API_GROUP, perm and home,
+                'requiredPermissions %r; appCategory %r' % (ai.get('requiredPermissions'), ai.get('appCategory')))
+        r.note('launcher access files (homechooser-access status; the app applies them when it loads)',
+               d.exec('sh %s/backport/homechooser-access status 2>&1' % APPDIR)[1].strip())
+        # the app's accessApply runs while the list loads: allow it a moment (listApps needs the grant)
+        self.wait(lambda: (self.api('listApps')[0] or {}).get('returnValue') is True, 30, 3)
+        info = self.api_conforms('getInfo', 'before selection')
+        r.check('before selection: getInfo says root true, permitted true, isHome false',
+                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is False, json.dumps(info))
+        apps = self.api_conforms('listApps', 'before selection')
+        ids = [a.get('id') for a in apps.get('apps') or [] if isinstance(a, dict)]
+        r.check('listApps names the launcher and the disposable app', self.launcher in ids and DISPOSABLE_ID in ids,
+                '%d apps; launcher %s, disposable %s' % (len(ids), self.launcher in ids, DISPOSABLE_ID in ids))
+        self.api_conforms('running', 'before selection')
+        # an installed app without the permission
+        for m, payload in (('listApps', {}), ('running', {}), ('closeById', {'id': APP_ID}), ('uninstall', {'id': self.launcher})):
+            rep, raw = self.api(m, payload, app=DISPOSABLE_ID)
+            r.check('%s as %s (no %s in its appinfo) is refused' % (m, DISPOSABLE_ID, API_GROUP), api_refused(rep),
+                    raw[:400])
+        rep, raw = self.api('getInfo', app=DISPOSABLE_ID)
+        r.check('getInfo as the app without the permission: permitted false, or refused by the hub',
+                api_refused(rep) or (rep or {}).get('permitted') is False, raw[:400])
+        rep, raw = self.api('listApps', app=None)
+        r.check('listApps without an application id (a plain root luna-send) is refused', api_refused(rep), raw[:400])
+        for m in ('closeById', 'uninstall'):
+            rep, raw = self.api(m, {'id': DISPOSABLE_ID})
+            r.check('%s as %s while it is not the selected Home: refused with notHome' % (m, self.launcher),
+                    api_refused(rep) and rep.get('errorCode') == 'notHome', raw[:400])
+        rep, raw = self.api('uninstallConfirmed', {'token': '0' * 32})
+        r.check('uninstallConfirmed as the launcher is refused (only Home Chooser or the notification service)',
+                api_refused(rep), raw[:400])
+        self.api_request(selected=False)
+
+    def api_request(self, selected):
+        """The `request` launch parameter: Home Chooser opens "Use <title> as Home?" for the requesting
+        launcher (cancelled with Back, on our own dialog); once it is Home, the "already your Home" toast."""
+        r, d = self.rec, self.dev
+        choice0 = self.state()['choice']
+        if not self.insp:
+            self.insp = Inspector(self.vm)
+        rc, out = d.launch(APP_ID, {'request': self.launcher})
+        r.check('ares-launch %s -p {"request":"%s"}' % (APP_ID, self.launcher), rc == 0, out.strip())
+        if selected:
+            toast = self.wait(lambda: (lambda t: t if t and 'already your Home' in t else None)((self.ui() or {}).get('toast')), 30, 1)
+            self.shot('3a-request-selected')
+            r.check('request while it is Home: the toast "<title> is already your Home."', bool(toast), repr(toast))
+            d.close(APP_ID)
+            self.close_insp()
+            return
+        ui = self.wait(lambda: (lambda u: u if (u.get('dialog') or '').startswith('Use ') else None)(self.ui() or {}), 60, 1) or {}
+        self.shot('2a-request-dialog')
+        want = 'Use %s as Home?' % self.L.title
+        r.check('request: Home Chooser asks "%s"' % want, ui.get('dialog') == want, json.dumps(ui))
+        ok, why = self.ours_in_front('Use *')
+        if not ok:
+            r.check('request: the dialog is ours and in front (else no key is pressed)', False, why)
+            return
+        self.press('BACK')
+        gone = self.wait(lambda: not (self.ui() or {}).get('dialog'), 10, 1)
+        r.check('request: Back cancels the dialog', bool(gone), json.dumps(self.ui()))
+        time.sleep(2)
+        r.check('request cancelled: the choice is unchanged', self.state()['choice'] == choice0, repr(self.state()['choice']))
+
+    def step_api(self):
+        """The launcher is the selected Home (after step 3; on 6-9 after the boot that mounted the patch)."""
+        r, d = self.rec, self.dev
+        r.begin('3a launcher API with the launcher selected (--api-check)')
+        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        info = self.api_conforms('getInfo', 'selected')
+        r.check('selected: getInfo says root true, permitted true, isHome true',
+                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is True, json.dumps(info))
+        self.api_conforms('listApps', 'selected')
+        self.api_conforms('running', 'selected')
+        # closeById closes a running app
+        d.launch(DISPOSABLE_ID)
+        running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
+        r.check('the disposable app is running before closeById', bool(running), str(self.running_ids()))
+        rep, raw = self.api('closeById', {'id': DISPOSABLE_ID})
+        r.check('closeById {id:%s} as the selected Home is accepted' % DISPOSABLE_ID,
+                (rep or {}).get('returnValue') is True and rep.get('id') == DISPOSABLE_ID, raw[:400])
+        closed = self.wait(lambda: DISPOSABLE_ID not in self.running_ids(), 20, 2)
+        r.check('closeById closed the app (not in applicationManager/running)', bool(closed), str(self.running_ids()))
+        rep, raw = self.api('closeById', {})
+        r.check('closeById without an id: badRequest', api_refused(rep) and rep.get('errorCode') == 'badRequest', raw[:400])
+        # the uninstall refusal list
+        for target, why in ((APP_ID, 'Home Chooser itself'), ('org.webosbrew.hbchannel', 'Homebrew Channel'),
+                            (self.launcher, 'the requesting launcher')):
+            rep, raw = self.api('uninstall', {'id': target})
+            r.check('uninstall of %s is refused (notAllowed)' % why, api_refused(rep) and rep.get('errorCode') == 'notAllowed',
+                    raw[:400])
+        self.api_uninstall_cancel()
+        self.api_uninstall_confirm()
+        self.api_request(selected=True)
+        self.check_no_compositor_restart('the launcher API calls', comp0)
+
+    def uninstall_ask(self, label):
+        """uninstall {id: disposable} as the Home: (confirm route 'alert'|'screen'|None, reply)."""
+        r = self.rec
+        self.uninstall_mark = self.messages_mark()
+        rep, raw = self.api('uninstall', {'id': DISPOSABLE_ID})
+        how = (rep or {}).get('confirm')
+        r.check('%s: uninstall {id:%s} replies pending with a confirm route' % (label, DISPOSABLE_ID),
+                (rep or {}).get('returnValue') is True and rep.get('pending') is True and how in ('alert', 'screen'), raw[:400])
+        return how if (rep or {}).get('returnValue') is True else None
+
+    def uninstall_alert_id(self):
+        """The alertId of the service's createAlert, from its UNINSTALL_ASK log line (PmLog), if logged."""
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3"
+                              % self.uninstall_mark)
+        m = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', out)
+        return (m[-1] if m else None), out.strip()
+
+    def screen_dialog(self):
+        if not self.insp:
+            self.insp = Inspector(self.vm)
+        return self.wait(lambda: (lambda u: u if (u.get('dialog') or '').startswith('Uninstall ') else None)(self.ui() or {}),
+                         60, 1) or {}
+
+    def dismiss_alert(self, label):
+        """Our createAlert: closed with closeAlert when its id is in the log, else with Back (never OK)."""
+        r = self.rec
+        time.sleep(2)
+        self.foreign_popup(label)
+        self.shot(label)
+        aid, ev = self.uninstall_alert_id()
+        if aid:
+            out = self.priv_luna('luna://com.webos.notification/closeAlert', '{"alertId":"%s"}' % aid)
+            r.check('%s: closeAlert on our "Uninstall ...?" alert was accepted' % label,
+                    '"returnValue":true' in out.replace(' ', ''), 'alertId %s\nreply: %s' % (aid, out))
+        else:
+            r.note('%s: no alertId in the UNINSTALL_ASK log line; dismissing with Back' % label, ev or 'no UNINSTALL_ASK line')
+            self.press('BACK')
+        time.sleep(3)
+        self.shot(label + '-dismissed')
+
+    def api_uninstall_cancel(self):
+        r, d = self.rec, self.dev
+        how = self.uninstall_ask('cancel')
+        if how == 'screen':
+            ui = self.screen_dialog()
+            self.shot('3a-uninstall-screen')
+            r.check('screen route: Home Chooser asks "Uninstall %s?"' % 'HC Fixture disposable',
+                    ui.get('dialog') == 'Uninstall HC Fixture disposable?', json.dumps(ui))
+            ok, why = self.ours_in_front('Uninstall *')
+            if ok:
+                self.press('BACK')
+                r.check('screen route: Back cancels the dialog', bool(self.wait(lambda: not (self.ui() or {}).get('dialog'), 10, 1)),
+                        json.dumps(self.ui()))
+            else:
+                r.check('screen route: the dialog is ours and in front (else no key is pressed)', False, why)
+            d.close(APP_ID)
+            self.close_insp()
+        elif how == 'alert':
+            self.dismiss_alert('3a-uninstall-alert')
+        time.sleep(5)
+        r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
+
+    def api_uninstall_confirm(self):
+        """The confirm path, only where the runner presses a key on its own screen: the screen route. On the
+        alert route confirming means pressing Uninstall on a system popup: MANUAL."""
+        r, d = self.rec, self.dev
+        how = self.uninstall_ask('confirm')
+        if how == 'alert':
+            self.dismiss_alert('3a-uninstall-alert-2')
+            r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> uninstallConfirmed '
+                     '-> removal)', 'the runner never presses OK on a system popup and the token is only in the alert; '
+                     'by hand: call uninstall as the launcher, press Uninstall, then check getAppInfo %s fails' % DISPOSABLE_ID)
+            return
+        if how != 'screen':
+            return
+        ui = self.screen_dialog()
+        ok, why = self.ours_in_front('Uninstall *')
+        r.check('confirm: the "Uninstall ...?" dialog is ours and in front', ok, why)
+        if not ok:
+            return
+        ok = self.focus_button('Uninstall')
+        r.check('confirm: focus is on "Uninstall"', ok, json.dumps(self.ui()))
+        if not ok:
+            return
+        self.press('OK')
+        gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 120, 5)
+        self.shot('3a-uninstalled')
+        r.check('confirm on our screen: uninstallConfirmed removed %s' % DISPOSABLE_ID, bool(gone),
+                'installed: %s; service log: %s' % (d.app_installed(DISPOSABLE_ID), d.sh(
+                    "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E 'UNINSTALL' | tail -n 4" % self.uninstall_mark)[1].strip()))
+        d.close(APP_ID)
+        self.close_insp()
+
+    def api_after_reboot(self):
+        """--reboot-check: the access grants and the elevation survive a boot."""
+        r = self.rec
+        self.wait(lambda: (self.api('getInfo')[0] or {}).get('returnValue') is True, 60, 5)
+        info = self.api_conforms('getInfo', 'after the reboot')
+        r.check('after the reboot: getInfo says root true, permitted true, isHome true',
+                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is True, json.dumps(info))
+        self.api_conforms('listApps', 'after the reboot')
+        self.api_conforms('running', 'after the reboot')
+
+    def api_after_uninstall(self):
+        """Home Chooser is gone: the launcher's calls fail cleanly (a JSON refusal, in time) and luna is up."""
+        r, d = self.rec, self.dev
+        for m in ('getInfo', 'listApps'):
+            t0 = time.time()
+            rep, raw = self.api(m)
+            r.check('after the uninstall: %s as %s fails cleanly (returnValue false, %.0f s)' % (m, self.launcher, time.time() - t0),
+                    api_refused(rep) and '[timeout]' not in raw, raw[:400])
+        fg, out = d.foreground()
+        r.check('after the uninstall: luna still answers (getForegroundAppInfo)', fg is not None and '"returnValue":true' in out.replace(' ', ''),
+                out[:300])
 
     # -- the app update (--update-check)
     def watcher_procs(self):
@@ -1575,6 +2361,7 @@ class Scenario:
         else:
             en = d.preload_policy()
             r.check('after the update: 5.x, the stock home policy is still not disabled', en[0] is not False, 'isEnabled=%r' % (en[0],))
+        self.check_device_texts()
         self.home_press(self.launcher, '3u-home')
         self.open_app_check('3u-app')
         r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
@@ -1585,6 +2372,7 @@ class Scenario:
         r.begin('4 sudden launcher uninstall')
         self.popup_mark = self.messages_mark()
         alerts_before = len(self.notif_lines('createAlert'))
+        comp0 = self.compositor_snapshot() if self.uses_backport() else None
         rc, out = d.remove(self.launcher)
         r.check('ares-install --remove launcher', rc == 0, out.strip())
         s = {}
@@ -1593,13 +2381,15 @@ class Scenario:
         s = self.state()
         r.note('state after the launcher was removed', json.dumps(s))
         self.residency('after the launcher uninstall')
-        self.assert_stock('after removal', s, mounts_stay=True)
+        self.assert_stock('after removal', s)
+        self.check_no_compositor_restart('after the launcher removal', comp0)
         self.check_preload_on('after the launcher removal')
         r.check('choice file is kept (the user\'s choice)', s['choice'] == self.launcher, repr(s['choice']))
         r.check('watcher still active', s['watcher'] == 'active', s['watcher'])
         rc, out = d.sh('tail -n 8 /tmp/homechooser-home.log')
         r.note('watcher log', out)
         self.home_press(STOCK, '4-home-stock')
+        comp0 = self.compositor_snapshot() if self.uses_backport() else None
         # reinstall
         rc, out = d.install(self.L.ipk)
         r.check('reinstall launcher', rc == 0 and 'Installed package' in out, out.strip())
@@ -1612,9 +2402,12 @@ class Scenario:
             r.check('on return the override is rebuilt', s['override'] == 'yes', s['override'])
         if self.uses_backport():
             r.check('on return the backport is still mounted', bool(s['mounts']), 'mounts: %s' % s['mounts'])
+            self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
             baked = self.baked_id()
             r.check('on return the id is baked into the mounted Settings.qml again',
                     self.launcher in baked, baked)
+            # stock -> launcher with the patch mounted: the live switch
+            self.check_no_compositor_restart('on return (a switch with the patch mounted)', comp0)
         self.wait(lambda: self.major <= 5 or self.dev.preload_policy()[0] is False, 60, 5)
         if self.major >= 6:
             enabled, raw = d.preload_policy()
@@ -1626,6 +2419,7 @@ class Scenario:
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
         toasts_before = len(self.notif_lines('createToast'))
+        comp0 = self.compositor_snapshot() if self.uses_backport() else None
         rc, out = d.remove(APP_ID)
         r.check('ares-install --remove Home Chooser', rc == 0, out.strip())
         self.check_toast(toasts_before)
@@ -1635,7 +2429,10 @@ class Scenario:
         r.note('state after uninstall', json.dumps(s))
         self.residency('after the Home Chooser uninstall')
         r.check('choice file removed', 'No such file' in s['choice'], repr(s['choice']))
-        self.assert_stock('after uninstall', s)
+        # 6-9: the record gets the stock id and the patch stays mounted (no unmount, no restart) until the
+        # next boot; the baked id is left as it was (the worker went with the app directory)
+        self.assert_stock('after uninstall', s, baked_emptied=False)
+        self.check_no_compositor_restart('after the Home Chooser uninstall', comp0)
         self.check_preload_on('after the Home Chooser uninstall')
         r.check('init.d entry removed', 'No such file' in s['initd'] or s['initd'] == '', repr(s['initd']))
         r.check('backport flag removed', s['flag'] == 'no', s['flag'])
@@ -1643,6 +2440,8 @@ class Scenario:
         rc, out = d.sh('tail -n 12 /tmp/homechooser-home.log')
         r.note('watcher log', out)
         self.home_press(STOCK, '5-home-stock')
+        if self.a.api_check:
+            self.api_after_uninstall()
 
     def step6(self):
         r, d = self.rec, self.dev
@@ -1654,12 +2453,13 @@ class Scenario:
                    'installed and Dock chosen through its UI); the runner does not do that yet', '')
         else:
             removed_hc = False
-            for app in (self.launcher, APP_ID):
+            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else [])
+            for app in apps:
                 if app in d.installed():
                     rc, out = d.remove(app)
                     r.say('removed %s: %s' % (app, out.strip()))
                     removed_hc = removed_hc or app == APP_ID
-            r.check('no test apps left installed', not ({self.launcher, APP_ID} & set(d.installed())),
+            r.check('no test apps left installed', not (set(apps) & set(d.installed())),
                     str(d.installed()))
             if removed_hc:
                 # The watcher needs about 15 s per removal it has to confirm, one after the other, and a VM
@@ -1698,56 +2498,105 @@ def ensure_devices(host, vm, rec):
                     break
             except OSError:
                 pass
-    p = os.path.expanduser('~/.webos/ose/novacom-devices.json')
-    devs = json.load(open(p))
-    byname = {x['name']: x for x in devs}
-    changed = False
     keyname = 'beanjar-%s-root' % vm
-    keypath = os.path.expanduser('~/.ssh/' + keyname)
-    if not os.path.exists(keypath):
-        src = '%s/identity/id_ed25519' % info['dir']
-        if not host.fetch(src, keypath):
-            raise SystemExit('could not fetch the root key of %s' % vm)
-        os.chmod(keypath, 0o600)
+    if fetch_key(host, '%s/identity/id_ed25519' % info['dir'], keyname):
         rec.say('fetched the root key of %s to ~/.ssh/%s' % (vm, keyname))
+    dkeyname = 'beanjar-%s_devmode' % vm
+    with devices_file() as devs:
+        # the devmode device (prisoner, 9922) uses the VM's devmode key, fetched only when it is added
+        if not any(x.get('name') == vm for x in devs) and fetch_key(host, '%s/identity/devmode_rsa' % info['dir'], dkeyname):
+            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
+        update_devices(devs, vm, addr, keyname, dkeyname, rec.say)
+
+
+def fetch_key(host, src, keyname):
+    """~/.ssh/<keyname> from the host unless it is there; True if fetched.  Fetched under a temp name and
+    renamed, so an interrupted copy never leaves a truncated key behind."""
+    keypath = os.path.expanduser('~/.ssh/' + keyname)
+    if os.path.exists(keypath):
+        return False
+    tmp = '%s.%d.tmp' % (keypath, os.getpid())
+    try:
+        if not host.fetch(src, tmp):
+            raise SystemExit('could not fetch %s from %s' % (src, host.name))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, keypath)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return True
+
+
+DEVICES_FILE = os.path.expanduser('~/.webos/ose/novacom-devices.json')
+
+
+class devices_file:
+    """`with devices_file() as devs:` read-modify-write of the ares device list, which runs in parallel
+    share.  An exclusive flock on <file>.lock serialises our runs; the new list is written to a temp file
+    in the same directory and renamed over the old one, so an ares command reading it at that moment
+    sees the old list or the new one, never a truncated file.  ares-cli-rs itself writes the file in
+    place without a lock (common/device/src/io.rs write_in), so `ares-setup-device` by hand during a run
+    is still unsafe.  The file is rewritten only if the list changed."""
+
+    def __init__(self, path=None):
+        self.path = path or DEVICES_FILE
+
+    def __enter__(self):
+        import fcntl
+        self.lock = open(self.path + '.lock', 'a')
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try:
+            with open(self.path) as f:
+                self.devs = json.load(f)
+        except BaseException:
+            self.lock.close()
+            raise
+        self.before = json.dumps(self.devs)
+        return self.devs
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None and json.dumps(self.devs) != self.before:
+                tmp = '%s.%d.tmp' % (self.path, os.getpid())
+                with open(tmp, 'w') as f:
+                    json.dump(self.devs, f, indent=2)
+                os.replace(tmp, self.path)
+        finally:
+            self.lock.close()  # releases the flock
+        return False
+
+
+def update_devices(devs, vm, addr, keyname, dkeyname, say=print):
+    """Add or fix `<vm>-root` (root, 6622) and `<vm>` (devmode, prisoner, 9922) in an ares device list."""
+    byname = {x['name']: x for x in devs}
     want = {vm + '-root': (6622, 'root', {'openSsh': keyname})}
     for name, (port, user, key) in want.items():
         e = byname.get(name)
         if e is None:
             devs.append({'profile': 'ose', 'name': name, 'host': addr, 'port': port, 'username': user,
                          'privateKey': key, 'files': 'sftp'})
-            changed = True
-            rec.say('added ares device %s -> %s:%d' % (name, addr, port))
+            say('added ares device %s -> %s:%d' % (name, addr, port))
         elif e.get('host') != addr:
-            rec.say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
+            say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
             e['host'] = addr
-            changed = True
     dv = byname.get(vm)
     if dv is None:
-        # the devmode device (prisoner, 9922) with the VM's devmode key, fetched from the host
-        dkeyname = 'beanjar-%s_devmode' % vm
-        dkeypath = os.path.expanduser('~/.ssh/' + dkeyname)
-        if not os.path.exists(dkeypath):
-            if not host.fetch('%s/identity/devmode_rsa' % info['dir'], dkeypath):
-                raise SystemExit('could not fetch the devmode key of %s' % vm)
-            os.chmod(dkeypath, 0o600)
-            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
         devs.append({'profile': 'ose', 'name': vm, 'host': addr, 'port': 9922, 'username': 'prisoner',
                      'privateKey': {'openSsh': dkeyname}, 'files': 'sftp'})
-        rec.say('added ares device %s -> %s:9922' % (vm, addr))
-        changed = True
+        say('added ares device %s -> %s:9922' % (vm, addr))
     elif dv.get('host') != addr:
-        rec.say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
+        say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
         dv['host'] = addr
-        changed = True
-    if changed:
-        json.dump(devs, open(p, 'w'), indent=2)
 
 
 def prepare_vm(host, vm, rec):
-    running = host.running_vms()
+    """Refuse a busy machine, set the VM's layers and link.  The caller starts it."""
+    try:
+        running = host.running_vms()
+    except RuntimeError as e:
+        raise SystemExit(str(e))
     if running:
-        raise SystemExit('VMs already running, not touching anything: %s' % running)
+        raise SystemExit('VMs already running on %s, not touching anything: %s' % (host.name, running))
     s = host.settings(vm)
     layers = (s.get('layers') or '').split(',')
     want = {}
@@ -1759,8 +2608,6 @@ def prepare_vm(host, vm, rec):
         rec.say('VM %s is off; settings %s' % (vm, want))
         rc, out = host.set_settings(vm, **want)
         rec.say(out.strip()[-300:])
-    rc, out = host.start(vm)
-    rec.say('beanjar start: %s' % out.strip()[-200:])
 
 
 def wait_for_device(vm, rec, timeout=300):
@@ -1776,11 +2623,16 @@ def wait_for_device(vm, rec, timeout=300):
     return False
 
 
+def interrupted(*_):
+    raise KeyboardInterrupt
+
+
 def main():
     ap = argparse.ArgumentParser(description='Home Chooser end-to-end test on one Beanjar VM')
     ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
-    ap.add_argument('--launcher', default='dock',
-                    help="'dock' (default), 'fixture:<native|qml|web>.<normal|overlay>', or an app id with --launcher-ipk")
+    ap.add_argument('--launcher', default=None,
+                    help="'dock' (default; with --api-check fixture:web.normal), 'fixture:<native|qml|web>.<normal|overlay>', "
+                         "or an app id with --launcher-ipk (an author's own launcher)")
     ap.add_argument('--launchers', default=None,
                     help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
                          "same VM, in sequence, with cleanup between")
@@ -1790,9 +2642,16 @@ def main():
                          '(step 3u) and check that everything survives')
     ap.add_argument('--update-from', default=None,
                     help='git ref of the older Home Chooser (default: the previous commit that changed app/, service/ or backport/)')
-    ap.add_argument('--host-mode', choices=['auto', 'local', 'remote'], default='auto',
-                    help='where beanjar runs: local if on PATH, else over ssh (default auto)')
-    ap.add_argument('--host-device', default='raspberrypi', help='ssh host (config alias) of the Beanjar host in remote mode')
+    ap.add_argument('--host', default=None,
+                    help="the Beanjar machine the VM is on, a name in e2e/hosts.toml (default: the file's default, 'pi')")
+    ap.add_argument('--hosts-file', default=None, help='a hosts file instead of e2e/hosts.toml + e2e/hosts.local.toml')
+    ap.add_argument('--host-mode', choices=['local', 'remote'], default=None,
+                    help="override the host's mode: beanjar run here, or over ssh")
+    ap.add_argument('--host-device', default=None, help="override the host's ssh target (an ssh config alias)")
+    ap.add_argument('--dock-ipk', default=None, help='the Dock ipk (default: hosts.toml [paths] dock_ipk, else %s)' % DOCK_IPK)
+    ap.add_argument('--hc-ipk', default=None, help='the Home Chooser ipk to test (default: the newest build/ipk/*.ipk)')
+    ap.add_argument('--old-ipk', default=None, help='--update-check: the older Home Chooser ipk, already built (skips the build)')
+    ap.add_argument('--outdir', default=None, help='the result directory (default e2e/results/<vm>-<timestamp>); must not exist')
     ap.add_argument('--elevation', choices=sorted(ELEVATIONS), default=None,
                     help="override the matrix's elevation strategy")
     ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',
@@ -1806,6 +2665,14 @@ def main():
                          'the stock-home preload policy and the stock home is not running')
     ap.add_argument('--keyfilter-generated', action='store_true',
                     help='opt in to the generated keyfilter patch for a webOS 6-9 device run')
+    ap.add_argument('--reboot-via', choices=['dialog', 'later'], default='dialog',
+                    help="webOS 6-9, the restart the first choice asks for: press Reboot on Home Chooser's own dialog "
+                         "(default; tvpower) or press Later and restart the VM with beanjar stop/start")
+    ap.add_argument('--api-check', action='store_true',
+                    help='the launcher-API contract (docs/launcher-api.md): calls as the launcher before and after it is '
+                         'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
+                         'The launcher must declare homechooser.applications: the default is the web fixture built with it; '
+                         '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()
@@ -1823,18 +2690,24 @@ def main():
     if args.launchers:
         specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
     else:
-        specs = [args.launcher]
+        specs = [args.launcher or ('fixture:web.normal' if args.api_check else 'dock')]
     args.multi = len(specs) > 1
     if args.multi and vm in KEEP_LAUNCHER_VMS:
         ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
+    cfg = load_hosts(args.hosts_file)
+    dock_ipk = args.dock_ipk or cfg['paths'].get('dock_ipk') or DOCK_IPK
     launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
-                               lambda t: print(t, flush=True)) for sp in specs]
-    args.new_ipk = args.old_ipk = args.old_ref = None
-    host = BeanjarHost(args.host_mode, args.host_device)
-    outdir = os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
+                               lambda t: print(t, flush=True), dock_ipk, api=args.api_check) for sp in specs]
+    args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
+    host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
+    args.new_ipk, args.old_ref = args.hc_ipk, None
+    outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
     rec.say('artefacts: ' + outdir)
+    rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
+    # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
+    signal.signal(signal.SIGTERM, interrupted)
     started = False
     scenario = None
     old_tmp = None
@@ -1845,12 +2718,15 @@ def main():
             args.old_ref = args.update_from or default_update_ref()
             rc, full = run(['git', '-C', REPO, 'rev-parse', '--short', args.old_ref], 30)
             rec.say('--update-check: old build from git ref %s (%s)' % (args.old_ref, full.strip()))
-            args.new_ipk = current_home_chooser_ipk(rec, args.build)
-            args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
+            args.new_ipk = args.new_ipk or current_home_chooser_ipk(rec, args.build)
+            if not args.old_ipk:
+                args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
             for label, f in (('old', args.old_ipk), ('current', args.new_ipk)):
                 rec.say('%s Home Chooser ipk %s version %s' % (label, f, ipk_appinfo(f).get('version')))
         prepare_vm(host, vm, rec)
-        started = True
+        started = True  # before the start, so a start interrupted half-way is stopped too
+        rc, out = host.start(vm)
+        rec.say('beanjar start: %s' % out.strip()[-200:])
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
         end = time.time() + 120
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):

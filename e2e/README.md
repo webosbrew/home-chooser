@@ -9,23 +9,29 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`; an app id needs
-`--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`, with `--api-check`
+`fixture:web.normal`; an app id needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
-(`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--host-mode
-auto|local|remote` and `--host-device` (see below); `--elevation luna|root-shell`; `--input
-qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
-`results.json`, numbered screenshots (`beanjar screenshot`, the TV picture).
+(`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
+Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
+`--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
+`--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
+`--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via dialog|later`
+(webOS 6-9, how the restart the first choice asks for is done; see "webOS 6-9: no restart while the TV runs");
+`--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
+`results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
+(below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
 Use `--keyfilter-generated` only on webOS 6-9 to exercise the opt-in generated keyfilter. The runner
 creates `debug-no-sets` and `keyfilter-generated` after installing Home Chooser and before the Home
-selection, checks `homechooser-keyfilter status` after selection and after `--reboot-check`, and uses
+selection, checks `homechooser-keyfilter status` after the boot that follows the selection (the patch is
+mounted by the boot hook, not at the choice) and after `--reboot-check`, and uses
 the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
 fails. The option refuses other releases and a non-stock baseline.
 
-Before booting, the runner stops if any VM is running. It adds the `hbchannel` layer and
+Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
 `<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a
 changed LAN address. It stops the VM at the end (not `w21p-kisscurl`).
@@ -67,12 +73,89 @@ backport mounts). There is no shortened mode; settle and sampling times stay as 
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
 through `socat`, the TV screenshot through `beanjar screenshot`, the fallback viewer capture through `grim`, fetching a key) goes through the
-`BeanjarHost` class. Mode is automatic: local when `beanjar` is on PATH (the Pi), otherwise remote
-over `ssh raspberrypi` (`--host-device` names another ssh config alias, `--host-mode` forces a
-mode). The Pi is a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions
-and VMs only. No remote quoting exists outside that class. The screenshots the steps look at come from
+`BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
+`ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
+runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
+on PATH, but the QMP sockets, `grim` and the VM files are on the machine the VM runs on.
+`--host-device` names another ssh config alias and `--host-mode` forces a mode for one run. The Pi is
+a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions and VMs only.
+VMs are listed with `beanjar list --local --json` (that machine's own VMs only); the QMP socket is under
+the VM directory `beanjar info` reports. No remote quoting exists outside that class. The screenshots the steps look at come from
 `beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; the
 `grim` fallback is the whole Wayland output.
+
+## Several machines
+
+The Beanjar machines are listed in `e2e/hosts.toml`; `e2e/hosts.local.toml` (git-ignored) is read over
+it, for this PC's own machines and `[paths]`. Without either file the one machine is today's: `pi`,
+reached with `ssh raspberrypi`, so a single-machine run needs no configuration.
+
+```toml
+default = "pi"
+
+[hosts.pi]
+ssh = "raspberrypi"      # an ssh config alias, key login (BatchMode); `local = true` for this PC
+# vms = ["w22o-ponytail-us"]
+```
+
+**One VM per machine.** A machine has one CPU set and one memory pool; two VMs on it contend and
+every timing or RSS measured that way is contaminated. So at most one VM runs on a machine at a time,
+and the runner refuses to boot one while any VM is running there, ours or another session's.
+Different machines run at the same time.
+
+Which VMs a machine has is asked from it (`beanjar list --local --json`), so a VM needs no entry. VM
+names must be unique across the machines: the ares device entries (`<vm>`, `<vm>-root`) and the keys in
+`~/.ssh` (`beanjar-<vm>-root`, `beanjar-<vm>_devmode`) are named after the VM only. A VM that exists on
+two machines (a copied image) is not run until `vms = [...]` pins it to one of them.
+
+To add a machine: install Beanjar on it, give it an ssh config alias with key login from this PC
+(`ssh <alias> beanjar list` must work without a prompt), add it with `beanjar host add <name>
+ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<name>] ssh =
+"<alias>"` to `e2e/hosts.local.toml` (or `hosts.toml` when it is shared) under the same name. The VMs
+run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
+
+`run_matrix.py` runs several VMs: one queue and one worker per machine, each run a subprocess of
+`homechooser_e2e.py`, so runs are serialised on a machine and parallel across machines.
+
+```
+python3 -I e2e/run_matrix.py --dry-run                            # the plan for the whole matrix
+python3 -I e2e/run_matrix.py --build --reboot-check               # the whole matrix
+python3 -I e2e/run_matrix.py --vms 5.x,9.x,11.x --launchers all-fixtures
+```
+
+* `--vms` takes VM names or releases (default: the matrix). Options it does not know (`--reboot-check`,
+  `--wait-popup N`, `--elevation`, ...) go to every run; `--no-stop`, `--vm`, `--host` and `--outdir` are
+  refused, since the scheduler sets them or a VM left running would hold its machine.
+* It builds once before the fan-out: Home Chooser (`--build`, else the newest `build/ipk/*.ipk`), the old
+  build for `--update-check`, and any missing fixture ipk. The Home Chooser ipks are copied into the
+  matrix directory and passed to each run (`--hc-ipk`, `--old-ipk`), so a rebuild in the tree during the
+  runs changes nothing.
+* Before each run it asks the machine for running VMs and waits up to `--wait-idle` seconds (default
+  180; the previous run's VM may still read Stopping) for none; then it refuses the run (`refused` in the
+  summary) and moves on. A machine that does not answer is refused the same way.
+* One line per finished run; each run's console goes to `<vm>.console.log`. The result is
+  `e2e/results/matrix-<timestamp>/`: `summary.md` and `summary.json` linking each run's directory
+  `<vm>/` (`run.log`, `results.json`, screenshots), and `ipk/`.
+* Ctrl-C starts no new run and interrupts the running ones; each runner unwinds through its cleanup and
+  stops the VM it started. A second Ctrl-C kills them and names the VMs that may still be running
+  (`beanjar stop <host>/<vm>`).
+* `python3 -I -m unittest discover -s e2e -p 'test_*.py'` tests the planning, the per-machine
+  serialisation, the refusals, Ctrl-C (fake machines and a fake runner) and the device-list lock, offline.
+
+What runs in parallel, and why it is safe:
+
+* `~/.webos/ose/novacom-devices.json`: the runner changes it under an exclusive `flock` on
+  `novacom-devices.json.lock` and replaces it by rename, so parallel runs lose no entry and an ares command
+  reading it never sees a half-written file. ares-cli-rs writes it in place without a lock, so
+  `ares-setup-device` by hand during a matrix run is still unsafe.
+* Keys fetched to `~/.ssh` are written under a temp name and renamed.
+* Temp files on a machine carry the VM name and the runner's pid (`/tmp/e2e-tv-<vm>-<pid>.png`); the
+  inspector's local port is picked per run and another is tried if the forward cannot bind it.
+* Each run has its own result directory and its own ares device entries (per VM).
+
+Beanjar's own multi-host CLI (`beanjar host add/list`, `beanjar list` across hosts, `<host>/<vm>` for
+start, stop, info and screenshot) reaches the machines the same way, ssh per call. The runner does not
+depend on it: it runs `beanjar` on each machine over ssh, which works whether or not this PC has Beanjar.
 
 ## Elevation strategies
 
@@ -99,7 +182,11 @@ and backport docs.
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
    `init.d/homechooser` links into the installed app; on 6 to 9 the backport targets are mounted
-   and the flag file exists, elsewhere not; on 10 and later the profile override exists.
+   (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
+   On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
+   toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
+   current texts (`grep -F` on the device: the watcher in the app and its running `/tmp` copy, the
+   service binary, the app bundle) and none of the old restart wording.
    Also asserted: at the first open after a fresh install there is no error toast (WAM's
    `localStorage` outlives `ares-install --remove`, so a `homechooser.pending` marker left by an
    earlier run must not read as a failed apply; the runner also plants such a marker through the
@@ -107,10 +194,14 @@ and backport docs.
    apply the panel is opened again with no error toast and the chosen row ticked.
 3. Home from an ordinary app (Homebrew Channel; docs T4): the launcher is running after having
    been closed first, or in front (a launcher bar like Dock is an overlay window, so the app
-   beneath stays "foreground"). A press with the stock home in front is only observed.
-4. `ares-install --remove` the launcher: record `home` is stock/unset (5.x: a stock id), the
-   override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id, the
-   choice file stays, the watcher stays active, Home opens the stock launcher. The watcher log shows
+   beneath stays "foreground"). A press with the stock home in front is only observed. On 6 to 9
+   this needs the boot of step 2, which has happened by then.
+4. `ares-install --remove` the launcher: record `home` is the stock id on 5.x to 9.x
+   (`com.webos.app.fullhome` if installed, else `com.webos.app.home`; on 6 to 9 exactly the id the
+   baseline resolved, never null) and null or unset on 10+, the
+   override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id and the
+   compositor was not restarted, the
+   choice file stays, the watcher stays active, Home opens the stock launcher at once. The watcher log shows
    the `notification createAlert:` calls and replies (a refusal is retried up to 8 times). The check
    is that the user was told: either the alert was accepted, or it was refused and the fallback toast
    (log: `alert was refused`, then an accepted `notification createToast:`) was shown; the toast
@@ -124,9 +215,13 @@ and backport docs.
    detected fault or `/var/log/messages` has faultmanager crash-popup lines since the step start (the
    LG "[crash] Fault Occured" popup); it never presses keys at it. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
-   launcher.
-5. `ares-install --remove` Home Chooser: record, override, choice file, `init.d` link, flag,
-   mounts and the watcher unit are gone; Home opens stock. The runner polls the log once a second
+   launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
+5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
+   watcher unit are gone; the record is stock as in step 4; on 6 to 9 the patch stays mounted until
+   the next boot (its sources are in `/tmp/homechooser-backport/stage`, not in the app), the baked id
+   is not checked (the worker went with the app directory), the compositor was not restarted, and
+   Home opens stock at once. The toast reads "Home Chooser was removed. The Home button opens LG Home
+   again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
    reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
@@ -134,6 +229,36 @@ and backport docs.
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
    and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
    file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
+
+### webOS 6-9: no restart while the TV runs
+
+Since 144ef21 nothing restarts the compositor on a running TV (a bare restart crashed WebAppMgr;
+`docs/key-filter-backport.md` "Restarting the compositor"). The runner follows that:
+
+* Step 2, patch not mounted: the choice mounts nothing. The app shows its own dialog "Restart the
+  TV?" ("The Home button changes after a restart.", Reboot and Later). Asserted before the restart:
+  `homechooser-keyfilter status` says `mounted=no` and `reboot=needed`, nothing is mounted, the flag
+  and the `init.d` entry are written, the record names the launcher, and the compositor was not
+  restarted. With `--reboot-via dialog` (the default) the runner checks that Home Chooser is the
+  foreground app and that the dialog in front is "Restart the TV?" (by the DOM, through the
+  inspector), moves focus to Reboot and presses OK there, on its own screen; the TV then restarts through
+  `rebootConfirmed` and `tvpower/power/reboot`, which this exercises. The runner waits for a new
+  `boot_id`. If none comes in 240 s that is a `FAIL`, and the VM is restarted with beanjar so the
+  run can go on; a VM that Beanjar shows off is started again. With `--reboot-via later` it presses
+  Later, checks the "Restart the TV later to finish." toast and restarts the VM with `beanjar stop`
+  and `start`. After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`,
+  `reboot=no`, at least 9 mounts), and the backport log of that boot (its firmware-order compositor
+  restart is the only one allowed) is noted; the generated-patch status checks come here.
+* Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
+  `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
+* No compositor restart: `surface-manager-daemon` keeps its `MainPID` and `NRestarts`, and no new
+  `restarting surface-manager-daemon` line appears in `/tmp/homechooser-backport.log`. Checked for
+  the choice, the launcher removal and its return (a switch with the patch mounted), the Home Chooser
+  uninstall and the API calls. It is skipped when a reboot came in between.
+* No crash: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
+  line and no WebAppMgr crash line, and within one boot `webapp-mgr` keeps its `MainPID` and `NRestarts`.
+* `--update-check` from a build older than 144ef21: that build mounts live and asks nothing; with no
+  dialog and the patch mounted the runner notes it and goes on.
 
 Measured on 2026-10-23: 10.3.1 accepted the alert from a plain root `luna-send` without `-a` (the watcher now sends with `-a com.webos.applicationManager`); 5.6.1
 and 9.2.1 answer `Alert is blocked by [ system ]` on every try (why is not established; on the 9.2.1
@@ -172,9 +297,65 @@ The log also has a "home-app residency" section at five points (before selecting
 Home", after the Home press, after the launcher uninstall, after the Home Chooser uninstall): is the
 stock home and the launcher running (`applicationManager/running`), pids and RSS. Observation only.
 
+## The launcher API check (`--api-check`)
+
+Opt-in steps that test the contract of `docs/launcher-api.md` on the device. Every call is made as the
+launcher with root `luna-send -a <launcher id> -n 1 luna://org.webosbrew.homechooser.service/<method>`
+through `ares-do exec` (`luna-send` under `ares-shell -r` prints nothing). The hub then takes the caller to
+be that installed app, with its own client permissions. The launcher must declare
+`requiredPermissions: ["homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
+web fixture built with the permission (`HC_FIXTURE_PERMISSION=homechooser.applications sh
+e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
+declare it and are refused. The run also installs a disposable non-home app,
+`org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
+
+* 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
+  permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps` and `running`
+  succeed with the documented fields and nothing beyond them (`getInfo`: `root`, `permitted` true and `isHome`
+  false; `listApps` names the launcher and the disposable app); the disposable app (no permission) is
+  refused `listApps`, `running`, `closeById` and `uninstall` and gets `permitted:false` from `getInfo` (or a
+  hub denial); a caller without an app id is refused; `closeById` and `uninstall` as the launcher answer
+  `notHome`; `uninstallConfirmed` as the launcher is refused. Then the `request` launch parameter is tested:
+  `ares-launch org.webosbrew.homechooser -p '{"request":"<launcher>"}'` opens "Use <title> as Home?", the
+  runner checks that this dialog is ours and in front, presses Back, and checks that the choice is unchanged.
+* 3a, after step 3 (the launcher is Home; on 6-9 after the boot of step 2): `getInfo` says `isHome:true`;
+  `closeById` closes the running disposable app (accepted, then gone from `running`); `closeById` without an
+  id is `badRequest`; `uninstall` of Home Chooser, Homebrew Channel and the launcher itself is `notAllowed`.
+  `uninstall` of the disposable app answers `pending` with `confirm:"alert"` or `"screen"`, and the
+  confirmation is dismissed, never confirmed: the alert by `closeAlert` (its `alertId` is read from the
+  service's `UNINSTALL_ASK` log line) or by Back when the id is not logged; the screen (Home Chooser
+  opened with `confirmUninstall`) by Back on our own "Uninstall HC Fixture disposable?" dialog. The app must
+  still be installed afterwards. The confirm path follows: on the screen route the runner presses Uninstall on
+  our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
+  (the token is only in the system alert's button). Then a `request` while the launcher is Home must give
+  the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
+* With `--reboot-check`, after the boot: `getInfo` (root, permitted, isHome), `listApps` and `running`
+  still succeed: the grants and the elevation survive a boot.
+* After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in
+  time), and luna still answers.
+* Cleanup removes the disposable app with the launcher and Home Chooser.
+
+### Checking your own launcher
+
+A launcher author can point the same checks at their launcher instead of the fixture:
+
+```
+python3 -I e2e/homechooser_e2e.py --vm 9.x --api-check \
+    --launcher org.example.launcher --launcher-ipk dist/org.example.launcher_1.0.0_arm.ipk
+python3 -I e2e/run_matrix.py --api-check --launcher org.example.launcher --launcher-ipk <ipk>   # every release
+```
+
+This is the whole scenario, steps 0 to 6, with your launcher chosen, the Home key proven to launch it,
+removed and reinstalled, plus the API steps. Your appinfo must have both entries above; the first check
+of 2a fails with what it read if not. What depends on the fixture is not assumed for your launcher. It is
+built from your ipk, not with the permission, and the overlay rule of the preload checks follows your
+appinfo's `defaultWindowType`. Your launcher's own behaviour is not tested (whatever it calls at start, its
+UI). The run removes your launcher at the end like any other.
+
 ## Launchers: Dock and the fixtures
 
-`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist`. The six fixtures
+`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist` unless `[paths] dock_ipk` in
+`e2e/hosts.local.toml` or `--dock-ipk` names another ipk. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
