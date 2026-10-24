@@ -29,6 +29,9 @@ HOMEKEY_FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
 NODE=${HOMECHOOSER_NODE:-node}
 command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
 REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-homekey-hook.js}
+CACHE=${HOMECHOOSER_CACHE:-/var/lib/webosbrew/homechooser/hook}
+APPINFO=${HOMECHOOSER_APPINFO:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/appinfo.json}
+STALE=${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}
 TMO_FORM=
 
 log() {
@@ -224,18 +227,81 @@ any_mounted() {
     return 1
 }
 
-# Check the current files directly; there is no firmware lookup or content-key cache.
-patch_status() {
-    result="$WORK/check.$$.out"
-    if "$NODE" "$REWRITER" check --root "${ROOT:-/}" > "$result" 2>&1; then
-        cat "$result"
-    else
-        echo patch=refused
-        printf 'reason='
-        tr '\n\r' '  ' < "$result"
-        printf '\n'
+installed_version() {
+    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$APPINFO" 2>/dev/null | head -n 1
+}
+
+checksum() { md5sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+# The tab-separated index is written with the JSON manifest by the rewriter. Only the
+# generated copies are mutable after boot; checksums always cover the persistent copies.
+cache_status() {
+    dir=${1:-$CACHE}
+    CACHE_REASON=
+    [ -f "$dir/manifest.json" ] && [ -s "$dir/manifest.tsv" ] || { CACHE_REASON=missing; return 1; }
+    version=$(installed_version)
+    [ -n "$version" ] && [ "$(cat "$dir/version" 2>/dev/null)" = "$version" ] || {
+        CACHE_REASON=version-changed; return 1;
+    }
+    count=0
+    tab=$(printf '\t')
+    while IFS="$tab" read -r path stock patched tier; do
+        case "$path:$stock:$patched:$tier" in
+            /usr/lib/qml/*:[0-9a-f]*:[0-9a-f]*:core|/usr/lib/qml/*:[0-9a-f]*:[0-9a-f]*:best-effort) ;;
+            *) CACHE_REASON=manifest-invalid; return 1 ;;
+        esac
+        [ "${#stock}" -eq 32 ] && [ "${#patched}" -eq 32 ] || { CACHE_REASON=manifest-invalid; return 1; }
+        [ "$(checksum "$dir/stage$path")" = "$patched" ] || { CACHE_REASON=cache-corrupt; return 1; }
+        if ! any_mounted || [ "$dir" != "$CACHE" ]; then
+            [ "$(checksum "$ROOT$path")" = "$stock" ] || { CACHE_REASON=stock-changed; return 1; }
+        fi
+        count=$((count + 1))
+    done < "$dir/manifest.tsv"
+    [ "$count" -ge 2 ] || { CACHE_REASON=manifest-invalid; return 1; }
+    return 0
+}
+
+do_prepare() {
+    if cache_status; then return 0; fi
+    reason=$CACHE_REASON
+    if any_mounted; then
+        printf '%s\n' "$reason" > "$STALE"
+        log "Home key hook cache stale ($reason); waiting for stock files after reboot"
+        return 0
     fi
-    rm -f "$result"
+    parent=$(dirname "$CACHE")
+    mkdir -p "$parent" || return 1
+    temp=$(mktemp -d "$CACHE.tmp.XXXXXX") || return 1
+    version=$(installed_version)
+    if [ -z "$version" ]; then
+        rm -rf "$temp"
+        log "Home key hook cache missing installed version"
+        return 1
+    fi
+    "$NODE" "$REWRITER" generate --root "${ROOT:-/}" --out "$temp/stage" \
+        --manifest "$temp/manifest.json" --version "$version" > "$temp/status" 2> "$temp/error"
+    r=$?
+    if [ "$r" != 0 ]; then
+        log "Home key hook rewriter failed ($r): $(cat "$temp/error")"
+        rm -rf "$temp"
+        return "$r"
+    fi
+    printf '%s\n' "$version" > "$temp/version"
+    if ! cache_status "$temp"; then
+        log "Home key hook generated cache failed validation: $CACHE_REASON"
+        rm -rf "$temp"
+        return 1
+    fi
+    old="$CACHE.old.$$"
+    [ ! -e "$CACHE" ] || mv "$CACHE" "$old" || { rm -rf "$temp"; return 1; }
+    if ! mv "$temp" "$CACHE"; then
+        [ ! -e "$old" ] || mv "$old" "$CACHE"
+        rm -rf "$temp"
+        return 1
+    fi
+    rm -rf "$old"
+    [ "$reason" = missing ] || printf '%s\n' "$reason" > "$STALE"
+    log "Home key hook cache generated for version $version ($reason)"
 }
 
 # compositor_dependants: the compositor's clients that the firmware restarts once the compositor is
@@ -351,20 +417,19 @@ do_apply() {
         log "Home key hook already mounted, nothing to do"
         return 0
     fi
+    if ! cache_status; then
+        reason=$CACHE_REASON
+        printf '%s\n' "$reason" > "$STALE"
+        log "Home key hook cache stale ($reason); leaving stock for this boot"
+        rm -rf "$CACHE"
+        return 0
+    fi
     rm -rf "$WORK/stage"
     rm -f "$WORK/manifest.json" "$WORK/applied-status" "$WORK/recovered" "$WORK/restart-reason"
-    "$NODE" "$REWRITER" generate --root "${ROOT:-/}" --out "$WORK/stage" \
-        --manifest "$WORK/manifest.json" > "$WORK/plan.$$" 2>&1
-    r=$?
-    cat "$WORK/plan.$$" >> "$LOG"
-    if [ "$r" != 0 ]; then
-        log "rewriter failed ($r): $(cat "$WORK/plan.$$"); leaving stock"
-        rm -rf "$WORK/stage"
-        rm -f "$WORK/manifest.json" "$WORK/plan.$$"
-        [ "$r" = 2 ] && return 0
-        return 1
-    fi
-    mv "$WORK/plan.$$" "$WORK/applied-status"
+    cp -R "$CACHE/stage" "$WORK/stage" || return 1
+    cp "$CACHE/manifest.json" "$WORK/manifest.json" || return 1
+    cp "$CACHE/status" "$WORK/applied-status" || return 1
+    cat "$WORK/applied-status" >> "$LOG"
     entries "$WORK/manifest.json" > "$AENT"
     # Put the stored choice into the copies that carry the placeholder.
     cid=$(baked_id)
@@ -402,7 +467,7 @@ do_apply() {
     done < "$AENT"
     rm -f "$AENT"
     VERIFY_QML=1
-    if restart_compositor; then return 0; fi
+    if restart_compositor; then rm -f "$STALE"; return 0; fi
     failure=$(cat "$WORK/restart-reason" 2>/dev/null)
     [ -n "$failure" ] || failure="compositor restart sequence failed"
     log "ERROR: boot compositor restart failed: $failure; unmounting the hook and restarting once to stock"
@@ -489,13 +554,26 @@ do_status() {
         echo mounted=yes
         cat "$WORK/applied-status" 2>/dev/null
         [ -f "$HOMEKEY_FLAG" ] || reboot=needed
+        if ! cache_status; then
+            echo hook=stale
+            echo "reason=$CACHE_REASON"
+            [ -f "$HOMEKEY_FLAG" ] && reboot=needed
+        fi
     else
         echo mounted=no
-        state=$(patch_status)
-        printf '%s\n' "$state"
-        if [ -f "$HOMEKEY_FLAG" ] && printf '%s\n' "$state" | grep -q '^patch=possible$'; then
-            reboot=needed
+        if cache_status; then
+            cat "$CACHE/status"
+            [ -f "$HOMEKEY_FLAG" ] && reboot=needed
+        else
+            echo hook=stale
+            [ -f "$STALE" ] || echo "reason=$CACHE_REASON"
+            echo patch=refused
         fi
+    fi
+    if [ -f "$STALE" ]; then
+        [ -f "$CACHE/manifest.json" ] && echo hook=stale
+        echo "reason=$(cat "$STALE")"
+        [ -f "$HOMEKEY_FLAG" ] && [ -f "$CACHE/manifest.json" ] && reboot=needed
     fi
     [ ! -f "$WORK/recovered" ] || cat "$WORK/recovered"
     echo "reboot=$reboot"
@@ -506,5 +584,7 @@ case "$1" in
     stop)     take_lock; do_stop ;;
     refresh)  shift; take_lock; do_refresh "$@" ;;
     status)   do_status ;;
-    *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [restart]|status]" >&2; exit 2 ;;
+    prepare)  take_lock; do_prepare ;;
+    clear)    take_lock; rm -rf "$CACHE"; rm -f "$STALE" ;;
+    *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [restart]|status|prepare|clear]" >&2; exit 2 ;;
 esac

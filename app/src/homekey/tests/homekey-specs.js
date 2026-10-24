@@ -45,6 +45,7 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 			return {stdout: `entry=${entry}\nactive=\nstored=\nhomekey=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
 		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};
+		if (command === homekeyCommand('prepare') || command === homekeyCommand('clear')) return {stdout: '', stderr: ''};
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
@@ -159,7 +160,7 @@ describe('install', () => {
 		const tv = fakeTV({dataMissing: true});
 		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(false);
-		expect(res.errors[0]).toMatch(/missing from the app package/);
+		expect(res.errors[0]).toMatch(/missing from the service package/);
 		expect(tv.tv.installed).toBe(false);
 	});
 
@@ -194,7 +195,8 @@ describe('remove', () => {
 		expect(res.ok).toBe(true);
 		const seq = kinds(tv);
 		expect(seq[0]).toBe('rm ' + HOMEKEY_FLAG);
-		expect(seq[1]).toBe(REFRESH);
+		expect(seq[1]).toBe(homekeyCommand('clear'));
+		expect(seq[2]).toBe(REFRESH);
 		expect(seq).not.toContain(STOP);
 		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + HOMEKEY_FLAG]);

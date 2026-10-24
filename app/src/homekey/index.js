@@ -81,8 +81,9 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 			const run = runner(log);
 			const res = Object.assign(result(log), {status: null, createdKey: false, rebootNeeded: false});
 			try {
+				await run.run(script('prepare'));
 				const before = await readStatus(run);
-				if (before.dataMissing) throw new Error('The Home key hook files are missing from the app package');
+				if (before.dataMissing) throw new Error('The Home key hook files are missing from the service package');
 				if (!before.mounted && before.patch !== 'possible') {
 					throw new Error('The Home key hook refused this firmware: ' + (before.reason || 'unknown reason'));
 				}
@@ -114,6 +115,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 			const res = Object.assign(result(log), {status: null, rebootNeeded: false});
 			try {
 				await run.remove(HOMEKEY_FLAG);
+				await run.run(script('clear'));
 			} catch (e) {
 				fail(res, e);
 			}

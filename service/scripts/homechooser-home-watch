@@ -144,14 +144,21 @@ major_version() {
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
-    for f in homechooser-home-watch homechooser-homekey homechooser-access; do
+    for f in homechooser-home-watch homechooser-homekey homechooser-homekey-hook.js homechooser-access; do
         if [ ! -f "$1/$f" ]; then
             [ "$f" != homechooser-home-watch ] && continue
             return 1
         fi
         cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
     done
-
+    if [ -d "$1/lib" ]; then
+        mkdir -p "$RT/lib" || return 1
+        for f in "$1"/lib/*.sh; do
+            [ -f "$f" ] || continue
+            cp "$f" "$RT/lib/$(basename "$f").new" &&
+                mv "$RT/lib/$(basename "$f").new" "$RT/lib/$(basename "$f")" || return 1
+        done
+    fi
 }
 
 # read_choice: print the stored home id. The file holds the id alone; surrounding spaces, tabs,
@@ -742,6 +749,8 @@ restore_all() {
     fi
     revert_platform "Home Chooser uninstalled"
     rm -f "$CHOICE" "$KEYFLAG"
+    rm -rf "${HOMECHOOSER_CACHE:-/var/lib/webosbrew/homechooser/hook}"
+    rm -f "${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
     for l in "$INITD"; do
         if [ -L "$l" ]; then
@@ -948,6 +957,13 @@ HOMEKEY=$SRC/homechooser-homekey
 trap 'finish "stopped by signal" 0' TERM INT HUP
 
 MAJOR=$(major_version)
+if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] && [ -f "$KEYFLAG" ] &&
+   [ -f "${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}" ]; then
+    (
+        "$SLEEP" "${HOMECHOOSER_PREPARE_DELAY:-45}"
+        $WSH "$HOMEKEY" prepare >> "$LOG" 2>&1
+    ) </dev/null >/dev/null 2>&1 &
+fi
 if [ -f "$SRC/homechooser-access" ]; then
     $WSH "$SRC/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
 fi

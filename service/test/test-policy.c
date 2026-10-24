@@ -83,7 +83,7 @@ static void test_commands(void)
 	CHECK(c && strcmp(c->argv[0], "/bin/systemctl") == 0 && strcmp(c->argv[1], "restart") == 0 && strcmp(c->argv[2], "sam") == 0 && !c->argv[3]);
 	c = hc_command_lookup("watch");
 	CHECK(c && strcmp(c->argv[0], "/bin/sh") == 0 && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "watch") == 0 && !c->argv[3]);
-	const char *kf[] = {"homekeyStatus", "status", "homekeyApply", "apply", "homekeyStop", "stop", "homekeyRefresh", "refresh"};
+	const char *kf[] = {"homekeyStatus", "status", "homekeyApply", "apply", "homekeyStop", "stop", "homekeyRefresh", "refresh", "homekeyPrepare", "prepare", "homekeyClear", "clear"};
 	for (int i = 0; i < 8; i += 2) {
 		c = hc_command_lookup(kf[i]);
 		CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], kf[i + 1]) == 0 && !c->argv[3]);
@@ -110,7 +110,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"restartSam", "watch", "homekeyStatus", "homekeyApply", "homekeyStop", "homekeyRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
+	static const char *const names[] = {"restartSam", "watch", "homekeyStatus", "homekeyApply", "homekeyStop", "homekeyRefresh", "homekeyPrepare", "homekeyClear", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);

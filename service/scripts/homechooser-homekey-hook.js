@@ -16,6 +16,8 @@
 
 var fs = require('fs');
 var path = require('path');
+var crypto = require('crypto');
+function md5(text) { return crypto.createHash('md5').update(Buffer.from(text, 'latin1')).digest('hex'); }
 
 var Q = 'usr/lib/qml/';
 var STOCK = 'com.webos.app.home';
@@ -300,15 +302,15 @@ function plan(root, opt) {
 	if (k === null) abort(F.homekey + ': core file is missing');
 	var kk = patchHomeKey(k);
 	var ss = patchSettings(s);
-	out.push({path: F.settings, stock: s, text: ss});
-	out.push({path: F.homekey, stock: k, text: kk});
+	out.push({path: F.settings, stock: s, text: ss, tier: 'core'});
+	out.push({path: F.homekey, stock: k, text: kk, tier: 'core'});
 	OPTIONAL.forEach(function (r) {
 		try {
 			var t = read(root, r.file);
 			if (t === null) abort('file is missing');
 			var patched = r.fn(t);
 			if (patched === t || balance(patched) !== balance(t)) abort('unchanged output or bracket mismatch');
-			out.push({path: r.file, stock: t, text: patched});
+			out.push({path: r.file, stock: t, text: patched, tier: 'best-effort'});
 		} catch (e) {
 			if (!(e instanceof Abort)) throw e;
 			skipped.push(r.file + ': ' + e.message);
@@ -332,7 +334,7 @@ function main(argv) {
 	var cmd = argv[0], opt = {root: '/'};
 	for (var i = 1; i < argv.length; i++) {
 		if (argv[i] === '--skip-version-gate') opt.skip = true; // offline negative controls only
-		else if (/^--(root|out|manifest)$/.test(argv[i]) && i + 1 < argv.length) opt[argv[i].slice(2)] = argv[++i];
+		else if (/^--(root|out|manifest|version)$/.test(argv[i]) && i + 1 < argv.length) opt[argv[i].slice(2)] = argv[++i];
 		else { process.stderr.write('bad argument ' + argv[i] + '\n'); return 1; }
 	}
 	if (['check', 'generate'].indexOf(cmd) < 0 || (cmd === 'generate' && !opt.out)) {
@@ -347,9 +349,15 @@ function main(argv) {
 				mkdirp(path.dirname(d));
 				fs.writeFileSync(d, Buffer.from(o.text, 'latin1'));
 			});
-			if (opt.manifest) fs.writeFileSync(opt.manifest, JSON.stringify({
-				files: p.targets.map(function (o) { return {path: '/' + o.path}; })
-			}, null, 2) + '\n');
+			if (opt.manifest) {
+				var files = p.targets.map(function (o) { return {
+					path: '/' + o.path, stockMd5: md5(o.stock), patchedMd5: md5(o.text), tier: o.tier
+				}; });
+				fs.writeFileSync(opt.manifest, JSON.stringify({version: opt.version || '', files: files,
+					skipped: p.skipped}, null, 2) + '\n');
+				fs.writeFileSync(path.join(path.dirname(opt.manifest), 'manifest.tsv'),
+					files.map(function (f) { return [f.path, f.stockMd5, f.patchedMd5, f.tier].join('\t'); }).join('\n') + '\n');
+			}
 		}
 		process.stdout.write('patch=possible\nunpatched-sites=' + p.skipped.length + '\n');
 		p.skipped.forEach(function (s) { process.stdout.write('skipped=' + s + '\n'); });

@@ -89,11 +89,15 @@ STUB
            HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" HOMECHOOSER_UMOUNT="$T/bin/umount" \
            HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" \
            HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_HOMEKEY_FLAG="$T/homekey-flag"
+    export HOMECHOOSER_CACHE="$T/hook" HOMECHOOSER_STALE="$T/hook-stale" HOMECHOOSER_APPINFO="$T/appinfo.json"
+    printf '{"version":"1.0"}\n' > "$T/appinfo.json"
     SETTINGS=/usr/lib/qml/WebOSCompositorBase/global/Settings.qml
     stage=$T/work/stage$SETTINGS
     export HOMECHOOSER_NODE="${NODE:-node}" HOMECHOOSER_REWRITER="$HERE/homechooser-homekey-hook.js"
     w() { $SH "$HERE/homechooser-homekey" "$@" > "$T/out" 2>&1; }
 
+    w prepare
+    check "$rel: cache prepared" test -f "$T/hook/manifest.tsv"
     w status
     check "$rel: status accepts structural anchors" has 'patch=possible' "$T/out"
     w apply

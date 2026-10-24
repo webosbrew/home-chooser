@@ -1,6 +1,6 @@
 # Minimal Home key hook, webOS 6–9
 
-Home Chooser runs one structural rewriter against the stock compositor at boot. The same guarded
+Home Chooser runs a structural rewriter against the stock compositor when preparing the persistent hook cache. The same guarded
 rules apply to webOS 6 through 9. A core mismatch leaves the device stock and logs the failed anchor. webOS 5 and 10 or later are refused.
 
 ## The hook
@@ -33,8 +33,8 @@ own behavior when Home is already in front, when voice UI is running, and when o
 ## Guards and runtime
 
 `service/scripts/homechooser-homekey-hook.js` is compatible with Node 8.12, the webOS 6 runtime: no
-lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. The worker uses `node`
-from PATH, falling back to `/usr/bin/node`, as before.
+lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. Preparation uses `node`
+from PATH, falling back to `/usr/bin/node`. Boot and status never start Node.
 
 Every core anchor must occur exactly once: the singleton pragma, Settings root id, subscribe
 signature and import, and the applicationManager group, launch and checkLaunch headers. Both
@@ -56,12 +56,14 @@ writing output; the worker stages everything before mounting anything.
 
 ```
 node service/scripts/homechooser-homekey-hook.js check --root /path/to/rootfs
-node service/scripts/homechooser-homekey-hook.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/hook.json
+node service/scripts/homechooser-homekey-hook.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/manifest.json --version 0.1.0
 ```
 
 Exit status is 0 for success, 2 for a guarded refusal (`ABORT: <specific reason>`), and 1 for usage
 or I/O failure. `--skip-version-gate` is for offline negative controls only; the worker never uses it.
-The manifest records the staged target paths. Status checks the current stock files directly.
+The manifest records each target path, stock and patched MD5, tier, skipped sites, and the
+Home Chooser version. The companion tab-separated index lets BusyBox shell validate it without
+starting Node. These hashes are per-TV cache keys, not a list of approved firmware hashes.
 
 ## Deployment
 
@@ -69,10 +71,21 @@ The installed `service/scripts/homechooser` entry is linked from Homebrew Channe
 `/var/lib/webosbrew/init.d/homechooser`. The `homekey` enable flag controls boot application.
 Packaging places the five runtime scripts beside the service binary; the app bundle carries none. Offline tests are kept in the source tree.
 
-At boot the worker generates files under `/tmp/homechooser-homekey/stage`, writes the configured
+On first installation or after an update, `homekeyPrepare` generates copies under
+`/var/lib/webosbrew/homechooser/hook/`. Preparation validates every generated copy, builds in a
+temporary directory and renames it into place. At boot the worker checks the installed version,
+the cached copies and the MD5 of each stock file. It copies a valid cache to
+`/tmp/homechooser-homekey/stage`, writes the configured
 id into the staged Settings.qml, bind-mounts the files, then restarts the compositor once. An id is
 baked only if applicationManager confirms that app is installed; an absent or unanswered app uses
 an empty fallback until the watcher refreshes it. The underlying rootfs is never written.
+
+When the cache is absent, corrupt, or based on changed stock files, boot leaves Home stock and
+logs the reason. It removes the stale cache. The watcher regenerates it after boot, then status
+reports `hook=stale`, the reason and `reboot=needed`; the hook becomes active on the next restart.
+The app uses the existing restart alert. A version change also invalidates the cache. `status`
+reads the manifest and mounts without invoking Node. Removing the hook or uninstalling Home
+Chooser deletes the persistent cache.
 
 The boot hook runs after the compositor has already loaded stock QML. The restart follows the
 firmware's `lsm-ready.service` order: read its systemctl start lines (`/etc/systemd/system` before
@@ -127,8 +140,7 @@ commands. Logs are in `/tmp/homechooser-homekey.log`.
 
 Status reports `mounted=yes|no`, `patch=possible|refused`, `reason=` on refusal,
 `unpatched-sites=N` for skipped best-effort files, repeated `skipped=<file>: <reason>` and
-`file=<patched path>` lines, and `reboot=needed|no`. The structural check is cached by the rules,
-version metadata and QML/JS content; it is recomputed after input changes.
+`file=<patched path>` lines, `hook=stale` when applicable, and `reboot=needed|no`.
 
 ## Offline verification
 

@@ -68,6 +68,8 @@ static const hc_command COMMANDS[] = {
 	{"restartSam", {"/bin/systemctl", "restart", "sam", NULL}, 60, false, false},
 	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
 	{"homekeyStatus", {"/bin/sh", HC_HOMEKEY_SCRIPT, "status", NULL}, 20, false, false},
+	{"homekeyPrepare", {"/bin/sh", HC_HOMEKEY_SCRIPT, "prepare", NULL}, 120, false, false},
+	{"homekeyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "clear", NULL}, 20, false, false},
 	/* homekeyApply and homekeyStop restart the compositor: debug/manual only, the app never calls them */
 	{"homekeyApply", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", NULL}, 90, false, false},
 	{"homekeyStop", {"/bin/sh", HC_HOMEKEY_SCRIPT, "stop", NULL}, 90, false, false},
