@@ -1120,8 +1120,9 @@ class Scenario:
         while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
             time.sleep(3)
         ensure_devices(host, self.vm, r)
-        up = wait_for_device(self.vm, r)
-        r.check(label + ': the VM is back with Homebrew Channel', up, 'wait_for_device')
+        state = wait_for_device(self.vm, r)
+        up = state == READY
+        r.check(label + ': the VM is back with Homebrew Channel', up, '%s (%s)' % (state, WAIT_STATES[state]))
         if up:
             b = self.dev.boot_id()
             r.check(label + ': it is a new boot (boot_id changed)', bool(b) and b != boot0, '%s -> %s' % (boot0, b))
@@ -2657,17 +2658,44 @@ def prepare_vm(host, vm, rec):
         rec.say(out.strip()[-300:])
 
 
+# wait_for_device states
+READY, NO_ROOT_SSH, NO_HBCHANNEL, DOWN = 'ready', 'no-root-ssh', 'no-hbchannel', 'down'
+WAIT_STATES = {
+    READY: 'root SSH answers and Homebrew Channel is installed',
+    NO_ROOT_SSH: "developer mode answers and lists Homebrew Channel, but root SSH (HBC's Dropbear, guest 22 = "
+                 "host 6622) does not",
+    NO_HBCHANNEL: 'root SSH answers, but Homebrew Channel is not installed',
+    DOWN: 'neither root SSH nor developer mode answers',
+}
+
+
 def wait_for_device(vm, rec, timeout=300):
+    """One of the states above: READY as soon as it is reached, else the last state seen at the timeout.
+    Every change of state is said, so a timeout shows which probe never passed."""
     dev = Device(vm)
     end = time.time() + timeout
-    while time.time() < end:
+    state = None
+    while True:
         rc, out = dev.sh('echo up', 20)
         if out.strip().endswith('up'):
-            apps = dev.installed()
-            if 'org.webosbrew.hbchannel' in apps:
-                return True
+            now = READY if 'org.webosbrew.hbchannel' in dev.installed() else NO_HBCHANNEL
+        else:
+            # the devmode device (prisoner, 9922) is Developer Mode's own Dropbear, not HBC's
+            now = NO_ROOT_SSH if 'org.webosbrew.hbchannel' in dev.installed() else DOWN
+        if now != state:
+            state = now
+            rec.say('VM %s: %s (%s)' % (vm, state, WAIT_STATES[state]))
+        if state == READY or time.time() >= end:
+            return state
         time.sleep(5)
-    return False
+
+
+def failsafe_note(vm):
+    return ("root SSH never answered while developer mode did: Homebrew Channel's startup.sh is most likely in "
+            "failsafe mode (telnetd only, no Dropbear). It sets /var/luna/preferences/webosbrew_failsafe at the start "
+            "of a boot and clears it about 12 s after its boot work, so a boot cut short before that (a VM stopped "
+            "within seconds of starting) leaves the flag and the next boot runs failsafe; that boot clears the flag "
+            "again after 15 s. Restarting %s once." % vm)
 
 
 def interrupted(*_):
@@ -2779,8 +2807,20 @@ def main():
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
             time.sleep(3)
         ensure_devices(host, vm, rec)
-        if not wait_for_device(vm, rec):
-            raise SystemExit('the VM did not come up with Homebrew Channel')
+        state = wait_for_device(vm, rec)
+        if state == NO_ROOT_SSH:
+            rec.say(failsafe_note(vm))
+            rc, out = host.stop(vm)
+            rec.say('beanjar stop: %s' % out.strip()[-200:])
+            rc, out = host.start(vm)
+            rec.say('beanjar start: %s' % out.strip()[-200:])
+            end = time.time() + 120
+            while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
+                time.sleep(3)
+            ensure_devices(host, vm, rec)
+            state = wait_for_device(vm, rec)
+        if state != READY:
+            raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
         for launcher in launchers:
             rec.tag = '[%s]' % launcher.spec if args.multi else ''
             rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))

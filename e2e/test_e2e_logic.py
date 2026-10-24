@@ -176,6 +176,43 @@ class Crashes(unittest.TestCase):
         self.assertEqual(e2e.crash_lines('WebAppMgr: ok\n'), [])
 
 
+class WaitForDevice(unittest.TestCase):
+    """2026-10-24: three VMs whose previous boot was cut at ~9 s came up in HBC failsafe mode (telnetd,
+    no Dropbear): developer mode answered, root SSH never did.  The wait names that state."""
+
+    def wait(self, root_up, apps):
+        class Dev:
+            def __init__(self, vm):
+                pass
+
+            def sh(self, cmd, timeout=60):
+                return (0, 'up') if root_up else (255, 'connection refused')
+
+            def installed(self):
+                return apps
+
+        said = []
+
+        class Rec:
+            def say(self, t):
+                said.append(t)
+        orig, e2e.Device = e2e.Device, Dev
+        try:
+            return e2e.wait_for_device('vm', Rec(), timeout=0), said
+        finally:
+            e2e.Device = orig
+
+    def test_states(self):
+        hb = ['org.webosbrew.hbchannel']
+        self.assertEqual(self.wait(True, hb)[0], e2e.READY)
+        self.assertEqual(self.wait(True, [])[0], e2e.NO_HBCHANNEL)
+        self.assertEqual(self.wait(False, hb)[0], e2e.NO_ROOT_SSH)
+        self.assertEqual(self.wait(False, [])[0], e2e.DOWN)
+        state, said = self.wait(False, hb)
+        self.assertEqual(len(said), 1)
+        self.assertIn('no-root-ssh', said[0])
+
+
 class FakeRec:
     def __init__(self):
         self.checks, self.notes = [], []
