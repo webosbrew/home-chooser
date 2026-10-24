@@ -88,8 +88,8 @@ The owner decides. This is a request only:
 * the request is dropped without any message when the id is the stock home, unknown, not in the
   Home category or malformed, and also when Home Chooser still shows a setup problem (for example
   the service is not elevated yet) or is busy;
-* on webOS 6 to 9 firmware without a reviewed patch, the dialog says so and changes nothing unless
-  the owner has turned on the generated patch (see [6.x to 9.x](#6x-to-9x));
+* on webOS 6 to 9, the dialog changes nothing if the structural Home-key hook refuses the firmware
+  (see [the minimal hook](key-filter-backport.md));
 * the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch` (dispatched on `document`; `window` is listened to as well), so the
   request works whether or not Home Chooser is already open.
 
@@ -347,14 +347,10 @@ system files at boot. For a launcher this means:
   launcher after that restart. Until then the choice is stored (`isHome` is true) but the Home
   button still opens LG Home. Later changes between launchers need no restart. Nothing restarts the
   compositor while the TV runs, so setup never closes your window.
-* **Reviewed builds.** The patch is keyed by the hashes of the stock files, for the builds listed
-  in [Coverage](key-filter-backport.md#coverage) (6.5.2 to 9.2.4).
-* **Generated patch on unreviewed firmware.** On an unlisted build, the owner can opt in to a patch
-  generated from the live files (`Use a patch generated for this firmware (not reviewed)`), which
-  is applied only if strict checks pass. Without the opt-in, selecting a launcher shows an
-  explanation and changes nothing; if even generation is refused, the dialog says the Home button
-  cannot be changed on this TV's software. A `request` from your app gets the same dialog.
-  See [Generated fallback](key-filter-backport.md#generated-fallback).
+* **Structural Home-key hook.** Every webOS 6–9 build uses the same guarded rewriter at boot.
+  Essential hooks apply together; supporting files are patched or skipped independently. A refusal
+  leaves stock behavior and prevents selecting a custom Home. See [the minimal hook](key-filter-backport.md).
+
 * **When the owner restores LG Home or your launcher is removed**, the record is written with the
   stock home id (not cleared), so LG Home opens at once; the patch stays mounted until the next
   restart. The owner is told about a removed launcher as described above, and the choice is

@@ -79,7 +79,9 @@ lsm-ready emit, rather than the existence of the persistent `/tmp/lsm-ready` fil
 A bare compositor restart can crash WebAppMgr when it reconnects before outputs are ready. The
 worker keeps these clients stopped on a failed restart. At boot only, a failure unmounts the hook
 and attempts one more restart with stock files, then starts the remembered clients when ready.
-Both the failure and recovery result are logged. Failed unmounts retain the staged sources and
+Both the failure and recovery result are logged. The 9.2.4 preflight found that systemd can report
+success even when the root QML fails to compile; this check does not cover that case. Device
+verification stopped for a recovery design decision; see [the evidence](minimal-hook-verification.md). Failed unmounts retain the staged sources and
 manifest for a later stop. The restart sequence runs in a waited child with detached output so an
 app window closing cannot cut the stop/start sequence in half.
 
@@ -148,3 +150,4 @@ does not mark a build as device verified.
 
 | webOS | VM / build | Minimal hook verified | Evidence |
 | --- | --- | --- | --- |
+| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | Partial probes only; full matrix stopped on recovery gap | [Runtime evidence](minimal-hook-verification.md) |
