@@ -620,6 +620,7 @@ printf '#!/bin/sh\necho unexpected-node >&2; exit 99\n' > "$T/bin/node"
 chmod +x "$T/bin/node"
 run status
 check "status does not start Node" test "$(wc -l < "$T/node-calls")" = "$calls"
+check "status identifies the cache generation" has 'cache-generation=' "$T/out"
 run apply
 check "cache hit mounts without Node" test "$(ncmds mount)" = 2
 check "boot did not start Node" test "$(wc -l < "$T/node-calls")" = "$calls"

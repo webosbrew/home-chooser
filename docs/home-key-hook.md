@@ -87,7 +87,8 @@ an empty fallback until the watcher refreshes it. The underlying rootfs is never
 When the cache is absent, corrupt, or based on changed stock files, boot leaves Home stock and
 logs the reason. It removes the stale cache. The watcher regenerates it after boot, then status
 reports `hook=stale`, the reason and `reboot=needed`; the hook becomes active on the next restart.
-The app uses the existing restart alert. A version change also invalidates the cache. `status`
+The app opens the existing restart alert once per cache generation when the user opens Home Chooser,
+and keeps the “Restart now” action visible. A version change also invalidates the cache. `status`
 reads the manifest and mounts without invoking Node. Removing the hook or uninstalling Home
 Chooser deletes the persistent cache.
 

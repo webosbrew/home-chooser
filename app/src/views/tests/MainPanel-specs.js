@@ -346,6 +346,14 @@ describe('Home Chooser screen', () => {
 		});
 
 		describe('a restart is pending when the screen opens', () => {
+			test('rebuilt stale cache raises one restart alert for its generation', async () => {
+				const status = {mounted: false, enabled: true, patch: 'possible', hook: 'stale', cacheGeneration: '123-45', rebootNeeded: true};
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf(status)});
+				mountApp(env);
+				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledTimes(1));
+				expect(env.rebootPrompt).toHaveBeenCalledWith('apply');
+				expect(window.localStorage.getItem('homechooser.hookCachePrompt')).toBe('123-45');
+			});
 			test('apply: a note and a "Restart now" row; the row asks the service again (reason apply)', async () => {
 				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({mounted: false, enabled: true, patch: 'possible', rebootNeeded: true})});
 				mountApp(env);

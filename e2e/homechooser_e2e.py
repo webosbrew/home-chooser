@@ -2456,9 +2456,20 @@ exit "$rc"
                 st.get('hook') == 'stale' and st.get('reason') == 'stock-changed' and st.get('reboot') == 'needed', raw)
         self.insp = Inspector(self.vm)
         d.launch(APP_ID)
-        ui = self.wait(lambda: self.ui(), 60, 2) or {}
+        def rendered():
+            page = self.ui()
+            return page if page and self.launcher in (page.get('rows') or []) else None
+        ui = self.wait(rendered, 120, 2) or {}
         self.shot('3c-restart-after-cache-rebuild')
         r.check('app shows the restart action after cache rebuild', ui.get('restart') is True, json.dumps(ui))
+        def cache_alert():
+            item, _ = self.reboot_ask_evidence()
+            return item if item.get('alert') else None
+        info = self.wait(cache_alert, 45, 2) or {}
+        r.check('app raises the restart alert once for the rebuilt cache',
+                info.get('alert') == 'accepted' and info.get('message') == REBOOT_PROMPT['apply'], repr(info))
+        if info.get('alert') == 'accepted':
+            self.close_reboot_alert('3c rebuilt cache', info)
         d.close(APP_ID)
         self.insp.close()
         self.insp = None

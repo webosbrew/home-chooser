@@ -1,6 +1,7 @@
 #!/bin/sh
 do_status() {
     [ -f "$REWRITER" ] || echo data=missing
+    [ ! -f "$CACHE/generation" ] || echo "cache-generation=$(cat "$CACHE/generation")"
     reboot=no
     if any_mounted; then
         echo mounted=yes

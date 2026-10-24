@@ -59,6 +59,7 @@ do_prepare() {
         return "$r"
     fi
     printf '%s\n' "$version" > "$temp/version"
+    printf '%s-%s\n' "$(date +%s)" "$$" > "$temp/generation"
     if ! cache_status "$temp"; then
         log "Home key hook generated cache failed validation: $CACHE_REASON"
         rm -rf "$temp"

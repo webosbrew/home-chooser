@@ -14,6 +14,7 @@ export const LOG_PREFIX = '[HomeChooser]';
 const DONE_TEXT = 'Done. Press Home to try it.';
 const RESTART_ASKED_TEXT = 'Done. Restart the TV to finish.';
 const RESTART_FAILED_TEXT = 'Restart the TV to finish.';
+const CACHE_PROMPT_KEY = 'homechooser.hookCachePrompt';
 
 // The line above the "Restart now" row while a restart is pending, by reason ('apply' or 'remove').
 export const RESTART_NOTE = {
@@ -88,6 +89,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [icons, setIcons] = useState({});
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
+	const stalePrompted = useRef(false);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -213,6 +215,20 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	// the patch mounted is an apply, the patch mounted without the flag file is a remove.
 	const restartPending = Boolean(patchStatus && patchStatus.rebootNeeded);
 	const restartReason = patchStatus && patchStatus.enabled ? 'apply' : 'remove';
+	useEffect(() => {
+		if (!env || busy || phase !== 'ready' || !restartPending || !patchStatus.enabled ||
+			patchStatus.hook !== 'stale' || !patchStatus.cacheGeneration || stalePrompted.current) return;
+		stalePrompted.current = true;
+		try {
+			if (window.localStorage.getItem(CACHE_PROMPT_KEY) === patchStatus.cacheGeneration) return;
+			window.localStorage.setItem(CACHE_PROMPT_KEY, patchStatus.cacheGeneration);
+		} catch (err) {
+			// The prompt still appears once in this window when storage is unavailable.
+		}
+		askRestart(env, 'apply').then((asked) => {
+			if (mounted.current) setToast({ok: asked, text: asked ? RESTART_ASKED_TEXT : RESTART_FAILED_TEXT});
+		});
+	}, [env, busy, phase, restartPending, patchStatus]);
 	const askReboot = useCallback(async () => {
 		if (!env || busy || !restartPending) return;
 		const asked = await askRestart(env, restartReason);

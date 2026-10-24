@@ -31,6 +31,8 @@ export const parseStatus = (text) => {
 		dataMissing: out.data === 'missing',
 		mounted: out.mounted === 'yes',
 		patch: out.patch || null,
+		hook: out.hook || null,
+		cacheGeneration: out['cache-generation'] || null,
 		recovered: out.recovered || null,
 		reason: out.reason || null,
 		unpatchedSites: Number(out['unpatched-sites'] || 0),
