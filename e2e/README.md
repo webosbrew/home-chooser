@@ -168,6 +168,8 @@ depend on it: it runs `beanjar` on each machine over ssh, which works whether or
   so the root instance starts, and verifies the same outcome. **This is a test-harness substitute
   for the missing luna path: the app's own elevation is not exercised on those releases.** The
   strategy used is written at the top of every run log. This path is untested so far.
+  The `--update-check` step reinstalls the service, which loses that root, so after the update the runner repeats
+  the elevation (and verifies it) before it opens the app again.
 
 ## Steps and what each asserts
 
@@ -382,7 +384,7 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
 
   The formats are firmware-derived, not yet device-confirmed for a third-party launcher: see
   `e2e/fixtures/README.md` "What the runner proves". A missing proof is a `FAIL` for every type; on a release where
-  `fixtures/qml/support.json` says `false` the qml fixture is skipped with an `XFAIL`.
+  `fixtures/qml/support.json` says `false` (12.x: no qml-runner or Qt in the firmware) the qml fixture is skipped with an `XFAIL`.
 * With `--launchers all-fixtures` a failure in one launcher is recorded and the next one runs.
 
 ## The update step (`--update-check`)
