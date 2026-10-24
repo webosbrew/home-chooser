@@ -1282,6 +1282,174 @@ static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
+/* ---- rebootPrompt / rebootConfirmed ----
+ * The patch needs a restart of the TV and nothing else restarts anything while the TV runs. Only
+ * Home Chooser can ask (rebootPrompt) and only while the worker reports reboot=needed; the reboot
+ * itself goes through tvpowerd (no systemctl fallback: it would skip the power-off sequence and its
+ * busy check). The one-shot token is the capability of the alert's button. */
+
+#define REBOOT_TTL_US (600 * G_USEC_PER_SEC)
+#define REBOOT_URI "luna://com.webos.service.tvpower/power/reboot"
+
+typedef struct {
+	char token[HC_TOKEN_LEN + 1];
+	gint64 expires;
+	bool live;
+} RebootToken;
+
+static RebootToken g_reboot_tokens[TOKEN_SLOTS];
+static int g_reboot_next;
+
+/* True when the worker's status says reboot=needed right now. */
+static bool reboot_pending(void)
+{
+	const hc_command *cmd = hc_command_lookup("keyfilterStatus");
+	if (!cmd) return false;
+	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
+	int code = run_argv(cmd->argv, cmd->timeout_s, out, err, NULL);
+	bool needed = code == 0 && hc_reboot_needed(out->str);
+	g_string_free(out, TRUE);
+	g_string_free(err, TRUE);
+	return needed;
+}
+
+/* A luna call that must come back with a true returnValue; reply text is logged. */
+static bool reboot_notify(const char *tag, const char *uri, jvalue_ref payload, int timeout_s)
+{
+	GString *out = g_string_new(NULL);
+	int code = luna_run(uri, jvalue_stringify(payload), 1, timeout_s, never_stop, out);
+	bool ok = code == 0 && hc_remove_reply_class(out->str) == 1;
+	LOGI(tag, "%s %s (exit %d): %s", uri, ok ? "accepted" : "refused", code, out->str);
+	g_string_free(out, TRUE);
+	return ok;
+}
+
+/* rebootPrompt {reason: "apply"|"remove", screen: bool} */
+static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	if (!gate(msg, "rebootPrompt", true)) return true;
+	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
+	char *reason = req ? get_string(req, "reason") : NULL;
+	jvalue_ref sv = req ? jobject_get(req, key_buf("screen")) : NULL;
+	bool screen = false;
+	if (sv && jis_valid(sv) && jis_boolean(sv)) jboolean_get(sv, &screen);
+	j_release(&req);
+	const char *message = hc_reboot_message(reason);
+	g_free(reason);
+	if (!reboot_pending()) {
+		send_error_for(msg, "rebootPrompt", "notPending", "No restart is pending");
+		return true;
+	}
+	if (!message) {
+		send_error_for(msg, "rebootPrompt", "badRequest", "reason must be apply or remove");
+		return true;
+	}
+	RebootToken *t = &g_reboot_tokens[g_reboot_next++ % TOKEN_SLOTS];
+	memset(t, 0, sizeof *t);
+	new_token(t->token);
+	if (!hc_token_ok(t->token)) {
+		send_error_for(msg, "rebootPrompt", "internal", "Could not make a confirmation token");
+		return true;
+	}
+	t->expires = g_get_monotonic_time() + REBOOT_TTL_US;
+	t->live = true;
+
+	if (screen) {
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_bool(o, "pending", true);
+		put_str(o, "confirm", "screen");
+		put_str(o, "token", t->token);
+		send_reply(msg, o);
+		return true;
+	}
+	jvalue_ref a = jobject_create();
+	put_str(a, "sourceId", HC_APP_ID);
+	put_str(a, "title", "Home Chooser");
+	put_str(a, "message", message);
+	jvalue_ref buttons = jarray_create(NULL);
+	jvalue_ref yes = jobject_create();
+	put_str(yes, "label", "Reboot");
+	put_str(yes, "onclick", "luna://" HC_SERVICE_ID "/rebootConfirmed");
+	jvalue_ref yes_params = jobject_create();
+	put_str(yes_params, "token", t->token);
+	jobject_set(yes, key_buf("params"), yes_params);
+	jarray_append(buttons, yes);
+	jvalue_ref no = jobject_create();
+	put_str(no, "label", "Later");
+	put_bool(no, "focus", true);
+	jarray_append(buttons, no);
+	jobject_set(a, key_buf("buttons"), buttons);
+	bool alert = reboot_notify("REBOOT_ASK", "luna://com.webos.notification/createAlert", a, 8);
+	j_release(&a);
+	const char *how = "alert";
+	if (!alert) {
+		t->live = false; /* nobody holds the token */
+		jvalue_ref toast = jobject_create();
+		put_str(toast, "sourceId", HC_APP_ID);
+		put_bool(toast, "noaction", true);
+		put_str(toast, "message", message);
+		bool shown = reboot_notify("REBOOT_ASK", "luna://com.webos.notification/createToast", toast, 8);
+		j_release(&toast);
+		if (!shown) {
+			send_error_for(msg, "rebootPrompt", "confirmFailed", "Could not ask the user: neither the alert nor the toast could be shown");
+			return true;
+		}
+		how = "toast";
+	}
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	put_bool(o, "pending", true);
+	put_str(o, "confirm", how);
+	send_reply(msg, o);
+	return true;
+}
+
+/* rebootConfirmed {token}: the user chose Reboot (the alert's button, or Home Chooser's dialog). */
+static bool on_reboot_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	const char *app = LSMessageGetApplicationID(msg);
+	/* Same rule as uninstallConfirmed: the notification service has no application id. */
+	if (app && app[0] && !hc_sender_ok(app)) {
+		LOGE("REFUSED", "rebootConfirmed from application id '%s'", app);
+		send_error(msg, "forbidden", "Only the confirmation may call this method");
+		return true;
+	}
+	if (geteuid() != 0) {
+		send_error(msg, "notRoot", "The service is not running as root");
+		return true;
+	}
+	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
+	char *token = req ? get_string(req, "token") : NULL;
+	j_release(&req);
+	RebootToken *t = NULL;
+	for (int i = 0; hc_token_ok(token) && i < TOKEN_SLOTS; i++) {
+		if (g_reboot_tokens[i].live && strcmp(g_reboot_tokens[i].token, token) == 0) t = &g_reboot_tokens[i];
+	}
+	g_free(token);
+	if (!t || g_get_monotonic_time() > t->expires) {
+		if (t) t->live = false;
+		LOGE("REFUSED", "rebootConfirmed with an unknown or expired token");
+		send_error(msg, "badToken", "The confirmation is unknown, used or expired");
+		return true;
+	}
+	t->live = false; /* one shot */
+	if (!reboot_pending()) {
+		send_error_for(msg, "rebootConfirmed", "notPending", "No restart is pending any more");
+		return true;
+	}
+	GString *out = g_string_new(NULL);
+	int code = luna_run(REBOOT_URI, "{\"reason\":\"remoteKey\"}", 1, 30, never_stop, out);
+	bool ok = code == 0 && hc_remove_reply_class(out->str) == 1;
+	LOGI("REBOOT", "%s (exit %d): %s", ok ? "accepted" : "refused", code, out->str);
+	g_string_free(out, TRUE);
+	if (ok) send_ok(msg);
+	else send_error_for(msg, "rebootConfirmed", "rebootFailed", "The TV did not accept the restart");
+	return true;
+}
+
 /* ---- registration ---- */
 
 static LSMethod methods[] = {
@@ -1303,6 +1471,8 @@ static LSMethod methods[] = {
 	{"closeById", on_launcher_close_by_id, LUNA_METHOD_FLAGS_NONE},
 	{"uninstall", on_launcher_uninstall, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
+	{"rebootPrompt", on_reboot_prompt, LUNA_METHOD_FLAGS_NONE},
+	{"rebootConfirmed", on_reboot_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
 };
 

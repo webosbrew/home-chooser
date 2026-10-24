@@ -37,6 +37,8 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 		backport: backport.applies ? backport : null,
 		readIcon: platform.readIcon,
 		rootLuna: platform.rootLuna,
-		uninstallConfirmed: platform.uninstallConfirmed
+		uninstallConfirmed: platform.uninstallConfirmed,
+		rebootPrompt: platform.rebootPrompt,
+		rebootConfirmed: platform.rebootConfirmed
 	};
 };

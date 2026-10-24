@@ -10,6 +10,12 @@
 #define HC_SERVICE_ID "org.webosbrew.homechooser.service"
 #ifndef HC_APP_DIR
 #define HC_APP_DIR "/media/developer/apps/usr/palm/applications/" HC_APP_ID
+/* The keyfilter worker's `status` output holds a line that is exactly `reboot=needed` (CR and
+ * blanks at the line ends are ignored; a substring of a longer line does not count). NULL: no. */
+bool hc_reboot_needed(const char *status_text);
+/* The text of the restart prompt for rebootPrompt's reason ("apply" or "remove"); NULL otherwise. */
+const char *hc_reboot_message(const char *reason);
+
 #endif
 #define HC_STATE_DIR "/var/lib/webosbrew/homechooser"
 #define HC_HOME_FILE HC_STATE_DIR "/home"
@@ -142,5 +148,11 @@ bool hc_luna_uri_allowed(const char *uri);
 
 /* A one-shot uninstall token: exactly HC_TOKEN_LEN lowercase hex digits. */
 bool hc_token_ok(const char *token);
+
+/* The keyfilter worker's `status` output holds a line that is exactly `reboot=needed` (CR and
+ * blanks at the line ends are ignored; a substring of a longer line does not count). NULL: no. */
+bool hc_reboot_needed(const char *status_text);
+/* The text of the restart prompt for rebootPrompt's reason ("apply" or "remove"); NULL otherwise. */
+const char *hc_reboot_message(const char *reason);
 
 #endif

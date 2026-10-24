@@ -4,20 +4,25 @@ import {ENTRY_SCRIPT, GENERATED_FLAG, KEYFILTER_FLAG, ensureEntryCommand, keyfil
 
 const RUN_WORKER = 'keyfilterApply';
 const RUN_WORKER_SAM = 'keyfilterApplySam';
+const STOP = 'keyfilterStop';
+const REFRESH = 'keyfilterRefresh';
 const ENSURE = ensureEntryCommand();
 const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no matched result from DB'};
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
 const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSettings', {category: 'general', settings: {defaultApps}}];
 
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
-// script's `status` prints; `installed` is the enable flag file, `entry` the init.d link; running
-// the worker flips `mounted`, `stop` flips it back.
-const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true, stopFails = false, failLuna = null, generated = null, optin = false} = {}) => {
+// script's `status` prints; `installed` is the enable flag file, `entry` the init.d link. `mounted`
+// only changes when the test says so (a boot mounts the patch; the app never does).
+const fakeTV = ({record, match = '9.2.1', dataMissing = false, refreshFails = false, failLuna = null, generated = null, optin = false} = {}) => {
 	const calls = [];
 	const tv = {installed: false, entry: 'none', mounted: false, release: null, generatedOptIn: optin};
+	// the worker's reboot line: the flag is on and nothing is mounted (a set matches), or the flag is off and something is
 	const statusText = () => {
-		if (dataMissing) return 'data=missing\nmounted=no\nmatch=none\n';
-		return tv.mounted ? `mounted=yes\nrelease=${tv.release}\n` : `mounted=no\nmatch=${match || 'none'}\ngenerated=${generated || ''}\noptin=${tv.generatedOptIn ? 'yes' : 'no'}\n`;
+		if (dataMissing) return 'data=missing\nmounted=no\nmatch=none\nreboot=no\n';
+		if (tv.mounted) return `mounted=yes\nrelease=${tv.release}\nreboot=${tv.installed ? 'no' : 'needed'}\n`;
+		const can = Boolean(match) || (generated === 'possible' && tv.generatedOptIn);
+		return `mounted=no\nmatch=${match || 'none'}\ngenerated=${generated || ''}\noptin=${tv.generatedOptIn ? 'yes' : 'no'}\nreboot=${tv.installed && can ? 'needed' : 'no'}\n`;
 	};
 	const rootLuna = async (uri, payload) => {
 		calls.push(['luna', uri, payload]);
@@ -44,19 +49,11 @@ const fakeTV = ({record, match = '9.2.1', dataMissing = false, mountWorks = true
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
 		}
-		if (command === RUN_WORKER || command === RUN_WORKER_SAM) {
-			if (mountWorks) {
-				tv.mounted = true;
-				tv.release = match || 'generated';
-			}
+		// the app never mounts, unmounts or restarts anything: these throw so a test sees the call
+		if (command === REFRESH) {
+			if (refreshFails) throw new ServiceError({returnValue: false, errorText: 'exit 1', stderrString: 'refresh failed'});
 			return {stdout: '', stderr: ''};
 		}
-		if (command === keyfilterCommand('stop')) {
-			if (stopFails) throw new ServiceError({returnValue: false, errorText: 'exit 1', stderrString: 'umount: busy'});
-			tv.mounted = false;
-			return {stdout: '', stderr: ''};
-		}
-		if (command === 'restartSam') return {stdout: '', stderr: ''};
 		throw new Error('unexpected command ' + command);
 	};
 	const writeFile = async (path, text) => {
@@ -109,12 +106,12 @@ describe('status', () => {
 });
 
 describe('install', () => {
-	test('absent key: create it, enable and link, run the worker, which restarts sam first', async () => {
+	test('absent key: create it, enable and link; no worker run, no restart; a reboot finishes it', async () => {
 		const tv = fakeTV();
-		const notices = [];
-		const res = await backport(tv).install({onNotice: (n) => notices.push(n)});
+		const res = await backport(tv).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(true);
+		expect(res.rebootNeeded).toBe(true);
 		expect(tv.record()).toEqual({});
 		expect(tv.calls.filter((c) => c[0] === 'luna').map((c) => [c[1], c[2]])).toEqual([GET, SET({})]);
 		const seq = kinds(tv);
@@ -122,37 +119,34 @@ describe('install', () => {
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
 		expect(at('setSystemSettings')).toBeLessThan(at('write ' + KEYFILTER_FLAG));
 		expect(at('write ' + KEYFILTER_FLAG)).toBeLessThan(at(ENSURE));
-				expect(at(ENSURE)).toBeLessThan(at(RUN_WORKER_SAM));
-		expect(seq).not.toContain(RUN_WORKER);
-		// sam is restarted inside the worker's run, not by a call after it that a closed panel would never make
-		expect(seq).not.toContain('restartSam');
+		[RUN_WORKER, RUN_WORKER_SAM, STOP, REFRESH, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
-		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: true, release: '9.2.1'});
-		expect(notices).toHaveLength(1);
+		expect(tv.tv.installed).toBe(true);
+		expect(tv.tv.entry).toBe('ok');
+		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: false, rebootNeeded: true});
 	});
 
-	test('record present: no write, no sam restart', async () => {
+	test('record present: no write, no worker run, no sam restart', async () => {
 		const tv = fakeTV({record: {home: 'x.y', kidsApp: 'k'}});
 		const res = await backport(tv, [9, 2, 1]).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(false);
+		expect(res.rebootNeeded).toBe(true);
 		expect(tv.record()).toEqual({home: 'x.y', kidsApp: 'k'});
-		expect(kinds(tv)).not.toContain('setSystemSettings');
-		expect(kinds(tv)).not.toContain('restartSam');
-		expect(kinds(tv)).toContain(RUN_WORKER);
+		const seq = kinds(tv);
+		expect(seq).not.toContain('setSystemSettings');
+		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 	});
 
-	test('record present, sam restart asked for: the same one run of the worker, flag and link first', async () => {
-		const tv = fakeTV({record: {home: 'x.y'}});
-		const res = await backport(tv, [8, 3, 0]).install({samRestart: true});
+	test('patch mounted but the flag was off (restored, not yet restarted): the flag comes back and no reboot is needed', async () => {
+		const tv = fakeTV({record: {}, match: '8.3.0'});
+		tv.tv.mounted = true;
+		tv.tv.release = '8.3.0';
+		const res = await backport(tv, [8, 3, 0]).install();
 		expect(res.ok).toBe(true);
-		const seq = kinds(tv);
-		expect(seq.filter((x) => x === RUN_WORKER_SAM)).toHaveLength(1);
-		expect(seq).not.toContain(RUN_WORKER);
-		expect(seq).not.toContain('restartSam');
-		expect(seq.indexOf('write ' + KEYFILTER_FLAG)).toBeLessThan(seq.indexOf(RUN_WORKER_SAM));
-		expect(seq.indexOf(ENSURE)).toBeLessThan(seq.indexOf(RUN_WORKER_SAM));
-		expect(tv.record()).toEqual({home: 'x.y'});
+		expect(tv.tv.installed).toBe(true);
+		expect(res.rebootNeeded).toBe(false);
+		expect(res.status).toMatchObject({mounted: true, release: '8.3.0'});
 	});
 
 	test('no matching set: fails before changing anything', async () => {
@@ -182,14 +176,6 @@ describe('install', () => {
 		expect(res.status.release).toBe('8.3.0');
 	});
 
-	test('a script that does not mount is an error, with the step log', async () => {
-		const tv = fakeTV({record: {}, mountWorks: false});
-		const res = await backport(tv).install();
-		expect(res.ok).toBe(false);
-		expect(res.errors[0]).toMatch(/did not mount/);
-		expect(res.steps.length).toBeGreaterThan(4);
-	});
-
 	test('a settings error other than an absent key stops before the copy', async () => {
 		const tv = fakeTV({failLuna: {returnValue: false, errorText: 'Access denied'}});
 		const res = await backport(tv).install();
@@ -202,25 +188,38 @@ describe('install', () => {
 });
 
 describe('remove', () => {
-	test('delete the flag, then stop; the init.d link stays', async () => {
+	test('delete the flag, refresh the baked id, never stop; the init.d link stays; a mounted patch needs a reboot', async () => {
 		const tv = fakeTV({record: {}});
 		await backport(tv).install();
+		tv.tv.mounted = true; // the next boot mounted it
+		tv.tv.release = '9.2.1';
 		tv.calls.length = 0;
 		const res = await backport(tv).remove();
 		expect(res.ok).toBe(true);
 		const seq = kinds(tv);
 		expect(seq[0]).toBe('rm ' + KEYFILTER_FLAG);
-		expect(seq[1]).toBe('keyfilterStop');
+		expect(seq[1]).toBe(REFRESH);
+		expect(seq).not.toContain(STOP);
+		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + KEYFILTER_FLAG]);
-		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: false});
+		expect(res.rebootNeeded).toBe(true);
+		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: true, rebootNeeded: true});
 	});
 
-	test('a failed stop is reported but the flag is still deleted', async () => {
-		const tv = fakeTV({record: {}, stopFails: true});
+	test('nothing mounted: no reboot needed', async () => {
+		const tv = fakeTV({record: {}});
+		await backport(tv).install();
+		const res = await backport(tv).remove();
+		expect(res.ok).toBe(true);
+		expect(res.rebootNeeded).toBe(false);
+	});
+
+	test('a failed refresh is reported but the flag is still deleted', async () => {
+		const tv = fakeTV({record: {}, refreshFails: true});
 		await backport(tv).install();
 		const res = await backport(tv).remove();
 		expect(res.ok).toBe(false);
-		expect(res.errors[0]).toMatch(/umount: busy/);
+		expect(res.errors[0]).toMatch(/refresh failed/);
 		expect(tv.tv.installed).toBe(false);
 	});
 });
@@ -238,17 +237,21 @@ describe('generated fallback', () => {
 		expect(tv.calls.filter((c) => c[0] === 'write')).toEqual([]);
 	});
 
-	test('opt-in allows install; removal of opt-in precedes disabling and stopping', async () => {
+	test('opt-in allows install; removal of opt-in precedes disabling and refreshing', async () => {
 		const tv = fakeTV({match: null, generated: 'possible'});
 		const bp = backport(tv);
 		expect((await bp.setGenerated(true)).ok).toBe(true);
 		expect(tv.tv.generatedOptIn).toBe(true);
-		expect((await bp.install()).ok).toBe(true);
+		const inst = await bp.install();
+		expect(inst.ok).toBe(true);
+		expect(inst.rebootNeeded).toBe(true);
+		tv.tv.mounted = true; // the next boot
+		tv.tv.release = 'generated';
 		expect((await bp.status()).status).toMatchObject({mounted: true, release: 'generated', generatedOptIn: true});
 		tv.calls.length = 0;
 		await bp.setGenerated(false);
 		await bp.remove();
-		expect(kinds(tv).slice(0, 3)).toEqual(['rm ' + GENERATED_FLAG, 'rm ' + KEYFILTER_FLAG, 'keyfilterStop']);
+		expect(kinds(tv).slice(0, 3)).toEqual(['rm ' + GENERATED_FLAG, 'rm ' + KEYFILTER_FLAG, REFRESH]);
 		expect(tv.tv.generatedOptIn).toBe(false);
 	});
 
@@ -256,5 +259,13 @@ describe('generated fallback', () => {
 		const tv = fakeTV({match: null, generated: 'refused', optin: true});
 		expect((await backport(tv).install()).ok).toBe(false);
 		expect(tv.tv.mounted).toBe(false);
+	});
+});
+
+describe('parseStatus reboot', () => {
+	test('reboot=needed', () => {
+		expect(parseStatus('mounted=no\nmatch=7.6.0\nreboot=needed\n').rebootNeeded).toBe(true);
+		expect(parseStatus('mounted=no\nmatch=7.6.0\nreboot=no\n').rebootNeeded).toBe(false);
+		expect(parseStatus('mounted=yes\nrelease=9.2.1\n').rebootNeeded).toBe(false);
 	});
 });

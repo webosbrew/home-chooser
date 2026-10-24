@@ -1,7 +1,7 @@
-// A marker for the one step that can take the window down: on webOS 6 to 9 the first choice
-// restarts the compositor so the patch loads, and that may close this overlay before the result
-// is known. The marker says what was being set; the next launch reads the real state, shows the
-// result once and clears it.
+// A marker left by earlier versions, for the one step that could take the window down: the first
+// choice on webOS 6 to 9 restarted the compositor so the patch loaded. Nothing writes it any more
+// (no step restarts the compositor while the TV runs); the startup still reads an old one, shows
+// its result once and clears it.
 export const PENDING_KEY = 'homechooser.pending';
 
 const store = () => {

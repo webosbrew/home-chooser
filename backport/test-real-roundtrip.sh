@@ -4,7 +4,7 @@
 # stubbed. For each release it checks that status finds the set by hash; that apply patches
 # copies and mounts them over every target; that the id baked into Settings.qml follows the
 # installed state of the stored choice (installed, not installed); that refresh and refresh stock
-# rewrite it in place; that the patched copies reverse-patch back to the stock bytes; that stop
+# rewrite it in place without restarting the compositor (only `refresh restart` does); that the patched copies reverse-patch back to the stock bytes; that stop
 # unmounts everything; and that the stock files were never touched.
 #
 # usage: test-real-roundtrip.sh [shell] [release=rootfs ...]
@@ -34,6 +34,17 @@ if [ $# -eq 0 ]; then
            "9.2.4=$P/webos-hypervisor/build/k8lpn2-ombre/rootfs"
 fi
 
+# seq: the systemctl calls that change something, in order; RESTART: what every release's
+# lsm-ready.service gives (docs/key-filter-backport.md, "Restarting the compositor")
+seq() { grep '^systemctl ' "$T/cmds" | grep -v '^systemctl is-active '; }
+RESTART="systemctl stop webapp-mgr.service
+systemctl stop booster.service
+systemctl stop maliit-server.service
+systemctl restart surface-manager-daemon.service
+systemctl start webapp-mgr.service
+systemctl start booster.service
+systemctl start maliit-server.service"
+
 entries() { tr '{},' '\n\n\n' < "$1" | sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'; }
 
 for pair in "$@"; do
@@ -62,7 +73,7 @@ STUB
 echo "umount \$*" >> "$T/cmds"
 grep -vF " \$1 " "$T/mounts" > "$T/mounts.new"; mv "$T/mounts.new" "$T/mounts"
 STUB
-    printf '#!/bin/sh\necho "systemctl $*" >> %s/cmds\n' "$T" > "$T/bin/systemctl"
+    printf '#!/bin/sh\necho "systemctl $*" >> %s/cmds\n[ "$1" = is-active ] && echo active\nexit 0\n' "$T" > "$T/bin/systemctl"
     cat > "$T/bin/luna-send" <<STUB
 #!/bin/sh
 [ "\$1" = -a ] && shift 2
@@ -73,7 +84,7 @@ STUB
     export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$root" HOMECHOOSER_WORK="$T/work" HOMECHOOSER_LOG="$T/log" \
            HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" HOMECHOOSER_UMOUNT="$T/bin/umount" \
            HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" \
-           HOMECHOOSER_SAM_WAIT=0
+           HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
     SETTINGS=/usr/lib/qml/WebOSCompositorBase/global/Settings.qml
     stage=$T/work/stage$SETTINGS
     w() { $SH "$HERE/homechooser-keyfilter" "$@" > "$T/out" 2>&1; }
@@ -83,6 +94,11 @@ STUB
     w apply
     check "$rel: apply exits 0 and mounts every target" test "$(grep -c '^mount' "$T/cmds")" = "$(grep -c . "$T/entries" | awk '{print $1 / 3}')"
     check "$rel: compositor restarted once" test "$(grep -c '^systemctl restart' "$T/cmds")" = 1
+    # the clients come from this firmware's own lsm-ready.service: stopped before, started after
+    check "$rel: the firmware's clients around the compositor restart" test "$(seq)" = "$RESTART"
+    # the bind sources live under WORK (/tmp), not in the app directory, so they outlive an uninstall
+    check "$rel: every mount source is under the work directory" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = "$(grep -c . "$T/entries" | awk '{print $1 / 3}')"
+    check "$rel: no mount source in the data (app) directory" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
     check "$rel: choice baked in (installed)" has 'configuredHomeAppId: "my.home"' "$stage"
     # reverse-patch the staged copies (placeholder back in) and compare with the real stock bytes
     mkdir -p "$T/rev"
@@ -99,16 +115,24 @@ STUB
     : > "$T/cmds"
     w refresh stock
     check "$rel: refresh stock empties the id" has 'configuredHomeAppId: ""' "$stage"
-    check "$rel: and restarts the compositor" has 'systemctl restart' "$T/cmds"
+    check "$rel: and does not restart the compositor" test -z "$(seq)"
     w refresh
     check "$rel: refresh puts the installed choice back" has 'configuredHomeAppId: "my.home"' "$stage"
+    check "$rel: refresh does not restart the compositor" test -z "$(seq)"
     : > "$T/installed"
     w refresh
     check "$rel: refresh with the app gone bakes stock" has 'configuredHomeAppId: ""' "$stage"
+    check "$rel: still no restart" test -z "$(seq)"
+    echo my.home > "$T/installed"
+    : > "$T/cmds"
+    w refresh restart
+    check "$rel: refresh restart restarts the compositor with its clients" test "$(seq)" = "$RESTART"
+    : > "$T/installed"
+    w refresh
     : > "$T/cmds"
     w stop
     check "$rel: stop unmounts everything" test ! -s "$T/mounts"
-    check "$rel: and restarts the compositor" has 'systemctl restart' "$T/cmds"
+    check "$rel: and restarts the compositor" test "$(seq)" = "$RESTART"
     : > "$T/cmds"
     w stop
     check "$rel: second stop does nothing" test ! -s "$T/cmds"
@@ -133,6 +157,7 @@ STUB
     touch "$T/generated-flag"
     w apply
     check "$rel: real generator apply succeeds" test "$?" = 0
+    check "$rel: generated mount sources are under the work directory, not the data directory" test "$(grep '^mount --bind' "$T/cmds" | grep -vc "^mount --bind $T/work/stage/")" = 0
     check "$rel: generated choice baked in" has 'configuredHomeAppId: "my.home"' "$stage"
     w status
     check "$rel: generated release" has 'release=generated' "$T/out"
@@ -142,8 +167,10 @@ STUB
     check "$rel: generated refresh stock clears id" has 'configuredHomeAppId: ""' "$stage"
     w refresh
     check "$rel: generated refresh restores id" has 'configuredHomeAppId: "my.home"' "$stage"
+    : > "$T/cmds"
     w stop
     check "$rel: generated stop unmounts everything" test ! -s "$T/mounts"
+    check "$rel: generated stop restarts the compositor with its clients" test "$(seq)" = "$RESTART"
     check "$rel: generated manifest removed" test ! -e "$T/work/generated/manifest.json"
     : > "$T/after"
     while read -r p && read -r h && read -r d; do sha256sum "$root$p" >> "$T/after"; done < "$T/entries"

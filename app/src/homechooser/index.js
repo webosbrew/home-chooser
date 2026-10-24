@@ -304,8 +304,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				if (previous !== appId) await closeApp(run, res, previous);
 
 				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
-				// (`deferSamRestart`: the caller is about to install the backport, whose worker does it, see
-				// backport.install; the restart closes this panel, so it may not come before that call)
+				// (`deferSamRestart`: the caller passes it only when a TV restart will follow, because the patch
+				// is not mounted yet and is mounted at the next boot; that restart restarts sam as well)
 				if (needsSamRestart(state) && deferSamRestart) {
 					res.samRestartDeferred = true;
 				} else if (needsSamRestart(state)) {

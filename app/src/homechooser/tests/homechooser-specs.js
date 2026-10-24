@@ -208,7 +208,7 @@ describe('apply', () => {
 		expect(res.needsKeyFilterBackport).toBe(true);
 	});
 
-	test('6.6.0, record absent, sam restart deferred: nothing restarts, the caller is told', async () => {
+	test('6.6.0, record absent, sam restart deferred (a TV restart follows): nothing restarts, the caller is told', async () => {
 		const tv = fakeTV();
 		const notices = [];
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {deferSamRestart: true, onNotice: (n) => notices.push(n)});

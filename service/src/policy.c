@@ -68,9 +68,8 @@ static const hc_command COMMANDS[] = {
 	{"restartSam", {"/bin/systemctl", "restart", "sam", NULL}, 60, false, false},
 	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
 	{"keyfilterStatus", {"/bin/sh", HC_KEYFILTER_SCRIPT, "status", NULL}, 20, false, false},
+	/* keyfilterApply and keyfilterStop restart the compositor: debug/manual only, the app never calls them */
 	{"keyfilterApply", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", NULL}, 90, false, false},
-	/* restarts sam first, inside the one root-side run, so it survives the panel being closed by that restart */
-	{"keyfilterApplySam", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", "samfirst", NULL}, 150, false, false},
 	{"keyfilterStop", {"/bin/sh", HC_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
 	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
 	/* the launcher API's permission group and API permissions (backport/homechooser-access) */
@@ -318,6 +317,8 @@ int hc_remove_reply_class(const char *text)
 
 static const char *const LUNA_URIS[] = {
 	"luna://com.webos.notification/createAlert",
+	"luna://com.webos.notification/createToast",
+	"luna://com.webos.service.tvpower/power/reboot",
 	"luna://com.webos.applicationManager/launch",
 	"luna://com.webos.applicationManager/removeLaunchPoint",
 	"luna://com.webos.applicationManager/listApps",
@@ -357,4 +358,33 @@ bool hc_token_ok(const char *token)
 	for (int i = 0; i < HC_TOKEN_LEN; i++)
 		if (!((token[i] >= '0' && token[i] <= '9') || (token[i] >= 'a' && token[i] <= 'f'))) return false;
 	return true;
+}
+
+/* ---- reboot prompt ---- */
+
+bool hc_reboot_needed(const char *text)
+{
+	if (!text) return false;
+	const char *want = "reboot=needed";
+	size_t wl = strlen(want);
+	const char *p = text;
+	while (*p) {
+		const char *end = strchr(p, '\n');
+		size_t len = end ? (size_t)(end - p) : strlen(p);
+		const char *a = p, *b = p + len;
+		while (a < b && (*a == ' ' || *a == '\t' || *a == '\r')) a++;
+		while (b > a && (b[-1] == ' ' || b[-1] == '\t' || b[-1] == '\r')) b--;
+		if ((size_t)(b - a) == wl && memcmp(a, want, wl) == 0) return true;
+		if (!end) break;
+		p = end + 1;
+	}
+	return false;
+}
+
+const char *hc_reboot_message(const char *reason)
+{
+	if (!reason) return NULL;
+	if (strcmp(reason, "apply") == 0) return "Restart the TV to finish setting up the Home button.";
+	if (strcmp(reason, "remove") == 0) return "Restart the TV to finish restoring LG Home.";
+	return NULL;
 }

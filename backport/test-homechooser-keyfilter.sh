@@ -71,9 +71,18 @@ echo "umount \$*" >> "$T/cmds"
 [ "\$1" = "-l" ] && shift
 grep -vF " \$1 " "$T/mounts" > "$T/mounts.new"; mv "$T/mounts.new" "$T/mounts"
 STUB
+    # is-active answers active unless $T/inactive-<unit> exists; $T/fail-<verb>-<unit> makes that call fail;
+    # $T/slow-restart makes a restart take a second.
     cat > "$T/bin/systemctl" <<STUB
 #!/bin/sh
 echo "systemctl \$*" >> "$T/cmds"
+if [ "\$1" = is-active ]; then
+    if [ -f "$T/inactive-\$2" ]; then echo inactive; exit 3; fi
+    echo active; exit 0
+fi
+[ "\$1" = restart ] && [ -f "$T/slow-restart" ] && sleep 1
+[ -f "$T/fail-\$1-\$2" ] && exit 1
+exit 0
 STUB
     echo my.home > "$T/installed"
     cat > "$T/bin/luna-send" <<'STUB'
@@ -122,7 +131,7 @@ STUB
     sed -i "s|@T@|$T|" "$T/bin/node"
     : > "$T/generator.js"
     export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" \
-           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_NO_SETS_FLAG="$T/debug-no-sets"
+           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag" HOMECHOOSER_NO_SETS_FLAG="$T/debug-no-sets"
     unset HOMECHOOSER_NO_SETS
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
@@ -134,6 +143,17 @@ STUB
 run() { $SH "$SCRIPT" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 rc() { [ "$(cat "$T/rc")" = "$1" ]; }
 ncmds() { grep -c "^$1" "$T/cmds"; }
+# seq: the systemctl calls that change something, in order (is-active left out)
+seq() { grep '^systemctl ' "$T/cmds" | grep -v '^systemctl is-active '; }
+# the compositor restart with every dependant running: stop the clients, restart, start them again
+RESTART="systemctl stop webapp-mgr.service
+systemctl stop booster.service
+systemctl stop maliit-server.service
+systemctl restart surface-manager-daemon.service
+systemctl start webapp-mgr.service
+systemctl start booster.service
+systemctl start maliit-server.service"
+restarted() { test "$(seq)" = "$RESTART"; }
 
 echo "== matching set applied ($SH)"
 setup
@@ -144,7 +164,10 @@ check "b.js patched in the stage" has 'global.isHomeApp(x)' "$T/work/stage/usr/l
 check "stock a.qml untouched" cmp -s "$T/orig/a.qml" "$T/root/usr/lib/qml/a.qml"
 check "two bind mounts" test "$(ncmds mount)" = 2
 check "bind mount of the stage over the original" has "mount --bind $T/work/stage/usr/lib/qml/a.qml $T/root/usr/lib/qml/a.qml" "$T/cmds"
-check "compositor restarted once" test "$(grep -c '^systemctl restart surface-manager-daemon.service$' "$T/cmds")" = 1
+check "compositor restarted once, clients stopped before and started after" restarted
+check "each client asked about first" test "$(ncmds 'systemctl is-active')" = 3
+check "restart output reaches the caller" has 'surface-manager-daemon.service restarted' "$T/out"
+check "no restart output file left" test -z "$(ls "$T/work" | grep '^restart\.')"
 check "log names the set" has 'diff set 1.0 matches' "$T/log"
 check "no choice: placeholder replaced by an empty id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
 check "placeholder gone" hasnt '@HOMECHOOSER_HOME@' "$T/work/stage/usr/lib/qml/a.qml"
@@ -164,12 +187,24 @@ run refresh
 check "exit 0" rc 0
 check "mounted copy updated" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 check "same inode" test "$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)" = "$inode"
-check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+check "no restart, no systemctl call at all" test ! -s "$T/cmds"
+check "log says the running compositor keeps its id" has 'configured home updated; the running compositor keeps its loaded id until the next start (the settings record is read first)' "$T/log"
 rm -f "${T:?}/home"
 : > "$T/cmds"
 run refresh
 check "choice removed: id cleared" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
-check "restart again" has 'systemctl restart' "$T/cmds"
+check "still no restart" test ! -s "$T/cmds"
+printf 'my.home\n' > "$T/home"
+: > "$T/cmds"
+run refresh restart
+check "refresh restart: exit 0" rc 0
+check "refresh restart: copy updated" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
+check "refresh restart: compositor restarted" restarted
+: > "$T/cmds"
+run refresh restart
+check "refresh restart with nothing changed: no restart" test ! -s "$T/cmds"
+rm -f "${T:?}/home"
+run refresh
 
 echo "== already mounted is a no-op"
 : > "$T/cmds"
@@ -183,7 +218,7 @@ run stop
 check "exit 0" rc 0
 check "two umounts" test "$(ncmds umount)" = 2
 check "mounts empty" test ! -s "$T/mounts"
-check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+check "compositor restarted, clients around it" test "$(seq)" = "$RESTART"
 check "stage removed" test ! -d "$T/work/stage"
 : > "$T/cmds"
 run stop
@@ -305,7 +340,7 @@ run
 : > "$T/cmds"
 run refresh stock
 check "stock refresh clears the id although the choice file is there" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
-check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
+check "no restart" test ! -s "$T/cmds"
 : > "$T/cmds"
 run refresh stock
 check "second stock refresh: nothing to do" test ! -s "$T/cmds"
@@ -315,10 +350,17 @@ check "plain refresh brings the choice back" has 'configuredHomeAppId: "my.home"
 : > "$T/cmds"
 run refresh
 check "plain refresh with the app gone bakes stock" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
-check "restarted for it" has 'systemctl restart' "$T/cmds"
+check "no restart for it" test ! -s "$T/cmds"
 : > "$T/cmds"
 run refresh stock
 check "stock refresh when already stock: no restart" test ! -s "$T/cmds"
+printf 'my.home\n' > "$T/home"
+echo my.home > "$T/installed"
+run refresh
+: > "$T/cmds"
+run refresh stock restart
+check "stock restart: id cleared" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
+check "stock restart: compositor restarted" restarted
 rm -rf "${T:?}"
 
 echo "== refresh norestart updates the copy and leaves the compositor"
@@ -334,7 +376,7 @@ check "exit 0" rc 0
 check "copy carries the new id" has 'configuredHomeAppId: "other.home"' "$T/work/stage/usr/lib/qml/a.qml"
 check "same inode" test "$(ls -i "$T/work/stage/usr/lib/qml/a.qml" | cut -d' ' -f1)" = "$inode"
 check "no restart" test ! -s "$T/cmds"
-check "log says the compositor was left" has 'compositor not restarted' "$T/log"
+check "log says the running compositor keeps its id" has 'the running compositor keeps its loaded id' "$T/log"
 : > "$T/cmds"
 run refresh norestart
 check "unchanged: nothing to do" test ! -s "$T/cmds"
@@ -374,6 +416,8 @@ check "exit 0" rc 0
 check "sam restarted" has 'systemctl restart sam' "$T/cmds"
 check "compositor restarted" has 'systemctl restart surface-manager-daemon.service' "$T/cmds"
 check "sam first, compositor after" test "$(grep -n '^systemctl restart sam$' "$T/cmds" | cut -d: -f1)" -lt "$(grep -n '^systemctl restart surface-manager-daemon.service$' "$T/cmds" | cut -d: -f1)"
+check "sam, then the compositor restart with its clients" test "$(seq)" = "systemctl restart sam
+$RESTART"
 check "mounted" test "$(ncmds mount)" = 2
 rm -rf "${T:?}"
 
@@ -390,6 +434,142 @@ echo "== plain apply never restarts sam"
 setup
 run apply
 check "no sam restart" hasnt 'systemctl restart sam' "$T/cmds"
+rm -rf "${T:?}"
+
+echo "== the compositor's clients come from the firmware's lsm-ready.service"
+setup
+mkdir -p "$T/root/lib/systemd/system" "$T/root/etc/systemd/system"
+printf '[Service]\nType=oneshot\nExecStart=/bin/systemctl stop x.service\nExecStart=/bin/systemctl start x.service\nExecStart=/bin/systemctl stop y@1.service\nExecStart=/bin/systemctl start y@1.service\nRemainAfterExit=yes\n' > "$T/root/lib/systemd/system/lsm-ready.service"
+run
+check "lib unit: its start lines, in order" test "$(seq)" = "systemctl stop x.service
+systemctl stop y@1.service
+systemctl restart surface-manager-daemon.service
+systemctl start x.service
+systemctl start y@1.service"
+run stop
+printf 'ExecStart=/bin/systemctl stop z.service\nExecStart=/bin/systemctl start z.service\n' > "$T/root/etc/systemd/system/lsm-ready.service"
+: > "$T/cmds"
+run
+check "etc unit wins over lib, as in systemd" test "$(seq)" = "systemctl stop z.service
+systemctl restart surface-manager-daemon.service
+systemctl start z.service"
+run stop
+printf '[Service]\nExecStart=/bin/true\n' > "$T/root/etc/systemd/system/lsm-ready.service"
+rm "$T/root/lib/systemd/system/lsm-ready.service"
+: > "$T/cmds"
+run
+check "a unit without start lines: the default clients" restarted
+run stop
+: > "$T/cmds"
+HOMECHOOSER_DEPENDANTS= run
+check "empty override: the compositor alone" test "$(seq)" = "systemctl restart surface-manager-daemon.service"
+rm -rf "${T:?}"
+
+echo "== only running clients are stopped and started again"
+setup
+touch "$T/inactive-booster.service"
+run
+check "exit 0" rc 0
+check "booster left alone" test "$(seq)" = "systemctl stop webapp-mgr.service
+systemctl stop maliit-server.service
+systemctl restart surface-manager-daemon.service
+systemctl start webapp-mgr.service
+systemctl start maliit-server.service"
+rm -rf "${T:?}"
+
+echo "== a failed compositor restart still starts the clients"
+setup
+touch "$T/fail-restart-surface-manager-daemon.service"
+run
+check "exit 1" rc 1
+check "clients started anyway" restarted
+check "logged" has 'ERROR: could not restart surface-manager-daemon.service' "$T/log"
+rm -rf "${T:?}"
+setup
+touch "$T/fail-stop-webapp-mgr.service" "$T/fail-start-booster.service"
+run
+check "failed start: exit 1" rc 1
+check "a failed stop or start goes on with the rest" restarted
+check "stop failure logged" has 'ERROR: could not stop webapp-mgr.service' "$T/log"
+check "start failure logged" has 'ERROR: could not start booster.service' "$T/log"
+rm -rf "${T:?}"
+
+echo "== a worker killed during the restart does not leave the clients stopped"
+setup
+run
+: > "$T/cmds"
+touch "$T/slow-restart"
+echo my.home > "$T/home"
+# as Home Chooser's service runs it: output into a pipe, the worker SIGKILLed at a timeout and the
+# pipe closed, so anything still writing to it gets SIGPIPE
+mkfifo "$T/pipe"
+cat "$T/pipe" > /dev/null &
+rpid=$!
+$SH "$SCRIPT" refresh restart > "$T/pipe" 2>&1 &
+wpid=$!
+n=0
+while ! grep -q '^systemctl restart' "$T/cmds" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+kill -9 "$wpid" "$rpid" 2>/dev/null
+wait "$wpid" "$rpid" 2>/dev/null
+check "killed while restarting" hasnt 'systemctl start maliit-server.service' "$T/cmds"
+n=0
+while ! grep -q '^systemctl start maliit-server.service' "$T/cmds" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+check "the restart still ran to the end" restarted
+check "and logged it" has 'starting maliit-server.service' "$T/log"
+rm -rf "${T:?}"
+
+echo "== status: reboot=needed or reboot=no"
+reboot_of() { run status; grep '^reboot=' "$T/out"; }
+setup
+check "no flag, unmounted: no" test "$(reboot_of)" = reboot=no
+check "status prints the line once" test "$(grep -c '^reboot=' "$T/out")" = 1
+touch "$T/keyfilter-flag"
+check "flag, unmounted, set matches: needed" test "$(reboot_of)" = reboot=needed
+check "existing lines unchanged" has 'match=1.0' "$T/out"
+run apply
+check "flag, mounted: no" test "$(reboot_of)" = reboot=no
+rm "$T/keyfilter-flag"
+check "no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
+check "mounted lines unchanged" has 'release=1.0' "$T/out"
+run stop
+check "no flag, stopped: no" test "$(reboot_of)" = reboot=no
+rm -rf "${T:?}"
+setup
+touch "$T/keyfilter-flag"
+echo changed >> "$T/root/usr/lib/qml/b.js"
+check "flag, unmounted, no match, no generated: no" test "$(reboot_of)" = reboot=no
+touch "$T/generator-success"
+echo possible >> "$T/generator.js"
+check "flag, no match, generated possible, no opt-in: no" test "$(reboot_of)" = reboot=no
+touch "$T/generated-flag"
+check "flag, no match, generated possible, opted in: needed" test "$(reboot_of)" = reboot=needed
+check "generated lines unchanged" has 'generated=possible' "$T/out"
+rm "$T/generator-success"
+echo changed >> "$T/generator.js"
+check "flag, no match, generated refused, opted in: no" test "$(reboot_of)" = reboot=no
+rm -rf "${T:?}"
+setup
+touch "$T/keyfilter-flag" "$T/generated-flag" "$T/generator-success" "$T/debug-no-sets"
+run apply
+check "generated: flag, mounted: no" test "$(reboot_of)" = reboot=no
+rm "$T/keyfilter-flag"
+check "generated: no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
+rm -rf "${T:?}"
+
+echo "== the mount sources are under the work directory, not the app directory"
+setup
+run
+check "reviewed: every bind source is under WORK" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = 2
+check "reviewed: no mount source under DATA" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
+check "reviewed: every /proc/mounts source is under WORK" test "$(grep -c "^$T/work/stage/" "$T/mounts")" = 2
+rm -rf "$T/data"
+check "the app directory can go: mounted copies stay" test -f "$T/work/stage/usr/lib/qml/a.qml"
+rm -rf "${T:?}"
+setup
+touch "$T/generated-flag" "$T/generator-success"
+HOMECHOOSER_NO_SETS=1 run apply
+check "generated: every bind source is under WORK" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = 2
+check "generated: no mount source under DATA" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
 rm -rf "${T:?}"
 
 echo "== generated fallback requires opt-in and respects refusals"

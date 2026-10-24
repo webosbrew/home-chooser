@@ -10,7 +10,9 @@ built. Paths are relative to each firmware's `rootfs/`.
 
 The patch is shipped as diffs in [`backport/`](../backport), one directory per release, and applied
 at boot by `backport/homechooser-keyfilter`, which the init.d entry `backport/homechooser` runs (see
-[Deployment](#deployment) and [Persistence](settings-app.md#persistence)).
+[Deployment](#deployment) and [Persistence](settings-app.md#persistence)). The app never mounts
+the patch or restarts the compositor while the TV runs: it enables the backport and asks for a
+reboot ([Install and remove from the app](#install-and-remove-from-the-app)).
 
 ## Coverage
 
@@ -58,7 +60,7 @@ Reviewed hash-keyed sets always come first. On webOS 6 to 9 with no matching set
 `Settings.getHomeAppId`, `isHomeApp` and `launchHome` behavior as the reviewed sets; it replaces
 stock-id comparisons, launches and values and exposes the helpers to the key filter. The worker
 bakes the stored choice into the copies, bind-mounts them and restarts the compositor through the
-same flow. Refresh, stop and boot reapplication use the generated manifest in
+same flow, at boot. Refresh, stop and boot reapplication use the generated manifest in
 `/tmp/homechooser-backport/generated/manifest.json`. No stock file is written. If stop cannot unmount a target, it reports failure and keeps the
 stage and manifest so status and a later stop can still find it.
 
@@ -238,11 +240,17 @@ names that have one.
 
 | Command | Effect |
 | --- | --- |
-| no argument, or `apply` | Find the set, patch copies, bind-mount them, restart the compositor. |
+| no argument, or `apply` | Find the set, patch copies, bind-mount them, restart the compositor. This is the boot path (the init.d entry runs it); the app does not call it, so it is otherwise for manual and debug use. |
 | `apply samfirst` | Restart `sam` (`systemctl restart sam`), then as `apply`, even when the backport is already mounted. The settings app asks for it on webOS 6 to 8 when its first write created `general/defaultApps` (`sam` misses that write until it restarts); doing it inside this one run keeps it from depending on a panel that the restart closes. |
-| `stop` | Unmount every target of every set it finds, restart the compositor. |
-| `refresh [stock] [norestart]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working) and restart the compositor when the id changed. With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. With `norestart`, update the copy and leave the compositor running: the watcher does that when it sees the stored choice change (see below). |
-| `status` | Print `mounted=yes` and `release=<set>`, or `mounted=no` and `match=<set or none>`; `data=missing` first if the data directory is absent. |
+| `stop` | Unmount every target of every set it finds, restart the compositor. Debug and manual use only; neither the app nor the watcher calls it. |
+| `refresh [stock] [restart]` | If mounted, write the stored choice into the mounted copy of `Settings.qml` again (in place, so the bind mount keeps working). It never restarts the compositor unless `restart` is given (debug). With `stock`, write an empty id whatever is stored: the watcher does that while the chosen app is not installed. `norestart` is still accepted and does nothing. |
+| `status` | Print `mounted=yes` and `release=<set>`, or `mounted=no` and `match=<set or none>`; `data=missing` first if the data directory is absent. Always ends with `reboot=needed` or `reboot=no` (below). |
+
+`status` says `reboot=needed` when the flag file (`/var/lib/webosbrew/homechooser/keyfilter`,
+`HOMECHOOSER_KEYFILTER_FLAG` overrides it) exists, nothing is mounted, and a reviewed set matches
+or the generated patch is possible (`generated=possible`) and opted in; or when the flag file is
+absent and something is still mounted. In the first case the next boot will mount the patch, in the
+second the next boot will not. Otherwise it says `reboot=no`.
 
 `apply`:
 
@@ -264,23 +272,144 @@ names that have one.
    refreshes it once it can tell. `refresh` makes the same decision.
 5. It runs `mount --bind` for each copy over its original. If one mount fails it unmounts the ones
    made and exits 1.
-6. It restarts the compositor with `systemctl restart surface-manager-daemon.service`, the unit
-   that runs `/usr/bin/surface-manager.sh` on all four releases (`surface-manager.service` is a
-   oneshot wrapper that starts it). The compositor reads the QML and the key filter scripts again at
-   start; there is no QML cache (`QML_DISABLE_DISK_CACHE=1`).
+6. It restarts the compositor (only `apply` and `stop`, and `refresh restart`, ever do), `surface-manager-daemon.service`, the unit that runs
+   `/usr/bin/surface-manager.sh` on every release (`surface-manager.service` is a oneshot wrapper
+   that starts it), with the compositor's clients stopped first and started again after it; see
+   [Restarting the compositor](#restarting-the-compositor). The compositor reads the QML and the
+   key filter scripts again at start; there is no QML cache (`QML_DISABLE_DISK_CACHE=1`).
 
 It logs to `/tmp/homechooser-backport.log`. `stop` is idempotent: with nothing mounted it does
 nothing. The script, the manifest parser (the three keys are picked line by line, no `jq`) and the
 `patch` flags use only busybox applets, which the images ship.
 
-The configured id is read once, at boot, and the loaded QML keeps it until the compositor restarts.
-A choice made later reaches the compositor through the settings record, which `getHomeAppId()`
-reads first, so the baked id is only the fallback for the next start. When the watcher sees the
-stored choice change and the app is installed, it has already brought the record to the new
-choice and runs `refresh norestart`: the mounted copy gets the new id (same inode) and the
-compositor is not restarted. (Before this, the copy kept the old id until the watcher restarted.)
-`refresh` without `norestart`, and `refresh stock`, still restart on a change; `refresh` is what the app runs when the stock home is restored, so the removed
-choice does not stay in the mounted copy until the next boot.
+The configured id is read once, at compositor start, and the loaded QML keeps it until the
+compositor starts again. A choice made later reaches the compositor through the settings record,
+which `getHomeAppId()` reads first (`general/defaultApps`, verified in every set and in the
+generator), so the baked id is only the fallback for the next start. Nothing restarts the compositor
+to change it: when the watcher sees the stored choice change and the app is installed, it has
+already brought the record to the new choice and runs `refresh`, and the mounted copy gets the new
+id (same inode). `refresh stock` (the chosen app is not installed) and the app's `refresh` when the
+stock home is restored do the same. Each logs `configured home updated; the running compositor keeps
+its loaded id until the next start (the settings record is read first)`.
+
+If the chosen app is uninstalled, the running compositor keeps its stale baked id until a reboot;
+the Home key falls back to the stock home through `launchHome`'s `returnValue === false` branch
+(present in every set and in the generator), and the watcher's alert says a restart finishes the
+change (webOS 6 to 9).
+
+### Restarting the compositor
+
+Only the boot `apply` restarts the compositor, plus `stop` and `refresh restart` for manual and
+debug use; the app and the watcher do not. At boot the restart is needed: the init.d hook runs
+after the compositor has started (see [Why the boot hook runs after the compositor](#why-the-boot-hook-runs-after-the-compositor)),
+so the patched files are mounted over a compositor that has already read the stock ones. A
+A bare
+`systemctl restart surface-manager-daemon.service` crashes WebAppMgr: measured on a 9.2.1 VM with
+no Home Chooser installed (`scratch/wam-crash/notes.md`), the running WebAppMgr exits on "Broken
+pipe" when the compositor goes, `Restart=on-failure` starts a new one while the new compositor is
+still starting (pid 5635 was up at 193.74 s, the compositor ready at 194.05 s), and that one often
+dies with SIGSEGV in the stock `libcbe.so` (fault address `0xc`, a null `wl_output`). The first of
+three restarts crashed `com.webos.app.inputcommon` instead.
+
+The firmware's units, read from the rootfs of 6.5.2, 6.6.0, 7.6.0, 8.3.0, 8.4.0, 9.2.1 and 9.2.4
+(the roots in `backport/test-real-roundtrip.sh`; the 8.3.0-s23z root was not on hand). The
+effective content is the same on all of them: up to 8.4.0 the units are in `lib/systemd/system`
+with drop-ins in `surface-manager*.service.d/override.conf`, and 9.x folds those drop-ins into
+`etc/systemd/system`. `webapp-mgr.service` is in `etc/systemd/system` everywhere. systemd is 239
+(6.x), 244 (7.x, 8.x) and 250 (9.x).
+
+* `surface-manager.service`: `Type=oneshot`, `RemainAfterExit=yes`,
+  `ExecStart=/bin/systemctl start surface-manager-daemon.service`, `ExecStop=` the matching stop.
+* `surface-manager-daemon.service`: `Type=notify`, `ExecStart=/usr/bin/surface-manager.sh`,
+  `Restart=on-failure`, `TimeoutStopSec=5`, no start timeout of its own (`DefaultTimeoutStartSec`
+  is the stock 90 s). No unit depends on it except the wrapper.
+* Ready: the compositor (`WebOSCoreCompositor::emitLsmReady`, `libWebOSCoreCompositor.so`) runs
+  `/sbin/initctl emit --no-wait lsm-ready`. `/sbin/initctl` is LG's upstart shim; on the 9.2.1 VM
+  its log, `/var/log/initctl.log`, shows each emit as `TOUCH : lsm-ready`,
+  `Exec : /bin/touch /tmp/lsm-ready`, then `NOTIFY : surface-manager` with the compositor's pid,
+  i.e. the daemon's `READY=1` (`sd_pid_notify`; the compositor binaries have no `sd_notify` of
+  their own). The shim's table has the same entry on every release. So
+  `systemctl restart surface-manager-daemon.service` returns once the new compositor has
+  emitted lsm-ready (the VM log: restart at 192.36 s, emit at 194.05 s, the worker's "restarted"
+  in the same second). `/tmp/lsm-ready` itself is never removed, so it is no signal of a restart.
+* Bound to the wrapper, `Requires=` and `After=surface-manager.service`: `webapp-mgr.service`
+  (also `ConditionPathExists=/tmp/lsm-ready`; pulled in by `webos-ibd.target`), `booster.service`,
+  `maliit-server.service`, `preload-manager.service`, and on 9.x `chromecast-provisioning.service`.
+  None of them is bound to the daemon, so a restart of the daemon alone touches none of them.
+* `lsm-ready.path` (`PathExists=/tmp/lsm-ready`, `Unit=lsm-ready.target`, wanted by
+  `default-webos.target` up to 8.4.0 and `multi-user.target` on 9.x) starts `lsm-ready.target`,
+  which `Wants=lsm-ready.service`. `lsm-ready.service` (`ConditionPathExists=/tmp/boot-done`,
+  `Requires=` and `BindsTo=surface-manager.service`, `Type=oneshot`, `RemainAfterExit=yes`) runs
+  `systemctl stop` then `start` of `webapp-mgr.service`, `booster.service` and
+  `maliit-server.service`, in that order (`lsm-ready-factory.service` is the same for a factory
+  boot). That is the firmware's list of what to restart once the compositor is ready. The path
+  unit fires only while its target is inactive, so a later lsm-ready does not run it again.
+* `surface-manager.sh`: when `/tmp/lsm-respawned` exists (the starfish platform and compositor
+  plugins refer to it) it SIGKILLs the processes matching `"@system_native_app"` before it starts
+  the compositor, so native apps are not left behind on a respawn.
+
+`systemctl restart surface-manager.service` would order everything (systemd try-restarts the
+units that `Requires=` or `BindsTo=` it, stops before the wrapper stops and starts after it is
+active again), but it also restarts `preload-manager.service`, which forgets the watcher's
+non-permanent `setPreloadPolicy` for the stock home, and `chromecast-provisioning.service` on 9.x.
+So the worker does that ordering itself, for the units the firmware names:
+
+1. Read the dependants from `lsm-ready.service`: its `ExecStart=/bin/systemctl start <unit>`
+   lines, `etc/systemd/system` before `lib/systemd/system` as systemd reads them, else
+   `webapp-mgr.service booster.service maliit-server.service` (`HOMECHOOSER_DEPENDANTS`
+   overrides the list for tests).
+2. `systemctl stop` each of them that `systemctl is-active` reports `active`, `activating` or
+   `reloading`, in that order. One that is not running is not started either.
+3. `systemctl restart surface-manager-daemon.service` (`HOMECHOOSER_UNIT`), which returns with
+   the compositor ready.
+4. `systemctl start` the same units in the same order, also if a step before failed. A failure
+   is logged and makes the exit status 1.
+
+The sequence runs in a child process that the worker waits for, with stdin, stdout and stderr on
+a file under `/tmp/homechooser-backport` (copied to the worker's output afterwards) and SIGHUP,
+SIGINT and SIGPIPE ignored. Home Chooser's service reads the worker's output through pipes and
+SIGKILLs it at its timeout (90 s, 150 s for `samfirst`; a compositor that never becomes ready
+holds `systemctl restart` for the 90 s start timeout), and when the app runs it, the stop of
+`webapp-mgr` closes the app. The worker is in the service's process tree, not WebAppMgr's, and
+the child goes on after the worker or its reader is gone, so the stop and the start are never
+separated. Stopping WebAppMgr closes every web app; with the bare restart they were lost to the
+crash too.
+
+### Why the boot hook runs after the compositor
+
+Measured on the 9.2.1 VM (`scratch/wam-crash/saved/20261024T005314Z-stop/`: `dmesg.txt`,
+`var-log/initctl.log`, `tmp-logs/homechooser-boot.log`):
+
+* systemd starts `surface-manager-daemon.service` at about 6.1 s of monotonic time ("Starting webos
+  - surface-manager-daemon.service" at 6.13 s, next to `mount-readwrite.service` at 6.11 s). `/var`
+  is not there yet: `mount-readwrite` mounts the entries of its fstab at about 6.2 to 6.45 s (the
+  bind entries at 6.43 s) and emits `mount-readwrite-done` at 7.08 s. The compositor emits
+  `lsm-ready` and the unit counts as started at 10.0 s.
+* Homebrew Channel's `startup.sh`, which runs the init.d entries, is started from `devmode.service`
+  in `webos-mbd.target`, after `minimal-boot-done`. The hook therefore always runs after the
+  compositor has started, on every boot (`homechooser-boot.log` shows it applying the set after
+  that point).
+* The compositor unit's only input that a third party can write is
+  `EnvironmentFile=-/var/systemd/system/env/surface-manager.env`, and it is read before `/var`
+  exists. `main.qml` imports its modules by absolute `file:///` URLs. So there is no hook that runs
+  before the compositor, short of editing LG's files (the unit, `surface-manager.sh` or the QML
+  directories), which the backport does not do.
+
+That is why the app does not mount live: a mount over a running compositor does nothing until it
+restarts, and a live restart closes every web app. The app writes the flag and the init.d entry,
+then asks the user to reboot; the boot hook does the mount and the restart, before the user sees
+anything, with the firmware-order sequence above.
+
+Restoring LG Home, disabling the generated patch, and uninstalling Home Chooser follow the same
+rule: the flag is removed, the baked id is emptied in the mounted copy, nothing is unmounted and
+nothing restarts. The bind mounts stay until the next boot, when nothing re-applies them (the flag
+is gone). Their sources are the staged copies under `/tmp/homechooser-backport/stage`, not files
+in the app directory, so they survive an uninstall (the tests assert this). Until that reboot the
+running compositor still has the old baked id, so with the record's home cleared the Home key can
+still open the old launcher while it is installed.
+
+A Quick Start+ power-off is a suspend, not a reboot (inferred, not measured), so it does not run
+the boot hook; that is why the app offers a real reboot (`com.webos.service.tvpower/power/reboot`).
 
 Tests (`sh` and `busybox sh`; the shell is the argument):
 
@@ -289,15 +418,24 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
   failing patch, a failing mount, an existing mount, the substitution of the stored choice
   (trailing newline, CRLF, surrounding spaces, empty and invalid ids), `refresh`, `stop`,
   `status`, no data directory and a bad argument, and the baked id for an installed, uninstalled
-  and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone, and
-  `refresh norestart`.
+  and silent `sam` (stubbed `luna-send`), `refresh stock` and `refresh` with the app gone,
+  `refresh` and `refresh stock` never restarting (no `systemctl` call), `refresh restart`,
+  `norestart` as a no-op, `status` `reboot=needed` and `reboot=no` in every case, the mount
+  sources being under the work directory and not the data directory (reviewed and generated), and
+  the exact `systemctl` sequence of a compositor restart: the
+  dependants from a fake `lsm-ready.service` (`etc` over `lib`, the default list), a client that
+  is not running, failed stops, starts and restarts, and a worker SIGKILLed with its output pipe
+  closed during the restart.
 * `backport/test-real-roundtrip.sh [shell] [release=rootfs ...]` runs the worker against the
   real stock files of every set (the firmware roots are listed in the script; a set whose root is
   not on the machine is skipped with a notice, and `OPENHOUSE_S23Z_ROOTFS` points at an unpacked
   S23Z image; other roots can be given as `release=rootfs` arguments), with only `mount`,
   `umount`, `systemctl` and `luna-send` stubbed: the set is found by hash, every target is
-  patched and mounted, the baked id follows the installed state, the patched copies reverse-patch
-  to the stock bytes, `stop` unmounts, and the stock files are unchanged.
+  patched and mounted from sources under the work directory, the baked id follows the installed
+  state without any restart, the patched copies reverse-patch to the stock bytes, `stop` unmounts,
+  the stock files are unchanged, and every compositor restart (`apply`, `stop`, `refresh restart`)
+  is the stop, restart, start sequence with the clients read from that firmware's own
+  `lsm-ready.service`.
 * `backport/test-settings-diff.sh` rebuilds a stand-in for the stock `Settings.qml` from the diff
   (the stock file is not in the repository), applies the diff of each of the four releases with
   GNU and busybox `patch`, substitutes the placeholder, reverses the patch and runs `qmllint` on
@@ -306,10 +444,10 @@ Tests (`sh` and `busybox sh`; the shell is the argument):
 ## Install and remove from the app
 
 The app shows the backport on webOS 6 to 9: whether it is enabled (the flag file), whether the
-init.d link is there and points at this install, whether the targets are mounted now, and the set
-that is mounted or the one that matches the live files (from `status`). The release gate is the
-major version; the set is chosen by hash. The package carries `backport/` (`app/scripts/copy-backport.js`
-runs between the build and `ares-package`).
+init.d link is there and points at this install, whether the targets are mounted now, whether a
+reboot is pending (`reboot=` from `status`), and the set that is mounted or the one that matches
+the live files. The release gate is the major version; the set is chosen by hash. The package
+carries `backport/` (`app/scripts/copy-backport.js` runs between the build and `ares-package`).
 
 Install, as root through Home Chooser's service ([service](service.md)), each step in the step log:
 
@@ -320,13 +458,20 @@ Install, as root through Home Chooser's service ([service](service.md)), each st
    first-write caveat), and the compositor's subscription is of the same kind as `sam`'s.
 3. Create the flag file and make `/var/lib/webosbrew/init.d/homechooser` a symlink to the entry in
    the app (see [Persistence](settings-app.md#persistence)).
-4. Run `homechooser-keyfilter apply` once (`apply samfirst` if step 2 created the key or the
-   choice deferred a sam restart). The worker restarts sam first when requested, then applies
-   the patch and restarts the compositor, so running apps may close.
-5. `status` again; the install fails if the targets are not mounted.
+4. `status` again. Nothing is mounted and nothing is restarted: `reboot=needed` is the expected
+   answer, and the app asks the user to reboot (Reboot or Later). The patch is mounted by the
+   boot hook on the next boot.
 
-After that a later choice reaches `sam` and the compositor live.
+Until that reboot the launcher choice still works, through the stock key filter and the settings
+record where the stock code reads it; the Home key changes after the reboot.
 
-Remove: delete the flag file, then run the worker's `stop`, then read `status`. The flag is deleted
-even if `stop` failed, so the next boot does not mount the files again. The init.d link stays, since
-the watcher uses it while a choice is stored. The `defaultApps` record is left as it is.
+Remove (restore LG Home, or disable the generated patch): delete the flag file (and the generated
+opt-in where that is what was asked), run `refresh` (it bakes the empty id into the mounted copy
+when no choice is stored), read `status`, and ask for a reboot (`reboot=needed` while something is
+still mounted). Nothing is unmounted and the compositor is not restarted. The init.d link stays,
+since the watcher uses it while a choice is stored. The `defaultApps` record is left as it is.
+Caveat: until the reboot the running compositor has its old baked id, so with the record's home
+cleared the Home key can still open the old launcher while it is installed.
+
+Uninstalling Home Chooser is handled by the watcher in the same way: no `stop`, no restart; the
+toast on webOS 6 to 9 says a restart puts LG Home back on the Home button.

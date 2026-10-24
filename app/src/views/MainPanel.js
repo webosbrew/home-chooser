@@ -9,6 +9,7 @@ import Spotlight from '@enact/spotlight';
 
 import {STOCK_HOME} from '../homechooser';
 import {ConfirmDialog, HomeItem, Toast} from './parts';
+import {REBOOT_BODY} from './useHomeChooser';
 import css from './Home.module.less';
 
 const FATAL_TEXT = {
@@ -61,10 +62,18 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			opener.current = null;
 		}
 	}, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
+	// The restart dialog opens right as a run ends: focus then belongs to the dialog, and returns to
+	// the list when it closes.
+	const rebootAsk = model.rebootAsk;
+	const wasAsking = useRef(false);
 	useEffect(() => {
-		if (wasBusy.current && !busy && !rootError) Spotlight.focus(rowId(current));
+		if (wasBusy.current && !busy && !rootError && !rebootAsk) Spotlight.focus(rowId(current));
 		wasBusy.current = busy;
 	}, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
+	useEffect(() => {
+		if (wasAsking.current && !rebootAsk && !busy && !rootError) Spotlight.focus(rowId(current));
+		wasAsking.current = Boolean(rebootAsk);
+	}, [rebootAsk]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const choose = useCallback((id) => {
 		if (busy) return;
@@ -153,7 +162,17 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			>
 				{uninstall ? 'This app will be removed from the TV.' : blocked ? (patch === 'unreviewed' ? 'This firmware has no reviewed patch. Turn on "Use a patch generated for this firmware (not reviewed)" to change the Home button.' : "The Home button can't be changed on this TV's software.")
 					: stock ? 'The Home button will open the LG Home again.'
-						: 'The Home button will open this app.' + (model.hasPatch && !model.patchMounted ? ' The screen will blink once while the TV loads the change.' : '')}
+						: 'The Home button will open this app.'}
+			</ConfirmDialog>
+			<ConfirmDialog
+				open={Boolean(rebootAsk)}
+				title="Restart the TV?"
+				confirmLabel="Reboot"
+				cancelLabel="Later"
+				onConfirm={model.confirmReboot}
+				onCancel={model.postponeReboot}
+			>
+				{rebootAsk ? REBOOT_BODY[rebootAsk.reason] : ''}
 			</ConfirmDialog>
 		</Panel>
 	);

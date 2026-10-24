@@ -17,6 +17,12 @@
 # watcher left in /tmp/homechooser-runtime, so the restore to stock still happens; with neither,
 # it exits 0 and the unit stays stopped.
 #
+# The key filter backport is applied here, at boot, because this hook runs after the compositor has
+# started (systemd starts it long before devmode's startup.sh); the worker's apply therefore mounts
+# and restarts the compositor. The app never does that while the TV runs: it writes the flag and
+# asks for a reboot, and this entry applies the patch on that boot. Home Chooser's uninstall removes
+# the flag and the link, so nothing re-applies after it.
+#
 # Files, all under /var/lib/webosbrew/homechooser/: `home` is the stored choice, the app id alone;
 # `keyfilter` exists while the backport is enabled.
 #

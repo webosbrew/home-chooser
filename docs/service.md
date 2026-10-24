@@ -58,13 +58,15 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `closeById` | `{id, force?}` | `{returnValue, id}`; selected Home only |
 | `uninstall` | `{id}` | `{returnValue, pending:true, id, confirm}` (`alert` or `screen`); selected Home only |
 | `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; internal confirmation only |
+| `rebootPrompt` | `{reason, screen?}` | `{returnValue, pending:true, confirm}` (`alert`, `toast`, or `screen` with `token`); Home Chooser only |
+| `rebootConfirmed` | `{token}` | `{returnValue}`; internal confirmation only |
 
 Every method except `status`, `quit` and `getInfo` is privileged: when the service is not root it answers
 `errorCode: "notRoot"` and does nothing.
 
 ## Who may call
 
-Settings methods (`status`, `quit`, `call`, files/icons, boot links and `run`) check
+Settings methods (`status`, `quit`, `call`, files/icons, boot links, `run` and `rebootPrompt`) check
 `LSMessageGetApplicationID`: it must be `org.webosbrew.homechooser` (an instance suffix after a
 space is accepted). Others receive `forbidden`. `make -C service dev` relaxes this settings gate;
 it is never packaged.
@@ -88,6 +90,62 @@ in the implementation. The settings app allows 120 seconds for confirmation.
 See [Launcher API version 1](launcher-api.md) for the contract, fields, errors, caller rules,
 selection requests and absence detection. Plain shell callers have no application id and are
 refused by launcher gates.
+
+## Restarting the TV
+
+No step restarts the compositor while the TV runs. When the patch needs a restart to take effect
+(first apply) or to go away (restore), the app asks the user to reboot the TV, through two
+methods. `keyfilterApplySam` (`apply samfirst`, which restarted `sam` first) is removed: the app
+no longer restarts anything, so there is no such command. `keyfilterApply` and `keyfilterStop`
+stay for manual and debugging use only.
+
+`rebootPrompt {reason, screen}` (Home Chooser only, root). `reason` is `apply` or `remove`.
+
+1. The pending check runs the worker's `status` (`keyfilterStatus`, 20 s) and requires a line
+   exactly `reboot=needed` (`hc_reboot_needed`: CR and blanks at line ends are ignored, a longer
+   line such as `xreboot=needed` does not count). Otherwise the error is `notPending`.
+2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
+   `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish
+   restoring LG Home.`
+3. A random 128-bit token is minted (32 hex digits from `/dev/urandom`, own table of four slots,
+   one shot, 10 minute lifetime).
+4. `screen: true` answers `{returnValue: true, pending: true, confirm: "screen", token}` and the
+   app shows its own dialog. Otherwise the service raises a `createAlert` (as
+   `com.webos.applicationManager`, source Home Chooser) with the message and the buttons
+   `Reboot` (onclick `luna://org.webosbrew.homechooser.service/rebootConfirmed`, params `{token}`)
+   and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`, with no
+   token. If the alert is refused the token is killed and a `createToast` (`noaction`) shows the
+   message: `confirm: "toast"`. If the toast is refused too: `confirmFailed`.
+
+`rebootConfirmed {token}` accepts Home Chooser or a sender without an application id (the
+notification service runs the alert's onclick); any other application id gets `forbidden`, the same
+rule as `uninstallConfirmed`. Root is required. The token must be live and unexpired and is
+consumed (`badToken` otherwise). The pending check runs again (`notPending` when the state has
+changed, for example the user restored in the meantime). Then
+`luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.tvpower/power/reboot
+'{"reason":"remoteKey"}'`. A true `returnValue` answers `{returnValue: true}`; anything else is
+`rebootFailed` and the reply text goes to the log.
+
+Abuse: only the Home Chooser app can mint a token, and only while the worker reports
+`reboot=needed`, so the service cannot be used to reboot a TV in a normal state. A caller without an
+application id (the notification service path) needs the 128-bit token, which only appears in the
+alert it raised for Home Chooser (or in the reply to the app). The reboot is checked again at
+confirm time, so an old alert cannot reboot the TV after the state has settled.
+
+There is no fallback to `systemctl reboot` or `reboot`. That skips tvpowerd's power-off sequence
+and its busy check (for example during a software update). If tvpowerd refuses, the user restarts
+the TV.
+
+The reboot method, from files only (not run on a device): tvpowerd (`usr/sbin/tvpowerd`) registers
+`com.webos.service.tvpower` `/power/reboot` on 5.6.x to 12.0.0 (and `/power2/reboot` from 7.x). The
+handler requires `reason` to be in `powerOffReasons` (`etc/tvpowerd/tvpowerd.json` up to 9.x;
+`etc/configd/layers/base/com.webos.service.tvpower.json` on 10.x and later). `remoteKey` is listed
+on every release and is not a force reason; an invalid reason answers `returnValue: false`. The
+handler then calls `com.palm.sleep/shutdown/machineReboot` after tvpowerd's prepare/notify round.
+ACG: the method is in group `tv.management` (`tv.internal.api.json`; on 12.0
+`com.webos.service.tvpower.api.json`) and private, plus `all` (`*/*`).
+`client-permissions.d/com.webos.sam.perm.json` gives `com.webos.applicationManager` both `all` and
+`tv.management` on every release checked, which is why the call runs under that identity.
 
 ## Privileged luna identity
 
@@ -115,7 +173,7 @@ This identity is device-unverified separately on webOS 5.x, 6.x, 7.x, 8.x, 9.x, 
 `api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`homechooser.applications`: five
 launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
 missing. On major 11+ the same five methods are also under `ares.webos.cli`. Neither includes
-`uninstallConfirmed`. The group is declared only by that API file, the way the installer declares
+`uninstallConfirmed`, `rebootPrompt` or `rebootConfirmed`. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
 
 No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
@@ -181,10 +239,9 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 | `restartSam` | `/bin/systemctl restart sam` | 60 s |
 | `watch` | `/bin/sh <app>/backport/homechooser watch` | 20 s |
 | `keyfilterStatus` | `/bin/sh <app>/backport/homechooser-keyfilter status` | 20 s |
-| `keyfilterApply` | same with `apply` | 90 s |
-| `keyfilterApplySam` | same with `apply samfirst` (restarts sam, then applies) | 150 s |
-| `keyfilterStop` | same with `stop` | 90 s |
-| `keyfilterRefresh` | same with `refresh` | 90 s |
+| `keyfilterApply` | same with `apply` (restarts the compositor; debug only, the app does not call it) | 90 s |
+| `keyfilterStop` | same with `stop` (unmounts and restarts the compositor; debug only) | 90 s |
+| `keyfilterRefresh` | same with `refresh` (never restarts the compositor unless given `restart`) | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |

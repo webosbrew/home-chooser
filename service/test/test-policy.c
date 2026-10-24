@@ -93,9 +93,8 @@ static void test_commands(void)
 		c = hc_command_lookup(kf[i]);
 		CHECK(c && strcmp(c->argv[1], HC_APP_DIR "/backport/homechooser-keyfilter") == 0 && strcmp(c->argv[2], kf[i + 1]) == 0 && !c->argv[3]);
 	}
-	c = hc_command_lookup("keyfilterApplySam");
-	CHECK(c && strcmp(c->argv[0], "/bin/sh") == 0 && strcmp(c->argv[1], HC_APP_DIR "/backport/homechooser-keyfilter") == 0
-		&& strcmp(c->argv[2], "apply") == 0 && strcmp(c->argv[3], "samfirst") == 0 && !c->argv[4] && !c->tolerant);
+	CHECK(!hc_command_lookup("keyfilterApplySam"));
+	CHECK(hc_command_lookup("keyfilterStatus") && hc_command_lookup("keyfilterRefresh"));
 	c = hc_command_lookup("stopWatcher");
 	CHECK(c && c->tolerant && strcmp(c->argv[2], "homechooser-home") == 0);
 	c = hc_command_lookup("watcherActive");
@@ -116,7 +115,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterApplySam", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
+	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);
@@ -286,6 +285,35 @@ static void test_luna_run(void)
 	CHECK(!hc_token_ok(NULL));
 }
 
+static void test_reboot(void)
+{
+	CHECK(hc_reboot_needed("mounted=no\nreboot=needed\n"));
+	CHECK(hc_reboot_needed("reboot=needed"));
+	CHECK(hc_reboot_needed("a=1\r\nreboot=needed\r\nb=2\r\n"));
+	CHECK(hc_reboot_needed("a=1\n  reboot=needed \t\n"));
+	CHECK(!hc_reboot_needed("reboot=no\n"));
+	CHECK(!hc_reboot_needed("mounted=yes\n"));
+	CHECK(!hc_reboot_needed(""));
+	CHECK(!hc_reboot_needed("xreboot=needed\n"));
+	CHECK(!hc_reboot_needed("reboot=needed2\n"));
+	CHECK(!hc_reboot_needed("note: reboot=needed\n"));
+	CHECK(!hc_reboot_needed(NULL));
+	CHECK(hc_reboot_message("apply") && strcmp(hc_reboot_message("apply"), "Restart the TV to finish setting up the Home button.") == 0);
+	CHECK(hc_reboot_message("remove") && strcmp(hc_reboot_message("remove"), "Restart the TV to finish restoring LG Home.") == 0);
+	CHECK(!hc_reboot_message("other"));
+	CHECK(!hc_reboot_message("Apply"));
+	CHECK(!hc_reboot_message(""));
+	CHECK(!hc_reboot_message(NULL));
+	const char *argv[8];
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.tvpower/power/reboot"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.notification/createToast"));
+	CHECK(!hc_luna_uri_allowed("luna://com.webos.service.tvpower/power/shutdown"));
+	CHECK(hc_luna_argv("luna://com.webos.service.tvpower/power/reboot", "{\"reason\":\"remoteKey\"}", 1, argv)
+		&& strcmp(argv[0], "/usr/bin/luna-send") == 0 && strcmp(argv[1], "-a") == 0 && strcmp(argv[2], "com.webos.applicationManager") == 0
+		&& strcmp(argv[3], "-n") == 0 && strcmp(argv[4], "1") == 0 && strcmp(argv[5], "luna://com.webos.service.tvpower/power/reboot") == 0
+		&& strcmp(argv[6], "{\"reason\":\"remoteKey\"}") == 0 && !argv[7]);
+}
+
 int main(void)
 {
 	test_sender();
@@ -297,6 +325,7 @@ int main(void)
 	test_caller();
 	test_remove();
 	test_luna_run();
+	test_reboot();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

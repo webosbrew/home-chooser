@@ -34,6 +34,7 @@ export const parseStatus = (text) => {
 		generated: out.generated || null,
 		reason: out.reason || null,
 		optin: out.optin === 'yes',
+		rebootNeeded: out.reboot === 'needed',
 		hashes
 	};
 };
@@ -85,13 +86,13 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 
 		// 1. make sure general/defaultApps exists, so the compositor's and sam's subscriptions see later writes
 		// 2. enable the backport (flag file) and link the boot entry into init.d
-		// 3. run the worker once, which restarts sam first when step 1 created the key or the caller
-		//    (`samRestart`) says the apply deferred that restart. The restart is the worker's, not a
-		//    call of ours: it closes the panel, and a panel that is gone makes no further calls.
-		async install({onNotice, samRestart = false} = {}) {
+		// Nothing is mounted and nothing restarts: the boot entry mounts the patch on the next boot, and
+		// `rebootNeeded` in the result says whether a restart is what finishes the change (the patch is
+		// enabled but not mounted).
+		async install() {
 			const log = [];
 			const run = runner(log);
-			const res = Object.assign(result(log), {status: null, createdKey: false});
+			const res = Object.assign(result(log), {status: null, createdKey: false, rebootNeeded: false});
 			try {
 				const before = await readStatus(run);
 				if (before.dataMissing) throw new Error('The backport files are missing from the app package');
@@ -108,38 +109,36 @@ export const createBackport = ({rootLuna, exec, writeFile, removeFile, version})
 				await run.write(KEYFILTER_FLAG, '');
 				await run.run(ensureEntryCommand());
 
-				if (onNotice) onNotice('Applying the backport and restarting the compositor; running apps may close.');
-				await run.run(res.createdKey || samRestart ? 'keyfilterApplySam' : script('apply'));
-
 				res.status = await readStatus(run);
-				if (!res.status.mounted) throw new Error(`The backport did not mount; see ${LOG_PATH}`);
+				res.rebootNeeded = res.status.rebootNeeded;
 			} catch (e) {
 				fail(res, e);
 			}
 			return res;
 		},
 
-		// Disable the backport (delete the flag file, so the next boot does not mount it again), then
-		// unmount and restart the compositor. The flag is deleted even if the unmount fails. The
-		// init.d link stays: the watcher needs it while a choice is stored.
+		// Disable the backport: delete the flag file, so the next boot does not mount it again, and bake
+		// the empty home id into the mounted copy (the worker's refresh, which never restarts the
+		// compositor). Nothing is unmounted: a mounted patch stays until the next boot, and
+		// `rebootNeeded` says so. The init.d link stays: the watcher needs it while a choice is stored.
 		async remove() {
 			const log = [];
 			const run = runner(log);
-			const res = Object.assign(result(log), {status: null});
+			const res = Object.assign(result(log), {status: null, rebootNeeded: false});
 			try {
 				await run.remove(KEYFILTER_FLAG);
 			} catch (e) {
 				fail(res, e);
 			}
 			try {
-				await run.run(script('stop'));
+				await run.run(script('refresh'));
 			} catch (e) {
 				fail(res, e);
 			}
 			if (res.ok) {
 				try {
 					res.status = await readStatus(run);
-					if (res.status.mounted) fail(res, new Error('The backport is still mounted'));
+					res.rebootNeeded = res.status.rebootNeeded;
 				} catch (e) {
 					fail(res, e);
 				}

@@ -7,9 +7,18 @@ import {errorMessage} from '../platform/errors';
 import {STOCK_HOME} from '../homechooser';
 import {formatStep} from '../homechooser/format';
 import {loadEnvironment} from '../homechooser/environment';
-import {clearPending, readPending, writePending} from './pending';
+import {clearPending, readPending} from './pending';
 
 const DONE_TEXT = 'Done. Press Home to try it.';
+const REBOOT_LATER_TEXT = 'Restart the TV later to finish.';
+const REBOOT_FAILED_TEXT = "Couldn't restart the TV. Restart it to finish.";
+const REBOOT_PROMPT_FAILED_TEXT = 'Restart the TV to finish.';
+
+// The restart dialog's wording, by reason ('apply' or 'remove').
+export const REBOOT_BODY = {
+	apply: 'The Home button changes after a restart.',
+	remove: 'LG Home is back on the Home button after a restart.'
+};
 
 export const LOG_PREFIX = '[HomeChooser]';
 
@@ -67,6 +76,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState('');
 	const [toast, setToast] = useState(null);
+	const [rebootAsk, setRebootAsk] = useState(null); // {reason, token} while the restart dialog is up
 	const [icons, setIcons] = useState({});
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
@@ -117,7 +127,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			setEnv(e);
 			const state = await refreshWith(e);
 			if (cancelled || !mounted.current) return;
-			// a result left by a run the restart cut short: judge it by the actual state, once
+			// a marker left by an earlier version, whose compositor restart cut the run short: judge it by the actual state, once
 			const left = readPending();
 			if (left) {
 				clearPending();
@@ -179,12 +189,49 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		} catch (e) {
 			// the outcome stands; the list may be stale
 		}
-		clearPending(); // the run finished in this window; no restart cut it short
+		clearPending(); // an old marker is moot: the run finished in this window
+		// The change is done but needs a TV restart to take effect: ask for it (outcome.reboot is the
+		// reason, 'apply' or 'remove'). On a visible screen the app shows its own dialog; when the
+		// screen is hidden the service puts up a system alert (or a toast) instead.
+		let ask = null;
+		if (outcome.ok && outcome.reboot) {
+			const screen = typeof document === 'undefined' || document.hidden !== true;
+			try {
+				const reply = await env.rebootPrompt(outcome.reboot, screen);
+				if (screen && reply.confirm === 'screen' && reply.token) ask = {reason: outcome.reboot, token: reply.token};
+			} catch (e) {
+				// eslint-disable-next-line no-console
+				console.log(`${LOG_PREFIX} reboot prompt: ${errorMessage(e)}`);
+				outcome = {ok: true, text: REBOOT_PROMPT_FAILED_TEXT};
+			}
+		}
 		if (!mounted.current) return;
 		setNotice('');
-		setToast(outcome);
+		setToast(ask ? null : outcome);
+		setRebootAsk(ask);
 		setBusy(false);
 	}, [env, busy, refreshWith]);
+
+	const confirmReboot = useCallback(() => {
+		const ask = rebootAsk;
+		setRebootAsk(null);
+		if (!ask) return undefined;
+		return run('restart the TV', async (e) => {
+			setNotice('Restarting the TV...');
+			try {
+				await e.rebootConfirmed(ask.token);
+				return {ok: true, text: 'Restarting the TV...'};
+			} catch (err) {
+				// eslint-disable-next-line no-console
+				console.log(`${LOG_PREFIX} reboot: ${errorMessage(err)}`);
+				return {ok: false, text: REBOOT_FAILED_TEXT};
+			}
+		});
+	}, [rebootAsk, run]);
+	const postponeReboot = useCallback(() => {
+		setRebootAsk(null);
+		setToast({ok: true, text: REBOOT_LATER_TEXT});
+	}, []);
 
 	const restoreWork = async (e) => {
 		setNotice('Restoring LG Home...');
@@ -192,36 +239,35 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		logResult('restore', res);
 		if (!res.ok) return {ok: false, text: plainFailure('restore LG Home', res.errors)};
 		// restoring stock takes the key filter patch out as well
+		// (the flag goes; the mounted copy stays until the next boot, so a restart finishes it)
 		if (e.backport && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
-			setNotice('Restoring LG Home... The screen will blink once.');
-			writePending(STOCK_HOME, 'LG Home');
 			const rem = await e.backport.remove();
 			logResult('remove patch', rem);
 			if (!rem.ok) return {ok: false, text: plainFailure('restore LG Home', rem.errors)};
+			if (rem.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'remove'};
 		}
 		return {ok: true, text: DONE_TEXT};
 	};
 
 	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
 		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
-		const needPatch = Boolean(e.backport) && !(patchStatus && patchStatus.mounted);
-		if (needPatch && patch !== 'ready' && patch !== 'generated') return {ok: false, text: "The Home button can't be changed on this TV's software."};
-		// The choice is applied first; installing the patch restarts the compositor and may close
-		// this window, so nothing of the choice may depend on code that runs after it. The same goes
-		// for the sam restart that webOS 6 to 8 needs after the first write: it closes this window
-		// too, so with a patch to install the apply leaves it to the install, which makes it in the
-		// same root-side run (before the compositor restart). Done in the apply, it could end the
-		// window before the install was ever called.
+		// The patch is needed unless it is mounted and enabled (mounted but disabled: a restore was done
+		// and no restart yet; the install just sets the flag again).
+		const mountedNow = Boolean(patchStatus && patchStatus.mounted);
+		const needPatch = Boolean(e.backport) && !(mountedNow && patchStatus.enabled);
+		if (needPatch && !mountedNow && patch !== 'ready' && patch !== 'generated') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+		// Nothing restarts the compositor while the TV runs, so no step here can close this window.
+		// Only a patch that is not mounted yet needs a TV restart (the boot entry mounts it), and
+		// that restart restarts sam too, so the apply skips its own sam restart then.
 		setNotice(`Setting ${candidate.title} as Home...`);
-		const res = await e.chooser.apply(candidate.id, {deferSamRestart: needPatch});
+		const res = await e.chooser.apply(candidate.id, {deferSamRestart: needPatch && !mountedNow});
 		logResult('apply', res);
 		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
 		if (needPatch) {
-			setNotice('Setting up. The screen will blink once.');
-			writePending(candidate.id, candidate.title);
-			const inst = await e.backport.install({samRestart: res.samRestartDeferred});
+			const inst = await e.backport.install();
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
+			if (inst.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'apply'};
 		}
 		return {ok: true, text: DONE_TEXT};
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -229,20 +275,22 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const toggleGenerated = useCallback((enabled) => run('change the generated patch', async (e) => {
 		const flag = await e.backport.setGenerated(enabled);
 		logResult('generated opt-in', flag);
+		let reboot;
 		if (!flag.ok) return {ok: false, text: plainFailure('change the generated patch', flag.errors)};
 		if (enabled && storedId && storedId !== STOCK_HOME) {
-			setNotice('Setting up. The screen will blink once.');
-			writePending(storedId, storedId);
+			setNotice('Setting up...');
 			const inst = await e.backport.install();
 			logResult('install generated patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('install the generated patch', inst.errors)};
+			reboot = inst.rebootNeeded ? 'apply' : undefined;
 		} else if (!enabled) {
-			setNotice('Removing the Home key patch. The screen will blink once.');
+			setNotice('Removing the Home key patch...');
 			const rem = await e.backport.remove();
 			logResult('remove generated patch', rem);
 			if (!rem.ok) return {ok: false, text: plainFailure('remove the generated patch', rem.errors)};
+			reboot = rem.rebootNeeded ? 'remove' : undefined;
 		}
-		return {ok: true, text: enabled ? (storedId ? DONE_TEXT : 'Generated patch enabled. Choose a Home app.') : 'Generated patch disabled. The Home button opens LG Home.'};
+		return {ok: true, reboot, text: enabled ? (storedId ? DONE_TEXT : 'Generated patch enabled. Choose a Home app.') : 'Generated patch disabled. The Home button opens LG Home.'};
 	}), [run, storedId]);
 	const notify = useCallback((text) => setToast({ok: true, text}), []);
 	const getUninstallTitle = useCallback(async (id) => {
@@ -269,6 +317,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		showGenerated: Boolean(patchStatus && (patchStatus.generated === 'possible' || patchStatus.release === 'generated' || patchStatus.generatedOptIn)),
 		generatedOptIn: Boolean(patchStatus && patchStatus.generatedOptIn), toggleGenerated,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
+		rebootAsk, confirmReboot, postponeReboot,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };

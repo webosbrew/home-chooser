@@ -30,19 +30,22 @@ Home Chooser is in English only.
   one plain sentence ("Couldn't set the Home app. The Home Chooser service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
   a success; Back closes it.
-* **webOS 6 to 9.** The key filter backport is not shown as a feature. If it is not mounted when a
-  launcher is chosen, the confirmation adds that the screen will blink once while the TV loads
-  the change, and confirming applies the choice first and installs the backport last (the restarts are the last step, so nothing of the choice depends on code that runs after it). Those restarts may
-  close the panel; on 6.x to 8.x the `sam` restart that a first `defaultApps` write needs is one of them, and it is made by the backport's worker, not by the apply (see [the order](#why-the-sam-restart-is-not-in-the-apply-on-6-to-9)). Before it (and after the apply has gone through and stored the choice), the app writes a small marker to `localStorage` (`homechooser.pending`,
-  the id being chosen); on the next launch it reads the actual current home and the stored choice and
-  judges the marker once, then clears it. The marker belongs to a live apply only when the stored choice
-  equals its id (empty for a restore): then the toast is "Done. Press Home to try it." if the home is the
-  one chosen, otherwise "Couldn't set the Home app." Any other stored choice means the marker is stale
-  (WAM keeps an app's `localStorage` in `/var/lib/wam/Default/Local Storage` across `ares-install --remove`, while
-  the uninstall cleanup removes the stored choice, so a marker left by a cut-short run shows up on the next
-  install) and it is dropped without a toast. A run that finishes in the same window clears the marker itself. Restoring LG Home
-  removes the backport after the restore. If no patch set matches the firmware (hash mismatch),
-  the dialog says the Home button can't be changed on this TV's software and applies nothing.
+* **webOS 6 to 9.** The key filter backport is not shown as a feature, and nothing restarts the compositor
+  or `sam` while the TV runs, so no step can close the panel. Choosing a launcher applies the choice
+  first. If the patch is mounted and enabled, that is all: the patched QML reads `general/defaultApps`
+  first, so the record decides live and switching launchers needs no install and no restart. Otherwise
+  (not mounted, or mounted with the flag off after a restore that no restart has finished yet) the app
+  then calls `backport.install()`, which writes the flag file and links the boot entry and runs nothing
+  else; its result says `rebootNeeded` when the flag is on and nothing is mounted (the worker's
+  `reboot=needed` status line). The patch is mounted by the boot entry on the next boot.
+  See [Restart prompt](#restart-prompt). Restoring LG Home removes the flag and bakes the empty id into
+  the mounted copy (`backport.remove()`, which runs `homechooser-keyfilter refresh` and never `stop`); a
+  mounted patch stays until the next boot, so a restart prompt follows. If no patch set matches the
+  firmware (hash mismatch), the dialog says the Home button can't be changed on this TV's software and
+  applies nothing. The earlier `localStorage` marker (`homechooser.pending`) is no longer written; on
+  startup the app still reads one left by an earlier version, judges it once against the actual home
+  and the stored choice (a marker whose id differs from the stored choice is stale and dropped without a
+  toast) and clears it.
 * **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
 * **Before uninstalling Home Chooser, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
@@ -108,32 +111,48 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   there is shown as a warning.
 * On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
-  `systemctl restart sam` is the last step; with the key filter backport to install, that step moves into
-  the backport's worker run (below).
+  `systemctl restart sam` is the last step; when the key filter backport still has to be installed, a TV
+  restart follows, which restarts `sam` as well, so the step is skipped (below).
 * On 6.x to 9.x the stock key filter launches `com.webos.app.home` by id, so the Home key follows
   the choice only with the [key filter backport](key-filter-backport.md) installed. The screen
-  installs it as part of choosing a launcher when it is not mounted, and removes it again when
-  LG Home is restored; there are no separate Install and Remove buttons.
+  enables it as part of choosing a launcher when it is not mounted and disables it again when
+  LG Home is restored; there are no separate Install and Remove buttons. Enabling takes a TV restart to
+  mount it, disabling takes one to unmount it.
 
 Before these writes `apply` stores the choice, and after them it makes sure the boot entry and the
 watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
 `/var/lib/webosbrew/homechooser/home`, the platform writes, link the init.d entry and start the
 watcher, close the previous home, and `systemctl restart sam` last if it applies.
 
-### Why the sam restart is not in the apply on 6 to 9
+### Why the sam restart is skipped on 6 to 9 when the patch is installed
 
 The `sam` restart brings the stock home forward as the last-input app and closes the panel's window.
-When the apply made it, the panel could be gone before the web app made its next call, `backport.install()`,
-and nothing else installs the backport: no flag file and no mounts, the Home key still opens the stock
-home, and the choice shows as made (seen on 8.3.0 and 7.x: apply succeeded, flag `no`, mounts `[]`). The
-panel therefore never makes the restart when it is going to install the backport. `apply(id,
-{deferSamRestart: true})` skips it and returns `samRestartDeferred`; the panel writes the pending marker and
-calls `backport.install({samRestart: true})`, which writes the flag, links the boot entry and then makes one
-root-side call, `keyfilterApplySam` (`homechooser-keyfilter apply samfirst`): the worker restarts `sam`
-first, then mounts the patch and restarts the compositor. That run belongs to the service and goes on
-whether or not the panel survives, and the flag and the entry are in place before it starts, so the next
-boot mounts the backport even if the run is cut short. When the backport is already mounted, nothing is
-deferred and the apply restarts `sam` itself, as before.
+When the patch is not mounted yet, the choice is followed by a TV restart (the boot entry mounts the
+patch), and that restart restarts `sam` as well, so the panel passes `apply(id, {deferSamRestart: true})`,
+which skips the restart and returns `samRestartDeferred`. It passes it only then: with the patch
+mounted and enabled, or when no restart will follow, the apply restarts `sam` itself when it has to, as
+before. The panel never restarts the compositor: `backport.install()` writes the flag and links the entry
+and runs no worker, so there is nothing that could close the panel between the choice and the install.
+
+### Restart prompt
+
+After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the screen asks for a TV
+restart (the choose, restore and generated patch flows alike). The reason is `apply` after an install and
+`remove` after a restore or after disabling the generated patch.
+
+* Screen visible (`document.hidden` is not `true`): the app calls the service's
+  `rebootPrompt {"reason", "screen": true}` ([service](service.md)), keeps the one-shot `token` of the
+  reply and shows its own dialog, "Restart the TV?", with "The Home button changes after a restart."
+  (`apply`) or "LG Home is back on the Home button after a restart." (`remove`) and the buttons
+  "Reboot" and "Later" (Back is Later). "Reboot" calls `rebootConfirmed {token}`, and the TV restarts; a
+  failure toasts "Couldn't restart the TV. Restart it to finish." "Later" toasts "Restart the TV later to
+  finish." Focus returns to the list when the dialog closes.
+* Screen hidden: the app calls `rebootPrompt {reason, "screen": false}`; the service puts up a system
+  alert with "Reboot" and "Later" (or a toast when the alert is refused), and the app shows nothing.
+* `rebootPrompt` failing (the status no longer says a restart is needed, the notification service
+  refuses both): the toast is "Restart the TV to finish."
+
+The service re-checks that a restart is needed before it asks and again before it restarts the TV.
 
 ## Persistence
 
@@ -194,7 +213,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
     subscription ends.
 * **Restoring stock** stops the watcher (`systemctl stop homechooser-home`), removes the choice file,
   then does the platform restore. On 6.x to 9.x it also runs `homechooser-keyfilter refresh`, which
-  clears the choice from the mounted `Settings.qml` (restarting the compositor if it changed).
+  clears the choice from the mounted `Settings.qml` copy (it does not restart the compositor: the
+  running compositor keeps its loaded id until the next start, and the settings record is read first).
   Clearing `home` is one function in the app, `removeHomeFromRecord()`, and `merged_write ""` in the
   watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
   `general/defaultApps` can never be removed (a write that leaves `home` out only looks like a
@@ -264,9 +284,11 @@ On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later
 screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
-**The user is told once.** After the revert, and after the compositor restart that comes with it on
-6.x to 9.x, the watcher shows an alert with one OK button:
+**The user is told once.** After the revert (no compositor restart on any release), the watcher shows an alert with one OK button:
 `luna-send -n 1 luna://com.webos.notification/createAlert '{"sourceId":"org.webosbrew.homechooser","title":"Home Chooser","message":"<title> was removed, so the Home button opens LG Home again.","buttons":[{"label":"OK","focus":true}]}'`.
+On 6.x to 9.x the message adds "Restart the TV to finish the change." (the running compositor still
+has the removed app's id baked in; Home falls back to LG Home through `launchHome`'s failure path
+until the restart). Other releases keep the text above.
 The title of an app that is gone cannot be looked up, so the watcher reads it from `getAppInfo`
 (failing that `appinfo.json`) while the app is installed and keeps it per choice, like the window
 type; a title it does not have, or one with a quote or backslash in it, is replaced by the app id.
@@ -301,10 +323,13 @@ gone it does, in order:
 2. removes the choice file (and its directory if empty) and the key filter flag file;
 3. removes the `init.d/homechooser` symlink (and the earlier `homechooser-keyfilter` link), only if it
    is a symlink;
-4. on webOS 6 to 9, `homechooser-keyfilter stop` from the runtime copy: it unmounts the bind mounts
-   it finds in the manifests and restarts the compositor, and does nothing if nothing is mounted;
-5. shows a toast, once, after the compositor restart of step 4:
+4. on webOS 6 to 9, nothing is unmounted and nothing restarts: the bind mounts stay until the next
+   boot (their sources are under `/tmp/homechooser-backport/stage`, not in the app directory, so they
+   survive the uninstall), and at that boot nothing re-applies because the init.d link and the flag
+   are gone;
+5. shows a toast, once:
    `luna-send -n 1 luna://com.webos.notification/createToast '{"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}'`
+   (on 6.x to 9.x: "Home Chooser was removed. Restart the TV to put LG Home back on the Home button.")
    (plain root, no `-a`, no `iconUrl` because the app's icon is being deleted; 5 s timeout, reply
    logged, never blocks);
 6. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit

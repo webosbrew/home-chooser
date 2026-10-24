@@ -3,22 +3,31 @@
 #
 # Installed in /var/lib/webosbrew/init.d/ and run as root by Homebrew Channel at boot.
 #
+# The boot hook runs after the compositor has started (systemd starts surface-manager-daemon long
+# before devmode's startup.sh, and /var is not even mounted then), so `apply` is the boot path: it
+# mounts and restarts the compositor in the firmware's order. The Home Chooser app no longer calls
+# apply or stop; it writes a flag and asks the user to reboot. apply, stop and `refresh restart`
+# are kept for manual and debug use (docs/key-filter-backport.md, "Restarting the compositor").
+#
 #   homechooser-keyfilter          apply: find the diff set whose stock hashes match the live
 #                                files, patch copies of them in /tmp, bind-mount the copies
-#                                over the originals and restart the compositor
-#   homechooser-keyfilter stop     unmount what apply mounted and restart the compositor
-#   homechooser-keyfilter refresh [stock] [norestart]
+#                                over the originals and restart the compositor (boot path, debug)
+#   homechooser-keyfilter stop     unmount what apply mounted and restart the compositor (debug)
+#   homechooser-keyfilter refresh [stock] [restart]
 #                                if mounted, write the stored choice into the mounted copy of
-#                                Settings.qml again and restart the compositor when it changed;
-#                                with `stock`, write an empty id whatever is stored (the watcher
-#                                does that while the chosen app is not installed); with
-#                                `norestart`, update the copy and leave the compositor running
-#                                (the watcher does that when the choice changes: the loaded QML
-#                                keeps its old value, but getHomeAppId reads the settings record
-#                                first, which the watcher has already brought to the new choice,
-#                                so the baked id is only the fallback for the next start)
+#                                Settings.qml again; with `stock`, write an empty id whatever is
+#                                stored (the watcher does that while the chosen app is not
+#                                installed). It never restarts the compositor unless `restart` is
+#                                given (debug): the loaded QML keeps its old value, but
+#                                getHomeAppId reads the settings record first, so the baked id is
+#                                only the fallback for the next start. `norestart` is accepted and
+#                                does nothing.
 #   homechooser-keyfilter apply samfirst   restart sam first, then as apply
-#   homechooser-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none
+#   homechooser-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none,
+#                                and reboot=needed|no: needed when the flag file exists and
+#                                nothing is mounted though a reviewed set matches (or the generated
+#                                patch is possible and opted in), or when the flag file is absent
+#                                and something is still mounted
 #
 # The data directory holds one directory per release with a manifest.json and the diffs. A set
 # is applied all or nothing. Nothing on the rootfs is modified.
@@ -33,8 +42,16 @@
 # init.d entry `homechooser`, which decides whether the backport is enabled.
 #
 # Overrides, for tests: HOMECHOOSER_LUNA_SEND, HOMECHOOSER_SAM_WAIT, HOMECHOOSER_SLEEP, HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHOICE, HOMECHOOSER_DATA, HOMECHOOSER_ROOT (prefix of the target paths),
-# HOMECHOOSER_WORK, HOMECHOOSER_LOG, HOMECHOOSER_MOUNTS, HOMECHOOSER_MOUNT, HOMECHOOSER_UMOUNT,
-# HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_PATCH, HOMECHOOSER_SHA256, HOMECHOOSER_UNIT.
+# HOMECHOOSER_WORK, HOMECHOOSER_LOG, HOMECHOOSER_KEYFILTER_FLAG (the enable flag, default
+# /var/lib/webosbrew/homechooser/keyfilter), HOMECHOOSER_GENERATED_FLAG, HOMECHOOSER_MOUNTS, HOMECHOOSER_MOUNT, HOMECHOOSER_UMOUNT,
+# HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_PATCH, HOMECHOOSER_SHA256, HOMECHOOSER_UNIT,
+# HOMECHOOSER_DEPENDANTS (the units stopped before and started after the compositor restart,
+# instead of the list read from lsm-ready.service; empty means none).
+#
+# "Restart the compositor" is: stop those of webapp-mgr, booster and maliit-server (the clients
+# the firmware's lsm-ready.service restarts) that are running, restart surface-manager-daemon,
+# start them again. Stopping WebAppMgr closes every web app, Home Chooser's own UI included.
+# Only apply (the boot path), stop and `refresh restart` do this.
 
 DATA=${HOMECHOOSER_DATA:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/backport}
 ROOT=${HOMECHOOSER_ROOT:-}
@@ -47,12 +64,14 @@ SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
 PATCH=${HOMECHOOSER_PATCH:-patch}
 SHA256=${HOMECHOOSER_SHA256:-sha256sum}
 UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
+DEPENDANTS_DEFAULT="webapp-mgr.service booster.service maliit-server.service"
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
 HC_LUNA_IDENTITY=com.webos.applicationManager    # privileged luna calls run with this identity (docs/service.md)
 SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
+KEYFILTER_FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
 GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
 NO_SETS_FLAG=${HOMECHOOSER_NO_SETS_FLAG:-/var/lib/webosbrew/homechooser/debug-no-sets}
 NODE=${HOMECHOOSER_NODE:-node}
@@ -246,14 +265,83 @@ active_manifest() {
     fi
 }
 
-restart_compositor() {
+# compositor_dependants: the compositor's clients that the firmware restarts once the compositor is
+# ready, in its order: the `systemctl start <unit>` lines of lsm-ready.service (/etc before /lib,
+# as systemd reads them). All releases 6.5.2 to 9.2.4 list webapp-mgr, booster and maliit-server,
+# which is also the fallback when the unit is not found (docs/key-filter-backport.md, "Restarting
+# the compositor").
+compositor_dependants() {
+    if [ -n "${HOMECHOOSER_DEPENDANTS+set}" ]; then
+        echo "$HOMECHOOSER_DEPENDANTS"
+        return 0
+    fi
+    for f in "$ROOT/etc/systemd/system/lsm-ready.service" "$ROOT/lib/systemd/system/lsm-ready.service"; do
+        [ -f "$f" ] || continue
+        list=$(sed -n 's|^ExecStart=[^ ]*systemctl start \([A-Za-z0-9@._-]*\.service\)[[:space:]]*$|\1|p' "$f" | tr '\n' ' ')
+        if [ -n "$list" ]; then
+            echo $list
+            return 0
+        fi
+    done
+    echo "$DEPENDANTS_DEFAULT"
+}
+
+# unit_running <unit>: active, or on its way there (the same set systemd try-restarts).
+unit_running() {
+    case "$("$SYSTEMCTL" is-active "$1" 2>/dev/null)" in
+        active|activating|reloading) return 0 ;;
+    esac
+    return 1
+}
+
+# restart_sequence <dependants...>: stop the dependants that are running, restart the compositor,
+# start them again. The daemon is Type=notify and its READY=1 is sent by the initctl shim when the
+# compositor emits lsm-ready, so `restart` returns once the compositor is ready, and the clients
+# connect to a compositor that has announced its outputs, as at boot. A client left running while
+# the compositor goes away exits on a broken pipe, is respawned by Restart=on-failure while the new
+# compositor is still starting, and WebAppMgr can crash there (9.2.1, scratch/wam-crash/notes.md).
+restart_sequence() {
+    was=
+    for u in "$@"; do
+        unit_running "$u" && was="$was $u"
+    done
+    for u in $was; do
+        log "stopping $u"
+        "$SYSTEMCTL" stop "$u" || log "ERROR: could not stop $u"
+    done
+    r=0
     log "restarting $UNIT"
     if "$SYSTEMCTL" restart "$UNIT"; then
         log "$UNIT restarted"
-        return 0
+    else
+        log "ERROR: could not restart $UNIT"
+        r=1
     fi
-    log "ERROR: could not restart $UNIT"
-    return 1
+    # Started even if the restart failed: a TV without WebAppMgr has no web apps at all.
+    for u in $was; do
+        log "starting $u"
+        "$SYSTEMCTL" start "$u" || { log "ERROR: could not start $u"; r=1; }
+    done
+    return $r
+}
+
+# restart_compositor: restart_sequence in a child of its own, waited for. The child does not hold
+# the caller's stdout or stderr (Home Chooser's service reads them through pipes and SIGKILLs this
+# worker at its timeout), so the stop and the start cannot be separated by the death of this
+# process or of the web app that asked for the run, which the stop of webapp-mgr closes. Its
+# output is copied to ours afterwards.
+restart_compositor() {
+    deps=$(compositor_dependants)
+    out="$WORK/restart.$$.out"
+    (
+        trap '' HUP INT PIPE
+        restart_sequence $deps
+    ) < /dev/null > "$out" 2>&1 &
+    wait $!
+    r=$?
+    cat "$out" 2>/dev/null
+    rm -f "$out"
+    return $r
 }
 
 undo_mounts() {
@@ -388,11 +476,12 @@ do_stop() {
 do_refresh() {
     detect_timeout
     any_mounted || { log "nothing mounted, nothing to refresh"; return 0; }
-    cid=; stock=0; norestart=0
+    cid=; stock=0; restart=0
     for a in "$@"; do
         case "$a" in
             stock) stock=1 ;;
-            norestart) norestart=1 ;;
+            restart) restart=1 ;;
+            norestart) ;;
         esac
     done
     [ "$stock" = 1 ] || cid=$(baked_id)
@@ -407,10 +496,10 @@ do_refresh() {
     rm -f "$WORK/entries.tmp"
     if [ "$changed" != 1 ]; then
         log "configured home unchanged"
-    elif [ "$norestart" = 1 ]; then
-        log "compositor not restarted, the settings record decides until the next start"
-    else
+    elif [ "$restart" = 1 ]; then
         restart_compositor
+    else
+        log "configured home updated; the running compositor keeps its loaded id until the next start (the settings record is read first)"
     fi
 }
 
@@ -418,6 +507,7 @@ do_status() {
     if [ ! -d "$DATA" ]; then
         echo "data=missing"
     fi
+    reboot=no
     if any_mounted; then
         echo "mounted=yes"
         echo "release=$(cat "$WORK/release" 2>/dev/null || echo unknown)"
@@ -429,12 +519,23 @@ do_status() {
             done < "$WORK/entries.tmp"
             rm -f "$WORK/entries.tmp"
         fi
+        [ -f "$KEYFILTER_FLAG" ] || reboot=needed
     else
         echo "mounted=no"
         rel=$(find_set)
         echo "match=${rel:-none}"
-        [ -n "$rel" ] || generated_status
+        if [ -n "$rel" ]; then
+            [ -f "$KEYFILTER_FLAG" ] && reboot=needed
+        else
+            gen=$(generated_status)
+            printf '%s\n' "$gen"
+            if [ -f "$KEYFILTER_FLAG" ] && printf '%s\n' "$gen" | grep -q '^generated=possible$' &&
+                [ -f "$GENERATED_FLAG" ]; then
+                reboot=needed
+            fi
+        fi
     fi
+    echo "reboot=$reboot"
 }
 
 case "$1" in
@@ -442,5 +543,5 @@ case "$1" in
     stop)     do_stop ;;
     refresh)  shift; do_refresh "$@" ;;
     status)   do_status ;;
-    *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [norestart]|status]" >&2; exit 2 ;;
+    *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [restart]|status]" >&2; exit 2 ;;
 esac

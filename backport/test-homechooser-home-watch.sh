@@ -584,9 +584,10 @@ for major in 6 8 9; do
     reply '{"home":"other.home","kidsApp":"k.app"}'
     run
     check "$major: record carries the new choice" has '"home":"other.home"' "$T/record"
-    check "$major: one refresh without restart" test "$(kfn 'refresh norestart data')" = 1
-    check "$major: the start refresh restarts as before" test "$(kfn 'refresh data')" = 1
-    check "$major: the refresh ran from the runtime copy" has "refresh norestart data=$T/rt from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
+    check "$major: the start refresh and the one for the new choice" test "$(kfn 'refresh data')" = 2
+    check "$major: no refresh asks for a restart" hasnt restart "$T/kfcalls"
+    check "$major: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
+    check "$major: the refresh ran from the runtime copy" has "refresh data=$T/rt from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
     cleanup
 done
 
@@ -596,7 +597,7 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app","x":1}'
 run
-check "no norestart refresh" test "$(kfn 'refresh norestart')" = 0
+check "only the start refresh" test "$(kfn 'refresh data')" = 1
 cleanup
 
 echo "== choice changed to an app that is not installed: left to the removal path"
@@ -606,7 +607,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'CHOICE ghost.app' >> "$T/stream"
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
-check "no norestart refresh for an uninstalled app" test "$(kfn 'refresh norestart')" = 0
+check "only the start refresh for an uninstalled app" test "$(kfn 'refresh data')" = 1
 cleanup
 
 echo "== choice changed on webOS 5 and 10: the backport is not involved"
@@ -639,8 +640,9 @@ for major in 6 9; do
     check "$major: generated opt-in removed" test ! -f "$T/generated-flag"
     check "$major: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$major: app directory is gone" test ! -d "$T/app"
-    check "$major: key filter stop ran" has "stop data=$T/rt" "$T/kfcalls"
-    check "$major: from the runtime copy" has "from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
+    check "$major: no key filter stop, no unmount, no restart" hasnt 'keyfilter stop' "$T/kfcalls"
+    check "$major: the worker was not asked to restart anything" hasnt restart "$T/kfcalls"
+    check "$major: no worker call after the revert" hasnt 'keyfilter apply' "$T/kfcalls"
     check "$major: manifest copied to the runtime" test -f "$T/rt/1.0/manifest.json"
     check "$major: the watcher itself ran from the runtime" test -f "$T/rt/homechooser-home-watch"
     check "$major: logged" has 'stock Home restored' "$T/log"
@@ -717,7 +719,7 @@ check "both at once: exit 0" rc 0
 check "both at once: one write" test "$(writes)" = 1
 check "both at once: stock state, nothing left for a later removal to break" nohome
 check "both at once: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
-check "both at once: stop ran" has stop "$T/kfcalls"
+check "both at once: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
 cleanup
 setup 8 'my.home\n'
 live '{"home":"my.home","kidsApp":"k.app"}'
@@ -745,7 +747,7 @@ check "exit 0" rc 0
 check "record is stock" nohome
 check "choice removed" test ! -f "$T/home"
 check "link removed" test ! -L "$T/init.d/homechooser"
-check "stop from the runtime copy" has "from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
+check "no stop from the runtime copy either" hasnt 'keyfilter stop' "$T/kfcalls"
 cleanup
 
 echo "== idempotent: a second restore changes nothing"
@@ -885,11 +887,14 @@ cleanup
 alerts() { grep -c ' CALL luna://com.webos.notification/createAlert' "$T/calls"; }
 toasts() { grep -c ' CALL luna://com.webos.notification/createToast' "$T/calls"; }
 lineof() { grep -n -- "$1" "$T/calls" | head -n 1 | cut -d: -f1; }
-ALERT_MSG='Title of my.home was removed, so the Home button opens LG Home again.'
+ALERT_MSG='Title of my.home was removed, so the Home button opens LG Home again. Restart the TV to finish the change.'
+ALERT_MSG_OLD='Title of my.home was removed, so the Home button opens LG Home again.'
 
 echo "== the chosen app removed: one alert, after the revert, with its title"
 for major in 5 8 10 11; do
     setup $major 'my.home\n'
+    msg=$ALERT_MSG_OLD
+    [ "$major" = 8 ] && msg=$ALERT_MSG
     live '{"home":"my.home","kidsApp":"k.app"}'
     reply '{"home":"my.home","kidsApp":"k.app"}'
     echo 'UNINSTALL my.home' >> "$T/stream"
@@ -899,13 +904,24 @@ for major in 5 8 10 11; do
     HOMECHOOSER_RECHECK=1 run
     check "$major: one alert, not repeated by the later checks" test "$(alerts)" = 1
     check "$major: no toast" test "$(toasts)" = 0
-    check "$major: payload" has "CALL luna://com.webos.notification/createAlert {\"sourceId\":\"org.webosbrew.homechooser\",\"title\":\"Home Chooser\",\"message\":\"$ALERT_MSG\",\"buttons\":[{\"label\":\"OK\",\"focus\":true}]}" "$T/calls"
+    check "$major: payload" has "CALL luna://com.webos.notification/createAlert {\"sourceId\":\"org.webosbrew.homechooser\",\"title\":\"Home Chooser\",\"message\":\"$msg\",\"buttons\":[{\"label\":\"OK\",\"focus\":true}]}" "$T/calls"
     check "$major: called through the fixed identity" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the revert write" test "$(lineof createAlert)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
     check "$major: reply logged" has 'notification createAlert: {"returnValue":true}' "$T/log"
     cleanup
 done
-echo "== the alert comes after the compositor restart of the revert (6 to 9)"
+echo "== the alert text on 6 and 9 as on 8; other releases keep the old one"
+for major in 6 9; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    run
+    check "$major: restart sentence" has "\"message\":\"$ALERT_MSG\"" "$T/calls"
+    cleanup
+done
+echo "== the revert of a removed chosen app never restarts the compositor (6 to 9)"
 for major in 6 9; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
@@ -914,6 +930,7 @@ for major in 6 9; do
     echo APPS >> "$T/stream"
     run
     check "$major: refresh stock ran before the alert" test "$(lineof 'KF refresh stock')" -lt "$(lineof createAlert)"
+    check "$major: refresh stock without restart" hasnt restart "$T/kfcalls"
     check "$major: one alert" test "$(alerts)" = 1
     cleanup
 done
@@ -926,7 +943,7 @@ reply '{"home":"my.home"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "id in the message" has '"message":"my.home was removed, so the Home button opens LG Home again."' "$T/calls"
+check "id in the message" has '"message":"my.home was removed, so the Home button opens LG Home again. Restart the TV to finish the change."' "$T/calls"
 cleanup
 echo "== the title is read from appinfo.json when getAppInfo carries none"
 setup 8 'my.home\n'
@@ -1059,7 +1076,7 @@ HOMECHOOSER_NOTIFY=0 run
 check "none sent" test "$(alerts)$(toasts)" = 00
 cleanup
 
-echo "== Home Chooser uninstalled: one toast, after the backport is undone"
+echo "== Home Chooser uninstalled: one toast, the backport left mounted (6 to 9)"
 for major in 5 6 9 10; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
@@ -1071,10 +1088,13 @@ for major in 5 6 9 10; do
     check "$major: exit 0" rc 0
     check "$major: one toast" test "$(toasts)" = 1
     check "$major: no alert" test "$(alerts)" = 0
-    check "$major: payload" has 'CALL luna://com.webos.notification/createToast {"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}' "$T/calls"
+    toast='Home Chooser was removed. The Home button opens LG Home again.'
+    [ "$major" = 6 -o "$major" = 9 ] && toast='Home Chooser was removed. Restart the TV to put LG Home back on the Home button.'
+    check "$major: payload" has "CALL luna://com.webos.notification/createToast {\"sourceId\":\"org.webosbrew.homechooser\",\"noaction\":true,\"message\":\"$toast\"}" "$T/calls"
     check "$major: fixed identity, one reply" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the record revert" test "$(lineof createToast)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"
-    [ "$major" = 6 -o "$major" = 9 ] && check "$major: after the backport stop (compositor restart)" test "$(lineof createToast)" -gt "$(lineof 'KF stop')"
+    check "$major: no worker stop, no restart" hasnt 'KF stop' "$T/calls"
+    check "$major: the only worker calls are refreshes" test "$(grep -vc '^keyfilter refresh' "$T/kfcalls")" = 0
     check "$major: files gone before the toast is the last word" test ! -f "$T/home"
     cleanup
 done
