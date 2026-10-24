@@ -27,8 +27,7 @@ homebrew app with three parts:
   again.
 * The webOS 6 to 9 Home-key hook uses one guarded rewriter on stock compositor files at boot.
   Essential hooks apply together; four supporting files are patched independently when their anchors
-  match. A refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted; reviewed
-  firmware diffs are test references only. See [The minimal hook](docs/key-filter-backport.md).
+  match. A refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/key-filter-backport.md).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.

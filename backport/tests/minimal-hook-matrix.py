@@ -46,10 +46,6 @@ PATTERNS = [
     ('U2', SUI, r'^function handleHomeKeys\([^)]*\) \{$', M, 1, 'systemUi: handleHomeKeys header'),
     ('U4', SUI, r'applicationManager\.(?:launch|checkLaunch)\(\s*' + LIT, 0, 1, 'systemUi: launches of the stock id (covered by K1/K2)'),
     ('A1', APL, r'applicationManager\.(?:launch|checkLaunch)\(\s*' + LIT, 0, 1, 'appLaunch: launches of the stock id (covered by K1/K2)'),
-    # --- today's anchors, for comparison ----------------------------------------------------
-    ('T1', KF, r'^[ \t]*readonly property var closeOverlaidItems: viewState\.closeOverlaidItems$', M, 0, 'today: KF global anchor'),
-    ('T2', KF, r'readonly property QtObject applicationManager: QtObject \{\n[ \t]*// functions\n', 0, 0, 'today: KF applicationManager anchor'),
-    ('T3', VSC, r'^[ \t]*property string lastInputApp:', M, 0, 'today: VSC homeAppId anchor'),
     # --- tier 2: optional comparisons --------------------------------------------------------
     ('N1', NUD, r'views\.fullscreen\.currentItem\.appId === ' + LIT, 0, 2, 'Nudge: suppress nudges over home'),
     ('B1', BLS, r'views\.fullscreen\.currentItem\.appId === ' + LIT, 0, 2, 'BaseLuna: getCurrentState "launcher"'),

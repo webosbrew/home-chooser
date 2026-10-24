@@ -5,8 +5,7 @@
 # refresh [stock] rewrites the stored-id fallback in the staged Settings.qml in place.
 # stop and refresh restart retain explicit manual/debug restart support.
 # status reports patch=possible|refused, unpatched-sites=N, skipped=reason and file=/path.
-# Reviewed backport/<release> sets are test references, never used here or shipped.
-# Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,SHA256,UNIT,
+# Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,UNIT,
 # CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,GEN,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
 
 ROOT=${HOMECHOOSER_ROOT:-}
@@ -16,7 +15,6 @@ MOUNTS=${HOMECHOOSER_MOUNTS:-/proc/mounts}
 MOUNT=${HOMECHOOSER_MOUNT:-mount}
 UMOUNT=${HOMECHOOSER_UMOUNT:-umount}
 SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
-SHA256=${HOMECHOOSER_SHA256:-sha256sum}
 UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
 DEPENDANTS_DEFAULT="webapp-mgr.service booster.service maliit-server.service"
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
@@ -39,11 +37,10 @@ log() {
     echo "$msg" >> "$LOG" 2>/dev/null
 }
 
-# entries <manifest>: print path, sha256 and diff name of every file, one per line, in order.
-# The manifest is JSON; the three keys are picked line by line, so the layout does not matter.
+# entries <manifest>: print staged target paths, one per line, in order.
 entries() {
     tr '{},' '\n\n\n' < "$1" |
-        sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'
+        sed -En 's/^[[:space:]]*"(path)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'
 }
 
 # configured_id: print the stored home id, trimmed; nothing if absent, empty or invalid.
@@ -216,47 +213,29 @@ take_lock() {
     echo $$ > "$LOCKDIR/pid"
 }
 
-# Only our staged manifest owns mounts; reviewed sets are offline test references.
+# Our staged target list owns the mounts.
 any_mounted() {
     [ -f "$WORK/manifest.json" ] || return 1
     entries "$WORK/manifest.json" > "$ETMP"
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         if is_mounted "$ROOT$p"; then rm -f "$ETMP"; return 0; fi
     done < "$ETMP"
     rm -f "$ETMP"
     return 1
 }
 
-# Cache checks by content, including discovery/guard inputs and the rules themselves.
-# Hash all QML/JS in these trees, so a new target or stray stock id invalidates the cache too.
-check_key() {
-    {
-        printf '%s\n' "$NODE"
-        "$SHA256" "$GEN" "$ROOT/etc/os-release" "$ROOT/usr/lib/os-release" 2>/dev/null
-        find "$ROOT/usr/lib/qml/WebOSCompositor" "$ROOT/usr/lib/qml/KeyFilters" \
-             "$ROOT/usr/lib/qml/WebOSCompositorBase" -type f \
-             \( -name '*.qml' -o -name '*.js' \) -exec "$SHA256" {} + 2>/dev/null | LC_ALL=C sort
-    } | "$SHA256" | cut -d' ' -f1
-}
-
+# Check the current files directly; there is no firmware lookup or content-key cache.
 patch_status() {
-    key=$(check_key)
-    cache="$WORK/check-$key"
-    if [ ! -f "$cache" ]; then
-        if "$NODE" "$GEN" check --root "${ROOT:-/}" > "$WORK/check.$$.out" 2>&1; then
-            cat "$WORK/check.$$.out" > "$WORK/check.$$.result"
-        else
-            {
-                echo patch=refused
-                printf 'reason='
-                tr '\n\r' '  ' < "$WORK/check.$$.out"
-                printf '\n'
-            } > "$WORK/check.$$.result"
-        fi
-        mv "$WORK/check.$$.result" "$cache"
-        rm -f "$WORK/check.$$.out"
+    result="$WORK/check.$$.out"
+    if "$NODE" "$GEN" check --root "${ROOT:-/}" > "$result" 2>&1; then
+        cat "$result"
+    else
+        echo patch=refused
+        printf 'reason='
+        tr '\n\r' '  ' < "$result"
+        printf '\n'
     fi
-    cat "$cache"
+    rm -f "$result"
 }
 
 # compositor_dependants: the compositor's clients that the firmware restarts once the compositor is
@@ -389,7 +368,7 @@ do_apply() {
     entries "$WORK/manifest.json" > "$AENT"
     # Put the stored choice into the copies that carry the placeholder.
     cid=$(baked_id)
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         if has_configured "$WORK/stage$p"; then
             set_configured "$WORK/stage$p" "$cid" || {
                 log "ERROR: cannot set the configured home in $p, hook not applied"
@@ -410,7 +389,7 @@ do_apply() {
 
     # Bind-mount the copies; if one fails, undo the ones already mounted.
     : > "$WORK/mounted"
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         if "$MOUNT" --bind "$WORK/stage$p" "$ROOT$p"; then
             echo "$ROOT$p" >> "$WORK/mounted"
             log "mounted $p"
@@ -445,7 +424,7 @@ do_stop() {
     for m in "$WORK/manifest.json"; do
         [ -f "$m" ] || continue
         entries "$m" > "$ETMP"
-        while read -r p && read -r h && read -r d; do
+        while read -r p; do
             tries=0
             while is_mounted "$ROOT$p" && [ "$tries" -lt 3 ]; do
                 tries=$((tries + 1))
@@ -460,7 +439,7 @@ do_stop() {
         done < "$ETMP"
     done
     # Keep the target list and mounted sources if an unmount failed, so status and a
-    # later stop can still find them even when no reviewed set names these files.
+    # later stop can still find them.
     if any_mounted; then
         log "ERROR: targets remain mounted; keeping stage and manifest for a later stop"
         return 1
@@ -487,7 +466,7 @@ do_refresh() {
     [ "$stock" = 1 ] || cid=$(baked_id)
     changed=0
     entries "$WORK/manifest.json" > "$ETMP" 2>/dev/null
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         f="$WORK/stage$p"
         has_configured "$f" || continue
         grep -qF "configuredHomeAppId: \"$cid\"" "$f" && continue

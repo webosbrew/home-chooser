@@ -1,5 +1,4 @@
 """No LG sources are stored here. Corpus roots are read-only; all outputs are temporary."""
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,7 +20,7 @@ NUDGE = Q + 'WebOSCompositor/views/StarfishNudgeView.qml'
 RECENTS = Q + 'WebOSCompositor/controllers/fullscreen/StarfishRecents.qml'
 FSC = Q + 'WebOSCompositor/controllers/StarfishFullscreenController.qml'
 LUNA = Q + 'WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml'
-PASS = FAIL = SKIP = BUILDS = REVIEWED = SCENARIOS = 0
+PASS = FAIL = SKIP = BUILDS = SCENARIOS = 0
 
 
 def run(*args):
@@ -73,25 +72,6 @@ def synthetic(root):
     put(root, FSC, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
 
 
-def reviewed(root, dest):
-    for manifest in sorted(BACKPORT.glob('*/manifest.json')):
-        entries = json.loads(manifest.read_text())['files']
-        if not all((root / e['path'].lstrip('/')).is_file() and
-                   hashlib.sha256((root / e['path'].lstrip('/')).read_bytes()).hexdigest() == e['sha256']
-                   for e in entries):
-            continue
-        for e in entries:
-            p = Path(e['path'].lstrip('/'))
-            (dest / p).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(root / p, dest / p)
-            r = subprocess.run(['patch', '-p0', '-F0', '-s'], cwd=dest,
-                               input=(manifest.parent / e['diff']).read_bytes(), capture_output=True)
-            if r.returncode:
-                raise RuntimeError(r.stderr.decode())
-        return manifest.parent.name
-    return None
-
-
 def restore(file, text):
     """Remove only our known insertions/substitutions; remaining bytes must be stock."""
     if file == SET:
@@ -107,7 +87,7 @@ def restore(file, text):
 
 
 def build(name, version, root, work, harness=True):
-    global BUILDS, REVIEWED, SCENARIOS
+    global BUILDS, SCENARIOS
     out, out2 = work / 'out', work / 'out2'
     r = run(NODE, GEN, 'generate', '--root', root, '--out', out, '--manifest', work / 'manifest.json')
     major = int(version.split('.')[0])
@@ -176,16 +156,11 @@ var stock='com.webos.app.home', chosen='org.example.launcher';
         return
     stock_api = (root / LUNA).read_text(encoding='latin1')
     check(name + ': stock QML readiness method exists', 'function getCurrentState(msg)' in stock_api and '"getCurrentState"' in stock_api)
-    ref = work / 'ref'
-    release = reviewed(root, ref)
     args = ['stock=' + str(root / SUI), 'min=' + str(out / SUI)]
-    if release:
-        args.append('ref=' + str(ref / SUI))
-        REVIEWED += 1
     h = run(NODE, HERE / 'home-key-harness.js', *args)
     (work / 'harness.tsv').write_text(''.join(line + '\n' for line in h.stdout.splitlines() if '\t' in line))
     v = run(sys.executable, '-I', HERE / 'home-key-verdict.py', work / 'harness.tsv', name)
-    check(name + ': behaviour' + (' == reviewed ' + release if release else ''), h.returncode == v.returncode == 0, v.stdout)
+    check(name + ': behaviour', h.returncode == v.returncode == 0, v.stdout)
     SCENARIOS += 144
     print(v.stdout.strip(), flush=True)
 
@@ -254,7 +229,7 @@ def main():
         matrix = run(sys.executable, '-I', HERE / 'minimal-hook-matrix.py', corpusfile)
         check('pattern matrix runs', matrix.returncode == 0, matrix.stdout)
         print(matrix.stdout)
-    print('%d passed, %d failed, %d skipped; %d supported builds, %d reviewed comparisons, %d Home-key scenarios' % (PASS, FAIL, SKIP, BUILDS, REVIEWED, SCENARIOS))
+    print('%d passed, %d failed, %d skipped; %d supported builds, %d Home-key scenarios' % (PASS, FAIL, SKIP, BUILDS, SCENARIOS))
     return bool(FAIL)
 
 

@@ -8,8 +8,8 @@
 # unmounts everything; and that the stock files were never touched.
 #
 # usage: test-real-roundtrip.sh [shell] [release=rootfs ...]
-#   shell defaults to sh (e.g. "busybox sh"). With no release=rootfs pairs, every set directory
-#   is tried against its known firmware root; a set whose root is not on this machine is skipped
+#   shell defaults to sh (e.g. "busybox sh"). With no release=rootfs pairs, every corpus root
+#   is tried; a root that is not on this machine is skipped
 #   with a notice. Explicit pairs must exist (a missing root fails).
 SH=${1:-sh}
 [ $# -gt 0 ] && shift
@@ -39,7 +39,7 @@ systemctl start webapp-mgr.service
 systemctl start booster.service
 systemctl start maliit-server.service"
 
-entries() { tr '{},' '\n\n\n' < "$1" | sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'; }
+entries() { tr '{},' '\n\n\n' < "$1" | sed -En 's/^[[:space:]]*"(path)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'; }
 
 for pair in "$@"; do
     rel=${pair%%=*}
@@ -65,7 +65,7 @@ for pair in "$@"; do
     node "$HERE/homechooser-keyfilter-gen.js" generate --root "$root" --out "$T/expected" --manifest "$T/expected.json" > /dev/null || { FAIL=$((FAIL + 1)); rm -rf "$T"; continue; }
     entries "$T/expected.json" > "$T/entries"
     : > "$T/before"
-    while read -r p && read -r h && read -r d; do sha256sum "$root$p" >> "$T/before"; done < "$T/entries"
+    while read -r p; do sha256sum "$root$p" >> "$T/before"; done < "$T/entries"
     cat > "$T/bin/mount" <<STUB
 #!/bin/sh
 echo "mount \$*" >> "$T/cmds"
@@ -85,7 +85,7 @@ id=\$(echo "\$4" | sed 's/.*"id":"\([^"]*\)".*/\1/')
 if grep -qxF "\$id" "$T/installed"; then echo '{"returnValue":true}'; else echo '{"returnValue":false}'; fi
 STUB
     chmod +x "$T/bin/"*
-    export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$root" HOMECHOOSER_WORK="$T/work" HOMECHOOSER_LOG="$T/log" \
+    export HOMECHOOSER_ROOT="$root" HOMECHOOSER_WORK="$T/work" HOMECHOOSER_LOG="$T/log" \
            HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" HOMECHOOSER_UMOUNT="$T/bin/umount" \
            HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home" HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" \
            HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
@@ -97,12 +97,12 @@ STUB
     w status
     check "$rel: status accepts structural anchors" has 'patch=possible' "$T/out"
     w apply
-    check "$rel: apply exits 0 and mounts every target" test "$(grep -c '^mount' "$T/cmds")" = "$(grep -c . "$T/entries" | awk '{print $1 / 3}')"
+    check "$rel: apply exits 0 and mounts every target" test "$(grep -c '^mount' "$T/cmds")" = "$(grep -c . "$T/entries")"
     check "$rel: compositor restarted once" test "$(grep -c '^systemctl restart' "$T/cmds")" = 1
     # the clients come from this firmware's own lsm-ready.service: stopped before, started after
     check "$rel: the firmware's clients around the compositor restart" test "$(seq)" = "$RESTART"
     # the bind sources live under WORK (/tmp), not in the app directory, so they outlive an uninstall
-    check "$rel: every mount source is under the work directory" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = "$(grep -c . "$T/entries" | awk '{print $1 / 3}')"
+    check "$rel: every mount source is under the work directory" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = "$(grep -c . "$T/entries")"
     check "$rel: no mount source in the data (app) directory" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
     check "$rel: choice baked in (installed)" has 'configuredHomeAppId: "my.home"' "$stage"
     # With the baked id reset, staged copies must equal the independently generated plan.
@@ -140,7 +140,7 @@ STUB
     check "$rel: apply with the app not installed bakes stock" has 'configuredHomeAppId: ""' "$stage"
     w stop
     : > "$T/after"
-    while read -r p && read -r h && read -r d; do sha256sum "$root$p" >> "$T/after"; done < "$T/entries"
+    while read -r p; do sha256sum "$root$p" >> "$T/after"; done < "$T/entries"
     check "$rel: the stock files were never touched" cmp -s "$T/before" "$T/after"
     rm -rf "${T:?}"
 done

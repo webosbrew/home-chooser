@@ -159,3 +159,11 @@ with both home ids, ordinary apps, last-input apps and homeconnect, checking bot
 states and stock/chosen configurations. The 541 checks pass under sh, BusyBox sh and Node 8.12;
 all 16 Home-key reviewed comparisons still match. On 9.2.4 all seven staged files are byte-identical
 before and after this correction.
+
+## Retiring the per-release references
+
+Before deletion, the final oracle run recorded **16 matching reviewed-set comparisons and
+2,736 Home-key scenarios** across 19 real supported firmware roots. The 541 offline checks
+passed under sh and BusyBox sh, and under Node 8.12 with each shell. The same corpus and
+stock-versus-rewriter harness remain; per-release manifests and diffs are no longer needed.
+The user approved their deletion before the remaining VM lanes completed.

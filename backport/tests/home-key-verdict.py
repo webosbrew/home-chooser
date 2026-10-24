@@ -9,9 +9,6 @@ def swap_label(lb):
 def swap_out(o):
     return o.replace(ST, '@').replace(L, ST).replace('@', L)
 res = []
-if 'ref' in rows:
-    d = [lb for lb in rows['min'] if rows['min'][lb] != rows['ref'][lb]]
-    res.append('min==ref: %s' % ('yes (%d scenarios)' % len(rows['min']) if not d else 'NO %d diffs e.g. %s | min=%s | ref=%s' % (len(d), d[0], rows['min'][d[0]], rows['ref'][d[0]])))
 d = [lb for lb in rows['min'] if lb.startswith('choice=-') and rows['min'][lb] != rows['stock'][lb]]
 res.append('no-choice==stock: %s' % ('yes' if not d else 'NO %d e.g. %s' % (len(d), d[0])))
 d = [lb for lb in rows['min'] if lb.startswith('choice=L') and swap_out(rows['min'][lb]) != rows['stock'][swap_label(lb)]]

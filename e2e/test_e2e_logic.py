@@ -123,10 +123,10 @@ class RebootDialog(unittest.TestCase):
             self.assertFalse(e2e.expects_reboot_dialog(major, False))
 
     def test_parse_status(self):
-        out = 'data=missing\nmounted=no\nmatch=9.2.1\nreboot=needed\n'
+        out = 'data=missing\nmounted=no\npatch=possible\nreboot=needed\n'
         st = e2e.parse_status(out)
-        self.assertEqual((st['mounted'], st['match'], st['reboot']), ('no', '9.2.1', 'needed'))
-        st = e2e.parse_status('mounted=yes\nrelease=9.2.1\nreboot=no')
+        self.assertEqual((st['mounted'], st['patch'], st['reboot']), ('no', 'possible', 'needed'))
+        st = e2e.parse_status('mounted=yes\npatch=possible\nreboot=no')
         self.assertEqual((st['mounted'], st['reboot']), ('yes', 'no'))
         self.assertEqual(e2e.parse_status('some log line = with spaces\n'), {})
 

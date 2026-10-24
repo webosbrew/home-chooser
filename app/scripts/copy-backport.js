@@ -1,4 +1,4 @@
-// Ships runtime scripts only; reviewed sets and offline tests stay in the repo.
+// Ships runtime scripts only; offline tests stay in the repo.
 const fs = require('fs');
 const path = require('path');
 

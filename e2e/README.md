@@ -27,7 +27,7 @@ beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart 
 
 Every webOS 6–9 run exercises the minimal structural hook. After the selection boot and the
 reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
-proofs apply on every build. No opt-in marker or patch-set suppression flag is needed.
+proofs apply on every build.
 
 Log evidence includes the retained `/var/log/messages.N.gz` archives in chronological order;
 boot and service activity can rotate the active file before an assertion reads it. After each
@@ -63,7 +63,7 @@ runs its reach calls for, not the whole matrix every time:
 | Change | Runs |
 | --- | --- |
 | Any change | The offline suites: `backport/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
-| Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, one backport set) | The releases inside the gate, plus one just outside it |
+| Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
 | Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (backport), 11.x (root-shell elevation, profile path) |
 | Only the runner or the docs | One VM |
 | A release or a tag | The whole matrix with `--reboot-check` |

@@ -59,7 +59,7 @@
 # which only rewrite the baked id in the mounted copy (docs/key-filter-backport.md).
 #
 # The app's files are deleted with the app, so at start the watcher copies itself, the key filter
-# worker and the manifests into /tmp/homechooser-runtime/ and runs from there.
+# worker into /tmp/homechooser-runtime/ and runs from there.
 #
 # Storms: at most one write per interval (10 s); each write that follows the last one closely
 # doubles the interval, up to 5 min. Every action is logged to /tmp/homechooser-home.log.
@@ -95,7 +95,6 @@ APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications 
 # Where installed apps' files are, for "still on disk": the appinfo directories and the store's.
 INSTALL_DIRS=${HOMECHOOSER_INSTALL_DIRS:-"$APPS_DIRS /media/cryptofs/apps/usr/palm/applications"}
 KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
-GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
 OLD_INITD=$(dirname "$INITD")/homechooser-keyfilter
 RECHECK=${HOMECHOOSER_RECHECK:-300}
@@ -142,7 +141,7 @@ major_version() {
 }
 
 # Copy what the removal path needs out of the app directory: this script, the key filter worker
-# and the manifests of the diff sets (which name the files the backport mounts over). Each file is
+# and the access helper. Each file is
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
@@ -153,11 +152,7 @@ stage_runtime() {
         fi
         cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
     done
-    for m in "$1"/*/manifest.json; do
-        [ -f "$m" ] || continue
-        rel=$(basename "$(dirname "$m")")
-        mkdir -p "$RT/$rel" && cp "$m" "$RT/$rel/manifest.json" || return 1
-    done
+
 }
 
 # read_choice: print the stored home id. The file holds the id alone; surrounding spaces, tabs,
@@ -676,7 +671,7 @@ hc_gone() {
 kf_refresh() {
     [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
     [ -f "$KEYFILTER" ] || return 0
-    HOMECHOOSER_DATA=$KF_DATA $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
+    $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
 }
 
 # sync_baked <choice>: the stored choice changed while the app is installed: write it into the
@@ -747,7 +742,7 @@ restore_all() {
         $WSH "$SRC/homechooser-access" remove >> "$LOG" 2>&1 || log "could not remove launcher access"
     fi
     revert_platform "Home Chooser uninstalled"
-    rm -f "$CHOICE" "$KEYFLAG" "$GENERATED_FLAG"
+    rm -f "$CHOICE" "$KEYFLAG"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
     for l in "$INITD" "$OLD_INITD"; do
         if [ -L "$l" ]; then
@@ -950,7 +945,6 @@ if [ "$SRC" != "$RTDIR" ]; then
     log "cannot copy the scripts to $RT, running from $SRC"
 fi
 KEYFILTER=$SRC/homechooser-keyfilter
-KF_DATA=$SRC
 
 trap 'finish "stopped by signal" 0' TERM INT HUP
 

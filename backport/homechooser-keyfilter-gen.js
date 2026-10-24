@@ -16,7 +16,6 @@
 
 var fs = require('fs');
 var path = require('path');
-var crypto = require('crypto');
 
 var Q = 'usr/lib/qml/';
 var STOCK = 'com.webos.app.home';
@@ -329,7 +328,6 @@ function plan(root, opt) {
 		if (/\.qml$/.test(o.path) && o.path !== F.settings && /\bSettings\./.test(o.text) && !/^import WebOSCompositorBase /m.test(o.text)) {
 			abort(o.path + ' uses Settings without importing WebOSCompositorBase');
 		}
-		o.stockSha = crypto.createHash('sha256').update(Buffer.from(o.stock, 'latin1')).digest('hex');
 	});
 	if (ss.split(PLACEHOLDER).length !== 2) abort('placeholder not once');
 	return {targets: out, skipped: skipped};
@@ -358,7 +356,7 @@ function main(argv) {
 				fs.writeFileSync(d, Buffer.from(o.text, 'latin1'));
 			});
 			if (opt.manifest) fs.writeFileSync(opt.manifest, JSON.stringify({
-				files: p.targets.map(function (o) { return {path: '/' + o.path, sha256: o.stockSha, diff: 'minimal'}; }),
+				files: p.targets.map(function (o) { return {path: '/' + o.path}; }),
 				skipped: p.skipped
 			}, null, 2) + '\n');
 		}

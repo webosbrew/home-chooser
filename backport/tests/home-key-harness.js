@@ -1,6 +1,6 @@
 'use strict';
-// Behavioural comparison of handleHomeKeys: stock vs reviewed set (ref) vs minimal hook.
-//   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | ref | min)
+// Behavioural comparison of handleHomeKeys: stock vs minimal hook.
+//   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | min)
 // Runs every scenario in each variant, with the key filter's applicationManager emulated the way
 // each variant's StarfishKeyFilter.qml defines it, and prints one line per scenario with the actions.
 var fs = require('fs');
@@ -68,7 +68,6 @@ function scenario(variant, mod, sc) {
 		},
 		close: function (id) { lg('close ' + id); }
 	};
-	if (variant === 'ref') am.launchHome = function (params) { launchLog('launch', getHomeAppId(), params); };
 	if (variant === 'min') am.getHomeAppId = getHomeAppId;
 	var e = mod.env;
 	Object.keys(e).forEach(function (k) { delete e[k]; });

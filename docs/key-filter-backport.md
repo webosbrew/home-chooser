@@ -1,7 +1,6 @@
 # Minimal Home-key hook, webOS 6–9
 
-Home Chooser runs one structural rewriter against the stock compositor at boot. It does not select
-patch sets by firmware hash. The same guarded rules apply to webOS 6 through 9; a tier-1 mismatch
+Home Chooser runs one structural rewriter against the stock compositor at boot. The same guarded rules apply to webOS 6 through 9; a tier-1 mismatch
 leaves the device stock and logs the exact failed anchor. webOS 5 and 10 or later are refused.
 
 ## The hook
@@ -54,15 +53,13 @@ node backport/homechooser-keyfilter-gen.js generate --root /path/to/rootfs --out
 
 Exit status is 0 for success, 2 for a guarded refusal (`ABORT: <specific reason>`), and 1 for usage
 or I/O failure. `--skip-version-gate` is for offline negative controls only; the worker never uses it.
-The manifest records paths and stock hashes for diagnostics and tests. Hashes never choose a patch.
+The manifest records the staged target paths. Status checks the current stock files directly.
 
 ## Deployment
 
 The installed `backport/homechooser` entry is linked from Homebrew Channel's
 `/var/lib/webosbrew/init.d/homechooser`. The `keyfilter` enable flag controls boot application.
-There is no opt-in variant or per-firmware selection. Packaging copies only the five runtime
-scripts. Reviewed `backport/<release>/` manifests and diffs remain in the repository as offline test
-references and never ship in the ipk.
+Packaging copies only the five runtime scripts. Offline tests are kept in the source tree.
 
 At boot the worker generates files under `/tmp/homechooser-backport/stage`, writes the configured
 id into the staged Settings.qml, bind-mounts the files, then restarts the compositor once. An id is
@@ -132,11 +129,11 @@ Run every `backport/test-*.sh` under both sh and busybox sh; pass a one-line exe
 `cd app && npm ci && npm run lint && CI=true npm test`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
 
-`test-minimal-hook.sh` (also the compatibility entry `test-generated.sh`) runs the study's pattern
+`test-minimal-hook.sh` runs the study's pattern
 matrix, syntax checks, deterministic output, restoration of the original bytes after removing our
 edits, refusal/double-patch mutations, per-file tier-2 drift, and the Home-key behavioral harness.
 For each supported firmware it compares 144 scenarios: no choice versus stock, chosen launcher
-versus stock with home roles exchanged, and output versus a matching reviewed set applied locally.
+versus stock with home roles exchanged.
 The harness emulates QML service boundaries; VM checks remain necessary for QML/script visibility
 and settings subscription timing. Synthetic anchor skeletons test failures even without a corpus.
 

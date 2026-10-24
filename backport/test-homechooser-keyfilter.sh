@@ -25,7 +25,7 @@ mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form
 
 setup() {
     T=$(mktemp -d)
-    mkdir -p "$T/root/usr/lib/qml" "$T/data/1.0" "$T/data/2.0" "$T/bin" "$T/orig"
+    mkdir -p "$T/root/usr/lib/qml" "$T/bin" "$T/orig"
     printf 'one\ntwo\nthree\nhome = "com.webos.app.home"\nfive\n' > "$T/root/usr/lib/qml/a.qml"
     printf 'alpha\nbeta\nHOME_APP_ID\ngamma\n' > "$T/root/usr/lib/qml/b.js"
     cp "$T/root/usr/lib/qml/a.qml" "$T/root/usr/lib/qml/b.js" "$T/orig/"
@@ -112,7 +112,7 @@ if [ "$mode" = generate ]; then
     mkdir -p "$out/usr/lib/qml"
     cp "$T/new-a" "$out/usr/lib/qml/a.qml"
     cp "$T/new-b" "$out/usr/lib/qml/b.js"
-    printf '{"files":[{"path":"/usr/lib/qml/a.qml","sha256":"unused","diff":"minimal"},{"path":"/usr/lib/qml/b.js","sha256":"unused","diff":"minimal"}]}\n' > "$manifest"
+    printf '{"files":[{"path":"/usr/lib/qml/a.qml"},{"path":"/usr/lib/qml/b.js"}]}\n' > "$manifest"
 fi
 echo 'patch=possible'
 echo 'unpatched-sites=0'
@@ -124,7 +124,7 @@ STUB
     export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
-    export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
+    export HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
            HOMECHOOSER_LOG="$T/log" HOMECHOOSER_MOUNTS="$T/mounts" HOMECHOOSER_MOUNT="$T/bin/mount" \
            HOMECHOOSER_UMOUNT="$T/bin/umount" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_CHOICE="$T/home"
 }
@@ -529,7 +529,7 @@ setup
 check "no flag, unmounted: no" test "$(reboot_of)" = reboot=no
 check "status prints the line once" test "$(grep -c '^reboot=' "$T/out")" = 1
 touch "$T/keyfilter-flag"
-check "flag, unmounted, set matches: needed" test "$(reboot_of)" = reboot=needed
+check "flag, unmounted, anchors match: needed" test "$(reboot_of)" = reboot=needed
 check "existing lines unchanged" has 'patch=possible' "$T/out"
 run apply
 check "flag, mounted: no" test "$(reboot_of)" = reboot=no
@@ -539,20 +539,6 @@ check "mounted lines unchanged" has 'patch=possible' "$T/out"
 run stop
 check "no flag, stopped: no" test "$(reboot_of)" = reboot=no
 rm -rf "${T:?}"
-echo "== content-keyed status cache"
-setup
-run status
-run status
-check "same inputs: one check" test "$(wc -l < "$T/node-calls")" = 1
-echo changed >> "$T/generator.js"
-run status
-check "changed rules invalidate cache" test "$(wc -l < "$T/node-calls")" = 2
-mkdir -p "$T/root/usr/lib/qml/KeyFilters"
-echo '// new file' > "$T/root/usr/lib/qml/KeyFilters/new.js"
-run status
-check "new discovery input invalidates cache" test "$(wc -l < "$T/node-calls")" = 3
-rm -rf "${T:?}"
-
 echo "== stop keeps sources when unmount fails"
 setup
 run apply
