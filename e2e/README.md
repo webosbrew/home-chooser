@@ -29,6 +29,10 @@ Every webOS 6–9 run exercises the minimal structural hook. After the selection
 reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
 proofs apply on every build. No opt-in marker or patch-set suppression flag is needed.
 
+Log evidence includes the retained `/var/log/messages.N.gz` archives in chronological order;
+boot and service activity can rotate the active file before an assertion reads it. After each
+hook boot, the run also records the compositor's main-QML load lines and retained crash lines.
+
 Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
 `<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a

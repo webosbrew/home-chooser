@@ -2136,6 +2136,10 @@ class Scenario:
                 st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
         r.note(label + ': backport log of the boot apply (its compositor restart is the one allowed)',
                self.dev.sh('tail -n 20 %s 2>&1' % self.BACKPORT_LOG)[1])
+        r.note(label + ': compositor QML and crash evidence from retained messages logs', self.dev.sh(
+            messages_command() + " | grep -E 'surface-manager.*(WebOSCompositorWindow::setCompositorMain|"
+            "Type .*unavailable|Syntax error|is not a type)|crashd.*CRASHED|WebAppMgr.*(SIGSEGV|segfault)'"
+            " | tail -n 24")[1].strip() or 'no matching retained line')
 
     def close_insp(self):
         if self.insp:
