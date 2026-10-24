@@ -833,6 +833,34 @@ class Scenario:
         rc, out = self.dev.sh("grep 'notification %s:' /tmp/homechooser-home.log 2>&1" % method)
         return [l for l in out.splitlines() if 'notification %s:' % method in l]
 
+    def priv_luna(self, uri, payload='{}'):
+        """A privileged luna call as root, always with the identity the watcher uses (-a com.webos.applicationManager)."""
+        # exec, not sh: luna-send under ares-shell -r exits with no output
+        rc, out = self.dev.exec("luna-send -a com.webos.applicationManager -n 1 %s '%s' 2>&1" % (uri, payload))
+        return out.strip()
+
+    def foreign_popup(self, label):
+        """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
+        faultmanager (9.2.1 rootfs: /usr/sbin/faultmanager) raises the "[crash] Fault Occured" popup through
+        notificationmgr and answers luna://com.webos.service.faultmanager/getFaultDetectedStatus with
+        detectedFaults; its crash lines (faultmanager/crashd/CRASHED/createNotiPopup) are in /var/log/messages.
+        notificationmgr has no list-alerts method.  Returns the evidence string or ''."""
+        mark = getattr(self, 'popup_mark', None)
+        if not mark:
+            mark = self.popup_mark = self.messages_mark()
+        ev = []
+        reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
+        flat = reply.replace(' ', '')
+        m = re.search(r'"detectedFaults":\[(.+?)\]', flat)
+        if m and m.group(1).strip():
+            ev.append('getFaultDetectedStatus: ' + reply[:300])
+        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E 'faultmanager.*(createNotiPopup|sendCreateAlert|detected)|crashd.*CRASHED|\\[crash\\] Fault' | tail -n 4" % mark)
+        ev += [l for l in out.splitlines() if l.strip()]
+        if ev:
+            self.rec.note('%s: foreign popup present: %s' % (label, ' | '.join(ev)),
+                          'an LG system popup may hold key focus; no key is pressed at it')
+        return ' | '.join(ev)
+
     def notif_wait(self, method, before, timeout, every=3):
         """Wait until the log has more `notification <method>:` lines than `before`."""
         return self.wait(lambda: len(self.notif_lines(method)) > before, timeout, every)
@@ -840,8 +868,8 @@ class Scenario:
     def check_alert(self, before):
         """After the chosen launcher was removed: the watcher logged one createAlert call and its reply.
         A reply that is not returnValue true is a FAIL with the fallback recorded, never a silent pass.
-        With an accepted alert: screenshot, press OK (it is our own alert, not a system popup),
-        screenshot again.  Plain root luna-send without -a was assumed to pass; this is the evidence."""
+        With an accepted alert: screenshot, close it with notification/closeAlert (no key press),
+        screenshot again."""
         r, d = self.rec, self.dev
         got = self.notif_wait('createAlert', before, 90)
         # a refusal is retried by the watcher (up to 8 tries, 3 s apart): wait for an accepted reply
@@ -869,16 +897,24 @@ class Scenario:
             r.check('the user was told: the alert was refused, so the fallback toast was shown', toast_ok,
                     'alert reply: %s\nfallback:\n%s' % (reply, fb.strip()))
             return
-        r.check('the user was told: the alert was accepted (plain root luna-send, no -a)', True, 'reply: %s' % reply)
+        r.check('the user was told: the alert was accepted (watcher sends with -a com.webos.applicationManager)', True, 'reply: %s' % reply)
         time.sleep(2)
+        self.foreign_popup('4-alert')
         self.shot('4-alert')
         r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "<launcher title> was removed, '
                'so the Home button opens LG Home again." and one OK button', '')
         fg0 = d.foreground()
-        self.press('OK')
+        m = re.search(r'"alertId"\s*:\s*"([^"]+)"', reply)
+        if m:
+            # closed over luna, no key press: an LG popup may be on top and would take the key
+            out = self.priv_luna('luna://com.webos.notification/closeAlert', '{"alertId":"%s"}' % m.group(1))
+            r.check('closeAlert on our alert (-a com.webos.applicationManager) was accepted',
+                    '"returnValue":true' in out.replace(' ', ''), 'alertId %s\nreply: %s' % (m.group(1), out))
+        else:
+            r.note('accepted createAlert reply carries no alertId: alert not closed', reply)
         time.sleep(3)
         self.shot('4-alert-dismissed')
-        r.note('OK pressed on the alert; foreground before/after (the alert itself is not an app)',
+        r.note('alert closed by closeAlert; foreground before/after (the alert itself is not an app)',
                '%s -> %s' % (fg0[0], d.foreground()[0]))
 
     def check_toast(self, before):
@@ -1026,6 +1062,8 @@ class Scenario:
                   ' (close did not stop it: this check does not discriminate)' if pre else ''))
         if from_app:
             self.front_app()
+        if proof:
+            self.foreign_popup(label)
         mark = self.messages_mark()
         self.press('HOME')
         time.sleep(6)
@@ -1545,6 +1583,7 @@ class Scenario:
     def step4(self):
         r, d = self.rec, self.dev
         r.begin('4 sudden launcher uninstall')
+        self.popup_mark = self.messages_mark()
         alerts_before = len(self.notif_lines('createAlert'))
         rc, out = d.remove(self.launcher)
         r.check('ares-install --remove launcher', rc == 0, out.strip())

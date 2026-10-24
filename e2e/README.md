@@ -117,8 +117,12 @@ and backport docs.
    fallback is the decided behaviour, so it passes. An unanswered alert, or a refused one with no
    accepted toast, is a `FAIL`. With an accepted alert the runner takes a `beanjar screenshot` (`4-alert`; look for
    "<launcher title> was removed, so the Home button opens LG Home again." and one OK button),
-   presses OK (it is Home Chooser's own alert; the rule against pressing OK is about LG's system
-   popups), and takes `4-alert-dismissed`. Reinstall: the
+   closes it with `notification/closeAlert` (alertId from the accepted reply, `luna-send -a
+   com.webos.applicationManager`; no key is pressed, an LG popup on top would take it), and takes
+   `4-alert-dismissed`. Before the alert screenshot and before each Home press that proves a launch,
+   the runner notes `foreign popup present: ...` when faultmanager's `getFaultDetectedStatus` lists a
+   detected fault or `/var/log/messages` has faultmanager crash-popup lines since the step start (the
+   LG "[crash] Fault Occured" popup); it never presses keys at it. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher.
 5. `ares-install --remove` Home Chooser: record, override, choice file, `init.d` link, flag,
@@ -131,7 +135,7 @@ and backport docs.
    and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
    file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
 
-Measured on 2026-10-23: 10.3.1 accepts the alert from a plain root `luna-send` without `-a`; 5.6.1
+Measured on 2026-10-23: 10.3.1 accepted the alert from a plain root `luna-send` without `-a` (the watcher now sends with `-a com.webos.applicationManager`); 5.6.1
 and 9.2.1 answer `Alert is blocked by [ system ]` on every try (why is not established; on the 9.2.1
 VM the stock home's first-run guide overlay was showing), so the toast is shown there. Right after a
 compositor restart both calls get `UI is not yet ready` and succeed on a retry a few seconds later.
