@@ -182,19 +182,60 @@ sha_of() {
 
 mkdir -p "$WORK" 2>/dev/null
 
+# Temp files are named per invocation: status runs from the app, the watcher and the service can
+# overlap, and a shared name let one run delete or truncate the list another was reading.
+# ETMP is the read-only scratch list (any_mounted, find_set, status, refresh, stop); AENT is the
+# apply list. Both are removed on every way out.
+ETMP="$WORK/entries.$$.tmp"
+AENT="$WORK/entries.$$"
+LOCKDIR="$WORK/lock.d"
+LOCK_WAIT=${HOMECHOOSER_LOCK_WAIT:-120}
+HAVE_LOCK=0
+
+cleanup() {
+    rm -f "$ETMP" "$AENT"
+    [ "$HAVE_LOCK" = 1 ] && rm -rf "$LOCKDIR"
+    HAVE_LOCK=0
+}
+trap cleanup EXIT
+trap 'exit 143' HUP INT TERM
+
+# take_lock: apply, stop and refresh change mounts and the staged copies, so only one runs at a
+# time. status takes no lock; it only reads, and reads a consistent answer at every step (the
+# stock files match until the first bind mount, and a mount is only reported once it exists).
+# A lock whose owner is gone is taken over; after LOCK_WAIT seconds the run gives up.
+take_lock() {
+    waited=0
+    while ! mkdir "$LOCKDIR" 2>/dev/null; do
+        owner=$(cat "$LOCKDIR/pid" 2>/dev/null)
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -rf "$LOCKDIR"
+            continue
+        fi
+        if [ "$waited" -ge "$LOCK_WAIT" ]; then
+            log "ERROR: another keyfilter run holds $LOCKDIR (pid ${owner:-unknown}), giving up"
+            exit 1
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    HAVE_LOCK=1
+    echo $$ > "$LOCKDIR/pid"
+}
+
 # any_mounted: succeed when a target of any set in the data directory is a mount point.
 any_mounted() {
     for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
         [ -f "$m" ] || continue
-        entries "$m" > "$WORK/entries.tmp"
+        entries "$m" > "$ETMP"
         while read -r p && read -r h && read -r d; do
             if is_mounted "$ROOT$p"; then
-                rm -f "$WORK/entries.tmp"
+                rm -f "$ETMP"
                 return 0
             fi
-        done < "$WORK/entries.tmp"
+        done < "$ETMP"
     done
-    rm -f "$WORK/entries.tmp"
+    rm -f "$ETMP"
     return 1
 }
 
@@ -205,7 +246,7 @@ find_set() {
     for m in "$DATA"/*/manifest.json; do
         [ -f "$m" ] || continue
         rel=$(basename "$(dirname "$m")")
-        entries "$m" > "$WORK/entries.tmp"
+        entries "$m" > "$ETMP"
         match=1
         count=0
         while read -r p && read -r h && read -r d; do
@@ -213,8 +254,8 @@ find_set() {
             cur=
             [ -f "$ROOT$p" ] && cur=$(sha_of "$ROOT$p")
             [ "$cur" = "$h" ] || match=0
-        done < "$WORK/entries.tmp"
-        rm -f "$WORK/entries.tmp"
+        done < "$ETMP"
+        rm -f "$ETMP"
         if [ "$match" = 1 ] && [ "$count" -gt 0 ]; then
             echo "$rel"
             return 0
@@ -383,29 +424,29 @@ do_apply() {
             return 1
         fi
         rel=generated
-        entries "$WORK/generated/manifest.json" > "$WORK/entries"
+        entries "$WORK/generated/manifest.json" > "$AENT"
     else
         log "diff set $rel matches the stock files"
         set_dir="$DATA/$rel"
         mkdir -p "$WORK/stage"
-        entries "$set_dir/manifest.json" > "$WORK/entries"
+        entries "$set_dir/manifest.json" > "$AENT"
 
         # Copy every target, then patch every copy; any failure drops the whole set.
         while read -r p && read -r h && read -r d; do
             mkdir -p "$WORK/stage$(dirname "$p")" && cp -p "$ROOT$p" "$WORK/stage$p" || {
                 log "ERROR: cannot copy $p, set $rel not applied"
-                rm -rf "$WORK/stage" "$WORK/entries"
+                rm -rf "$WORK/stage" "$AENT"
                 return 1
             }
-        done < "$WORK/entries"
+        done < "$AENT"
         while read -r p && read -r h && read -r d; do
             if ! (cd "$WORK/stage" && "$PATCH" -p0 < "$set_dir/$d") >> "$LOG" 2>&1; then
                 log "ERROR: $d does not apply to $p, set $rel not applied"
-                rm -rf "$WORK/stage" "$WORK/entries"
+                rm -rf "$WORK/stage" "$AENT"
                 return 1
             fi
             log "patched $p with $d"
-        done < "$WORK/entries"
+        done < "$AENT"
     fi
 
     # Put the stored choice into the copies that carry the placeholder.
@@ -414,12 +455,12 @@ do_apply() {
         if has_configured "$WORK/stage$p"; then
             set_configured "$WORK/stage$p" "$cid" || {
                 log "ERROR: cannot set the configured home in $p, set $rel not applied"
-                rm -rf "$WORK/stage" "$WORK/entries"
+                rm -rf "$WORK/stage" "$AENT"
                 return 1
             }
             log "configured home in $p: '${cid:-none}'"
         fi
-    done < "$WORK/entries"
+    done < "$AENT"
 
     # Bind-mount the copies; if one fails, undo the ones already mounted.
     : > "$WORK/mounted"
@@ -430,11 +471,11 @@ do_apply() {
         else
             log "ERROR: cannot mount over $p, set $rel not applied"
             undo_mounts
-            rm -rf "$WORK/stage" "$WORK/entries"
+            rm -rf "$WORK/stage" "$AENT"
             return 1
         fi
-    done < "$WORK/entries"
-    rm -f "$WORK/entries"
+    done < "$AENT"
+    rm -f "$AENT"
     echo "$rel" > "$WORK/release"
 
     restart_compositor
@@ -444,7 +485,7 @@ do_stop() {
     unmounted=0
     for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
         [ -f "$m" ] || continue
-        entries "$m" > "$WORK/entries.tmp"
+        entries "$m" > "$ETMP"
         while read -r p && read -r h && read -r d; do
             tries=0
             while is_mounted "$ROOT$p" && [ "$tries" -lt 3 ]; do
@@ -457,7 +498,7 @@ do_stop() {
                     break
                 fi
             done
-        done < "$WORK/entries.tmp"
+        done < "$ETMP"
     done
     # Keep the generated target list and mounted sources if an unmount failed, so status and a
     # later stop can still find them even when no reviewed set names these files.
@@ -465,7 +506,7 @@ do_stop() {
         log "ERROR: targets remain mounted; keeping stage and manifest for a later stop"
         return 1
     fi
-    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$WORK/entries" "$WORK/entries.tmp" "$WORK/generated"
+    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$AENT" "$ETMP" "$WORK/generated"
     if [ "$unmounted" = 1 ]; then
         restart_compositor
     else
@@ -486,14 +527,14 @@ do_refresh() {
     done
     [ "$stock" = 1 ] || cid=$(baked_id)
     changed=0
-    entries "$(active_manifest)" > "$WORK/entries.tmp" 2>/dev/null
+    entries "$(active_manifest)" > "$ETMP" 2>/dev/null
     while read -r p && read -r h && read -r d; do
         f="$WORK/stage$p"
         has_configured "$f" || continue
         grep -qF "configuredHomeAppId: \"$cid\"" "$f" && continue
         set_configured "$f" "$cid" && { log "configured home in $p: '${cid:-none}'"; changed=1; }
-    done < "$WORK/entries.tmp"
-    rm -f "$WORK/entries.tmp"
+    done < "$ETMP"
+    rm -f "$ETMP"
     if [ "$changed" != 1 ]; then
         log "configured home unchanged"
     elif [ "$restart" = 1 ]; then
@@ -513,11 +554,11 @@ do_status() {
         echo "release=$(cat "$WORK/release" 2>/dev/null || echo unknown)"
         if [ "$(cat "$WORK/release" 2>/dev/null)" = generated ]; then
             echo match=generated
-            entries "$WORK/generated/manifest.json" > "$WORK/entries.tmp"
+            entries "$WORK/generated/manifest.json" > "$ETMP"
             while read -r p && read -r h && read -r d; do
                 echo "hash=$(sha_of "$WORK/stage$p") $p"
-            done < "$WORK/entries.tmp"
-            rm -f "$WORK/entries.tmp"
+            done < "$ETMP"
+            rm -f "$ETMP"
         fi
         [ -f "$KEYFILTER_FLAG" ] || reboot=needed
     else
@@ -539,9 +580,9 @@ do_status() {
 }
 
 case "$1" in
-    ""|apply) [ $# -gt 0 ] && shift; do_apply "$@" ;;
-    stop)     do_stop ;;
-    refresh)  shift; do_refresh "$@" ;;
+    ""|apply) [ $# -gt 0 ] && shift; take_lock; do_apply "$@" ;;
+    stop)     take_lock; do_stop ;;
+    refresh)  shift; take_lock; do_refresh "$@" ;;
     status)   do_status ;;
     *)        echo "usage: $0 [apply [samfirst]|stop|refresh [stock] [restart]|status]" >&2; exit 2 ;;
 esac

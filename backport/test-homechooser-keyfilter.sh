@@ -3,7 +3,7 @@
 # usage: test-homechooser-keyfilter.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
 HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=$HERE/homechooser-keyfilter
+SCRIPT=${KF_SCRIPT:-$HERE/homechooser-keyfilter}
 PASS=0
 FAIL=0
 
@@ -655,6 +655,48 @@ touch "$T/generated-flag" "$T/generator-success"
 run apply
 check "reviewed set used" has '1.0' "$T/work/release"
 check "generator not run" test ! -e "$T/node-calls"
+rm -rf "${T:?}"
+
+echo "== concurrent runs"
+setup
+# Overlapping status runs (app install, watcher refresh, service) must each see the same answer:
+# they used to share one scratch list and one run could delete it under another.
+n=
+for round in 1 2 3 4 5; do
+    for i in 1 2 3 4 5 6 7 8; do
+        $SH "$SCRIPT" status > "$T/par.$round.$i" 2>&1 &
+    done
+    wait
+done
+bad=0
+for o in "$T"/par.*; do
+    grep -qx 'match=1.0' "$o" && grep -qx 'mounted=no' "$o" || { bad=$((bad + 1)); n=$(tr '\n' ' ' < "$o"); }
+done
+check "40 parallel status runs all report match=1.0 ($bad wrong: $n)" test "$bad" = 0
+check "no scratch lists left behind" test -z "$(ls "$T/work" | grep '^entries')"
+rm -f "$T"/par.*
+
+# apply, stop and refresh exclude each other
+$SH "$SCRIPT" apply > "$T/par.a" 2>&1 &
+$SH "$SCRIPT" apply > "$T/par.b" 2>&1 &
+wait
+check "two parallel applies mount once" test "$(ncmds mount)" = 2
+check "no lock left after the runs" test ! -e "$T/work/lock.d"
+# a lock whose owner is gone is taken over
+mkdir "$T/work/lock.d"; echo 999999 > "$T/work/lock.d/pid"
+run stop
+check "stale lock taken over" rc 0
+check "stale lock removed on exit" test ! -e "$T/work/lock.d"
+# a live owner holds the others off, and they give up after the timeout
+sleep 30 & holder=$!
+mkdir "$T/work/lock.d"; echo $holder > "$T/work/lock.d/pid"
+HOMECHOOSER_LOCK_WAIT=1 run apply
+check "busy lock: gives up with 1" rc 1
+check "busy lock: says so" has 'giving up' "$T/out"
+check "busy lock: not removed by the loser" test -d "$T/work/lock.d"
+HOMECHOOSER_LOCK_WAIT=1 run status
+check "status ignores the lock" rc 0
+kill $holder 2>/dev/null; wait $holder 2>/dev/null
 rm -rf "${T:?}"
 
 echo "== usage"
