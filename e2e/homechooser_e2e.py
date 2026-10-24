@@ -24,6 +24,7 @@ import urllib.request
 import glob
 import hashlib
 import io
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -176,6 +177,134 @@ def parse_reboot_ask(text):
                 if a:
                     out['alert_id'] = a[-1]
     return out
+
+
+class RebootAlertMonitor:
+    """Observe the service's notification call when a firmware drops its PmLog info lines.
+
+    ls-monitor carries the confirmation token in the request. Keep raw events only in memory;
+    the recorded evidence contains the message, button labels and notification reply only.
+    """
+    def __init__(self, dev):
+        self.dev = dev
+        self.proc = None
+        self.thread = None
+        self.remote_pid = None
+        self.ready = threading.Event()
+        self.lock = threading.Lock()
+        self.calls = {}
+        self.seen = []
+        self.candidates = []
+        self.info = {'message': None, 'buttons': [], 'alert': None, 'alert_id': None, 'toast': None}
+
+    def start(self):
+        self.proc = subprocess.Popen(
+            # ares-do exec buffers stdout until the command exits; ares-shell -r streams it.
+            ['ares-shell', '-d', self.dev.root, '-r',
+             'printf "HC_MONITOR_PID=%s\\n" "$$"; exec ls-monitor -j -f com.webos.notification'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            start_new_session=True)
+        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread.start()
+        self.ready.wait(timeout=5)
+        time.sleep(1)  # let the hub attach before the confirmation key is sent
+        return self.ready.is_set() and self.proc.poll() is None
+
+    def _read(self):
+        for line in self.proc.stdout:
+            if line.startswith('HC_MONITOR_PID='):
+                try:
+                    self.remote_pid = int(line.partition('=')[2].strip())
+                    self.ready.set()
+                except ValueError:
+                    pass
+                continue
+            try:
+                event = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            with self.lock:
+                self._observe(event)
+
+    def _observe(self, event):
+        if len(self.seen) < 12 and (event.get('method') in ('createAlert', 'createToast')
+                                    or (event.get('type') == 'return'
+                                        and event.get('sender') == 'com.webos.notification')):
+            self.seen.append({k: event.get(k) for k in
+                              ('type', 'transport', 'sender', 'destination', 'method', 'replyToken')})
+        if (event.get('type') == 'call' and event.get('transport') == 'TX'
+                and event.get('destination') == 'com.webos.notification'
+                and event.get('method') in ('createAlert', 'createToast')):
+            payload = event.get('payload') or {}
+            if not isinstance(payload, dict):
+                if len(self.candidates) < 4:
+                    self.candidates.append({'method': event.get('method'), 'payload_type': type(payload).__name__})
+                return
+            buttons = payload.get('buttons')
+            if payload.get('sourceId') == APP_ID and len(self.candidates) < 4:
+                self.candidates.append({
+                    'method': event.get('method'), 'sourceId': payload.get('sourceId'),
+                    'title': payload.get('title'), 'message': payload.get('message'),
+                    'buttons': [{k: b.get(k) for k in ('label', 'onclick', 'focus')}
+                                for b in buttons if isinstance(b, dict)] if isinstance(buttons, list) else type(buttons).__name__,
+                })
+            if payload.get('sourceId') != APP_ID:
+                return
+            method = event['method']
+            if method == 'createAlert':
+                if payload.get('title') != 'Home Chooser':
+                    return
+                self.info['message'] = payload.get('message')
+                self.info['buttons'] = [b.get('label') for b in buttons if isinstance(b, dict)] \
+                    if isinstance(buttons, list) else []
+            elif self.info['message'] and payload.get('message') != self.info['message']:
+                return
+            sender = event.get('senderUniqueName') or event.get('sender')
+            self.calls[(sender, event.get('token'))] = method
+        elif (event.get('type') == 'return' and event.get('transport') == 'TX'
+              and event.get('sender') == 'com.webos.notification'):
+            destination = event.get('destinationUniqueName') or event.get('destination')
+            method = self.calls.pop((destination, event.get('replyToken')), None)
+            if method:
+                payload = event.get('payload') or {}
+                if not isinstance(payload, dict):
+                    return
+                accepted = payload.get('returnValue') is True
+                key = 'alert' if method == 'createAlert' else 'toast'
+                self.info[key] = 'accepted' if accepted else 'refused'
+                if method == 'createAlert' and accepted:
+                    self.info['alert_id'] = payload.get('alertId')
+
+    def snapshot(self):
+        with self.lock:
+            return dict(self.info, buttons=list(self.info['buttons']))
+
+    def diagnostic(self):
+        with self.lock:
+            return json.dumps({'candidates': self.candidates, 'events': self.seen})
+
+    def close(self):
+        if self.remote_pid:
+            pid = self.remote_pid
+            self.dev.sh('if [ "$(cat /proc/%d/comm 2>/dev/null)" = ls-monitor ]; then kill %d; fi'
+                        % (pid, pid), timeout=10)
+        if self.proc and self.proc.poll() is None:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                self.proc.wait(timeout=5)
+        if self.thread:
+            self.thread.join(timeout=2)
+        if self.proc and self.proc.stdout:
+            self.proc.stdout.close()
 
 
 def parse_status(text):
@@ -1749,6 +1878,9 @@ class Scenario:
                 if i == 3 and self.a.update_check:
                     guarded(self.step_update)
         finally:
+            if getattr(self, 'ask_monitor', None):
+                self.ask_monitor.close()
+                self.ask_monitor = None
             if self.a.until >= 5:
                 self.step6()
             else:
@@ -1865,6 +1997,10 @@ class Scenario:
             r.note('patch mounted before choosing: %s (a restart prompt is %s)' % (
                 mounted_before, 'expected' if expects_reboot_dialog(self.major, mounted_before) else 'not expected'), '')
         self.ask_mark = self.messages_mark()
+        if expects_reboot_dialog(self.major, mounted_before):
+            self.ask_monitor = RebootAlertMonitor(d)
+            if not self.ask_monitor.start():
+                r.note('notification bus monitor did not start; using PmLog evidence', '')
         self.press('OK')
         # the choice is applied; nothing restarts the compositor any more, so the panel stays open
         toasts = []
@@ -2021,12 +2157,23 @@ class Scenario:
                               % getattr(self, 'ask_mark', ''))
         return out
 
+    def reboot_ask_evidence(self):
+        """Prefer the service log; use the observed notification call when PmLog discards info lines."""
+        raw = self.reboot_ask_log()
+        info = parse_reboot_ask(raw)
+        if not info['alert'] and getattr(self, 'ask_monitor', None):
+            observed = self.ask_monitor.snapshot()
+            if observed['alert']:
+                return observed, 'LS2 notification call/reply: ' + json.dumps(observed)
+            return info, raw or 'no REBOOT_ASK line or notification bus evidence; bus events: ' + self.ask_monitor.diagnostic()
+        return info, raw or 'no REBOOT_ASK line'
+
     def close_reboot_alert(self, label, info):
         """Our restart alert: closed over luna with the alertId from its createAlert reply (the same as the
         removal alert; no key is pressed, so no foreign popup can take it).  True when closeAlert was accepted."""
         r = self.rec
         if info['alert'] != 'accepted' or not info['alert_id']:
-            r.note('%s: no accepted createAlert with an alertId in the REBOOT_ASK log; nothing to close' % label,
+            r.note('%s: no accepted createAlert with an alertId in the prompt evidence; nothing to close' % label,
                    json.dumps(info))
             return False
         out = self.priv_luna('luna://com.webos.notification/closeAlert', '{"alertId":"%s"}' % info['alert_id'])
@@ -2038,7 +2185,7 @@ class Scenario:
     def reboot_after_choice(self, comp0):
         """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks the
         service for a system alert (Reboot / Later) and says so in a toast.  The runner checks, from the
-        service's REBOOT_ASK log lines, that a createAlert for the restart prompt was sent with the buttons
+        service's REBOOT_ASK log lines or notification bus events, that a createAlert was sent with the buttons
         Reboot and Later (or, when the alert was refused, that the toast fallback was shown).
 
         --reboot-via later (default): our alert is closed with closeAlert and the VM is restarted with
@@ -2057,18 +2204,18 @@ class Scenario:
             u = self.ui() or {}
             if u.get('toast') and u['toast'] not in toasts:
                 toasts.append(u['toast'])  # gone after 6 s
-            info = parse_reboot_ask(self.reboot_ask_log())
+            info, _ = self.reboot_ask_evidence()
             return info if info['alert'] else None
-        info = self.wait(asked, 90, 2) or parse_reboot_ask(self.reboot_ask_log())
+        info = self.wait(asked, 90, 2) or self.reboot_ask_evidence()[0]
         if info['alert'] == 'refused':
-            self.wait(lambda: parse_reboot_ask(self.reboot_ask_log())['toast'] == 'accepted', 40, 3)
-            info = parse_reboot_ask(self.reboot_ask_log())
+            self.wait(lambda: self.reboot_ask_evidence()[0]['toast'] == 'accepted', 40, 3)
+            info = self.reboot_ask_evidence()[0]
         ui = self.ui()
         if not info['alert'] and self.a.update_check and d.mounts():
             r.note('no restart prompt and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
             return
         self.shot('2-reboot-alert')
-        raw_log = self.reboot_ask_log()
+        info, raw_log = self.reboot_ask_evidence()
         r.check('6-9, patch not mounted: the service sent a createAlert for the restart prompt with the buttons %s and %s'
                 % REBOOT_BUTTONS, info['message'] is not None and info['buttons'] == list(REBOOT_BUTTONS) and bool(info['alert']),
                 raw_log or 'no REBOOT_ASK line')
@@ -2100,6 +2247,9 @@ class Scenario:
         self.check_no_compositor_restart('choosing the launcher', comp0)
         boot0 = d.boot_id()
         self.close_insp()
+        if getattr(self, 'ask_monitor', None):
+            self.ask_monitor.close()
+            self.ask_monitor = None
         if self.a.reboot_via == 'alert':
             r.manual('press Reboot on the restart alert', 'the runner cannot prove that the alert in front is ours with focus on '
                      'Reboot without reading the picture (see 2-reboot-alert), so it presses no key. Press Reboot by hand within '

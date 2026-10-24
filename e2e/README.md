@@ -249,8 +249,10 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   after about 90 to 120 s without a key press, `userTimeout`, and the alert survives that) and toasts "Done.
   Restart the TV to finish."; while the restart is pending it also lists a "Restart now" row under the note
   "The Home button changes after a restart.". The runner reads the service's `REBOOT_ASK` PmLog lines
-  (since the confirmation was pressed) and checks: a `createAlert` request with the apply message and the
-  buttons Reboot and Later, and the notification service's reply. An accepted alert is the pass (screenshot
+  (since the confirmation was pressed), or the same notification call and reply from `ls-monitor` when a
+  firmware drops the service's info logs. The monitor retains only token-free evidence. It checks a
+  `createAlert` request with the apply message and the buttons Reboot and Later, and the notification
+  service's reply. An accepted alert is the pass (screenshot
   `2-reboot-alert`: look for the message and the two buttons, focus on Later). A refused alert passes only
   with the fallback: an accepted `createToast` with the message. Through the inspector it also checks that
   the page shows no dialog, lists the "Restart now" row and showed the toast (a page that an overlay timeout

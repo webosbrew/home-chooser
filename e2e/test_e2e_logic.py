@@ -197,6 +197,53 @@ class RebootAsk(unittest.TestCase):
             got = e2e.parse_reboot_ask(text)
             self.assertEqual((got['message'], got['buttons'], got['alert'], got['alert_id'], got['toast']), (None, [], None, None, None))
 
+    def test_bus_monitor_observes_alert_without_retaining_confirmation_token(self):
+        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        monitor._observe({
+            'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
+            'senderUniqueName': 'client-100',
+            'destination': 'com.webos.notification', 'method': 'createAlert', 'token': 7,
+            'payload': {'sourceId': e2e.APP_ID, 'title': 'Home Chooser', 'message': self.APPLY,
+                        'buttons': [{'label': 'Reboot', 'onclick': 'luna://' + e2e.SVC_ID + '/rebootConfirmed',
+                                     'params': {'token': 'private-token'}},
+                                    {'label': 'Later', 'focus': True}]}})
+        monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
+                          'destination': 'com.webos.lunasend-100', 'destinationUniqueName': 'client-100',
+                          'replyToken': 7,
+                          'payload': {'returnValue': True, 'alertId': 'alert-7'}})
+        info = monitor.snapshot()
+        self.assertEqual((info['message'], info['buttons'], info['alert'], info['alert_id']),
+                         (self.APPLY, ['Reboot', 'Later'], 'accepted', 'alert-7'))
+        self.assertNotIn('private-token', json.dumps(info))
+        self.assertNotIn('private-token', monitor.diagnostic())
+
+    def test_bus_monitor_rejects_foreign_or_unbound_alerts(self):
+        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
+                          'destination': 'com.webos.lunasend-100', 'replyToken': 9,
+                          'payload': {'returnValue': True, 'alertId': 'foreign'}})
+        monitor._observe({'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
+                          'destination': 'com.webos.notification', 'method': 'createAlert', 'token': 8,
+                          'payload': {'sourceId': 'another.app'}})
+        self.assertIsNone(monitor.snapshot()['alert'])
+
+    def test_bus_monitor_records_refused_alert_and_accepted_toast(self):
+        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        for token, method in ((1, 'createAlert'), (2, 'createToast')):
+            payload = {'sourceId': e2e.APP_ID, 'message': self.APPLY}
+            if method == 'createAlert':
+                payload.update(title='Home Chooser', message=self.APPLY, buttons=[
+                    {'label': 'Reboot', 'onclick': 'luna://' + e2e.SVC_ID + '/rebootConfirmed',
+                     'params': {'token': 'secret'}}, {'label': 'Later', 'focus': True}])
+            monitor._observe({'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
+                              'destination': 'com.webos.notification', 'method': method,
+                              'token': token, 'payload': payload})
+            monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
+                              'destination': 'com.webos.lunasend-100', 'replyToken': token,
+                              'payload': {'returnValue': method == 'createToast'}})
+        self.assertEqual((monitor.snapshot()['alert'], monitor.snapshot()['toast']),
+                         ('refused', 'accepted'))
+
     def test_the_reboot_via_choices(self):
         with open(os.path.join(REPO, 'e2e/homechooser_e2e.py'), encoding='utf-8') as f:
             src = f.read()
