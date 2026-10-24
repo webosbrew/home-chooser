@@ -1,4 +1,4 @@
-# The Beanjar machines the E2E suite runs on (e2e/README.md "Beanjar machines").
+# The Beanjar machines the E2E suite runs on (e2e/README.md "Several machines").
 # e2e/hosts.local.toml (git-ignored) is read over this file: a host table there adds a machine or
 # changes keys of one here, and [paths] there sets this PC's own paths.
 #

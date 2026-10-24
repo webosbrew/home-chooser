@@ -13,9 +13,11 @@ Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (d
 `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
-(`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--host-mode
-auto|local|remote` and `--host-device` (see below); `--elevation luna|root-shell`; `--input
-qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
+(`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
+Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
+`--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
+`--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
+`--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture).
 
@@ -25,7 +27,7 @@ selection, checks `homechooser-keyfilter status` after selection and after `--re
 the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
 fails. The option refuses other releases and a non-stock baseline.
 
-Before booting, the runner stops if any VM is running. It adds the `hbchannel` layer and
+Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
 `<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a
 changed LAN address. It stops the VM at the end (not `w21p-kisscurl`).
@@ -67,12 +69,89 @@ backport mounts). There is no shortened mode; settle and sampling times stay as 
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
 through `socat`, the TV screenshot through `beanjar screenshot`, the fallback viewer capture through `grim`, fetching a key) goes through the
-`BeanjarHost` class. Mode is automatic: local when `beanjar` is on PATH (the Pi), otherwise remote
-over `ssh raspberrypi` (`--host-device` names another ssh config alias, `--host-mode` forces a
-mode). The Pi is a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions
-and VMs only. No remote quoting exists outside that class. The screenshots the steps look at come from
+`BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
+`ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
+runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
+on PATH, but the QMP sockets, `grim` and the VM files are on the machine the VM runs on.
+`--host-device` names another ssh config alias and `--host-mode` forces a mode for one run. The Pi is
+a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions and VMs only.
+VMs are listed with `beanjar list --local --json` (that machine's own VMs only); the QMP socket is under
+the VM directory `beanjar info` reports. No remote quoting exists outside that class. The screenshots the steps look at come from
 `beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; the
 `grim` fallback is the whole Wayland output.
+
+## Several machines
+
+The Beanjar machines are listed in `e2e/hosts.toml`; `e2e/hosts.local.toml` (git-ignored) is read over
+it, for this PC's own machines and `[paths]`. Without either file the one machine is today's: `pi`,
+reached with `ssh raspberrypi`, so a single-machine run needs no configuration.
+
+```toml
+default = "pi"
+
+[hosts.pi]
+ssh = "raspberrypi"      # an ssh config alias, key login (BatchMode); `local = true` for this PC
+# vms = ["w22o-ponytail-us"]
+```
+
+**One VM per machine.** A machine has one CPU set and one memory pool; two VMs on it contend and
+every timing or RSS measured that way is contaminated. So at most one VM runs on a machine at a time,
+and the runner refuses to boot one while any VM is running there, ours or another session's.
+Different machines run at the same time.
+
+Which VMs a machine has is asked from it (`beanjar list --local --json`), so a VM needs no entry. VM
+names must be unique across the machines: the ares device entries (`<vm>`, `<vm>-root`) and the keys in
+`~/.ssh` (`beanjar-<vm>-root`, `beanjar-<vm>_devmode`) are named after the VM only. A VM that exists on
+two machines (a copied image) is not run until `vms = [...]` pins it to one of them.
+
+To add a machine: install Beanjar on it, give it an ssh config alias with key login from this PC
+(`ssh <alias> beanjar list` must work without a prompt), add it with `beanjar host add <name>
+ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<name>] ssh =
+"<alias>"` to `e2e/hosts.local.toml` (or `hosts.toml` when it is shared) under the same name. The VMs
+run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
+
+`run_matrix.py` runs several VMs: one queue and one worker per machine, each run a subprocess of
+`homechooser_e2e.py`, so runs are serialised on a machine and parallel across machines.
+
+```
+python3 -I e2e/run_matrix.py --dry-run                            # the plan for the whole matrix
+python3 -I e2e/run_matrix.py --build --reboot-check               # the whole matrix
+python3 -I e2e/run_matrix.py --vms 5.x,9.x,11.x --launchers all-fixtures
+```
+
+* `--vms` takes VM names or releases (default: the matrix). Options it does not know (`--reboot-check`,
+  `--wait-popup N`, `--elevation`, ...) go to every run; `--no-stop`, `--vm`, `--host` and `--outdir` are
+  refused, since the scheduler sets them or a VM left running would hold its machine.
+* It builds once before the fan-out: Home Chooser (`--build`, else the newest `build/ipk/*.ipk`), the old
+  build for `--update-check`, and any missing fixture ipk. The Home Chooser ipks are copied into the
+  matrix directory and passed to each run (`--hc-ipk`, `--old-ipk`), so a rebuild in the tree during the
+  runs changes nothing.
+* Before each run it asks the machine for running VMs and waits up to `--wait-idle` seconds (default
+  180; the previous run's VM may still read Stopping) for none; then it refuses the run (`refused` in the
+  summary) and moves on. A machine that does not answer is refused the same way.
+* One line per finished run; each run's console goes to `<vm>.console.log`. The result is
+  `e2e/results/matrix-<timestamp>/`: `summary.md` and `summary.json` linking each run's directory
+  `<vm>/` (`run.log`, `results.json`, screenshots), and `ipk/`.
+* Ctrl-C starts no new run and interrupts the running ones; each runner unwinds through its cleanup and
+  stops the VM it started. A second Ctrl-C kills them and names the VMs that may still be running
+  (`beanjar stop <host>/<vm>`).
+* `python3 -I -m unittest discover -s e2e -p 'test_*.py'` tests the planning, the per-machine
+  serialisation, the refusals, Ctrl-C (fake machines and a fake runner) and the device-list lock, offline.
+
+What runs in parallel, and why it is safe:
+
+* `~/.webos/ose/novacom-devices.json`: the runner changes it under an exclusive `flock` on
+  `novacom-devices.json.lock` and replaces it by rename, so parallel runs lose no entry and an ares command
+  reading it never sees a half-written file. ares-cli-rs writes it in place without a lock, so
+  `ares-setup-device` by hand during a matrix run is still unsafe.
+* Keys fetched to `~/.ssh` are written under a temp name and renamed.
+* Temp files on a machine carry the VM name and the runner's pid (`/tmp/e2e-tv-<vm>-<pid>.png`); the
+  inspector's local port is picked per run and another is tried if the forward cannot bind it.
+* Each run has its own result directory and its own ares device entries (per VM).
+
+Beanjar's own multi-host CLI (`beanjar host add/list`, `beanjar list` across hosts, `<host>/<vm>` for
+start, stop, info and screenshot) reaches the machines the same way, ssh per call. The runner does not
+depend on it: it runs `beanjar` on each machine over ssh, which works whether or not this PC has Beanjar.
 
 ## Elevation strategies
 
@@ -174,7 +253,8 @@ stock home and the launcher running (`applicationManager/running`), pids and RSS
 
 ## Launchers: Dock and the fixtures
 
-`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist`. The six fixtures
+`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist` unless `[paths] dock_ipk` in
+`e2e/hosts.local.toml` or `--dock-ipk` names another ipk. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
