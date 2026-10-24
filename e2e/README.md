@@ -9,8 +9,8 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`; an app id needs
-`--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`, with `--api-check`
+`fixture:web.normal`; an app id needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
@@ -18,12 +18,16 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
 `--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
-`results.json`, numbered screenshots (`beanjar screenshot`, the TV picture).
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via dialog|later`
+(webOS 6-9, how the restart the first choice asks for is done; see "webOS 6-9: no restart while the TV runs");
+`--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
+`results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
+(below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
 Use `--keyfilter-generated` only on webOS 6-9 to exercise the opt-in generated keyfilter. The runner
 creates `debug-no-sets` and `keyfilter-generated` after installing Home Chooser and before the Home
-selection, checks `homechooser-keyfilter status` after selection and after `--reboot-check`, and uses
+selection, checks `homechooser-keyfilter status` after the boot that follows the selection (the patch is
+mounted by the boot hook, not at the choice) and after `--reboot-check`, and uses
 the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
 fails. The option refuses other releases and a non-stock baseline.
 
@@ -178,7 +182,11 @@ and backport docs.
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
    `init.d/homechooser` links into the installed app; on 6 to 9 the backport targets are mounted
-   and the flag file exists, elsewhere not; on 10 and later the profile override exists.
+   (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
+   On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
+   toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
+   current texts (`grep -F` on the device: the watcher in the app and its running `/tmp` copy, the
+   service binary, the app bundle) and none of the old restart wording.
    Also asserted: at the first open after a fresh install there is no error toast (WAM's
    `localStorage` outlives `ares-install --remove`, so a `homechooser.pending` marker left by an
    earlier run must not read as a failed apply; the runner also plants such a marker through the
@@ -186,10 +194,14 @@ and backport docs.
    apply the panel is opened again with no error toast and the chosen row ticked.
 3. Home from an ordinary app (Homebrew Channel; docs T4): the launcher is running after having
    been closed first, or in front (a launcher bar like Dock is an overlay window, so the app
-   beneath stays "foreground"). A press with the stock home in front is only observed.
-4. `ares-install --remove` the launcher: record `home` is stock/unset (5.x: a stock id), the
-   override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id, the
-   choice file stays, the watcher stays active, Home opens the stock launcher. The watcher log shows
+   beneath stays "foreground"). A press with the stock home in front is only observed. On 6 to 9
+   this needs the boot of step 2, which has happened by then.
+4. `ares-install --remove` the launcher: record `home` is the stock id on 5.x to 9.x
+   (`com.webos.app.fullhome` if installed, else `com.webos.app.home`; on 6 to 9 exactly the id the
+   baseline resolved, never null) and null or unset on 10+, the
+   override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id and the
+   compositor was not restarted, the
+   choice file stays, the watcher stays active, Home opens the stock launcher at once. The watcher log shows
    the `notification createAlert:` calls and replies (a refusal is retried up to 8 times). The check
    is that the user was told: either the alert was accepted, or it was refused and the fallback toast
    (log: `alert was refused`, then an accepted `notification createToast:`) was shown; the toast
@@ -203,9 +215,13 @@ and backport docs.
    detected fault or `/var/log/messages` has faultmanager crash-popup lines since the step start (the
    LG "[crash] Fault Occured" popup); it never presses keys at it. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
-   launcher.
-5. `ares-install --remove` Home Chooser: record, override, choice file, `init.d` link, flag,
-   mounts and the watcher unit are gone; Home opens stock. The runner polls the log once a second
+   launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
+5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
+   watcher unit are gone; the record is stock as in step 4; on 6 to 9 the patch stays mounted until
+   the next boot (its sources are in `/tmp/homechooser-backport/stage`, not in the app), the baked id
+   is not checked (the worker went with the app directory), the compositor was not restarted, and
+   Home opens stock at once. The toast reads "Home Chooser was removed. The Home button opens LG Home
+   again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
    reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
@@ -213,6 +229,36 @@ and backport docs.
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
    and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
    file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
+
+### webOS 6-9: no restart while the TV runs
+
+Since 144ef21 nothing restarts the compositor on a running TV (a bare restart crashed WebAppMgr;
+`docs/key-filter-backport.md` "Restarting the compositor"). The runner follows that:
+
+* Step 2, patch not mounted: the choice mounts nothing. The app shows its own dialog "Restart the
+  TV?" ("The Home button changes after a restart.", Reboot and Later). Asserted before the restart:
+  `homechooser-keyfilter status` says `mounted=no` and `reboot=needed`, nothing is mounted, the flag
+  and the `init.d` entry are written, the record names the launcher, and the compositor was not
+  restarted. With `--reboot-via dialog` (the default) the runner checks that Home Chooser is the
+  foreground app and that the dialog in front is "Restart the TV?" (by the DOM, through the
+  inspector), moves focus to Reboot and presses OK there, on its own screen; the TV then restarts through
+  `rebootConfirmed` and `tvpower/power/reboot`, which this exercises. The runner waits for a new
+  `boot_id`. If none comes in 240 s that is a `FAIL`, and the VM is restarted with beanjar so the
+  run can go on; a VM that Beanjar shows off is started again. With `--reboot-via later` it presses
+  Later, checks the "Restart the TV later to finish." toast and restarts the VM with `beanjar stop`
+  and `start`. After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`,
+  `reboot=no`, at least 9 mounts), and the backport log of that boot (its firmware-order compositor
+  restart is the only one allowed) is noted; the generated-patch status checks come here.
+* Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
+  `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
+* No compositor restart: `surface-manager-daemon` keeps its `MainPID` and `NRestarts`, and no new
+  `restarting surface-manager-daemon` line appears in `/tmp/homechooser-backport.log`. Checked for
+  the choice, the launcher removal and its return (a switch with the patch mounted), the Home Chooser
+  uninstall and the API calls. It is skipped when a reboot came in between.
+* No crash: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
+  line and no WebAppMgr crash line, and within one boot `webapp-mgr` keeps its `MainPID` and `NRestarts`.
+* `--update-check` from a build older than 144ef21: that build mounts live and asks nothing; with no
+  dialog and the patch mounted the runner notes it and goes on.
 
 Measured on 2026-10-23: 10.3.1 accepted the alert from a plain root `luna-send` without `-a` (the watcher now sends with `-a com.webos.applicationManager`); 5.6.1
 and 9.2.1 answer `Alert is blocked by [ system ]` on every try (why is not established; on the 9.2.1
@@ -250,6 +296,61 @@ root-shell elevation.
 The log also has a "home-app residency" section at five points (before selecting, after "Use as
 Home", after the Home press, after the launcher uninstall, after the Home Chooser uninstall): is the
 stock home and the launcher running (`applicationManager/running`), pids and RSS. Observation only.
+
+## The launcher API check (`--api-check`)
+
+Opt-in steps that test the contract of `docs/launcher-api.md` on the device. Every call is made as the
+launcher with root `luna-send -a <launcher id> -n 1 luna://org.webosbrew.homechooser.service/<method>`
+through `ares-do exec` (`luna-send` under `ares-shell -r` prints nothing). The hub then takes the caller to
+be that installed app, with its own client permissions. The launcher must declare
+`requiredPermissions: ["homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
+web fixture built with the permission (`HC_FIXTURE_PERMISSION=homechooser.applications sh
+e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
+declare it and are refused. The run also installs a disposable non-home app,
+`org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
+
+* 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
+  permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps` and `running`
+  succeed with the documented fields and nothing beyond them (`getInfo`: `root`, `permitted` true and `isHome`
+  false; `listApps` names the launcher and the disposable app); the disposable app (no permission) is
+  refused `listApps`, `running`, `closeById` and `uninstall` and gets `permitted:false` from `getInfo` (or a
+  hub denial); a caller without an app id is refused; `closeById` and `uninstall` as the launcher answer
+  `notHome`; `uninstallConfirmed` as the launcher is refused. Then the `request` launch parameter is tested:
+  `ares-launch org.webosbrew.homechooser -p '{"request":"<launcher>"}'` opens "Use <title> as Home?", the
+  runner checks that this dialog is ours and in front, presses Back, and checks that the choice is unchanged.
+* 3a, after step 3 (the launcher is Home; on 6-9 after the boot of step 2): `getInfo` says `isHome:true`;
+  `closeById` closes the running disposable app (accepted, then gone from `running`); `closeById` without an
+  id is `badRequest`; `uninstall` of Home Chooser, Homebrew Channel and the launcher itself is `notAllowed`.
+  `uninstall` of the disposable app answers `pending` with `confirm:"alert"` or `"screen"`, and the
+  confirmation is dismissed, never confirmed: the alert by `closeAlert` (its `alertId` is read from the
+  service's `UNINSTALL_ASK` log line) or by Back when the id is not logged; the screen (Home Chooser
+  opened with `confirmUninstall`) by Back on our own "Uninstall HC Fixture disposable?" dialog. The app must
+  still be installed afterwards. The confirm path follows: on the screen route the runner presses Uninstall on
+  our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
+  (the token is only in the system alert's button). Then a `request` while the launcher is Home must give
+  the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
+* With `--reboot-check`, after the boot: `getInfo` (root, permitted, isHome), `listApps` and `running`
+  still succeed: the grants and the elevation survive a boot.
+* After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in
+  time), and luna still answers.
+* Cleanup removes the disposable app with the launcher and Home Chooser.
+
+### Checking your own launcher
+
+A launcher author can point the same checks at their launcher instead of the fixture:
+
+```
+python3 -I e2e/homechooser_e2e.py --vm 9.x --api-check \
+    --launcher org.example.launcher --launcher-ipk dist/org.example.launcher_1.0.0_arm.ipk
+python3 -I e2e/run_matrix.py --api-check --launcher org.example.launcher --launcher-ipk <ipk>   # every release
+```
+
+This is the whole scenario, steps 0 to 6, with your launcher chosen, the Home key proven to launch it,
+removed and reinstalled, plus the API steps. Your appinfo must have both entries above; the first check
+of 2a fails with what it read if not. What depends on the fixture is not assumed for your launcher. It is
+built from your ipk, not with the permission, and the overlay rule of the preload checks follows your
+appinfo's `defaultWindowType`. Your launcher's own behaviour is not tested (whatever it calls at start, its
+UI). The run removes your launcher at the end like any other.
 
 ## Launchers: Dock and the fixtures
 
