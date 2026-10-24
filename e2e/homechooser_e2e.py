@@ -1050,7 +1050,9 @@ class Scenario:
         end = time.time() + self.a.wait_popup
         first = True
         while True:
-            ui = self.ui() or {}
+            ui = self.ui()
+            if ui is None:
+                raise RuntimeError('our page is not readable; not pressing a probe key')
             cur = rows.index(ui['row']) if ui.get('row') in rows else 0
             k1, k2 = ('DOWN', 'UP') if cur + 1 < len(rows) else ('UP', 'DOWN')
             self.press(k1)
@@ -1782,6 +1784,7 @@ class Scenario:
         r.note('planted stale marker', self.insp.evaluate(PLANT_JS % self.launcher))
         d.close(APP_ID)
         time.sleep(3)
+        self.launch_mark = self.messages_mark()
         d.launch(APP_ID)
         toasts = []
 
@@ -1805,11 +1808,18 @@ class Scenario:
             raise RuntimeError('UI never listed the launcher; cannot continue')
         r.say('UI driven: initial focus on %s' % ui.get('row'))
         rows = ui['rows']
+        if not self.ensure_page('2 before the list keys'):
+            raise RuntimeError('Home Chooser is not on screen; not pressing keys')
         self.ensure_key_focus(rows)
         ui = self.ui() or ui
-        # move focus to the launcher's row
+        # move focus to the launcher's row; a key only while our page is readable
         for _ in range(len(rows) + 2):
-            ui = self.ui() or {}
+            ui = self.ui()
+            if ui is None:
+                r.note('2: our page went away while moving the focus; no more keys',
+                       self.page_gone_evidence(getattr(self, 'launch_mark', '') or ''))
+                ui = {}
+                break
             if ui.get('row') == self.launcher:
                 break
             cur, tgt = rows.index(ui['row']) if ui.get('row') in rows else 0, rows.index(self.launcher)
@@ -1819,16 +1829,20 @@ class Scenario:
         ui = self.ui() or {}
         r.check('focus is on the launcher row', ui.get('row') == self.launcher, json.dumps(ui))
         self.shot('row-focused')
+        if ui.get('row') != self.launcher or (self.ui() or {}).get('row') != self.launcher:
+            raise RuntimeError('focus is not on the launcher row of our page; not pressing OK')
         self.press('OK')
         ui = self.wait(lambda: (lambda u: u if u and u.get('dialog') else None)(self.ui()), 15, 1) or {}
         r.check('the confirmation dialog opened ("Use <name> as Home?")',
                 bool(ui.get('dialog')) and ui['dialog'].startswith('Use '), json.dumps(ui))
         r.say('UI driven: dialog "%s", focus "%s"' % (ui.get('dialog'), ui.get('text')))
         self.shot('dialog')
-        if ui.get('text') != 'Use as Home':
+        if ui.get('dialog') and ui.get('text') != 'Use as Home':
             self.press('UP')
             ui = self.ui() or {}
         r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
+        if ui.get('text') != 'Use as Home':
+            raise RuntimeError('focus is not on "Use as Home" in our dialog; not pressing OK')
         mounted_before = bool(d.mounts()) if self.uses_backport() else False
         comp0 = self.compositor_snapshot() if self.uses_backport() else None
         if self.uses_backport():
@@ -1937,6 +1951,21 @@ class Scenario:
             return json.loads(v) if v else None
         except ValueError:
             return None
+
+    def ensure_page(self, label):
+        """Before keys go to the list: our page must be readable.  surface-manager closes an overlay window
+        (Home Chooser's appinfo defaultWindowType) after a stretch without key input (6.5.2: about 90 s
+        after the launch with no key, about 120 s after the last key; a relaunch alone does not reset it;
+        logged as getAppLifeStatus closing reason userTimeout).  If the app was closed, why is noted and it
+        is opened once more; no key is pressed at whatever is beneath.  True when the list is there."""
+        if self.ui() is not None:
+            return True
+        self.rec.note('%s: our page is gone before the keys; opening Home Chooser again' % label,
+                      self.page_gone_evidence(getattr(self, 'launch_mark', '') or ''))
+        self.launch_mark = self.messages_mark()
+        self.dev.launch(APP_ID)
+        return bool(self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()),
+                              60, 1))
 
     def page_gone_evidence(self, mark):
         """Why our page went away since `mark`: the inspector's reason, whether sam still runs the app,
