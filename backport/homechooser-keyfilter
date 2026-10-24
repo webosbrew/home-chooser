@@ -6,7 +6,7 @@
 # stop and refresh restart retain explicit manual/debug restart support.
 # status reports patch=possible|refused, unpatched-sites=N, skipped=reason and file=/path.
 # Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,UNIT,
-# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,GEN,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
+# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,REWRITER,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
 
 ROOT=${HOMECHOOSER_ROOT:-}
 WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-backport}
@@ -28,7 +28,7 @@ TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 KEYFILTER_FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
 NODE=${HOMECHOOSER_NODE:-node}
 command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
-GEN=${HOMECHOOSER_GEN:-$(dirname "$0")/homechooser-keyfilter-gen.js}
+REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-keyfilter-rewrite.js}
 TMO_FORM=
 
 log() {
@@ -227,7 +227,7 @@ any_mounted() {
 # Check the current files directly; there is no firmware lookup or content-key cache.
 patch_status() {
     result="$WORK/check.$$.out"
-    if "$NODE" "$GEN" check --root "${ROOT:-/}" > "$result" 2>&1; then
+    if "$NODE" "$REWRITER" check --root "${ROOT:-/}" > "$result" 2>&1; then
         cat "$result"
     else
         echo patch=refused
@@ -353,7 +353,7 @@ do_apply() {
     fi
     rm -rf "$WORK/stage"
     rm -f "$WORK/manifest.json" "$WORK/applied-status" "$WORK/recovered" "$WORK/restart-reason"
-    "$NODE" "$GEN" generate --root "${ROOT:-/}" --out "$WORK/stage" \
+    "$NODE" "$REWRITER" generate --root "${ROOT:-/}" --out "$WORK/stage" \
         --manifest "$WORK/manifest.json" > "$WORK/plan.$$" 2>&1
     r=$?
     cat "$WORK/plan.$$" >> "$LOG"
@@ -483,7 +483,7 @@ do_refresh() {
 }
 
 do_status() {
-    [ -f "$GEN" ] || echo data=missing
+    [ -f "$REWRITER" ] || echo data=missing
     reboot=no
     if any_mounted; then
         echo mounted=yes

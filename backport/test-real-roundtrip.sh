@@ -62,7 +62,7 @@ for pair in "$@"; do
 
     : > "$T/mounts"; : > "$T/cmds"
     printf 'my.home\n' > "$T/home"; echo my.home > "$T/installed"
-    node "$HERE/homechooser-keyfilter-gen.js" generate --root "$root" --out "$T/expected" --manifest "$T/expected.json" > /dev/null || { FAIL=$((FAIL + 1)); rm -rf "$T"; continue; }
+    node "$HERE/homechooser-keyfilter-rewrite.js" generate --root "$root" --out "$T/expected" --manifest "$T/expected.json" > /dev/null || { FAIL=$((FAIL + 1)); rm -rf "$T"; continue; }
     entries "$T/expected.json" > "$T/entries"
     : > "$T/before"
     while read -r p; do sha256sum "$root$p" >> "$T/before"; done < "$T/entries"
@@ -91,7 +91,7 @@ STUB
            HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
     SETTINGS=/usr/lib/qml/WebOSCompositorBase/global/Settings.qml
     stage=$T/work/stage$SETTINGS
-    export HOMECHOOSER_NODE="${NODE:-node}" HOMECHOOSER_GEN="$HERE/homechooser-keyfilter-gen.js"
+    export HOMECHOOSER_NODE="${NODE:-node}" HOMECHOOSER_REWRITER="$HERE/homechooser-keyfilter-rewrite.js"
     w() { $SH "$HERE/homechooser-keyfilter" "$@" > "$T/out" 2>&1; }
 
     w status

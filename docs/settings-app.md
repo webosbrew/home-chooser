@@ -611,3 +611,8 @@ offline test references and are excluded from the package.
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
 `app/package.json`. `backport/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
 6.6.0, 8.3.0, 9.2.1, 10.3.1 and 11.2.0 and assert the payloads.
+
+The webOS 6–9 hook has a two-file core (Settings and StarfishKeyFilter). The systemUi refresh and
+four supporting files are best effort; status lists skipped files. If systemUi cannot be rewritten,
+Home over the chosen launcher relaunches it instead of handing it the key, and LG Home in front
+can keep the key through the stock comparison. See [the minimal hook](key-filter-backport.md).

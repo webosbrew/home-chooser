@@ -1,6 +1,6 @@
 'use strict';
-// Behavioural comparison of handleHomeKeys: stock vs minimal hook.
-//   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | min)
+// Behavioural comparison of handleHomeKeys: stock vs core-only vs complete hook.
+//   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | core | min)
 // Runs every scenario in each variant, with the key filter's applicationManager emulated the way
 // each variant's StarfishKeyFilter.qml defines it, and prints one line per scenario with the actions.
 var fs = require('fs');
@@ -59,16 +59,16 @@ function scenario(variant, mod, sc) {
 	}
 	var am = {
 		launch: function (appId, params) {
-			if (variant === 'min' && appId === STOCK && getHomeAppId() !== STOCK) return launchLog('launch', getHomeAppId(), params);
+			if (variant !== 'stock' && appId === STOCK && getHomeAppId() !== STOCK) return launchLog('launch', getHomeAppId(), params);
 			launchLog('launch', appId, params);
 		},
 		checkLaunch: function (appId, params) {
-			if (variant === 'min' && appId === STOCK) appId = getHomeAppId();
+			if (variant !== 'stock' && appId === STOCK) appId = getHomeAppId();
 			launchLog('launch', appId, params);
 		},
 		close: function (id) { lg('close ' + id); }
 	};
-	if (variant === 'min') am.getHomeAppId = getHomeAppId;
+	if (variant !== 'stock') am.getHomeAppId = getHomeAppId;
 	var e = mod.env;
 	Object.keys(e).forEach(function (k) { delete e[k]; });
 	e.Qt = new Proxy(KEYS, {get: function (t, p) { return p in t ? t[p] : 0x7000; }});
@@ -94,9 +94,7 @@ function scenario(variant, mod, sc) {
 		surfaceAcceptsMetaKey: function () { return 'false'; },
 		closeOverlaidItems: function () { lg('closeOverlaidItems'); },
 		sendKeyToFocusWindow: function (k, p) { lg('sendKey ' + k.toString(16) + ' ' + p); },
-		prepareToGoHome: function () {},
-		isHomeApp: function (id) { return id === getHomeAppId(); },
-		getHomeAppId: getHomeAppId
+		prepareToGoHome: function () {}
 	};
 	var api = mod.make(mod.proxy);
 	var h = api.handleHomeKeys();

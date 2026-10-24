@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 'use strict';
-// the minimal, hash-free Home-key hook for webOS 6 to 9.
+// The minimal structural Home-key hook for webOS 6 to 9.
 //
-//   node homechooser-keyfilter-gen.js check    --root DIR [--skip-version-gate]
-//   node homechooser-keyfilter-gen.js generate --root DIR --out DIR
+//   node homechooser-keyfilter-rewrite.js check    --root DIR [--skip-version-gate]
+//   node homechooser-keyfilter-rewrite.js generate --root DIR --out DIR
 //
-// Tier 1 (all or nothing; any failed guard -> exit 2, nothing written, stock stays):
+// Core (all or nothing; any failed guard -> exit 2, nothing written, stock stays):
 //   Settings.qml          one constant block before the root's closing brace + one import line
 //   StarfishKeyFilter.qml applicationManager.launch / checkLaunch redirect the stock id, and expose getHomeAppId
+// Best effort (each file on its own; skipped anchors leave the file stock and are reported):
 //   systemUi.js           only where `var HOME_APP_ID = "com.webos.app.home";` exists: one line at the top of
 //                         handleHomeKeys refreshes HOME_APP_ID from the live home id
-// Tier 2 (each file on its own; a file whose anchors do not match exactly is left stock and reported):
 //   StarfishNudgeView, StarfishBaseLunaServiceAPI, StarfishRecents, StarfishFullscreenController
 // Written for Node 8.12: no named groups, lookbehind, dotAll, replaceAll or recursive mkdir.
 
@@ -147,7 +147,7 @@ function balance(t) {
 function insertAt(t, i, s) { return t.slice(0, i) + s + t.slice(i); }
 
 // ------------------------------------------------------------------------------------------
-// Tier 1
+// Core
 
 function patchSettings(t) {
 	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('Settings.qml already has home helpers');
@@ -162,7 +162,7 @@ function patchSettings(t) {
 	return insertAt(t, end.index + 1, SETTINGS_BLOCK);
 }
 
-function patchKeyFilter(t, needCheckLaunch) {
+function patchKeyFilter(t) {
 	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('StarfishKeyFilter.qml already routes the home id');
 	one(t, /^import WebOSCompositorBase 1\.0$/m, 'StarfishKeyFilter.qml import');
 	var g = one(t, /^[ \t]*readonly property QtObject applicationManager: QtObject \{$/m, 'applicationManager group');
@@ -173,28 +173,20 @@ function patchKeyFilter(t, needCheckLaunch) {
 	var reC = /^([ \t]*)readonly property var checkLaunch:[ \t]+function\(appId, params, checkUpdateOnLaunch, autoInstallation\) \{\n/m;
 	var l = one(t, reL, 'applicationManager.launch');
 	if (l.index < gOpen || l.index > gEnd) abort('applicationManager.launch is outside its group');
-	var c = null;
-	var nc = count(reC, t);
-	if (nc === 1) {
-		c = reC.exec(t);
-		if (c.index < gOpen || c.index > gEnd) abort('applicationManager.checkLaunch is outside its group');
-	} else if (nc > 1 || needCheckLaunch) {
-		abort('applicationManager.checkLaunch matched ' + nc + ' times');
-	}
+	var c = one(t, reC, 'applicationManager.checkLaunch');
+	if (c.index < gOpen || c.index > gEnd) abort('applicationManager.checkLaunch is outside its group');
 	var ind = l[1];
 	// edits from the end backwards so indices stay valid
 	var edits = [];
 	edits.push([l.index + l[0].length, ind + '    if (Settings.redirectHomeLaunch(appId, params, reason)) return; // ' + MARK + '\n']);
 	edits.push([l.index, ind + 'readonly property var getHomeAppId: function() { return Settings.getHomeAppId(); } // ' + MARK + '\n']);
-	if (c) {
-		edits.push([c.index + c[0].length, c[1] + '    if (appId === Settings.stockHomeAppId) appId = Settings.getHomeAppId(); // ' + MARK + '\n']);
-	}
+	edits.push([c.index + c[0].length, c[1] + '    if (appId === Settings.stockHomeAppId) appId = Settings.getHomeAppId(); // ' + MARK + '\n']);
 	edits.sort(function (a, b) { return b[0] - a[0]; });
 	edits.forEach(function (e) { t = insertAt(t, e[0], e[1]); });
 	return t;
 }
 
-// returns {text, changed, checkLaunch} ; text === null when the file is left stock
+// Optional script refresh: a mismatch leaves the complete script stock.
 function patchSystemUi(t) {
 	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('systemUi.js already routes the home id');
 	var defRe = /^var HOME_APP_ID = "com\.webos\.app\.home";\n/m;
@@ -208,7 +200,7 @@ function patchSystemUi(t) {
 	if (lits !== nDef + launches + checks) abort('systemUi.js: a stock id is used other than in HOME_APP_ID or a launch (' + lits + ' literals)');
 	if (nDef === 0) {
 		if (usesAll !== 0) abort('systemUi.js uses HOME_APP_ID without the expected definition');
-		return {text: null, checkLaunch: checks > 0};
+		abort('systemUi.js has no HOME_APP_ID refresh anchor');
 	}
 	if (nDef > 1) abort('systemUi.js defines HOME_APP_ID ' + nDef + ' times');
 	var h = one(t, /^function handleHomeKeys\([^)]*\) \{\n/m, 'handleHomeKeys');
@@ -227,11 +219,11 @@ function patchSystemUi(t) {
 	if (cmpUses !== inside) abort('systemUi.js uses HOME_APP_ID other than in a comparison (' + (inside - cmpUses) + ')');
 	if (!inside) abort('systemUi.js defines HOME_APP_ID but handleHomeKeys does not use it');
 	var line = '    if (applicationManager.getHomeAppId) HOME_APP_ID = applicationManager.getHomeAppId(); // ' + MARK + ': the live home id\n';
-	return {text: insertAt(t, h.index + h[0].length, line), checkLaunch: checks > 0};
+	return insertAt(t, h.index + h[0].length, line);
 }
 
 // ------------------------------------------------------------------------------------------
-// Tier 2: each returns new text or throws Abort (caller leaves the file stock)
+// Best effort: each returns new text or throws Abort (caller leaves the file stock)
 
 function needImport(t) {
 	if (!/^import WebOSCompositorBase 1\.0$/m.test(t)) abort('does not import WebOSCompositorBase');
@@ -243,7 +235,8 @@ function exactSub(t, re, repl, n, what) {
 	return t.replace(new RegExp(re.source, 'g'), repl);
 }
 
-var TIER2 = [
+var OPTIONAL = [
+	{file: F.systemui, name: 'home comparisons', fn: patchSystemUi},
 	{file: F.nudge, name: 'nudge', fn: function (t) {
 		needImport(t);
 		if (count(new RegExp(LIT), t) !== 1) abort('expected one stock id');
@@ -263,7 +256,10 @@ var TIER2 = [
 		var ns = count(spare, t), nn = count(nmrm, t);
 		if (count(new RegExp(LIT), t) !== ns + nn || ns + nn === 0) abort('stock id in an unexpected form');
 		// spare the chosen home as well as the stock one (sam brings the stock home back anyway)
+		var seen = {};
 		t = t.replace(new RegExp(spare.source, 'g'), function (all, x) {
+			if (seen[x]) abort('recents exclusion for ' + x + ' is ambiguous');
+			seen[x] = true;
 			return x + '.appId !== "' + STOCK + '" && !Settings.isHomeApp(' + x + '.appId)';
 		});
 		if (nn > 0) {
@@ -299,29 +295,25 @@ function plan(root, opt) {
 	var major = osMajor(root);
 	if (!opt.skip && (major === null || major < 6 || major > 9)) abort('webOS ' + major + ' is outside 6 to 9');
 	var out = [], skipped = [];
-	var s = read(root, F.settings), k = read(root, F.keyfilter), u = read(root, F.systemui);
-	if (s === null || k === null || u === null) abort('a tier-1 file is missing');
-	var su = patchSystemUi(u);
-	var kk = patchKeyFilter(k, su.checkLaunch);
+	var s = read(root, F.settings), k = read(root, F.keyfilter);
+	if (s === null) abort(F.settings + ': core file is missing');
+	if (k === null) abort(F.keyfilter + ': core file is missing');
+	var kk = patchKeyFilter(k);
 	var ss = patchSettings(s);
 	out.push({path: F.settings, stock: s, text: ss});
 	out.push({path: F.keyfilter, stock: k, text: kk});
-	if (su.text !== null) out.push({path: F.systemui, stock: u, text: su.text});
-	if (opt.tier2) {
-		TIER2.forEach(function (r) {
+	OPTIONAL.forEach(function (r) {
+		try {
 			var t = read(root, r.file);
-			if (t === null) return;
-			if (!new RegExp(LIT).test(t)) return;
-			try {
-				var patched = r.fn(t);
-				if (patched === t || balance(patched) !== balance(t)) abort('unchanged output or bracket mismatch');
-				out.push({path: r.file, stock: t, text: patched, tier: 2});
-			} catch (e) {
-				if (!(e instanceof Abort)) throw e;
-				skipped.push(r.file + ': ' + e.message);
-			}
-		});
-	}
+			if (t === null) abort('file is missing');
+			var patched = r.fn(t);
+			if (patched === t || balance(patched) !== balance(t)) abort('unchanged output or bracket mismatch');
+			out.push({path: r.file, stock: t, text: patched});
+		} catch (e) {
+			if (!(e instanceof Abort)) throw e;
+			skipped.push(r.file + ': ' + e.message);
+		}
+	});
 	out.forEach(function (o) {
 		if (o.text === o.stock) abort(o.path + ' unchanged');
 		if (balance(o.text) !== balance(o.stock)) abort(o.path + ': brackets no longer balance as in stock');
@@ -337,14 +329,14 @@ function mkdirp(d) { if (!fs.existsSync(d)) { mkdirp(path.dirname(d)); fs.mkdirS
 
 // check and generate share the same plan; a refusal writes no staged files.
 function main(argv) {
-	var cmd = argv[0], opt = {root: '/', tier2: true};
+	var cmd = argv[0], opt = {root: '/'};
 	for (var i = 1; i < argv.length; i++) {
 		if (argv[i] === '--skip-version-gate') opt.skip = true; // offline negative controls only
 		else if (/^--(root|out|manifest)$/.test(argv[i]) && i + 1 < argv.length) opt[argv[i].slice(2)] = argv[++i];
 		else { process.stderr.write('bad argument ' + argv[i] + '\n'); return 1; }
 	}
 	if (['check', 'generate'].indexOf(cmd) < 0 || (cmd === 'generate' && !opt.out)) {
-		process.stderr.write('usage: homechooser-keyfilter-gen.js check|generate [--root DIR] [--out DIR] [--manifest FILE]\n');
+		process.stderr.write('usage: homechooser-keyfilter-rewrite.js check|generate [--root DIR] [--out DIR] [--manifest FILE]\n');
 		return 1;
 	}
 	try {
@@ -356,8 +348,7 @@ function main(argv) {
 				fs.writeFileSync(d, Buffer.from(o.text, 'latin1'));
 			});
 			if (opt.manifest) fs.writeFileSync(opt.manifest, JSON.stringify({
-				files: p.targets.map(function (o) { return {path: '/' + o.path}; }),
-				skipped: p.skipped
+				files: p.targets.map(function (o) { return {path: '/' + o.path}; })
 			}, null, 2) + '\n');
 		}
 		process.stdout.write('patch=possible\nunpatched-sites=' + p.skipped.length + '\n');

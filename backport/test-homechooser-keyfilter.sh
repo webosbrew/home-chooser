@@ -106,8 +106,8 @@ while [ "$#" -gt 0 ]; do
     esac
     shift 2
 done
-[ -f "$T/generator-refuse" ] && { echo 'ABORT: fixture refused' >&2; exit 2; }
-[ -f "$T/generator-error" ] && { echo 'ERROR: fixture I/O error' >&2; exit 1; }
+[ -f "$T/rewriter-refuse" ] && { echo 'ABORT: fixture refused' >&2; exit 2; }
+[ -f "$T/rewriter-error" ] && { echo 'ERROR: fixture I/O error' >&2; exit 1; }
 if [ "$mode" = generate ]; then
     mkdir -p "$out/usr/lib/qml"
     cp "$T/new-a" "$out/usr/lib/qml/a.qml"
@@ -120,8 +120,8 @@ echo 'file=/usr/lib/qml/a.qml'
 echo 'file=/usr/lib/qml/b.js'
 STUB
     sed -i "s|@T@|$T|" "$T/bin/node"
-    : > "$T/generator.js"
-    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
+    : > "$T/rewriter.js"
+    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_REWRITER="$T/rewriter.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
     export HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
@@ -220,7 +220,7 @@ rm -rf "${T:?}"
 echo "== refusal and I/O error mount nothing"
 for failure in refuse error; do
     setup
-    touch "$T/generator-$failure"
+    touch "$T/rewriter-$failure"
     run
     if [ "$failure" = refuse ]; then expected=0; else expected=1; fi
     check "$failure: worker exit" rc "$expected"

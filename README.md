@@ -26,8 +26,8 @@ homebrew app with three parts:
   calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
   again.
 * The webOS 6 to 9 Home-key hook uses one guarded rewriter on stock compositor files at boot.
-  Essential hooks apply together; four supporting files are patched independently when their anchors
-  match. A refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/key-filter-backport.md).
+  Settings and key-filter hooks apply together; systemUi and four supporting files are patched
+  independently when their anchors match. A core refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/key-filter-backport.md).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.

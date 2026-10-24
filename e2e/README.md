@@ -27,7 +27,8 @@ beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart 
 
 Every webOS 6–9 run exercises the minimal structural hook. After the selection boot and the
 reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
-proofs apply on every build.
+proofs apply on every build. Offline checks also exercise the two-file core when optional
+systemUi anchors fail; the documented foreground-comparison degradation is expected there.
 
 Log evidence includes the retained `/var/log/messages.N.gz` archives in chronological order;
 boot and service activity can rotate the active file before an assertion reads it. After each

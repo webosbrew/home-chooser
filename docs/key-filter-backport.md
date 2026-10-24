@@ -1,22 +1,22 @@
 # Minimal Home-key hook, webOS 6–9
 
-Home Chooser runs one structural rewriter against the stock compositor at boot. The same guarded rules apply to webOS 6 through 9; a tier-1 mismatch
-leaves the device stock and logs the exact failed anchor. webOS 5 and 10 or later are refused.
+Home Chooser runs one structural rewriter against the stock compositor at boot. The same guarded
+rules apply to webOS 6 through 9. A core mismatch leaves the device stock and logs the failed anchor. webOS 5 and 10 or later are refused.
 
 ## The hook
 
-| Tier | File | Change |
+| Group | File | Change |
 | --- | --- | --- |
-| 1 | `WebOSCompositorBase/global/Settings.qml` | Import WebOSServices; add the shared home-id, redirect and launch-fallback helpers. |
-| 1 | `WebOSCompositor/controllers/StarfishKeyFilter.qml` | Expose `applicationManager.getHomeAppId`; redirect stock-home `launch` and `checkLaunch` calls. |
-| 1 | `KeyFilters/systemUi.js`, when it defines `HOME_APP_ID` | Refresh that variable at the start of `handleHomeKeys`. Existing comparisons stay intact. |
-| 2 | `StarfishNudgeView.qml` | Suppress nudges over the chosen home. |
-| 2 | `StarfishBaseLunaServiceAPI.qml` | Report the chosen home as the launcher in `getCurrentState`. |
-| 2 | `StarfishRecents.qml` | Spare both the chosen launcher and LG Home during cleanup, retaining the firmware's last-input exclusion and default. |
-| 2 | `StarfishFullscreenController.qml` | Use the chosen home for NMRM last-input. |
+| Core | `WebOSCompositorBase/global/Settings.qml` | Import WebOSServices; add the shared home-id, redirect and launch-fallback helpers. |
+| Core | `WebOSCompositor/controllers/StarfishKeyFilter.qml` | Expose `applicationManager.getHomeAppId`; redirect stock-home `launch` and `checkLaunch` calls. |
+| Best effort | `KeyFilters/systemUi.js`, when it defines `HOME_APP_ID` | Refresh that variable at the start of `handleHomeKeys`. Existing comparisons stay intact. |
+| Best effort | `StarfishNudgeView.qml` | Suppress nudges over the chosen home. |
+| Best effort | `StarfishBaseLunaServiceAPI.qml` | Report the chosen home as the launcher in `getCurrentState`. |
+| Best effort | `StarfishRecents.qml` | Spare both the chosen launcher and LG Home during cleanup, retaining the firmware's last-input exclusion and default. |
+| Best effort | `StarfishFullscreenController.qml` | Use the chosen home for NMRM last-input. |
 
-Tier 1 is all or nothing. Tier 2 is independent per file: an unexpected anchor skips that file
-and leaves its behavior stock. Everything outside this table stays stock, including the fallback
+The two core files are all or nothing. The other five files are independent: a missing file or
+unexpected anchor skips that complete file and reports the reason in `unpatched-sites` and `skipped`. Everything outside this table stays stock, including the fallback
 Home view, splash/spinner logic, gestures, home-type window metadata and the multiview toolbar's
 literal case comparison. Launches through the key filter's applicationManager still use the redirect.
 
@@ -26,29 +26,37 @@ Changing the record updates Home behavior without restarting anything. A failed 
 falls back to the stock home with the original request fields. An invalid JSON launch request stays
 on the stock path. With the stock id selected, the stock launch implementation runs.
 
-Older builds with no `HOME_APP_ID` definition need only the two QML files in tier 1. Builds that
+Older builds with no `HOME_APP_ID` definition need only the two core QML files. Builds that
 compare the foreground app to that variable also mount systemUi.js. This preserves the firmware's
 own behavior when Home is already in front, when voice UI is running, and when overlays have focus.
 
 ## Guards and runtime
 
-`backport/homechooser-keyfilter-gen.js` is compatible with Node 8.12, the webOS 6 runtime: no
+`backport/homechooser-keyfilter-rewrite.js` is compatible with Node 8.12, the webOS 6 runtime: no
 lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. The worker uses `node`
 from PATH, falling back to `/usr/bin/node`, as before.
 
-Every tier-1 anchor must occur exactly once: the singleton pragma, Settings root id and subscribe
-signature, imports, applicationManager group and launch headers, and the Home handler header where
-needed. The launch members must lie inside their group. checkLaunch may be absent only when the
-Home script does not call it. A missing file, an existing home helper, an unknown stock-id use or a
-HOME_APP_ID use outside a foreground comparison inside handleHomeKeys aborts the complete plan.
+Every core anchor must occur exactly once: the singleton pragma, Settings root id, subscribe
+signature and import, and the applicationManager group, launch and checkLaunch headers. Both
+launch members must lie inside their group. A missing core file or existing core home helper
+refuses the complete plan before any output is written.
+
+The optional systemUi rule checks its definition, handler header and known stock-id uses. A
+mismatch leaves the original script in place while the core still redirects stock-home launches.
+On firmware with foreground-home comparisons, skipping this file has a measured degradation:
+with the chosen launcher already in front, Home relaunches it instead of handing it the key;
+with LG Home in front, the stock comparison can hand Home to LG Home rather than launching the
+chosen app. Voice and overlay decisions also retain their stock-home comparisons. Firmware with
+no such comparisons needs no script edit. The harness verifies this core-only behavior separately
+from the complete hook.
 
 Each output must change, retain the original bracket balance and have its Settings import.
 Settings.qml must contain exactly one stored-id placeholder. The entire plan is checked before
 writing output; the worker stages everything before mounting anything.
 
 ```
-node backport/homechooser-keyfilter-gen.js check --root /path/to/rootfs
-node backport/homechooser-keyfilter-gen.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/hook.json
+node backport/homechooser-keyfilter-rewrite.js check --root /path/to/rootfs
+node backport/homechooser-keyfilter-rewrite.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/hook.json
 ```
 
 Exit status is 0 for success, 2 for a guarded refusal (`ABORT: <specific reason>`), and 1 for usage
@@ -79,7 +87,7 @@ It calls the stock `com.webos.surfacemanager/getCurrentState` method as root wit
 `-a com.webos.applicationManager`, polling against monotonic uptime for up to 24 seconds with each call bounded to two
 seconds. A successful reply must contain both `returnValue:true` and a string `currentState`.
 The method is implemented and registered by the stock StarfishBaseLunaServiceAPI QML object on
-all 19 corpus builds; it does not depend on the tier-2 rewrite being applied. On 9.2.4 it stops
+all 19 corpus builds; it does not depend on the optional rewrite being applied. On 9.2.4 it stops
 answering when broken Settings.qml prevents main.qml from loading, even though systemd reports
 an active compositor, and answers again after stock rollback.
 
@@ -118,7 +126,7 @@ The live record still takes priority. `stop` unmounts and restarts; `refresh res
 commands. Logs are in `/tmp/homechooser-backport.log`.
 
 Status reports `mounted=yes|no`, `patch=possible|refused`, `reason=` on refusal,
-`unpatched-sites=N` for skipped applicable tier-2 files, repeated `skipped=<file>: <reason>` and
+`unpatched-sites=N` for skipped best-effort files, repeated `skipped=<file>: <reason>` and
 `file=<patched path>` lines, and `reboot=needed|no`. The structural check is cached by the rules,
 version metadata and QML/JS content; it is recomputed after input changes.
 
@@ -131,9 +139,11 @@ Run every `backport/test-*.sh` under both sh and busybox sh; pass a one-line exe
 
 `test-minimal-hook.sh` runs the study's pattern
 matrix, syntax checks, deterministic output, restoration of the original bytes after removing our
-edits, refusal/double-patch mutations, per-file tier-2 drift, and the Home-key behavioral harness.
+edits, refusal/double-patch mutations, per-file best-effort drift, and the Home-key behavioral harness.
 For each supported firmware it compares 144 scenarios: no choice versus stock, chosen launcher
-versus stock with home roles exchanged.
+versus stock with home roles exchanged, and the actual two-file core plan versus stock foreground
+comparisons with redirected launches. The latter explicitly checks the launcher-front relaunch
+degradation when systemUi is skipped.
 The harness emulates QML service boundaries; VM checks remain necessary for QML/script visibility
 and settings subscription timing. Synthetic anchor skeletons test failures even without a corpus.
 
@@ -163,4 +173,6 @@ does not mark a build as device verified.
 
 | webOS | VM / build | Minimal hook verified | Evidence |
 | --- | --- | --- | --- |
-| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | Partial probes only; full matrix stopped on recovery gap | [Runtime evidence](research/minimal-hook-verification.md) |
+| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | 154 full E2E checks; API, reboot and automatic rollback verified | [Runtime evidence](research/minimal-hook-verification.md) |
+| 9.2.1 | w22h-ombre / 23.21.20.01 W22H | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
+| 6.5.2 | w21a-kisscurl / 03.53.25.01 W21A | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |

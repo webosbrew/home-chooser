@@ -167,3 +167,50 @@ Before deletion, the final oracle run recorded **16 matching reviewed-set compar
 passed under sh and BusyBox sh, and under Node 8.12 with each shell. The same corpus and
 stock-versus-rewriter harness remain; per-release manifests and diffs are no longer needed.
 The user approved their deletion before the remaining VM lanes completed.
+
+## Final core and best-effort contract
+
+The later user decision makes only Settings.qml and StarfishKeyFilter atomic. Their imports,
+helper block, launch/checkLaunch redirects and exposed getter must match together. systemUi.js
+and the four supporting files are independent best-effort rewrites; missing or mismatched files
+are left stock and reported. The implementation is named `homechooser-keyfilter-rewrite.js`.
+Runtime firmware selection and content-key status caching are gone; the only version gate is
+webOS major 6–9. The manifest contains staged paths only.
+
+The retained harness now executes stock, core-only and complete-hook variants. Core-only plans
+contain exactly the two dependent files and report all five optional files as skipped. They
+match stock foreground comparisons with stock-home launches redirected. On the 16 corpus builds
+that use HOME_APP_ID comparisons, 48 of 144 scenarios degrade: Home over the chosen launcher
+relaunches it instead of handing it the key, while LG Home in front can retain Home through its
+stock comparison. The three older comparison-free scripts have zero degraded scenarios.
+Broken systemUi anchors produce partial plans; missing or ambiguous core anchors refuse all output.
+
+After this decision, all 19 normal stock plans remain byte-identical under Node 8.12 to the
+implementation used by the completed VM runs. All six retained suites pass under sh and BusyBox
+sh, and under Node 8.12 with each shell: minimal-hook 606 checks (19 real supported roots, one
+synthetic skeleton, two negative roots and 2,736 scenarios), worker 199, watcher 547, boot entry 50,
+real roundtrip 399, and the access suite. There are no failed or skipped corpus checks.
+Clean npm install, lint, 213 Jest tests in eight suites, 297 native service checks, 64 Python runner
+tests and packaging pass. The ipk contains exactly five current runtime scripts.
+
+Completed full runs after readiness was fixed:
+
+| VM | Full attempts | Successful result | Artifacts |
+| --- | ---: | --- | --- |
+| w24g-ombre, 9.2.4 | 2 | 154 PASS, one MANUAL-only API alert confirmation; no FAIL | e2e/results/w24g-ombre-20261024-210929/ |
+| w22h-ombre, 9.2.1 | 1 | 106 PASS, no FAIL | e2e/results/w22h-ombre-20261024-212139/ |
+| w21a-kisscurl, 6.5.2 | 2 (one interrupted for a runner fix) | 106 PASS, no FAIL | e2e/results/w21a-kisscurl-20261024-214245/ |
+
+Each completed VM was returned to stock with test apps removed, leaving hbchannel as its original
+developer-app list, and stopped. Screenshots show the green web fixture on 9.2.4 and Dock over
+Homebrew Channel on 9.2.1 and 6.5.2; stock Home launch proofs pass after removal and uninstall.
+
+The first 9.2.4 full attempt recorded 150 PASS and three runner failures: the service alert log
+rotated before an active-file-only reader saw it, although the screenshot showed the correct prompt.
+The corrected rerun passed. The first 6.5.2 attempt exposed a second runner portability defect:
+BusyBox 1.29.3 has no `sort -V`. It was interrupted through cleanup (56 provisional PASS), the
+reader changed to numeric suffix sorting, and the complete rerun passed. Artifacts are
+`e2e/results/w24g-ombre-20261024-205556/` and
+`e2e/results/w21a-kisscurl-20261024-213346/`. No product assertion failed in these attempts.
+The 6.5.2 firmware accepted Power Off but did not exit QEMU within 90 seconds; Beanjar synced
+the disks and stopped it on each shutdown. No crash was observed during these full runs.
