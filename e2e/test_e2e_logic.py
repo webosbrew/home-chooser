@@ -22,6 +22,17 @@ REPO = os.path.dirname(HERE)
 FULL, HOME = e2e.FULLHOME, e2e.STOCK
 
 
+class LogMark(unittest.TestCase):
+    def test_only_lines_after_the_mark(self):
+        log = ['a closeByAppId x', 'b', 'c']
+        self.assertEqual(e2e.lines_after(log, 2), ['c'])
+        self.assertEqual(e2e.lines_after(log, 3), [])
+        self.assertEqual(e2e.lines_after(log, 0), log)
+
+    def test_a_log_shorter_than_the_mark_is_a_new_boot(self):
+        self.assertEqual(e2e.lines_after(['x', 'y'], 50), ['x', 'y'])
+
+
 class StockRecord(unittest.TestCase):
     def test_5x_is_unchanged_a_stock_launcher(self):
         for home in (FULL, HOME):

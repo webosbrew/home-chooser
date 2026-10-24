@@ -241,6 +241,12 @@ FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
 FIXTURE_ID = 'org.webosbrew.hcfixture.%s.%s'
 
 
+def lines_after(lines, mark):
+    """The log lines written after `mark` lines; a log shorter than the mark was started afresh (a new
+    boot), so all of it counts."""
+    return lines[mark:] if mark <= len(lines) else list(lines)
+
+
 def ipk_files(path):
     """{member name: bytes} of the data.tar.gz inside an ipk (an ar archive; stdlib only)."""
     raw = open(path, 'rb').read()
@@ -764,10 +770,20 @@ class Inspector:
                 return p
         return None
 
+    def log_pages(self, why):
+        """Say what /json lists, so a page-lookup failure is told apart from empty DOM content."""
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:%d/json' % self.port, timeout=5) as r:
+                pages = [(p.get('id'), p.get('title'), p.get('url')) for p in json.loads(r.read().decode())]
+        except Exception as e:
+            pages = 'unreadable: %r' % (e,)
+        print('  inspector evaluate -> None (%s); /json pages: %s' % (why, pages), flush=True)
+
     def evaluate(self, expr):
         """Runtime.evaluate in the Home Chooser page; None if it is not there."""
         page = self._page()
         if not page:
+            self.log_pages('no page for %s' % APP_ID)
             return None
         try:
             s = socket.create_connection(('127.0.0.1', self.port), timeout=8)
@@ -1320,14 +1336,23 @@ class Scenario:
         """6.x to 10.x with an overlay launcher: the watcher leaves the stock home running."""
         return self.L.overlay and 6 <= self.major <= 10
 
+    def mark_log(self):
+        """Remember how long the watcher log is now: /tmp/homechooser-home.log accumulates across the
+        fixtures of one boot, so a check about one switch must only read the lines after this mark."""
+        self.log_mark = len(self.log_lines())
+        return self.log_mark
+
+    def log_since_mark(self):
+        return lines_after(self.log_lines(), getattr(self, 'log_mark', 0))
+
     def check_stock_left_running(self, label, samples):
         """Overlay launcher on 6.x to 10.x: the stock home is running, the watcher logged the skip and
-        never called closeByAppId for it."""
+        never called closeByAppId for it (only the log lines since the mark, i.e. since this switch)."""
         r = self.rec
-        self.wait(lambda: SKIP_LINE in self.dev.sh("cat /tmp/homechooser-home.log 2>&1")[1], 120, 5)
-        log = self.dev.sh("cat /tmp/homechooser-home.log 2>&1")[1]
-        skips = [l for l in log.splitlines() if SKIP_LINE in l]
-        closes = [l for l in log.splitlines() if 'closeByAppId ' + STOCK in l]
+        self.wait(lambda: any(SKIP_LINE in l for l in self.log_since_mark()), 120, 5)
+        log = self.log_since_mark()
+        skips = [l for l in log if SKIP_LINE in l]
+        closes = [l for l in log if 'closeByAppId ' + STOCK in l]
         r.note(label + ': watcher skip lines', '\n'.join(skips))
         r.check(label + ': watcher log has the overlay skip line naming %s (stock home left running)' % self.launcher,
                 any(self.launcher in l for l in skips) if skips else False,
@@ -1663,6 +1688,7 @@ class Scenario:
     def step2(self):
         r, d = self.rec, self.dev
         r.begin('2 choose the launcher through the UI')
+        self.mark_log()  # the watcher log accumulates over the fixtures of a boot: later checks read only what follows
         self.residency('before selecting')
         self.insp = Inspector(self.vm)
         d.launch(APP_ID)
@@ -1982,6 +2008,7 @@ class Scenario:
         else:
             r.check('after the boot (5.x) the watcher made no preload call', 'setPreloadPolicy' not in self.preload_log(),
                     self.preload_log())
+        self.log_mark = 0  # a new boot, a new /tmp log
         self.check_preload_off('after the reboot', settle=30)
         if self.a.keyfilter_generated:
             self.check_generated_status('after reboot')
@@ -2363,6 +2390,11 @@ class Scenario:
             r.check('after the update: 5.x, the stock home policy is still not disabled', en[0] is not False, 'isEnabled=%r' % (en[0],))
         self.check_device_texts()
         self.home_press(self.launcher, '3u-home')
+        if self.strat.name == 'root-shell':
+            # the update reinstalled the service: root is gone and only the luna path (the app) gets it back,
+            # which root-shell stands in for; without it the app shows "can't set up root access yet"
+            self.strat.prepare(d, r)
+            self.strat.verify(d, r)
         self.open_app_check('3u-app')
         r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
             "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12" % (t_install, APP_ID))[1])

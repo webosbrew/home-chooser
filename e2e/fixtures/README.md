@@ -46,7 +46,9 @@ Is `type: "qml"` supported? `support.json` holds the answer per release, with th
 only. `sam-conf.json` has `QmlRunnerPath: /usr/bin/qml-runner`, the binary exists, `sam` contains `QmlAppLifeHandler`,
 and LG ships `type:"qml"` apps on **5.6.1/5.6.2, 6.3-6.6, 7.4-7.6, 8.3-8.4, 9.2.x and 10.3.1**. On **11.2.0** the runner
 and `QmlRunnerPath` are still there and the schema still allows `qml`, but no shipped app uses it, so it is
-`unknown`; **12.0.0** has no sam or runner in the dump: `unknown`. Nothing is verified on a device for a third-party
+`unknown`; **12.0.0** is `false`: its rootfs has no `qml-runner`, no Qt libs, no `Eos.Window` module and no booster
+unit (only the `QmlRunnerPath` setting and sam's `QmlAppLifeHandler` remain), and a device run saw sam launch, splash
+and stop without ever reaching `APP_LAUNCHED`, so these fixtures XFAIL on 12.x. Nothing is verified on a device for a third-party
 install, on any release. The runner reads `support.json`: `false` for a release skips the fixture with an `XFAIL`;
 otherwise it runs and the launch proof decides.
 
