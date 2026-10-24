@@ -61,7 +61,7 @@ const CancelableBox = Cancelable({
 }, DialogBox);
 
 // A dialog drawn inside the panel (Moonstone's Dialog and Popup cover the whole screen).
-export const ConfirmDialog = ({open, title, children, confirmLabel, cancelLabel = 'Cancel', onConfirm, onCancel}) => {
+export const ConfirmDialog = ({open, title, children, confirmLabel, onConfirm, onCancel}) => {
 	useEffect(() => {
 		if (open) Spotlight.focus(DIALOG_ID);
 	}, [open]);
@@ -73,7 +73,7 @@ export const ConfirmDialog = ({open, title, children, confirmLabel, cancelLabel 
 				<div className={css.dialogBody}>{children}</div>
 				<div className={css.buttons}>
 					{onConfirm ? <Button onClick={onConfirm}>{confirmLabel}</Button> : null}
-					<Button onClick={onCancel}>{onConfirm ? cancelLabel : 'OK'}</Button>
+					<Button onClick={onCancel}>{onConfirm ? 'Cancel' : 'OK'}</Button>
 				</div>
 			</CancelableBox>
 		</div>

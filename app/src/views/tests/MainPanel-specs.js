@@ -27,8 +27,7 @@ const makeEnv = ({version = [11, 0, 0], candidates, currentHome = null, stored =
 		backport,
 		rootLuna: jest.fn(async () => ({returnValue: true, appInfo: {title: 'Example App'}})),
 		uninstallConfirmed: jest.fn(async () => ({returnValue: true})),
-		rebootPrompt: jest.fn(async (reason, onScreen) => (onScreen ? {returnValue: true, pending: true, confirm: 'screen', token: 'tok123'} : {returnValue: true, pending: true, confirm: 'alert'})),
-		rebootConfirmed: jest.fn(async () => ({returnValue: true})),
+		rebootPrompt: jest.fn(async () => ({returnValue: true, pending: true, confirm: 'alert'})),
 		readIcon: jest.fn(async (id, p) => (p.includes('fancy') ? 'data:image/png;base64,AAAA' : null))
 	};
 };
@@ -302,7 +301,7 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText(name));
 		};
 
-		test('patch not mounted: apply first, install second, then the restart dialog; Reboot confirms with the token', async () => {
+		test('patch not mounted: apply first, install second, then the service is asked for the restart alert; the app shows no dialog', async () => {
 			const backport = backportOf({mounted: false, enabled: false, match: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], backport});
 			mountApp(env);
@@ -310,66 +309,27 @@ describe('Home Chooser screen', () => {
 			await screen.findByText('Use Plain Launcher as Home?');
 			expect(screen.queryByText(/blink/)).toBeNull();
 			fireEvent.click(screen.getByText('Use as Home'));
-			expect(await screen.findByText('Restart the TV?')).toBeTruthy();
-			expect(screen.getByText('The Home button changes after a restart.')).toBeTruthy();
+			expect(await screen.findByText('Done. Restart the TV to finish.', {selector: '[role="status"]'})).toBeTruthy();
 			expect(backport.install).toHaveBeenCalledWith();
 			expect(backport.install.mock.invocationCallOrder[0]).toBeGreaterThan(env.chooser.apply.mock.invocationCallOrder[0]);
 			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: true});
-			expect(env.rebootPrompt).toHaveBeenCalledWith('apply', true);
-			expect(env.rebootConfirmed).not.toHaveBeenCalled();
-			fireEvent.click(screen.getByText('Reboot'));
-			await waitFor(() => expect(env.rebootConfirmed).toHaveBeenCalledWith('tok123'));
-			expect(await screen.findByText('Restarting the TV...', {selector: '[role="status"]'})).toBeTruthy();
+			expect(env.rebootPrompt).toHaveBeenCalledTimes(1);
+			expect(env.rebootPrompt).toHaveBeenCalledWith('apply');
+			expect(screen.queryByText('Restart the TV?')).toBeNull();
+			expect(screen.queryByText('Reboot')).toBeNull();
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
 		});
 
-		test('Later shows the later toast, calls nothing and returns focus to the list', async () => {
-			const backport = backportOf({mounted: false, enabled: false, match: '8.3.0'});
-			const env = makeEnv({version: [8, 3, 0], backport});
-			mountApp(env);
-			await chooseOn('Plain Launcher');
-			fireEvent.click(await screen.findByText('Use as Home'));
-			await screen.findByText('Restart the TV?');
-			fireEvent.click(screen.getByText('Later'));
-			expect(await screen.findByText('Restart the TV later to finish.')).toBeTruthy();
-			expect(screen.queryByText('Restart the TV?')).toBeNull();
-			expect(env.rebootConfirmed).not.toHaveBeenCalled();
-			await waitFor(() => expect(document.activeElement && document.activeElement.closest('[data-spotlight-id^="home-"]')).toBeTruthy());
-		});
-
-		test('Back on the restart dialog is Later', async () => {
-			const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: false, enabled: false, match: '8.3.0'})});
-			mountApp(env);
-			await chooseOn('Plain Launcher');
-			fireEvent.click(await screen.findByText('Use as Home'));
-			await screen.findByText('Restart the TV?');
-			fireEvent.keyUp(screen.getByText('Later'), {keyCode: 27});
-			expect(await screen.findByText('Restart the TV later to finish.')).toBeTruthy();
-			expect(env.rebootConfirmed).not.toHaveBeenCalled();
-		});
-
-		test('a failed restart shows the failure toast', async () => {
-			const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: false, enabled: false, match: '8.3.0'})});
-			env.rebootConfirmed.mockRejectedValue(new Error('rebootFailed'));
-			mountApp(env);
-			await chooseOn('Plain Launcher');
-			fireEvent.click(await screen.findByText('Use as Home'));
-			await screen.findByText('Restart the TV?');
-			fireEvent.click(screen.getByText('Reboot'));
-			expect(await screen.findByText("Couldn't restart the TV. Restart it to finish.")).toBeTruthy();
-		});
-
-		test('hidden document: the service shows the system alert, the app shows no dialog', async () => {
+		test('the prompt is the same whether the document is hidden or not', async () => {
 			const hidden = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
 			try {
 				const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: false, enabled: false, match: '8.3.0'})});
 				mountApp(env);
 				await chooseOn('Plain Launcher');
 				fireEvent.click(await screen.findByText('Use as Home'));
-				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('apply', false));
-				await screen.findByText('Done. Press Home to try it.');
+				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('apply'));
+				await screen.findByText('Done. Restart the TV to finish.');
 				expect(screen.queryByText('Restart the TV?')).toBeNull();
-				expect(env.rebootConfirmed).not.toHaveBeenCalled();
 			} finally {
 				hidden.mockRestore();
 			}
@@ -383,6 +343,46 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText('Use as Home'));
 			expect(await screen.findByText('Restart the TV to finish.')).toBeTruthy();
 			expect(screen.queryByText('Restart the TV?')).toBeNull();
+		});
+
+		describe('a restart is pending when the screen opens', () => {
+			test('apply: a note and a "Restart now" row; the row asks the service again (reason apply)', async () => {
+				const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: false, enabled: true, match: '8.3.0', rebootNeeded: true})});
+				mountApp(env);
+				expect(await screen.findByText('The Home button changes after a restart.')).toBeTruthy();
+				expect(env.rebootPrompt).not.toHaveBeenCalled();
+				fireEvent.click(screen.getByText('Restart now'));
+				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('apply'));
+				expect(await screen.findByText('Check the restart prompt on the screen.')).toBeTruthy();
+			});
+
+			test('remove: the patch mounted without the flag is a remove', async () => {
+				const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: true, enabled: false, release: '8.3.0', rebootNeeded: true})});
+				mountApp(env);
+				expect(await screen.findByText('LG Home is on the Home button now. A restart removes the patch.')).toBeTruthy();
+				fireEvent.click(screen.getByText('Restart now'));
+				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('remove'));
+			});
+
+			test('a refused prompt (notPending, say) toasts the plain line', async () => {
+				const env = makeEnv({version: [8, 3, 0], backport: backportOf({mounted: false, enabled: true, match: '8.3.0', rebootNeeded: true})});
+				env.rebootPrompt.mockRejectedValue(new Error('notPending'));
+				mountApp(env);
+				fireEvent.click(await screen.findByText('Restart now'));
+				expect(await screen.findByText('Restart the TV to finish.')).toBeTruthy();
+			});
+
+			test('nothing pending: no note and no row', async () => {
+				mountApp(makeEnv({version: [8, 3, 0], backport: backportOf({mounted: true, enabled: true, release: '8.3.0', rebootNeeded: false})}));
+				await screen.findByText('Plain Launcher');
+				expect(screen.queryByText('Restart now')).toBeNull();
+			});
+
+			test('no patch (5.x, 10 and later): nothing to restart, no row', async () => {
+				mountApp(makeEnv({version: [11, 0, 0]}));
+				await screen.findByText('Plain Launcher');
+				expect(screen.queryByText('Restart now')).toBeNull();
+			});
 		});
 
 		test('mounted and enabled: switching launchers makes no install call and no prompt', async () => {
@@ -461,13 +461,10 @@ describe('Home Chooser screen', () => {
 			mountApp(env);
 			fireEvent.click(await screen.findByText('LG Home (stock)'));
 			fireEvent.click(await screen.findByText('Use LG Home'));
-			expect(await screen.findByText('Restart the TV?')).toBeTruthy();
-			expect(screen.getByText('LG Home is on the Home button now. A restart removes the patch.')).toBeTruthy();
+			expect(await screen.findByText('Done. Restart the TV to finish.', {selector: '[role="status"]'})).toBeTruthy();
 			expect(backport.remove).toHaveBeenCalled();
 			expect(backport.remove.mock.invocationCallOrder[0]).toBeGreaterThan(env.chooser.restoreStock.mock.invocationCallOrder[0]);
-			expect(env.rebootPrompt).toHaveBeenCalledWith('remove', true);
-			fireEvent.click(screen.getByText('Reboot'));
-			await waitFor(() => expect(env.rebootConfirmed).toHaveBeenCalledWith('tok123'));
+			expect(env.rebootPrompt).toHaveBeenCalledWith('remove');
 		});
 
 		test('restoring stock when nothing is mounted needs no restart', async () => {
@@ -513,8 +510,8 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText('Use as Home'));
 			await waitFor(() => expect(backport.install).toHaveBeenCalled());
 			expect(env.chooser.apply).toHaveBeenCalledWith('org.plain.launcher', {deferSamRestart: true});
-			expect(await screen.findByText('Restart the TV?')).toBeTruthy();
-			expect(env.rebootPrompt).toHaveBeenCalledWith('apply', true);
+			expect(await screen.findByText('Done. Restart the TV to finish.')).toBeTruthy();
+			expect(env.rebootPrompt).toHaveBeenCalledWith('apply');
 			expect((await screen.findByTestId('footer')).textContent).toBe('Home key patch: generated, not reviewed (not active)');
 		});
 
@@ -523,7 +520,7 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText(label));
 			await waitFor(() => expect(backport.install).toHaveBeenCalledTimes(1));
 			expect(backport.setGenerated.mock.invocationCallOrder[0]).toBeLessThan(backport.install.mock.invocationCallOrder[0]);
-			await screen.findByText('Restart the TV?');
+			await screen.findByText('Done. Restart the TV to finish.');
 		});
 
 		test('turning off clears opt-in before removing, then asks for a restart (remove); active generated choices need no reinstall', async () => {
@@ -537,10 +534,8 @@ describe('Home Chooser screen', () => {
 			await waitFor(() => expect(backport.remove).toHaveBeenCalledTimes(1));
 			expect(backport.setGenerated).toHaveBeenCalledWith(false);
 			expect(backport.setGenerated.mock.invocationCallOrder[0]).toBeLessThan(backport.remove.mock.invocationCallOrder[0]);
-			await screen.findByText('Restart the TV?');
-			expect(env.rebootPrompt).toHaveBeenCalledWith('remove', true);
-			fireEvent.click(screen.getByText('Later'));
-			await screen.findByText('Restart the TV later to finish.');
+			await screen.findByText('Done. Restart the TV to finish.');
+			expect(env.rebootPrompt).toHaveBeenCalledWith('remove');
 		});
 
 		test('a failed flag write prevents installation', async () => {
@@ -703,7 +698,7 @@ describe('Home Chooser screen', () => {
 			mountApp(makeEnv({version: [8, 3, 0], backport}));
 			fireEvent.click(await screen.findByText('Plain Launcher'));
 			fireEvent.click(await screen.findByText('Use as Home'));
-			await screen.findByText('Restart the TV?');
+			await screen.findByText('Done. Restart the TV to finish.');
 			expect(seen).toBeNull();
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
 		});

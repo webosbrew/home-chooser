@@ -85,21 +85,19 @@ describe('service client', () => {
 		});
 	});
 
-	test('rebootPrompt and rebootConfirmed call the service and surface its errors', async () => {
+	test('rebootPrompt sends only the reason, answers the alert route and surfaces its errors', async () => {
 		const {call, calls} = bridge({
-			rebootPrompt: (payload) => (payload.reason === 'apply' ? reply({pending: true, confirm: 'screen', token: 't0k'}) : {returnValue: false, errorCode: 'notPending', errorText: 'nothing to restart'}),
-			rebootConfirmed: (payload) => (payload.token === 't0k' ? reply() : {returnValue: false, errorCode: 'badToken'})
+			rebootPrompt: (payload) => (payload.reason === 'apply' ? reply({pending: true, confirm: 'alert'}) : {returnValue: false, errorCode: 'notPending', errorText: 'nothing to restart'})
 		});
 		const s = createServiceClient(call);
-		await expect(s.rebootPrompt('apply', true)).resolves.toMatchObject({confirm: 'screen', token: 't0k'});
-		await expect(s.rebootPrompt('remove', false)).rejects.toMatchObject({reply: {errorCode: 'notPending'}});
-		await expect(s.rebootConfirmed('t0k')).resolves.toMatchObject({returnValue: true});
-		await expect(s.rebootConfirmed('bad')).rejects.toBeInstanceOf(ServiceError);
+		const got = await s.rebootPrompt('apply');
+		expect(got).toMatchObject({confirm: 'alert'});
+		expect(got.token).toBeUndefined();
+		await expect(s.rebootPrompt('remove')).rejects.toMatchObject({reply: {errorCode: 'notPending'}});
+		expect(s.rebootConfirmed).toBeUndefined(); // only the alert's button calls it
 		expect(calls).toEqual([
-			[SERVICE_URI + '/rebootPrompt', {reason: 'apply', screen: true}],
-			[SERVICE_URI + '/rebootPrompt', {reason: 'remove', screen: false}],
-			[SERVICE_URI + '/rebootConfirmed', {token: 't0k'}],
-			[SERVICE_URI + '/rebootConfirmed', {token: 'bad'}]
+			[SERVICE_URI + '/rebootPrompt', {reason: 'apply'}],
+			[SERVICE_URI + '/rebootPrompt', {reason: 'remove'}]
 		]);
 	});
 
@@ -230,6 +228,6 @@ describe('createPlatform', () => {
 		expect(calls.map((c) => c[0].slice(SERVICE_URI.length))).toEqual(['/call', '/writeFile', '/run']);
 		expect(typeof p.ensureRoot).toBe('function');
 		expect(typeof p.rebootPrompt).toBe('function');
-		expect(typeof p.rebootConfirmed).toBe('function');
+		expect(p.rebootConfirmed).toBeUndefined();
 	});
 });

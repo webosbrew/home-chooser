@@ -47,7 +47,6 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 		readIcon: platform.readIcon,
 		rootLuna: platform.rootLuna,
 		uninstallConfirmed: platform.uninstallConfirmed,
-		rebootPrompt: platform.rebootPrompt,
-		rebootConfirmed: platform.rebootConfirmed
+		rebootPrompt: platform.rebootPrompt
 	};
 };

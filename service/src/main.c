@@ -1324,16 +1324,13 @@ static bool reboot_notify(const char *tag, const char *uri, jvalue_ref payload, 
 	return ok;
 }
 
-/* rebootPrompt {reason: "apply"|"remove", screen: bool} */
+/* rebootPrompt {reason: "apply"|"remove"}: always a system alert (a toast when it is refused); the token never leaves the service */
 static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	if (!gate(msg, "rebootPrompt", true)) return true;
 	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
 	char *reason = req ? get_string(req, "reason") : NULL;
-	jvalue_ref sv = req ? jobject_get(req, key_buf("screen")) : NULL;
-	bool screen = false;
-	if (sv && jis_valid(sv) && jis_boolean(sv)) jboolean_get(sv, &screen);
 	j_release(&req);
 	const char *message = hc_reboot_message(reason);
 	g_free(reason);
@@ -1355,15 +1352,6 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	t->expires = g_get_monotonic_time() + REBOOT_TTL_US;
 	t->live = true;
 
-	if (screen) {
-		jvalue_ref o = jobject_create();
-		put_bool(o, "returnValue", true);
-		put_bool(o, "pending", true);
-		put_str(o, "confirm", "screen");
-		put_str(o, "token", t->token);
-		send_reply(msg, o);
-		return true;
-	}
 	jvalue_ref a = jobject_create();
 	put_str(a, "sourceId", HC_APP_ID);
 	put_str(a, "title", "Home Chooser");
@@ -1381,6 +1369,8 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	put_bool(no, "focus", true);
 	jarray_append(buttons, no);
 	jobject_set(a, key_buf("buttons"), buttons);
+	/* The payload holds the token, so it is not logged; this line says what was asked (the e2e runner reads it). */
+	LOGI("REBOOT_ASK", "createAlert request: message \"%s\", buttons Reboot (rebootConfirmed) and Later (focused)", message);
 	bool alert = reboot_notify("REBOOT_ASK", "luna://com.webos.notification/createAlert", a, 8);
 	j_release(&a);
 	const char *how = "alert";
@@ -1406,7 +1396,7 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
-/* rebootConfirmed {token}: the user chose Reboot (the alert's button, or Home Chooser's dialog). */
+/* rebootConfirmed {token}: the user chose Reboot on the alert. */
 static bool on_reboot_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;

@@ -9,18 +9,31 @@ import {formatStep} from '../homechooser/format';
 import {loadEnvironment} from '../homechooser/environment';
 import {clearPending, readPending} from './pending';
 
-const DONE_TEXT = 'Done. Press Home to try it.';
-const REBOOT_LATER_TEXT = 'Restart the TV later to finish.';
-const REBOOT_FAILED_TEXT = "Couldn't restart the TV. Restart it to finish.";
-const REBOOT_PROMPT_FAILED_TEXT = 'Restart the TV to finish.';
+export const LOG_PREFIX = '[HomeChooser]';
 
-// The restart dialog's wording, by reason ('apply' or 'remove').
-export const REBOOT_BODY = {
+const DONE_TEXT = 'Done. Press Home to try it.';
+const RESTART_ASKED_TEXT = 'Done. Restart the TV to finish.';
+const RESTART_FAILED_TEXT = 'Restart the TV to finish.';
+
+// The line above the "Restart now" row while a restart is pending, by reason ('apply' or 'remove').
+export const RESTART_NOTE = {
 	apply: 'The Home button changes after a restart.',
 	remove: 'LG Home is on the Home button now. A restart removes the patch.'
 };
 
-export const LOG_PREFIX = '[HomeChooser]';
+// Ask the service for the restart prompt, a system alert (docs/service.md "Restarting the TV"): the
+// app has no dialog of its own for it, because an overlay is closed after a stretch without a key
+// press and the alert is not. Resolves true when the prompt was raised.
+const askRestart = async (e, reason) => {
+	try {
+		await e.rebootPrompt(reason);
+		return true;
+	} catch (err) {
+		// eslint-disable-next-line no-console
+		console.log(`${LOG_PREFIX} reboot prompt: ${errorMessage(err)}`);
+		return false;
+	}
+};
 
 export const logResult = (label, res) => {
 	/* eslint-disable no-console */
@@ -76,7 +89,6 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [busy, setBusy] = useState(false);
 	const [notice, setNotice] = useState('');
 	const [toast, setToast] = useState(null);
-	const [rebootAsk, setRebootAsk] = useState(null); // {reason, token} while the restart dialog is up
 	const [icons, setIcons] = useState({});
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
@@ -190,48 +202,28 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			// the outcome stands; the list may be stale
 		}
 		clearPending(); // an old marker is moot: the run finished in this window
-		// The change is done but needs a TV restart to take effect: ask for it (outcome.reboot is the
-		// reason, 'apply' or 'remove'). On a visible screen the app shows its own dialog; when the
-		// screen is hidden the service puts up a system alert (or a toast) instead.
-		let ask = null;
+		// The change is done but needs a TV restart to take effect (outcome.reboot is the reason, 'apply'
+		// or 'remove'): the service puts up the system alert, and the screen only says so.
 		if (outcome.ok && outcome.reboot) {
-			const screen = typeof document === 'undefined' || document.hidden !== true;
-			try {
-				const reply = await env.rebootPrompt(outcome.reboot, screen);
-				if (screen && reply.confirm === 'screen' && reply.token) ask = {reason: outcome.reboot, token: reply.token};
-			} catch (e) {
-				// eslint-disable-next-line no-console
-				console.log(`${LOG_PREFIX} reboot prompt: ${errorMessage(e)}`);
-				outcome = {ok: true, text: REBOOT_PROMPT_FAILED_TEXT};
-			}
+			outcome = {ok: true, text: (await askRestart(env, outcome.reboot)) ? RESTART_ASKED_TEXT : RESTART_FAILED_TEXT};
 		}
 		if (!mounted.current) return;
 		setNotice('');
-		setToast(ask ? null : outcome);
-		setRebootAsk(ask);
+		setToast(outcome);
 		setBusy(false);
 	}, [env, busy, refreshWith]);
 
-	const confirmReboot = useCallback(() => {
-		const ask = rebootAsk;
-		setRebootAsk(null);
-		if (!ask) return undefined;
-		return run('restart the TV', async (e) => {
-			setNotice('Restarting the TV...');
-			try {
-				await e.rebootConfirmed(ask.token);
-				return {ok: true, text: 'Restarting the TV...'};
-			} catch (err) {
-				// eslint-disable-next-line no-console
-				console.log(`${LOG_PREFIX} reboot: ${errorMessage(err)}`);
-				return {ok: false, text: REBOOT_FAILED_TEXT};
-			}
-		});
-	}, [rebootAsk, run]);
-	const postponeReboot = useCallback(() => {
-		setRebootAsk(null);
-		setToast({ok: true, text: REBOOT_LATER_TEXT});
-	}, []);
+	// A restart is pending (webOS 6 to 9; the worker's status says reboot=needed): the flag file without
+	// the patch mounted is an apply, the patch mounted without the flag file is a remove.
+	const restartPending = Boolean(patchStatus && patchStatus.rebootNeeded);
+	const restartReason = patchStatus && patchStatus.enabled ? 'apply' : 'remove';
+	const askReboot = useCallback(async () => {
+		if (!env || busy || !restartPending) return;
+		const asked = await askRestart(env, restartReason);
+		if (!mounted.current) return;
+		setToast(asked ? {ok: true, text: 'Check the restart prompt on the screen.'} : {ok: false, text: RESTART_FAILED_TEXT});
+		if (!asked) refreshWith(env); // it may have been restarted or settled in the meantime
+	}, [env, busy, restartPending, restartReason, refreshWith]);
 
 	const restoreWork = async (e) => {
 		setNotice('Restoring LG Home...');
@@ -317,7 +309,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		showGenerated: Boolean(patchStatus && (patchStatus.generated === 'possible' || patchStatus.release === 'generated' || patchStatus.generatedOptIn)),
 		generatedOptIn: Boolean(patchStatus && patchStatus.generatedOptIn), toggleGenerated,
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
-		rebootAsk, confirmReboot, postponeReboot,
+		restartPending, restartReason, askReboot,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };

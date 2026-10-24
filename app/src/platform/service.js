@@ -44,10 +44,10 @@ export const createServiceClient = (call, {timeoutMs = CALL_TIMEOUT_MS, runTimeo
 		removeFile: (path) => invoke('removeFile', {path}).then(ok),
 		readIcon: (appId) => invoke('readIcon', {appId}).then(ok).then((r) => ({mime: r.mime, data: r.data})),
 		uninstallConfirmed: (token) => invoke('uninstallConfirmed', {token}, runTimeoutMs).then(ok),
-		// The restart prompt (docs/service.md): confirm is 'screen' (with a token for the app's own
-		// dialog), 'alert' or 'toast'. rebootConfirmed restarts the TV; it only answers on failure.
-		rebootPrompt: (reason, screen) => invoke('rebootPrompt', {reason, screen: Boolean(screen)}).then(ok),
-		rebootConfirmed: (token) => invoke('rebootConfirmed', {token}, runTimeoutMs).then(ok),
+		// The restart prompt (docs/service.md): the service raises a system alert (confirm 'alert', or
+		// 'toast' when the alert is refused). The alert's Reboot button calls rebootConfirmed with a token
+		// the app never sees, so the app has no such method.
+		rebootPrompt: (reason) => invoke('rebootPrompt', {reason}).then(ok),
 		link: () => invoke('link').then(ok),
 		unlink: () => invoke('unlink').then(ok),
 		linkStatus: () => invoke('linkStatus').then(ok),

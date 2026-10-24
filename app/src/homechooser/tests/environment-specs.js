@@ -25,11 +25,11 @@ describe('loadEnvironment', () => {
 		const b = await loadEnvironment(platform({osRelease: jest.fn().mockResolvedValue({version: [11, 0, 0]})}));
 		expect(b.backport).toBeNull();
 	});
-	test('the restart calls pass through from the platform', async () => {
+	test('the restart prompt passes through from the platform; the app has no way to confirm it', async () => {
 		const p = platform({rebootPrompt: jest.fn(), rebootConfirmed: jest.fn()});
 		const env = await loadEnvironment(p);
 		expect(env.rebootPrompt).toBe(p.rebootPrompt);
-		expect(env.rebootConfirmed).toBe(p.rebootConfirmed);
+		expect(env.rebootConfirmed).toBeUndefined();
 	});
 	test('access setup follows elevation and failures leave the panel usable', async () => {
 		const p = platform();
