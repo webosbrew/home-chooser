@@ -9,12 +9,15 @@ timestamp probe was removed after one reboot.
 The same `legacy-broadcast-dvb` fault at `API_SI_GetLinkageUriInfo+0x197` occurred with the
 boot compositor restart on main and this branch. In standardized plain-reboot batches:
 
-| Variant | Boots | DVB crashes | Local logs |
-| --- | ---: | ---: | --- |
-| main `b472a38` | 10 | 1 | `build/test-tmp/boot-count-main.log`, `boot-count-main-late.log` |
-| branch, normal preload | 10 | 1 | `boot-count-branch-late.log`, `boot-count-normal-probe.log` |
-| branch, preload disabled temporarily | 10 | 0 | `boot-count-no-preload.log`, `boot-count-no-preload-probe.log` |
-| stock-only, no Home Chooser hook | 10 | 0 | `boot-count-stock-late.log` |
+| Variant | Boots | DVB crashes |
+| --- | ---: | ---: |
+| main `b472a38` | 10 | 1 |
+| branch, normal preload | 10 | 1 |
+| branch, preload disabled temporarily | 10 | 0 |
+| stock-only, no Home Chooser hook | 10 | 0 |
+
+The per-boot logs of these batches (git-ignored, under `build/test-tmp/`) were deleted on
+2026-10-25 during a cleanup; the counts above are as reported when the batches ran.
 
 Some batches made early status probes and others only checked after uptime 65 s, so these ratios
 do not isolate preload or quantify a reliable crash rate. A full main E2E run also reproduced the
