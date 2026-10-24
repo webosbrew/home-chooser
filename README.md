@@ -59,7 +59,7 @@ homebrew app with three parts:
 
 ## Launchers
 
-Home Chooser supports a launcher only through its appinfo: an app that declares `appCategory: ["home"]` (and, if it is an
+Authors: see the [launcher developer guide](docs/launcher-api.md). Home Chooser supports a launcher only through its appinfo: an app that declares `appCategory: ["home"]` (and, if it is an
 overlay window, `defaultWindowType: "overlay"`) is listed and can be chosen. Apps that patch the system themselves
 (AltHome style) are out of scope. The end-to-end test checks this with six fixture launchers
 ([`e2e/fixtures`](e2e/fixtures/README.md)) besides Dock:
@@ -75,8 +75,8 @@ firmware evidence, in `e2e/fixtures/qml/support.json`.
 
 ## Documents
 
-* [Launcher API version 1](docs/launcher-api.md): appinfo permissions, application methods, selection
-  requests and user-confirmed uninstall for launcher authors.
+* [Writing a launcher, API version 1](docs/launcher-api.md): the developer guide for launcher authors:
+  appinfo, selection requests, the application methods, errors, per-release notes and testing.
 
 * [The Home key and the home app, webOS 5 to 26](docs/research/home-key-and-home-app.md): how
   each release picks and launches the home app, verified against the firmware and on emulator

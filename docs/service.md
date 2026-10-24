@@ -199,8 +199,71 @@ Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER
 The group format, manifest keys and app-id naming, non-dev root persistence across reboot, and
 effective CLI permissions on 11+ are device-unverified. So are permission metadata in `getAppInfo`,
 `running` availability/shape, launch-point ids, alert button payloads and click sender identity,
-and the terminal removal status. The [per-release table](launcher-api.md#device-validation-status)
-records this separately for each release.
+and the terminal removal status. The [device status](#launcher-api-device-status) below records
+this separately for each release.
+
+## Launcher API: confirmation and removal
+
+The launcher-facing contract (parameters, replies, errors) is in [Launcher API](launcher-api.md).
+This is what the service does behind `uninstall` and `uninstallConfirmed`.
+
+* **Token.** The service stores at most four random, one-shot tokens, valid for 120 seconds; a newer
+  request can replace an older slot. Tokens stay inside Home Chooser's confirmation flow: the alert
+  button parameters and the screen launch parameters
+  (`{confirmUninstall:"<id>", token:"<token>"}`). The confirmation screen obtains the title from
+  `getAppInfo` and asks the same question as the alert.
+* **Asking.** The service fetches the target's title, then raises the alert (8 s bound); if
+  `createAlert` is refused it launches Home Chooser's settings app with the screen parameters (15 s
+  bound). Both failing is `confirmFailed`.
+* **Confirming.** `uninstallConfirmed {token}` rechecks that the requester is still the selected
+  Home, then calls `applicationManager/removeLaunchPoint` with `<id>_default`. A platform refusal
+  saying the app “is not removable” stops the operation (`notRemovable`). Other failures fall back
+  to `appInstallService/dev/remove` for a developer app or `appInstallService/remove` for a store
+  app, with `{id,subscribe:true}`, reading progress until status 31 (success) or 25 (failure), with
+  a 90 second bound. The launch-point route reports acceptance, not an independently observed end
+  of uninstall.
+* **Reply and errors.** `{returnValue:true,id,route:"launchPoint"}` or
+  `route:"appInstallService"`. Errors: `forbidden`, `notRoot`, `badToken`, `notHome`,
+  `notRemovable`, `removeFailed`. Any root caller without an application id that holds a live token
+  can complete the removal; the token is the capability.
+* **Caller identity and launcher gates.** The caller is `LSMessageGetApplicationID` (dropping an
+  instance suffix after a space). The service independently reads the caller's installed
+  `requiredPermissions`; `closeById` and `uninstall` also compare the id with the stored choice in
+  `/var/lib/webosbrew/homechooser/home`. These are service checks even where the hub allows the call
+  through a broader group.
+
+## Launcher API device status
+
+The launcher API has host policy, shell and UI tests; none of the following is claimed as verified
+on a device. This applies separately to each supported release:
+
+| webOS major | API/group files | privileged `-a` identity | developer CLI group |
+| --- | --- | --- | --- |
+| 5.x | device-unverified | device-unverified | not added |
+| 6.x | device-unverified | device-unverified | not added |
+| 7.x | device-unverified | device-unverified | not added |
+| 8.x | device-unverified | device-unverified | not added |
+| 9.x | device-unverified | device-unverified | not added |
+| 10.x | device-unverified | device-unverified | not added |
+| 11.x | device-unverified | device-unverified | device-unverified |
+| 12.x | device-unverified | device-unverified | device-unverified |
+
+Specifically device-unverified: `getAppInfo` returning `requiredPermissions` (installed appinfo
+fallback exists); a group declared only by an API file being grantable to launchers, the manifest
+key `apiPermissionFiles`, and the manifest being named after the app id; `/var/luna-service2`
+surviving reboot; `<id>_default` being the correct launch-point id; alert button `onclick`/`params`
+and the click sender's application identity; `running` being callable and returning a `running`
+array; status 31 reliably being the final successful removal status; and `ares.webos.cli` alone
+allowing delivery on 11+.
+
+For a device validation session, the order is: install/elevate Home Chooser and inspect the access
+files; install a consenting Home fixture and inspect its effective client permissions; call
+`getInfo`, `listApps` and `running`; test the Home request and close checks before/after selection;
+exercise cancel and confirm for removal of a disposable user app, including the screen fallback;
+then check access restoration after reboot and cleanup after Home Chooser removal. As root,
+simulate an installed caller with its real id (see
+[Testing your launcher](launcher-api.md#testing-your-launcher) for the fixture build). Destructive
+removal checks require the owner's device permission.
 
 ## Allow-lists
 
