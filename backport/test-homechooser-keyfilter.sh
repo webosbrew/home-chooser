@@ -31,31 +31,6 @@ setup() {
     cp "$T/root/usr/lib/qml/a.qml" "$T/root/usr/lib/qml/b.js" "$T/orig/"
     printf 'one\ntwo\nthree\nhome = Settings.getHomeAppId()\nproperty string configuredHomeAppId: "@HOMECHOOSER_HOME@"\nfive\n' > "$T/new-a"
     printf 'alpha\nbeta\nglobal.isHomeApp(x)\ngamma\n' > "$T/new-b"
-    for f in a:a.qml b:b.js; do
-        k=${f%%:*}; n=${f##*:}
-        diff -u --label "usr/lib/qml/$n" --label "usr/lib/qml/$n" "$T/orig/$n" "$T/new-$k" > "$T/data/1.0/$n.diff"
-    done
-    sa=$(sha256sum "$T/orig/a.qml" | cut -d' ' -f1)
-    sb=$(sha256sum "$T/orig/b.js" | cut -d' ' -f1)
-    cat > "$T/data/1.0/manifest.json" <<JSON
-{
-  "release": "1.0",
-  "files": [
-    {
-      "path": "/usr/lib/qml/a.qml",
-      "sha256": "$sa",
-      "diff": "a.qml.diff"
-    },
-    {
-      "path": "/usr/lib/qml/b.js",
-      "sha256": "$sb",
-      "diff": "b.js.diff"
-    }
-  ]
-}
-JSON
-    # a second set for another firmware, whose hashes match nothing
-    printf '{"release":"2.0","files":[{"path":"/usr/lib/qml/a.qml","sha256":"%064d","diff":"a.qml.diff"}]}\n' 0 > "$T/data/2.0/manifest.json"
     : > "$T/mounts"
     : > "$T/cmds"
     cat > "$T/bin/mount" <<STUB
@@ -81,6 +56,7 @@ if [ "\$1" = is-active ]; then
     echo active; exit 0
 fi
 [ "\$1" = restart ] && [ -f "$T/slow-restart" ] && sleep 1
+[ "\$1" = restart ] && [ -f "$T/fail-once" ] && { rm -f "$T/fail-once"; exit 1; }
 [ -f "$T/fail-\$1-\$2" ] && exit 1
 exit 0
 STUB
@@ -119,20 +95,22 @@ while [ "$#" -gt 0 ]; do
     esac
     shift 2
 done
-[ -f "$T/generator-success" ] || { echo 'ABORT: fixture refused' >&2; exit 2; }
+[ -f "$T/generator-refuse" ] && { echo 'ABORT: fixture refused' >&2; exit 2; }
+[ -f "$T/generator-error" ] && { echo 'ERROR: fixture I/O error' >&2; exit 1; }
 if [ "$mode" = generate ]; then
     mkdir -p "$out/usr/lib/qml"
-    cp "$root/usr/lib/qml/"* "$out/usr/lib/qml/"
-    (cd "$out" && patch -p0 < "$T/data/1.0/a.qml.diff" && patch -p0 < "$T/data/1.0/b.js.diff") || exit 1
-    cp "$T/data/1.0/manifest.json" "$manifest"
+    cp "$T/new-a" "$out/usr/lib/qml/a.qml"
+    cp "$T/new-b" "$out/usr/lib/qml/b.js"
+    printf '{"files":[{"path":"/usr/lib/qml/a.qml","sha256":"unused","diff":"minimal"},{"path":"/usr/lib/qml/b.js","sha256":"unused","diff":"minimal"}]}\n' > "$manifest"
 fi
-echo 'ok files=2'
+echo 'patch=possible'
+echo 'unpatched-sites=0'
+echo 'file=/usr/lib/qml/a.qml'
+echo 'file=/usr/lib/qml/b.js'
 STUB
     sed -i "s|@T@|$T|" "$T/bin/node"
     : > "$T/generator.js"
-    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" \
-           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag" HOMECHOOSER_NO_SETS_FLAG="$T/debug-no-sets"
-    unset HOMECHOOSER_NO_SETS
+    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_GEN="$T/generator.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
     export HOMECHOOSER_DATA="$T/data" HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
@@ -155,7 +133,7 @@ systemctl start booster.service
 systemctl start maliit-server.service"
 restarted() { test "$(seq)" = "$RESTART"; }
 
-echo "== matching set applied ($SH)"
+echo "== minimal hook applied ($SH)"
 setup
 run
 check "exit 0" rc 0
@@ -168,13 +146,13 @@ check "compositor restarted once, clients stopped before and started after" rest
 check "each client asked about first" test "$(ncmds 'systemctl is-active')" = 3
 check "restart output reaches the caller" has 'surface-manager-daemon.service restarted' "$T/out"
 check "no restart output file left" test -z "$(ls "$T/work" | grep '^restart\.')"
-check "log names the set" has 'diff set 1.0 matches' "$T/log"
+check "log names the plan" has 'patch=possible' "$T/log"
 check "no choice: placeholder replaced by an empty id" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
 check "placeholder gone" hasnt '@HOMECHOOSER_HOME@' "$T/work/stage/usr/lib/qml/a.qml"
 check "stock a.qml has no placeholder" hasnt configuredHomeAppId "$T/root/usr/lib/qml/a.qml"
 run status
 check "status mounted" has 'mounted=yes' "$T/out"
-check "status release" has 'release=1.0' "$T/out"
+check "status release" has 'patch=possible' "$T/out"
 
 echo "== refresh follows the stored choice"
 : > "$T/cmds"
@@ -225,40 +203,24 @@ run stop
 check "second stop does nothing" test ! -s "$T/cmds"
 run status
 check "status stock" has 'mounted=no' "$T/out"
-check "status match" has 'match=1.0' "$T/out"
+check "status match" has 'patch=possible' "$T/out"
 rm -rf "${T:?}"
 
-echo "== one hash mismatch mounts nothing"
-setup
-echo changed >> "$T/root/usr/lib/qml/b.js"
-run
-check "exit 0" rc 0
-check "no mount" test "$(ncmds mount)" = 0
-check "no restart" test "$(ncmds systemctl)" = 0
-check "log says no set" has 'no diff set matches' "$T/log"
-run status
-check "status none" has 'match=none' "$T/out"
-rm -rf "${T:?}"
-
-echo "== missing target mounts nothing"
-setup
-rm "$T/root/usr/lib/qml/a.qml"
-run
-check "exit 0" rc 0
-check "no mount" test "$(ncmds mount)" = 0
-rm -rf "${T:?}"
-
-echo "== patch failure mounts nothing"
-setup
-# the hashes match but the second diff does not apply
-sed 's/^-HOME_APP_ID$/-OTHER_LINE/' "$T/data/1.0/b.js.diff" > "$T/x" && mv "$T/x" "$T/data/1.0/b.js.diff"
-run
-check "exit 1" rc 1
-check "no mount" test "$(ncmds mount)" = 0
-check "no restart" test "$(ncmds systemctl)" = 0
-check "log names the diff" has 'b.js.diff does not apply' "$T/log"
-check "stage removed" test ! -d "$T/work/stage"
-rm -rf "${T:?}"
+echo "== refusal and I/O error mount nothing"
+for failure in refuse error; do
+    setup
+    touch "$T/generator-$failure"
+    run
+    if [ "$failure" = refuse ]; then expected=0; else expected=1; fi
+    check "$failure: worker exit" rc "$expected"
+    check "$failure: no mounts" test "$(ncmds mount)" = 0
+    check "$failure: no restart" test "$(ncmds systemctl)" = 0
+    check "$failure: stage discarded" test ! -d "$T/work/stage"
+    run status
+    check "$failure: status refused" has 'patch=refused' "$T/out"
+    check "$failure: reason" has 'reason=' "$T/out"
+    rm -rf "${T:?}"
+done
 
 echo "== mount failure undoes the first mount"
 setup
@@ -401,14 +363,6 @@ HOMECHOOSER_TIMEOUT= run
 check "no timeout: still works" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
 rm -rf "${T:?}"
 
-echo "== no data directory"
-setup
-rm -rf "$T/data"
-run
-check "exit 0" rc 0
-check "no mount" test "$(ncmds mount)" = 0
-rm -rf "${T:?}"
-
 echo "== apply samfirst restarts sam before the compositor"
 setup
 run apply samfirst
@@ -477,21 +431,24 @@ systemctl start webapp-mgr.service
 systemctl start maliit-server.service"
 rm -rf "${T:?}"
 
-echo "== a failed compositor restart still starts the clients"
+echo "== boot restart failure recovers to stock"
 setup
 touch "$T/fail-restart-surface-manager-daemon.service"
 run
 check "exit 1" rc 1
-check "clients started anyway" restarted
-check "logged" has 'ERROR: could not restart surface-manager-daemon.service' "$T/log"
+check "restart attempted twice, only at boot failure" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
+check "all mounts undone" test ! -s "$T/mounts"
+check "recovery logged" has 'boot compositor restart failed' "$T/log"
+check "clients stay stopped without a compositor" test "$(ncmds 'systemctl start')" = 0
+check "stock failure logged" has 'stock compositor recovery failed' "$T/log"
 rm -rf "${T:?}"
 setup
-touch "$T/fail-stop-webapp-mgr.service" "$T/fail-start-booster.service"
+touch "$T/fail-once"
 run
-check "failed start: exit 1" rc 1
-check "a failed stop or start goes on with the rest" restarted
-check "stop failure logged" has 'ERROR: could not stop webapp-mgr.service' "$T/log"
-check "start failure logged" has 'ERROR: could not start booster.service' "$T/log"
+check "recovered failure still reports exit 1" rc 1
+check "stock success logged" has 'stock compositor recovery succeeded' "$T/log"
+check "stock has no mounts" test ! -s "$T/mounts"
+check "two compositor restarts" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
 rm -rf "${T:?}"
 
 echo "== a worker killed during the restart does not leave the clients stopped"
@@ -525,136 +482,41 @@ check "no flag, unmounted: no" test "$(reboot_of)" = reboot=no
 check "status prints the line once" test "$(grep -c '^reboot=' "$T/out")" = 1
 touch "$T/keyfilter-flag"
 check "flag, unmounted, set matches: needed" test "$(reboot_of)" = reboot=needed
-check "existing lines unchanged" has 'match=1.0' "$T/out"
+check "existing lines unchanged" has 'patch=possible' "$T/out"
 run apply
 check "flag, mounted: no" test "$(reboot_of)" = reboot=no
 rm "$T/keyfilter-flag"
 check "no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
-check "mounted lines unchanged" has 'release=1.0' "$T/out"
+check "mounted lines unchanged" has 'patch=possible' "$T/out"
 run stop
 check "no flag, stopped: no" test "$(reboot_of)" = reboot=no
 rm -rf "${T:?}"
+echo "== content-keyed status cache"
 setup
-touch "$T/keyfilter-flag"
-echo changed >> "$T/root/usr/lib/qml/b.js"
-check "flag, unmounted, no match, no generated: no" test "$(reboot_of)" = reboot=no
-touch "$T/generator-success"
-echo possible >> "$T/generator.js"
-check "flag, no match, generated possible, no opt-in: no" test "$(reboot_of)" = reboot=no
-touch "$T/generated-flag"
-check "flag, no match, generated possible, opted in: needed" test "$(reboot_of)" = reboot=needed
-check "generated lines unchanged" has 'generated=possible' "$T/out"
-rm "$T/generator-success"
-echo changed >> "$T/generator.js"
-check "flag, no match, generated refused, opted in: no" test "$(reboot_of)" = reboot=no
-rm -rf "${T:?}"
-setup
-touch "$T/keyfilter-flag" "$T/generated-flag" "$T/generator-success" "$T/debug-no-sets"
-run apply
-check "generated: flag, mounted: no" test "$(reboot_of)" = reboot=no
-rm "$T/keyfilter-flag"
-check "generated: no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
-rm -rf "${T:?}"
-
-echo "== the mount sources are under the work directory, not the app directory"
-setup
-run
-check "reviewed: every bind source is under WORK" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = 2
-check "reviewed: no mount source under DATA" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
-check "reviewed: every /proc/mounts source is under WORK" test "$(grep -c "^$T/work/stage/" "$T/mounts")" = 2
-rm -rf "$T/data"
-check "the app directory can go: mounted copies stay" test -f "$T/work/stage/usr/lib/qml/a.qml"
-rm -rf "${T:?}"
-setup
-touch "$T/generated-flag" "$T/generator-success"
-HOMECHOOSER_NO_SETS=1 run apply
-check "generated: every bind source is under WORK" test "$(grep -c "^mount --bind $T/work/stage/" "$T/cmds")" = 2
-check "generated: no mount source under DATA" test "$(grep '^mount ' "$T/cmds" | grep -c "$T/data")" = 0
-rm -rf "${T:?}"
-
-echo "== generated fallback requires opt-in and respects refusals"
-setup
-touch "$T/debug-no-sets" "$T/generator-success"
-run apply
-check "no opt-in: no mounts" test "$(ncmds mount)" = 0
-check "no opt-in: generator not run by apply" test ! -e "$T/node-calls"
 run status
-check "status offers generation" has 'generated=possible' "$T/out"
-check "status opt-in off" has 'optin=no' "$T/out"
 run status
-check "same stock hashes: only one node invocation" test "$(wc -l < "$T/node-calls")" = 1
+check "same inputs: one check" test "$(wc -l < "$T/node-calls")" = 1
 echo changed >> "$T/generator.js"
 run status
-check "changed rules hash: check recomputed" test "$(wc -l < "$T/node-calls")" = 2
-echo '// new file' > "$T/root/usr/lib/qml/new.qml"
-# Discovery is scoped to the generator's trees, test those too.
+check "changed rules invalidate cache" test "$(wc -l < "$T/node-calls")" = 2
 mkdir -p "$T/root/usr/lib/qml/KeyFilters"
 echo '// new file' > "$T/root/usr/lib/qml/KeyFilters/new.js"
 run status
-check "new discovery input: check recomputed" test "$(wc -l < "$T/node-calls")" = 3
-echo changed >> "$T/root/usr/lib/qml/KeyFilters/new.js"
-run status
-check "changed stock hash: check recomputed" test "$(wc -l < "$T/node-calls")" = 4
-mv "$T/root/usr/lib/qml/KeyFilters/new.js" "$T/root/usr/lib/qml/KeyFilters/renamed.js"
-run status
-check "renamed discovery input: check recomputed" test "$(wc -l < "$T/node-calls")" = 5
+check "new discovery input invalidates cache" test "$(wc -l < "$T/node-calls")" = 3
 rm -rf "${T:?}"
 
+echo "== stop keeps sources when unmount fails"
 setup
-touch "$T/debug-no-sets" "$T/generated-flag"
 run apply
-check "refusal leaves stock (exit 0)" rc 0
-check "refusal: no mounts" test "$(ncmds mount)" = 0
-check "refusal: no restart" test "$(ncmds systemctl)" = 0
-check "refusal: no stage or manifest" test ! -e "$T/work/stage" -a ! -e "$T/work/generated/manifest.json"
-run status
-check "status says refused" has 'generated=refused' "$T/out"
-check "status gives reason" has 'reason=ABORT: fixture refused' "$T/out"
-check "status opt-in on" has 'optin=yes' "$T/out"
-run status
-check "refusal cached too" test "$(wc -l < "$T/node-calls")" = 2
-rm -rf "${T:?}"
-
-echo "== generated lifecycle, including refresh and stop without reviewed data"
-setup
-touch "$T/generated-flag" "$T/generator-success"
-HOMECHOOSER_NO_SETS=1 run apply
-check "generated apply succeeds" rc 0
-check "generated mounts both files" test "$(ncmds mount)" = 2
-run status
-check "generated mounted" has 'mounted=yes' "$T/out"
-check "generated release" has 'release=generated' "$T/out"
-check "generated match" has 'match=generated' "$T/out"
-check "generated hashes" has "hash=$(sha256sum "$T/work/stage/usr/lib/qml/b.js" | cut -d' ' -f1) /usr/lib/qml/b.js" "$T/out"
-# Stop and refresh must use the generated manifest even when no reviewed sets exist.
-rm -rf "$T/data"
-echo my.home > "$T/home"
-run refresh
-check "generated refresh bakes choice" has 'configuredHomeAppId: "my.home"' "$T/work/stage/usr/lib/qml/a.qml"
-run refresh stock
-check "generated refresh stock clears choice" has 'configuredHomeAppId: ""' "$T/work/stage/usr/lib/qml/a.qml"
-run apply
-check "already mounted generated: no second generator invocation" test "$(wc -l < "$T/node-calls")" = 1
 touch "$T/umount-fail"
 run stop
-check "failed generated stop reports failure" rc 1
-check "failed stop keeps the generated target list" test -f "$T/work/generated/manifest.json"
-check "failed stop keeps the mounted sources" test -d "$T/work/stage"
-run status
-check "failed stop still reports generated mount" has 'match=generated' "$T/out"
+check "failed stop" rc 1
+check "manifest retained" test -f "$T/work/manifest.json"
+check "stage retained" test -d "$T/work/stage"
 rm "$T/umount-fail"
 run stop
-check "generated stop succeeds" rc 0
-check "generated mounts gone" test ! -s "$T/mounts"
-check "generated manifest removed" test ! -e "$T/work/generated/manifest.json"
-rm -rf "${T:?}"
-
-echo "== reviewed sets take precedence even with opt-in"
-setup
-touch "$T/generated-flag" "$T/generator-success"
-run apply
-check "reviewed set used" has '1.0' "$T/work/release"
-check "generator not run" test ! -e "$T/node-calls"
+check "later stop succeeds" rc 0
+check "all mounts gone" test ! -s "$T/mounts"
 rm -rf "${T:?}"
 
 echo "== concurrent runs"
@@ -670,9 +532,9 @@ for round in 1 2 3 4 5; do
 done
 bad=0
 for o in "$T"/par.*; do
-    grep -qx 'match=1.0' "$o" && grep -qx 'mounted=no' "$o" || { bad=$((bad + 1)); n=$(tr '\n' ' ' < "$o"); }
+    grep -qx 'patch=possible' "$o" && grep -qx 'mounted=no' "$o" || { bad=$((bad + 1)); n=$(tr '\n' ' ' < "$o"); }
 done
-check "40 parallel status runs all report match=1.0 ($bad wrong: $n)" test "$bad" = 0
+check "40 parallel status runs all report patch=possible ($bad wrong: $n)" test "$bad" = 0
 check "no scratch lists left behind" test -z "$(ls "$T/work" | grep '^entries')"
 rm -f "$T"/par.*
 

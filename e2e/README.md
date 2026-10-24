@@ -25,12 +25,9 @@ beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart 
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
 (below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
-Use `--keyfilter-generated` only on webOS 6-9 to exercise the opt-in generated keyfilter. The runner
-creates `debug-no-sets` and `keyfilter-generated` after installing Home Chooser and before the Home
-selection, checks `homechooser-keyfilter status` after the boot that follows the selection (the patch is
-mounted by the boot hook, not at the choice) and after `--reboot-check`, and uses
-the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
-fails. The option refuses other releases and a non-stock baseline.
+Every webOS 6–9 run exercises the minimal structural hook. After the selection boot and the
+reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
+proofs apply on every build. No opt-in marker or patch-set suppression flag is needed.
 
 Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
@@ -268,7 +265,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
     boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
   least 9 mounts), and the backport log of that boot (its firmware-order compositor restart is the only
-  one allowed) is noted; the generated-patch status checks come here. The `rebootConfirmed` path (the
+  one allowed) is noted; the minimal-hook status checks come here. The `rebootConfirmed` path (the
   alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.

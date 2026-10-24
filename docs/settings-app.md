@@ -40,13 +40,13 @@ Home Chooser is in English only.
   `reboot=needed` status line). The patch is mounted by the boot entry on the next boot.
   See [Restart prompt](#restart-prompt). Restoring LG Home removes the flag and bakes the empty id into
   the mounted copy (`backport.remove()`, which runs `homechooser-keyfilter refresh` and never `stop`); a
-  mounted patch stays until the next boot, so a restart prompt follows. If no patch set matches the
-  firmware (hash mismatch), the dialog says the Home button can't be changed on this TV's software and
+  mounted patch stays until the next boot, so a restart prompt follows. If the structural hook refuses the
+  firmware, the dialog says the Home button can't be changed on this TV's software and
   applies nothing. The earlier `localStorage` marker (`homechooser.pending`) is no longer written; on
   startup the app still reads one left by an earlier version, judges it once against the actual home
   and the stored choice (a marker whose id differs from the stored choice is stale and dropped without a
   toast) and clears it.
-* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when no patch set matches the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
+* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when the structural hook refuses the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
 * **Before uninstalling Home Chooser, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
   "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
@@ -138,9 +138,9 @@ and runs no worker, so there is nothing that could close the panel between the c
 
 ### Restart prompt
 
-After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the choose, restore and
-generated patch flows ask for a TV restart. The reason is `apply` after an install and `remove` after a
-restore or after disabling the generated patch. Only webOS 6 to 9 have a patch, so only they ever ask;
+After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the choose and restore
+flows ask for a TV restart. The reason is `apply` after an install and `remove` after a
+restore. Only webOS 6 to 9 have a patch, so only they ever ask;
 on 5.x and 10 and later `backport` is null, no step reports `rebootNeeded` and nothing changes.
 
 The prompt is always the service's system alert, never a dialog of the app. Home Chooser is an overlay
@@ -584,7 +584,7 @@ package` passes through to `make -C service`:
 | `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
 | `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
 | `OUT` | `../build/service` | `service/Makefile`: where the binary goes |
-| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `backport/test-real-roundtrip.sh` and `backport/test-generated.sh`: the firmware roots they try (a root that is missing is skipped) |
+| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `backport/test-real-roundtrip.sh` and `backport/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
 | `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
 
 `make -C service test` and the Jest specs need none of them.
@@ -605,8 +605,8 @@ limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the
 directories, drops the other locale directories and the character maps, and rewrites iLib's
 manifest to the remaining files. The UI strings are English and come from the source and from
 Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/copy-backport.js` then copies `backport/`
-(the three scripts at mode 755, and each release's manifest and diffs) into `dist`; the package is
-0.97 MB.
+(the five runtime scripts at mode 755) into `dist`. Reviewed release manifests and diffs are
+offline test references and are excluded from the package.
 
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
 `app/package.json`. `backport/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
