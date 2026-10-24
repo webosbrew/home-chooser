@@ -758,6 +758,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
 check "first run staged sourced helpers" test -f "$T/rt/lib/watch-restore.sh"
+check "first run staged the rewriter dependency" test -f "$T/rt/lib/homekey-settings.js"
 rm -rf "$T/service/scripts"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"

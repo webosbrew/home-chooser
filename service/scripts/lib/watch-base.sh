@@ -18,7 +18,7 @@ stage_runtime() {
     done
     if [ -d "$1/lib" ]; then
         mkdir -p "$RT/lib" || return 1
-        for f in "$1"/lib/*.sh; do
+        for f in "$1"/lib/*.sh "$1"/lib/*.js; do
             [ -f "$f" ] || continue
             cp "$f" "$RT/lib/$(basename "$f").new" &&
                 mv "$RT/lib/$(basename "$f").new" "$RT/lib/$(basename "$f")" || return 1
