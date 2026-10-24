@@ -33,7 +33,7 @@ export const releaseInfo = (version) => {
 	const major = majorOf(version);
 	return {
 		major,
-		// 6.x to 9.x: the stock Home key hook names com.webos.app.home, so the Home key ignores the choice
+		// 6.x to 9.x: the stock compositor names com.webos.app.home, so the Home key ignores the choice
 		// until the Home key hook is installed.
 		needsHomeKeyHook: major >= 6 && major <= 9,
 		// 10.x and later: the compositor's home id is the system profile's, so write an override too.
@@ -335,7 +335,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				}
 				await run.remove(HOME_FILE);
 				if (info.major <= 9) {
-					// 5.x: the Home key hook launches the record's home directly, so name a stock home.
+					// 5.x: the stock Home handler launches the record's home directly, so name a stock home.
 					// 6 to 9: the patched QML reads the record before the id it loaded at compositor start (the
 					// old launcher, until a reboot), so the stock id is written, not null. Stock firmware ignores
 					// the record for the Home key, so it can stay.

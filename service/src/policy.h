@@ -11,12 +11,6 @@
 #define HC_SERVICE_DIR "/media/developer/apps/usr/palm/services/" HC_SERVICE_ID
 #ifndef HC_APP_DIR
 #define HC_APP_DIR "/media/developer/apps/usr/palm/applications/" HC_APP_ID
-/* The Home key hook worker's `status` output holds a line that is exactly `reboot=needed` (CR and
- * blanks at the line ends are ignored; a substring of a longer line does not count). NULL: no. */
-bool hc_reboot_needed(const char *status_text);
-/* The text of the restart prompt for rebootPrompt's reason ("apply" or "remove"); NULL otherwise. */
-const char *hc_reboot_message(const char *reason);
-
 #endif
 #define HC_STATE_DIR "/var/lib/webosbrew/homechooser"
 #define HC_HOME_FILE HC_STATE_DIR "/home"
