@@ -25,12 +25,14 @@ beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart 
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
 (below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
-Use `--keyfilter-generated` only on webOS 6-9 to exercise the opt-in generated keyfilter. The runner
-creates `debug-no-sets` and `keyfilter-generated` after installing Home Chooser and before the Home
-selection, checks `homechooser-keyfilter status` after the boot that follows the selection (the patch is
-mounted by the boot hook, not at the choice) and after `--reboot-check`, and uses
-the normal Home-key launch proof. It removes both markers during cleanup, including when a test step
-fails. The option refuses other releases and a non-stock baseline.
+Every webOS 6–9 run exercises the minimal structural hook. After the selection boot and the
+reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
+proofs apply on every build. Offline checks also exercise the two-file core when optional
+systemUi anchors fail; the documented foreground-comparison degradation is expected there.
+
+Log evidence includes the retained `/var/log/messages.N.gz` archives in chronological order;
+boot and service activity can rotate the active file before an assertion reads it. After each
+hook boot, the run also records the compositor's main-QML load lines and retained crash lines.
 
 Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
 `link=lan` while the VM is off (standing permission), boots it, creates or fixes the
@@ -62,7 +64,7 @@ runs its reach calls for, not the whole matrix every time:
 | Change | Runs |
 | --- | --- |
 | Any change | The offline suites: `backport/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
-| Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, one backport set) | The releases inside the gate, plus one just outside it |
+| Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
 | Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (backport), 11.x (root-shell elevation, profile path) |
 | Only the runner or the docs | One VM |
 | A release or a tag | The whole matrix with `--reboot-check` |
@@ -268,7 +270,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
     boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
   least 9 mounts), and the backport log of that boot (its firmware-order compositor restart is the only
-  one allowed) is noted; the generated-patch status checks come here. The `rebootConfirmed` path (the
+  one allowed) is noted; the minimal-hook status checks come here. The `rebootConfirmed` path (the
   alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.

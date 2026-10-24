@@ -6,11 +6,15 @@ launcher-API reply checks of --api-check, and the restart/crash detection.  No d
     python3 -I -m unittest discover -s e2e -p 'test_*.py'
 """
 import contextlib
+import gzip
 import io
 import json
 import os
 import re
+import shlex
+import shutil
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -24,6 +28,40 @@ FULL, HOME = e2e.FULLHOME, e2e.STOCK
 
 
 class LogMark(unittest.TestCase):
+    def test_rotated_messages_preserve_alert_and_crash_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            # webOS 6's BusyBox 1.29.3 rejects sort -V (observed on w21a-kisscurl).
+            # Exercise that constraint as well as numeric archive ordering.
+            bindir = os.path.join(root, 'bin')
+            os.mkdir(bindir)
+            sort = os.path.join(bindir, 'sort')
+            with open(sort, 'w') as script:
+                script.write('#!/bin/sh\ncase "$*" in *V*) exit 2;; esac\nexec %s "$@"\n'
+                             % shlex.quote(shutil.which('sort')))
+            os.chmod(sort, 0o755)
+            env = dict(os.environ, PATH=bindir + os.pathsep + os.environ['PATH'])
+            path = os.path.join(root, 'messages')
+            for suffix, content in [('.12.gz', 'a old\n'),
+                                    ('.2.gz', 'b REBOOT_ASK createAlert\n'),
+                                    ('.0.gz', 'c crashd CRASHED\n')]:
+                with gzip.open(path + suffix, 'wt') as log:
+                    log.write(content)
+            with open(path, 'w') as log:
+                log.write('d current\n')
+            cmd = e2e.messages_command(path) + " | awk '$1 >= \"b\"'"
+            result = subprocess.run(['sh', '-c', cmd], capture_output=True, text=True, check=True, env=env)
+            self.assertEqual(result.stdout, 'b REBOOT_ASK createAlert\nc crashd CRASHED\nd current\n')
+
+    def test_messages_without_archives(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, 'messages')
+            with open(path, 'w') as log:
+                log.write('only current\n')
+            result = subprocess.run(['sh', '-c', e2e.messages_command(path)],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, 'only current\n')
+            self.assertEqual(result.stderr, '')
+
     def test_only_lines_after_the_mark(self):
         log = ['a closeByAppId x', 'b', 'c']
         self.assertEqual(e2e.lines_after(log, 2), ['c'])
@@ -85,10 +123,10 @@ class RebootDialog(unittest.TestCase):
             self.assertFalse(e2e.expects_reboot_dialog(major, False))
 
     def test_parse_status(self):
-        out = 'data=missing\nmounted=no\nmatch=9.2.1\nreboot=needed\n'
+        out = 'data=missing\nmounted=no\npatch=possible\nreboot=needed\n'
         st = e2e.parse_status(out)
-        self.assertEqual((st['mounted'], st['match'], st['reboot']), ('no', '9.2.1', 'needed'))
-        st = e2e.parse_status('mounted=yes\nrelease=9.2.1\nreboot=no')
+        self.assertEqual((st['mounted'], st['patch'], st['reboot']), ('no', 'possible', 'needed'))
+        st = e2e.parse_status('mounted=yes\npatch=possible\nreboot=no')
         self.assertEqual((st['mounted'], st['reboot']), ('yes', 'no'))
         self.assertEqual(e2e.parse_status('some log line = with spaces\n'), {})
 

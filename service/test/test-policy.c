@@ -24,11 +24,6 @@ static void test_files(void)
 {
 	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/home"));
 	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/keyfilter"));
-	CHECK(hc_file_allowed(HC_GENERATED_FLAG));
-	CHECK(hc_file_readable(HC_GENERATED_FLAG));
-	CHECK(!hc_file_allowed(HC_GENERATED_FLAG "/"));
-	CHECK(!hc_file_allowed(HC_GENERATED_FLAG ".tmp"));
-	CHECK(!hc_file_allowed(HC_STATE_DIR "/debug-no-sets"));
 	CHECK(hc_file_allowed("/var/webos-profile/override/org.webosbrew.homechooser.json"));
 	CHECK(!hc_file_allowed(NULL));
 	CHECK(!hc_file_allowed("/etc/passwd"));

@@ -17,7 +17,7 @@ setup() {
     T=$(mktemp -d)
     mkdir -p "$T/app/backport" "$T/bin" "$T/state" "$T/init.d"
     cp "$SCRIPT" "$T/app/backport/homechooser"
-    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA" >> %s/cmds\n' "$T" > "$T/app/backport/homechooser-keyfilter"
+    printf '#!/bin/sh\necho "keyfilter $*" >> %s/cmds\n' "$T" > "$T/app/backport/homechooser-keyfilter"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser-home-watch"
     printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
     printf '#!/bin/sh\necho "systemd-run $*" >> %s/cmds\n' "$T" > "$T/bin/systemd-run"
@@ -71,7 +71,7 @@ for major in 6 7 8 9; do
     setup $major
     touch "$T/state/keyfilter"
     run
-    check "$major: key filter applied" has "keyfilter apply data=$T/app/backport" "$T/cmds"
+    check "$major: key filter applied" has "keyfilter apply" "$T/cmds"
     check "$major: no choice, no watcher" hasnt systemd-run "$T/cmds"
     cleanup
     setup $major

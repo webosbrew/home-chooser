@@ -25,11 +25,9 @@ homebrew app with three parts:
   requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
   calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
   again.
-* The webOS 6 to 9 key filter backport is shipped as diffs keyed by the stock file's sha256. A
-  Homebrew Channel boot script applies them to copies of the stock files and bind-mounts the
-  copies over the originals. Reviewed sets take precedence; on webOS 6 to 9 with unknown hashes,
-  the owner may opt in to a patch generated from the live stock files with strict post-conditions.
-  Any refusal leaves the files stock. See [Generated fallback](docs/key-filter-backport.md#generated-fallback).
+* The webOS 6 to 9 Home-key hook uses one guarded rewriter on stock compositor files at boot.
+  Settings and key-filter hooks apply together; systemUi and four supporting files are patched
+  independently when their anchors match. A core refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/key-filter-backport.md).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.
@@ -83,5 +81,5 @@ firmware evidence, in `e2e/fixtures/qml/support.json`.
   each release picks and launches the home app, verified against the firmware and on emulator
   VMs, with the mod map and the remaining tests.
 * [The root service](docs/service.md): `org.webosbrew.homechooser.service`, its methods, allow-lists, sender check, elevation and logs.
-* [The key filter backport, webOS 6.6.0 to 9.2.1](docs/key-filter-backport.md): the home id the
-  compositor shares, the sites patched per release, the boot script and the install sequence.
+* [The key filter backport, webOS 6 to 9](docs/key-filter-backport.md): the home id the
+  compositor shares, the structural guards and verification, the boot script and the install sequence.

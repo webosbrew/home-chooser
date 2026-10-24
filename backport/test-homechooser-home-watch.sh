@@ -25,14 +25,12 @@ setup() {
     : > "$T/mark"
     : > "$T/kfcalls"
     mkfifo "$T/appsfeed"
-    mkdir -p "$T/app/backport/1.0" "$T/init.d"
+    mkdir -p "$T/app/backport" "$T/init.d"
     cp "$SCRIPT" "$T/app/backport/homechooser-home-watch"
-    printf '#!/bin/sh\necho "keyfilter $* data=$HOMECHOOSER_DATA from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/app/backport/homechooser-keyfilter"
+    printf '#!/bin/sh\necho "keyfilter $* from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/app/backport/homechooser-keyfilter"
     printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/app/backport/homechooser-access"
-    echo '{"release":"1.0","files":[]}' > "$T/app/backport/1.0/manifest.json"
-    echo ' diff' > "$T/app/backport/1.0/x.diff"
     printf '#!/bin/sh\n' > "$T/app/backport/homechooser"
-    touch "$T/flag" "$T/generated-flag"
+    touch "$T/flag"
     ln -s "$T/app/backport/homechooser" "$T/init.d/homechooser"
     : > "$T/calls"
     : > "$T/stream"
@@ -157,7 +155,7 @@ SLEEPSTUB
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
-           HOMECHOOSER_GENERATED_FLAG="$T/generated-flag" HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
+           HOMECHOOSER_KEYFILTER_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
            HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark" \
            HOMECHOOSER_INSTALL_DIRS="$T/apps"
 }
@@ -424,7 +422,7 @@ for major in 6 8; do
     check "$major: no home written while the app is missing, then once when it is back" test "$(writes)" = 2
     check "$major: written again with home" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
     check "$major: backport refreshed to stock" test "$(kfn 'refresh stock')" = 1
-    check "$major: backport refreshed to the choice after" test "$(kfn 'refresh data')" -ge 2
+    check "$major: backport refreshed to the choice after" test "$(kfn 'refresh from')" -ge 2
     check "$major: choice file kept" test -f "$T/home"
     check "$major: logged" has 'my.home is not installed, stock Home in use' "$T/log"
     check "$major: logged return" has 'my.home is installed again' "$T/log"
@@ -592,7 +590,7 @@ reply '{"kidsApp":"k.app"}'
 run
 check "the new choice is written at once" has '{"defaultApps":{"home":"other.home","kidsApp":"k.app"}}' "$T/calls"
 check "two writes: the removal and the new choice" test "$(writes)" = 2
-check "backport refreshed for the new choice" test "$(kfn 'refresh data')" = 2
+check "backport refreshed for the new choice" test "$(kfn 'refresh from')" = 2
 cleanup
 
 echo "== choice changed while the app is installed: baked id refreshed without a restart"
@@ -606,10 +604,10 @@ for major in 6 8 9; do
     reply '{"home":"other.home","kidsApp":"k.app"}'
     run
     check "$major: record carries the new choice" has '"home":"other.home"' "$T/record"
-    check "$major: the start refresh and the one for the new choice" test "$(kfn 'refresh data')" = 2
+    check "$major: the start refresh and the one for the new choice" test "$(kfn 'refresh from')" = 2
     check "$major: no refresh asks for a restart" hasnt restart "$T/kfcalls"
     check "$major: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
-    check "$major: the refresh ran from the runtime copy" has "refresh data=$T/rt from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
+    check "$major: the refresh ran from the runtime copy" has "refresh from=$T/rt/homechooser-keyfilter" "$T/kfcalls"
     cleanup
 done
 
@@ -619,7 +617,7 @@ live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app","x":1}'
 run
-check "only the start refresh" test "$(kfn 'refresh data')" = 1
+check "only the start refresh" test "$(kfn 'refresh from')" = 1
 cleanup
 
 echo "== choice changed to an app that is not installed: left to the removal path"
@@ -629,7 +627,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'CHOICE ghost.app' >> "$T/stream"
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
-check "only the start refresh for an uninstalled app" test "$(kfn 'refresh data')" = 1
+check "only the start refresh for an uninstalled app" test "$(kfn 'refresh from')" = 1
 cleanup
 
 echo "== choice changed on webOS 5 and 10: the backport is not involved"
@@ -659,13 +657,11 @@ for major in 6 9; do
     check "$major: other entries kept" has 'kidsApp' "$T/record"
     check "$major: choice file removed" test ! -f "$T/home"
     check "$major: backport flag removed" test ! -f "$T/flag"
-    check "$major: generated opt-in removed" test ! -f "$T/generated-flag"
     check "$major: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$major: app directory is gone" test ! -d "$T/app"
     check "$major: no key filter stop, no unmount, no restart" hasnt 'keyfilter stop' "$T/kfcalls"
     check "$major: the worker was not asked to restart anything" hasnt restart "$T/kfcalls"
     check "$major: no worker call after the revert" hasnt 'keyfilter apply' "$T/kfcalls"
-    check "$major: manifest copied to the runtime" test -f "$T/rt/1.0/manifest.json"
     check "$major: the watcher itself ran from the runtime" test -f "$T/rt/homechooser-home-watch"
     check "$major: logged" has 'stock Home restored' "$T/log"
     check "$major: nothing written after the restore" test "$(writes)" = 1
@@ -762,7 +758,7 @@ run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
-touch "$T/flag" "$T/generated-flag"
+touch "$T/flag"
 : > "$T/stream"
 $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0

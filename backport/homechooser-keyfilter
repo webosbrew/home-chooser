@@ -1,59 +1,13 @@
 #!/bin/sh
-# Home Chooser key filter backport, webOS 6.6.0 to 9.2.1.
-#
-# Installed in /var/lib/webosbrew/init.d/ and run as root by Homebrew Channel at boot.
-#
-# The boot hook runs after the compositor has started (systemd starts surface-manager-daemon long
-# before devmode's startup.sh, and /var is not even mounted then), so `apply` is the boot path: it
-# mounts and restarts the compositor in the firmware's order. The Home Chooser app no longer calls
-# apply or stop; it writes a flag and asks the user to reboot. apply, stop and `refresh restart`
-# are kept for manual and debug use (docs/key-filter-backport.md, "Restarting the compositor").
-#
-#   homechooser-keyfilter          apply: find the diff set whose stock hashes match the live
-#                                files, patch copies of them in /tmp, bind-mount the copies
-#                                over the originals and restart the compositor (boot path, debug)
-#   homechooser-keyfilter stop     unmount what apply mounted and restart the compositor (debug)
-#   homechooser-keyfilter refresh [stock] [restart]
-#                                if mounted, write the stored choice into the mounted copy of
-#                                Settings.qml again; with `stock`, write an empty id whatever is
-#                                stored (the watcher does that while the chosen app is not
-#                                installed). It never restarts the compositor unless `restart` is
-#                                given (debug): the loaded QML keeps its old value, but
-#                                getHomeAppId reads the settings record first, so the baked id is
-#                                only the fallback for the next start. `norestart` is accepted and
-#                                does nothing.
-#   homechooser-keyfilter apply samfirst   restart sam first, then as apply
-#   homechooser-keyfilter status   print mounted=yes|no and release=<set> or match=<set>|none,
-#                                and reboot=needed|no: needed when the flag file exists and
-#                                nothing is mounted though a reviewed set matches (or the generated
-#                                patch is possible and opted in), or when the flag file is absent
-#                                and something is still mounted
-#
-# The data directory holds one directory per release with a manifest.json and the diffs. A set
-# is applied all or nothing. Nothing on the rootfs is modified.
-#
-# The patched Settings.qml carries a `configuredHomeAppId: "@HOMECHOOSER_HOME@"` line. After patch
-# the script replaces the placeholder with the id stored in /var/lib/webosbrew/homechooser/home
-# (trimmed, and only if it is letters, digits, '.', '-' and '_'; otherwise an empty string), so
-# the key filter has a home id when the settings record has none. The id is baked in only if
-# `applicationManager/getAppInfo` says the app is installed; an uninstalled app, or a sam that
-# does not answer within HOMECHOOSER_SAM_WAIT seconds (20), bakes the empty id, which the key filter
-# reads as the stock home. The watcher (homechooser-home-watch) refreshes it later. Called from the
-# init.d entry `homechooser`, which decides whether the backport is enabled.
-#
-# Overrides, for tests: HOMECHOOSER_LUNA_SEND, HOMECHOOSER_SAM_WAIT, HOMECHOOSER_SLEEP, HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHOICE, HOMECHOOSER_DATA, HOMECHOOSER_ROOT (prefix of the target paths),
-# HOMECHOOSER_WORK, HOMECHOOSER_LOG, HOMECHOOSER_KEYFILTER_FLAG (the enable flag, default
-# /var/lib/webosbrew/homechooser/keyfilter), HOMECHOOSER_GENERATED_FLAG, HOMECHOOSER_MOUNTS, HOMECHOOSER_MOUNT, HOMECHOOSER_UMOUNT,
-# HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_PATCH, HOMECHOOSER_SHA256, HOMECHOOSER_UNIT,
-# HOMECHOOSER_DEPENDANTS (the units stopped before and started after the compositor restart,
-# instead of the list read from lsm-ready.service; empty means none).
-#
-# "Restart the compositor" is: stop those of webapp-mgr, booster and maliit-server (the clients
-# the firmware's lsm-ready.service restarts) that are running, restart surface-manager-daemon,
-# start them again. Stopping WebAppMgr closes every web app, Home Chooser's own UI included.
-# Only apply (the boot path), stop and `refresh restart` do this.
+# Minimal Home-key hook for webOS 6-9. Called by homechooser at boot only.
+# Rewrites copies under /tmp, bind-mounts them, then restarts the compositor in firmware order.
+# On restart or functional QML readiness failure, removes the mounts and tries one stock restart. No runtime restarts.
+# refresh [stock] rewrites the stored-id fallback in the staged Settings.qml in place.
+# stop and refresh restart retain explicit manual/debug restart support.
+# status reports patch=possible|refused, unpatched-sites=N, skipped=reason and file=/path.
+# Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,UNIT,
+# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,REWRITER,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
 
-DATA=${HOMECHOOSER_DATA:-/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/backport}
 ROOT=${HOMECHOOSER_ROOT:-}
 WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-backport}
 LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-backport.log}
@@ -61,22 +15,20 @@ MOUNTS=${HOMECHOOSER_MOUNTS:-/proc/mounts}
 MOUNT=${HOMECHOOSER_MOUNT:-mount}
 UMOUNT=${HOMECHOOSER_UMOUNT:-umount}
 SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
-PATCH=${HOMECHOOSER_PATCH:-patch}
-SHA256=${HOMECHOOSER_SHA256:-sha256sum}
 UNIT=${HOMECHOOSER_UNIT:-surface-manager-daemon.service}
 DEPENDANTS_DEFAULT="webapp-mgr.service booster.service maliit-server.service"
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 LUNA=${HOMECHOOSER_LUNA_SEND:-luna-send}
 HC_LUNA_IDENTITY=com.webos.applicationManager    # privileged luna calls run with this identity (docs/service.md)
 SAM_WAIT=${HOMECHOOSER_SAM_WAIT:-20}
+READY_WAIT=${HOMECHOOSER_READY_WAIT:-24}
+VERIFY_QML=0
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
 KEYFILTER_FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
-GENERATED_FLAG=${HOMECHOOSER_GENERATED_FLAG:-/var/lib/webosbrew/homechooser/keyfilter-generated}
-NO_SETS_FLAG=${HOMECHOOSER_NO_SETS_FLAG:-/var/lib/webosbrew/homechooser/debug-no-sets}
 NODE=${HOMECHOOSER_NODE:-node}
 command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
-GEN=${HOMECHOOSER_GEN:-$(dirname "$0")/homechooser-keyfilter-gen.js}
+REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-keyfilter-rewrite.js}
 TMO_FORM=
 
 log() {
@@ -85,11 +37,10 @@ log() {
     echo "$msg" >> "$LOG" 2>/dev/null
 }
 
-# entries <manifest>: print path, sha256 and diff name of every file, one per line, in order.
-# The manifest is JSON; the three keys are picked line by line, so the layout does not matter.
+# entries <manifest>: print staged target paths, one per line, in order.
 entries() {
     tr '{},' '\n\n\n' < "$1" |
-        sed -En 's/^[[:space:]]*"(path|sha256|diff)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'
+        sed -En 's/^[[:space:]]*"(path)"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\2/p'
 }
 
 # configured_id: print the stored home id, trimmed; nothing if absent, empty or invalid.
@@ -116,6 +67,49 @@ detect_timeout() {
     elif "$TIMEOUT" -t 1 true > /dev/null 2>&1; then
         TMO_FORM=old
     fi
+}
+
+# A C++ compositor can report READY=1 even when main.qml failed. getCurrentState is
+# registered by the stock StarfishBaseLunaServiceAPI QML object, independently of tier 2.
+# Require both success and its string-valued currentState, not merely a live Luna service.
+# Each request is bounded to two seconds; the entire polling window is READY_WAIT (24s).
+qml_ready() {
+    detect_timeout
+    deadline=$(($(cut -d. -f1 /proc/uptime) + READY_WAIT))
+    ready_attempt=0
+    reply="$WORK/ready.$$.out"
+    while :; do
+        ready_attempt=$((ready_attempt + 1))
+        case "$TMO_FORM" in
+            new) "$TIMEOUT" 2 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 ;;
+            old) "$TIMEOUT" -t 2 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 ;;
+            *)
+                # No timeout applet: bound the native luna-send child ourselves and reap it.
+                "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 luna://com.webos.surfacemanager/getCurrentState '{}' > "$reply" 2>&1 &
+                ready_pid=$!
+                for ready_tick in 1 2; do
+                    kill -0 "$ready_pid" 2>/dev/null || break
+                    sleep 1
+                done
+                kill "$ready_pid" 2>/dev/null
+                wait "$ready_pid" 2>/dev/null
+                ;;
+        esac
+        if grep -q '"returnValue"[[:space:]]*:[[:space:]]*true' "$reply" &&
+           grep -q '"currentState"[[:space:]]*:[[:space:]]*"[^"]*"' "$reply"; then
+            log "QML ready via getCurrentState (attempt $ready_attempt)"
+            rm -f "$reply"
+            return 0
+        fi
+        if [ "$(cut -d. -f1 /proc/uptime)" -ge "$deadline" ]; then
+            reason="QML getCurrentState unavailable after $READY_WAIT s: $(tr '\n\r' '  ' < "$reply" | cut -c1-240)"
+            printf '%s\n' "$reason" > "$WORK/restart-reason"
+            log "ERROR: $reason"
+            rm -f "$reply"
+            return 1
+        fi
+        "$SLEEP" 1
+    done
 }
 
 # app_state <id>: print yes (installed), no (sam answers returnValue false) or unknown (no
@@ -176,15 +170,11 @@ is_mounted() {
     grep -qF " $1 " "$MOUNTS" 2>/dev/null
 }
 
-sha_of() {
-    "$SHA256" "$1" 2>/dev/null | cut -d' ' -f1
-}
-
 mkdir -p "$WORK" 2>/dev/null
 
 # Temp files are named per invocation: status runs from the app, the watcher and the service can
 # overlap, and a shared name let one run delete or truncate the list another was reading.
-# ETMP is the read-only scratch list (any_mounted, find_set, status, refresh, stop); AENT is the
+# ETMP is the read-only scratch list (any_mounted, status, refresh, stop); AENT is the
 # apply list. Both are removed on every way out.
 ETMP="$WORK/entries.$$.tmp"
 AENT="$WORK/entries.$$"
@@ -223,87 +213,29 @@ take_lock() {
     echo $$ > "$LOCKDIR/pid"
 }
 
-# any_mounted: succeed when a target of any set in the data directory is a mount point.
+# Our staged target list owns the mounts.
 any_mounted() {
-    for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
-        [ -f "$m" ] || continue
-        entries "$m" > "$ETMP"
-        while read -r p && read -r h && read -r d; do
-            if is_mounted "$ROOT$p"; then
-                rm -f "$ETMP"
-                return 0
-            fi
-        done < "$ETMP"
-    done
+    [ -f "$WORK/manifest.json" ] || return 1
+    entries "$WORK/manifest.json" > "$ETMP"
+    while read -r p; do
+        if is_mounted "$ROOT$p"; then rm -f "$ETMP"; return 0; fi
+    done < "$ETMP"
     rm -f "$ETMP"
     return 1
 }
 
-# find_set: print the release whose files all match their stock hash, if any.
-find_set() {
-    [ "${HOMECHOOSER_NO_SETS:-0}" = 1 ] && return 1
-    [ -f "$NO_SETS_FLAG" ] && return 1
-    for m in "$DATA"/*/manifest.json; do
-        [ -f "$m" ] || continue
-        rel=$(basename "$(dirname "$m")")
-        entries "$m" > "$ETMP"
-        match=1
-        count=0
-        while read -r p && read -r h && read -r d; do
-            count=$((count + 1))
-            cur=
-            [ -f "$ROOT$p" ] && cur=$(sha_of "$ROOT$p")
-            [ "$cur" = "$h" ] || match=0
-        done < "$ETMP"
-        rm -f "$ETMP"
-        if [ "$match" = 1 ] && [ "$count" -gt 0 ]; then
-            echo "$rel"
-            return 0
-        fi
-    done
-    return 1
-}
-
-# Cache checks by content, including discovery/guard inputs and the rules themselves.
-# Hash all QML/JS in these trees, so a new target or stray stock id invalidates the cache too.
-generated_key() {
-    {
-        printf '%s\n' "$NODE"
-        "$SHA256" "$GEN" "$ROOT/etc/os-release" 2>/dev/null
-        find "$ROOT/usr/lib/qml/WebOSCompositor" "$ROOT/usr/lib/qml/KeyFilters" \
-             "$ROOT/usr/lib/qml/WebOSCompositorBase" -type f \
-             \( -name '*.qml' -o -name '*.js' \) -exec "$SHA256" {} + 2>/dev/null | LC_ALL=C sort
-    } | "$SHA256" | cut -d' ' -f1
-}
-
-generated_status() {
-    key=$(generated_key)
-    cache="$WORK/check-$key"
-    if [ ! -f "$cache" ]; then
-        if "$NODE" "$GEN" check --root "${ROOT:-/}" > "$WORK/check.$$.out" 2>&1; then
-            echo generated=possible > "$WORK/check.$$.result"
-        else
-            {
-                echo generated=refused
-                printf 'reason='
-                tr '\n\r' '  ' < "$WORK/check.$$.out"
-                printf '\n'
-            } > "$WORK/check.$$.result"
-        fi
-        mv "$WORK/check.$$.result" "$cache"
-        rm -f "$WORK/check.$$.out"
-    fi
-    cat "$cache"
-    if [ -f "$GENERATED_FLAG" ]; then echo optin=yes; else echo optin=no; fi
-}
-
-active_manifest() {
-    rel=$(cat "$WORK/release" 2>/dev/null)
-    if [ "$rel" = generated ]; then
-        echo "$WORK/generated/manifest.json"
+# Check the current files directly; there is no firmware lookup or content-key cache.
+patch_status() {
+    result="$WORK/check.$$.out"
+    if "$NODE" "$REWRITER" check --root "${ROOT:-/}" > "$result" 2>&1; then
+        cat "$result"
     else
-        echo "$DATA/$rel/manifest.json"
+        echo patch=refused
+        printf 'reason='
+        tr '\n\r' '  ' < "$result"
+        printf '\n'
     fi
+    rm -f "$result"
 }
 
 # compositor_dependants: the compositor's clients that the firmware restarts once the compositor is
@@ -337,15 +269,17 @@ unit_running() {
 
 # restart_sequence <dependants...>: stop the dependants that are running, restart the compositor,
 # start them again. The daemon is Type=notify and its READY=1 is sent by the initctl shim when the
-# compositor emits lsm-ready, so `restart` returns once the compositor is ready, and the clients
-# connect to a compositor that has announced its outputs, as at boot. A client left running while
+# compositor emits lsm-ready. This proves process readiness; the boot path also requires the
+# QML-served method before clients connect. A client left running while
 # the compositor goes away exits on a broken pipe, is respawned by Restart=on-failure while the new
 # compositor is still starting, and WebAppMgr can crash there (9.2.1, scratch/wam-crash/notes.md).
 restart_sequence() {
-    was=
+    was=$(cat "$WORK/restart-clients" 2>/dev/null)
     for u in "$@"; do
+        case " $was " in *" $u "*) continue ;; esac
         unit_running "$u" && was="$was $u"
     done
+    printf '%s\n' "$was" > "$WORK/restart-clients"
     for u in $was; do
         log "stopping $u"
         "$SYSTEMCTL" stop "$u" || log "ERROR: could not stop $u"
@@ -356,13 +290,18 @@ restart_sequence() {
         log "$UNIT restarted"
     else
         log "ERROR: could not restart $UNIT"
-        r=1
+        echo "systemctl restart $UNIT failed" > "$WORK/restart-reason"
+        # Keep clients stopped until a ready compositor exists; boot recovery retries stock.
+        return 1
     fi
-    # Started even if the restart failed: a TV without WebAppMgr has no web apps at all.
+    if [ "$VERIFY_QML" = 1 ]; then
+        qml_ready || return 1
+    fi
     for u in $was; do
         log "starting $u"
         "$SYSTEMCTL" start "$u" || { log "ERROR: could not start $u"; r=1; }
     done
+    rm -f "$WORK/restart-clients"
     return $r
 }
 
@@ -387,9 +326,13 @@ restart_compositor() {
 
 undo_mounts() {
     [ -f "$WORK/mounted" ] || return 0
+    failed=0
     while read -r t; do
-        "$UMOUNT" "$t" 2>/dev/null || "$UMOUNT" -l "$t" 2>/dev/null
+        if is_mounted "$t"; then
+            "$UMOUNT" "$t" 2>/dev/null || "$UMOUNT" -l "$t" 2>/dev/null || failed=1
+        fi
     done < "$WORK/mounted"
+    [ "$failed" = 0 ] || return 1
     rm -f "$WORK/mounted"
 }
 
@@ -408,53 +351,27 @@ do_apply() {
         log "key filter backport already mounted, nothing to do"
         return 0
     fi
-    rel=$(find_set)
-    rm -rf "$WORK/stage" "$WORK/generated"
-    if [ -z "$rel" ]; then
-        log "no diff set matches the stock files"
-        [ -f "$GENERATED_FLAG" ] || { log "generated patch not opted in, leaving stock"; return 0; }
-        mkdir -p "$WORK/generated"
-        "$NODE" "$GEN" generate --root "${ROOT:-/}" --out "$WORK/stage" \
-            --manifest "$WORK/generated/manifest.json" >> "$LOG" 2>&1
-        r=$?
-        if [ "$r" != 0 ]; then
-            log "generator failed ($r), leaving stock; see $LOG"
-            rm -rf "$WORK/stage" "$WORK/generated"
-            [ "$r" = 2 ] && return 0
-            return 1
-        fi
-        rel=generated
-        entries "$WORK/generated/manifest.json" > "$AENT"
-    else
-        log "diff set $rel matches the stock files"
-        set_dir="$DATA/$rel"
-        mkdir -p "$WORK/stage"
-        entries "$set_dir/manifest.json" > "$AENT"
-
-        # Copy every target, then patch every copy; any failure drops the whole set.
-        while read -r p && read -r h && read -r d; do
-            mkdir -p "$WORK/stage$(dirname "$p")" && cp -p "$ROOT$p" "$WORK/stage$p" || {
-                log "ERROR: cannot copy $p, set $rel not applied"
-                rm -rf "$WORK/stage" "$AENT"
-                return 1
-            }
-        done < "$AENT"
-        while read -r p && read -r h && read -r d; do
-            if ! (cd "$WORK/stage" && "$PATCH" -p0 < "$set_dir/$d") >> "$LOG" 2>&1; then
-                log "ERROR: $d does not apply to $p, set $rel not applied"
-                rm -rf "$WORK/stage" "$AENT"
-                return 1
-            fi
-            log "patched $p with $d"
-        done < "$AENT"
+    rm -rf "$WORK/stage"
+    rm -f "$WORK/manifest.json" "$WORK/applied-status" "$WORK/recovered" "$WORK/restart-reason"
+    "$NODE" "$REWRITER" generate --root "${ROOT:-/}" --out "$WORK/stage" \
+        --manifest "$WORK/manifest.json" > "$WORK/plan.$$" 2>&1
+    r=$?
+    cat "$WORK/plan.$$" >> "$LOG"
+    if [ "$r" != 0 ]; then
+        log "rewriter failed ($r): $(cat "$WORK/plan.$$"); leaving stock"
+        rm -rf "$WORK/stage"
+        rm -f "$WORK/manifest.json" "$WORK/plan.$$"
+        [ "$r" = 2 ] && return 0
+        return 1
     fi
-
+    mv "$WORK/plan.$$" "$WORK/applied-status"
+    entries "$WORK/manifest.json" > "$AENT"
     # Put the stored choice into the copies that carry the placeholder.
     cid=$(baked_id)
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         if has_configured "$WORK/stage$p"; then
             set_configured "$WORK/stage$p" "$cid" || {
-                log "ERROR: cannot set the configured home in $p, set $rel not applied"
+                log "ERROR: cannot set the configured home in $p, hook not applied"
                 rm -rf "$WORK/stage" "$AENT"
                 return 1
             }
@@ -462,31 +379,52 @@ do_apply() {
         fi
     done < "$AENT"
 
+    # Test-only fault injection, after the real rewrite, before any mount. Never enabled by the app.
+    if [ "${HOMECHOOSER_DEBUG_BREAK_SETTINGS:-0}" = 1 ]; then
+        broken="$WORK/stage/usr/lib/qml/WebOSCompositorBase/global/Settings.qml"
+        [ -f "$broken" ] || { log "ERROR: debug Settings.qml target missing"; return 1; }
+        log "DEBUG: injecting a Settings.qml syntax error into the staged copy"
+        printf '\nHOMECHOOSER DEBUG BROKEN QML !!!\n' >> "$broken" || return 1
+    fi
+
     # Bind-mount the copies; if one fails, undo the ones already mounted.
     : > "$WORK/mounted"
-    while read -r p && read -r h && read -r d; do
+    while read -r p; do
         if "$MOUNT" --bind "$WORK/stage$p" "$ROOT$p"; then
             echo "$ROOT$p" >> "$WORK/mounted"
             log "mounted $p"
         else
-            log "ERROR: cannot mount over $p, set $rel not applied"
-            undo_mounts
+            log "ERROR: cannot mount over $p, hook not applied"
+            undo_mounts || { log "ERROR: partial mounts remain; keeping stage and manifest"; return 1; }
             rm -rf "$WORK/stage" "$AENT"
             return 1
         fi
     done < "$AENT"
     rm -f "$AENT"
-    echo "$rel" > "$WORK/release"
-
-    restart_compositor
+    VERIFY_QML=1
+    if restart_compositor; then return 0; fi
+    failure=$(cat "$WORK/restart-reason" 2>/dev/null)
+    [ -n "$failure" ] || failure="compositor restart sequence failed"
+    log "ERROR: boot compositor restart failed: $failure; unmounting the hook and restarting once to stock"
+    undo_mounts || { log "ERROR: recovery could not unmount all targets; keeping stage"; return 1; }
+    if restart_compositor; then
+        log "stock compositor recovery succeeded"
+        printf 'recovered=stock\nreason=%s\n' "$failure" > "$WORK/recovered"
+    else
+        log "ERROR: stock compositor recovery failed: $(cat "$WORK/restart-reason" 2>/dev/null)"
+        printf 'recovered=failed\nreason=%s; stock recovery: %s\n' "$failure" "$(cat "$WORK/restart-reason" 2>/dev/null)" > "$WORK/recovered"
+    fi
+    rm -rf "$WORK/stage"
+    rm -f "$WORK/manifest.json" "$WORK/applied-status"
+    return 1
 }
 
 do_stop() {
     unmounted=0
-    for m in "$DATA"/*/manifest.json "$WORK/generated/manifest.json"; do
+    for m in "$WORK/manifest.json"; do
         [ -f "$m" ] || continue
         entries "$m" > "$ETMP"
-        while read -r p && read -r h && read -r d; do
+        while read -r p; do
             tries=0
             while is_mounted "$ROOT$p" && [ "$tries" -lt 3 ]; do
                 tries=$((tries + 1))
@@ -500,13 +438,13 @@ do_stop() {
             done
         done < "$ETMP"
     done
-    # Keep the generated target list and mounted sources if an unmount failed, so status and a
-    # later stop can still find them even when no reviewed set names these files.
+    # Keep the target list and mounted sources if an unmount failed, so status and a
+    # later stop can still find them.
     if any_mounted; then
         log "ERROR: targets remain mounted; keeping stage and manifest for a later stop"
         return 1
     fi
-    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/release" "$AENT" "$ETMP" "$WORK/generated"
+    rm -rf "$WORK/stage" "$WORK/mounted" "$WORK/applied-status" "$AENT" "$ETMP" "$WORK/manifest.json"
     if [ "$unmounted" = 1 ]; then
         restart_compositor
     else
@@ -527,8 +465,8 @@ do_refresh() {
     done
     [ "$stock" = 1 ] || cid=$(baked_id)
     changed=0
-    entries "$(active_manifest)" > "$ETMP" 2>/dev/null
-    while read -r p && read -r h && read -r d; do
+    entries "$WORK/manifest.json" > "$ETMP" 2>/dev/null
+    while read -r p; do
         f="$WORK/stage$p"
         has_configured "$f" || continue
         grep -qF "configuredHomeAppId: \"$cid\"" "$f" && continue
@@ -545,37 +483,21 @@ do_refresh() {
 }
 
 do_status() {
-    if [ ! -d "$DATA" ]; then
-        echo "data=missing"
-    fi
+    [ -f "$REWRITER" ] || echo data=missing
     reboot=no
     if any_mounted; then
-        echo "mounted=yes"
-        echo "release=$(cat "$WORK/release" 2>/dev/null || echo unknown)"
-        if [ "$(cat "$WORK/release" 2>/dev/null)" = generated ]; then
-            echo match=generated
-            entries "$WORK/generated/manifest.json" > "$ETMP"
-            while read -r p && read -r h && read -r d; do
-                echo "hash=$(sha_of "$WORK/stage$p") $p"
-            done < "$ETMP"
-            rm -f "$ETMP"
-        fi
+        echo mounted=yes
+        cat "$WORK/applied-status" 2>/dev/null
         [ -f "$KEYFILTER_FLAG" ] || reboot=needed
     else
-        echo "mounted=no"
-        rel=$(find_set)
-        echo "match=${rel:-none}"
-        if [ -n "$rel" ]; then
-            [ -f "$KEYFILTER_FLAG" ] && reboot=needed
-        else
-            gen=$(generated_status)
-            printf '%s\n' "$gen"
-            if [ -f "$KEYFILTER_FLAG" ] && printf '%s\n' "$gen" | grep -q '^generated=possible$' &&
-                [ -f "$GENERATED_FLAG" ]; then
-                reboot=needed
-            fi
+        echo mounted=no
+        state=$(patch_status)
+        printf '%s\n' "$state"
+        if [ -f "$KEYFILTER_FLAG" ] && printf '%s\n' "$state" | grep -q '^patch=possible$'; then
+            reboot=needed
         fi
     fi
+    [ ! -f "$WORK/recovered" ] || cat "$WORK/recovered"
     echo "reboot=$reboot"
 }
 

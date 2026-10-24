@@ -32,12 +32,20 @@ SVC_ID = APP_ID + '.service'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/keyfilter'
-GENERATED_FLAG = '/var/lib/webosbrew/homechooser/keyfilter-generated'
-NO_SETS_FLAG = '/var/lib/webosbrew/homechooser/debug-no-sets'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
+
+
+def messages_command(path='/var/log/messages'):
+    """Read retained rotations oldest first, then the active syslog (webOS uses .N.gz)."""
+    quoted = shlex.quote(path)
+    # BusyBox 1.29 on webOS 6 has no sort -V. Sort the numeric rotation suffix instead.
+    return ("{ for log in $(ls %s.[0-9]*.gz 2>/dev/null | "
+            "awk -F. '{print $(NF-1), $0}' | sort -rn | cut -d' ' -f2-); do "
+            "zcat \"$log\" 2>/dev/null; done; cat %s; }" % (quoted, quoted))
+
 
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
@@ -53,7 +61,7 @@ MATRIX = [
     ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
     ('6.x', 'w21a-kisscurl', 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to the Dock project and is not in the matrix)'),
     ('9.x', 'w24g-ombre', 'luna', 'verified', 'W24G 33.20.23.01 = 9.2.4; os-release read 2026-10-23'),
-    ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per backport/9.2.4; os-release to be read'),
+    ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per firmware metadata; os-release to be read'),
     ('7.x', 'w22p-mullet', 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
     ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
     ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
@@ -600,6 +608,10 @@ class BeanjarHost:
         return self.beanjar('settings', vm, 'set', *['%s=%s' % i for i in kv.items()])
 
     def start(self, vm):
+        # Check the host immediately before every boot, including scenario reboots.
+        running = self.running_vms()
+        if running:
+            raise RuntimeError('refusing boot while VMs are running: %s' % running)
         return self.beanjar('start', vm, timeout=600)
 
     def stop(self, vm):
@@ -950,6 +962,7 @@ class Recorder:
         self.log = open(os.path.join(outdir, 'run.log'), 'w')
 
     def say(self, text):
+        text = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(text))
         line = '%s %s' % (time.strftime('%H:%M:%S'), text)
         print(line, flush=True)
         self.log.write(line + '\n')
@@ -964,6 +977,7 @@ class Recorder:
 
     def check(self, name, ok, evidence='', expected=None):
         """expected: text citing the documented limitation; a failing check then records XFAIL."""
+        evidence = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(evidence))
         status = 'PASS' if ok else ('XFAIL' if expected else 'FAIL')
         self.results.append({'step': self.step, 'name': name, 'status': status,
                              'evidence': str(evidence), 'expected': expected})
@@ -1002,7 +1016,6 @@ class Scenario:
         self.capture_broken = False
         self.viewer_opened = False
         self.major = 0  # webOS TV release, 5..12
-        self.generated_markers_cleaned = False
         self.stock_id = None  # what restore/removal/uninstall write as home (stock_home_id), from the baseline
 
     # -- helpers
@@ -1133,10 +1146,16 @@ class Scenario:
     def uses_override(self):
         return self.major >= 10
 
-    def check_generated_status(self, label):
+    def hook_mounts_match(self, mounts=None):
         rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
-        self.rec.check('%s: generated keyfilter is mounted' % label,
-                       rc == 0 and 'mounted=yes' in out and 'match=generated' in out, out.strip())
+        planned = [line[5:] for line in out.splitlines() if line.startswith('file=')]
+        mounted = self.dev.mounts() if mounts is None else mounts
+        return rc == 0 and bool(planned) and set(planned) == set(mounted)
+
+    def check_hook_status(self, label):
+        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        self.rec.check('%s: minimal hook is mounted' % label,
+                       rc == 0 and 'mounted=yes' in out and 'patch=possible' in out, out.strip())
 
     def kf_status(self):
         """(parsed, raw) of `homechooser-keyfilter status` (6.x to 9.x)."""
@@ -1177,7 +1196,7 @@ class Scenario:
         if not self.uses_backport() or not before:
             return
         d = self.dev
-        rc, out = d.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20"
+        rc, out = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20")
                        % (before['mark'], shlex.quote(CRASH_RE.pattern)))
         bad = crash_lines(out)
         self.rec.check(label + ': no crashd CRASHED or WebAppMgr crash line in /var/log/messages since %s' % before['mark'],
@@ -1237,15 +1256,6 @@ class Scenario:
                 except SystemExit:
                     pass
         return ''
-
-    def cleanup_generated_markers(self):
-        if not self.a.keyfilter_generated or self.generated_markers_cleaned:
-            return
-        rm_rc, rm_out = self.dev.sh('rm -f %s %s' % (NO_SETS_FLAG, GENERATED_FLAG))
-        rc, out = self.dev.sh('test ! -e %s && test ! -e %s' % (NO_SETS_FLAG, GENERATED_FLAG))
-        self.rec.check('generated-patch markers removed', rm_rc == 0 and rc == 0,
-                       out.strip() or rm_out.strip() or 'both markers absent')
-        self.generated_markers_cleaned = rc == 0
 
     def stock_record_ok(self, home):
         return stock_record_ok(self.major, home, self.stock_id)
@@ -1336,7 +1346,7 @@ class Scenario:
         reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
         real, noise = classify_faults(reply, up_mark)
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4" % (t_mark, POPUP_LINE_RE))
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
         ev += [l for l in out.splitlines() if l.strip()]
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
@@ -1464,7 +1474,7 @@ class Scenario:
             r.note('%s: stock home %s after the reboot (open risk: a boot-time launch outside the preload '
                    'manager would keep it resident; recorded, not asserted)'
                    % (label, 'RUNNING' if running else 'not running'),
-                   self.dev.sh("grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' /var/log/messages | "
+                   self.dev.sh(messages_command() + " | grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' | "
                                "grep 'com.webos.app.home' | head -n 8")[1].strip() or 'no launch line for the stock home')
 
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
@@ -1506,7 +1516,7 @@ class Scenario:
             self.residency(label + ': stock home came back')
             r.note(label + ': whole watcher log', self.dev.sh('cat /tmp/homechooser-home.log 2>&1 | tail -n 40')[1])
             r.note(label + ': sam lines about the stock home', self.dev.sh(
-                "grep -E 'com.webos.app.home' /var/log/messages | grep -E 'close|Close|launch|Launch|NL_APP' | tail -n 15")[1])
+                messages_command() + " | grep -E 'com.webos.app.home' | grep -E 'close|Close|launch|Launch|NL_APP' | tail -n 15")[1])
 
     def check_preload_on(self, label, wait_for=120):
         """The policy is back to enabled (launcher uninstalled, choice stock, Home Chooser uninstalled)."""
@@ -1641,7 +1651,7 @@ class Scenario:
     def sam_launch_lines(self, appid, mark):
         """sam lines in /var/log/messages stamped at or after `mark` that name appid and are launch-related:
         NL_APP_LAUNCH_BEGIN {"app_id":"<id>",...}, APP_LAUNCHED, RelaunchAsCommon (and the _ERR/_WARNING variants)."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | grep -E ' sam ' | tail -n 40"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -F %s | grep -E ' sam ' | tail -n 40")
                               % (mark, shlex.quote(appid)))
         return [l for l in out.splitlines() if self.LAUNCH_OK.search(l) or self.LAUNCH_BAD.search(l)]
 
@@ -1683,7 +1693,7 @@ class Scenario:
         relaunch of com.webos.app.home."""
         pattern = pattern or ('launchDefaultApp.*homeKey|homeKey.*launchDefaultApp|'
                               'RelaunchAsCommon.*com.webos.app.home')
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8")
                               % (mark, pattern))
         return [l for l in out.splitlines() if l.strip()]
 
@@ -1708,19 +1718,6 @@ class Scenario:
         r.check('baseline: nothing of Home Chooser is installed',
                 APP_ID not in d.installed() and 'No such' in base['choice'],
                 'installed: %s; choice: %s' % (d.installed(), base['choice']))
-        if self.a.keyfilter_generated:
-            rc, markers = d.sh('test ! -e %s && test ! -e %s' % (NO_SETS_FLAG, GENERATED_FLAG))
-            stock_baseline = (APP_ID not in d.installed() and 'No such' in base['choice']
-                              and stock_baseline_ok(self.major, base['record_home'])
-                              and base['watcher'] != 'active'
-                              and ('No such' in base['initd'] or not base['initd'])
-                              # 6-9: an earlier run's patch stays mounted until the next boot
-                              and (not base['mounts'] or self.uses_backport()) and base['flag'] == 'no'
-                              and rc == 0)
-            r.check('generated-patch run starts from a stock baseline', stock_baseline,
-                    'state: %s; markers: %s' % (json.dumps(base), markers.strip() or 'absent'))
-            if not stock_baseline:
-                raise RuntimeError('generated-patch run requires a stock baseline; refusing to install')
         r.check('baseline: Homebrew Channel is installed', 'org.webosbrew.hbchannel' in d.installed(),
                 str(d.installed()))
         df = d.sh('df -h /media/developer | tail -1')[1].strip()
@@ -1752,13 +1749,10 @@ class Scenario:
                 if i == 3 and self.a.update_check:
                     guarded(self.step_update)
         finally:
-            try:
-                if self.a.until >= 5:
-                    self.step6()
-                else:
-                    r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
-            finally:
-                self.cleanup_generated_markers()
+            if self.a.until >= 5:
+                self.step6()
+            else:
+                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
 
     def step1(self, strat):
         r, d = self.rec, self.dev
@@ -1772,12 +1766,6 @@ class Scenario:
         r.note('df /media/developer before installing', df)
         rc, out = d.install(hc)
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
-        if self.a.keyfilter_generated:
-            rc, out = d.sh('mkdir -p /var/lib/webosbrew/homechooser && touch %s %s'
-                           % (NO_SETS_FLAG, GENERATED_FLAG))
-            r.check('enable generated-patch test markers', rc == 0, out.strip() or 'markers created')
-            if rc != 0:
-                raise RuntimeError('could not create generated-patch markers')
         rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
         r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
@@ -1907,7 +1895,7 @@ class Scenario:
                 baked = self.baked_id()
                 r.check('the watcher baked the launcher id into the mounted Settings.qml (refresh, no restart)',
                         self.launcher in baked, baked)
-        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or len(self.dev.mounts()) >= 9), 90)
+        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or self.hook_mounts_match()), 90)
         self.residency('right after "Use as Home" (settled)')
         s = self.state()
         r.note('state after choosing', json.dumps(s))
@@ -1918,10 +1906,9 @@ class Scenario:
                 s['initd'] == APPDIR + '/backport/homechooser', s['initd'])
         if self.uses_backport():
             r.check('backport mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
-                    len(s['mounts']) >= 9, 'mounts: %s' % s['mounts'])
+                    self.hook_mounts_match(s['mounts']), 'mounts: %s' % s['mounts'])
             r.check('backport flag file exists', s['flag'] == 'yes', s['flag'])
-            if self.a.keyfilter_generated:
-                self.check_generated_status('after selection' + (' and the boot' if not mounted_before else ''))
+            self.check_hook_status('after selection' + (' and the boot' if not mounted_before else ''))
         else:
             r.check('no backport on this release', not s['mounts'] and s['flag'] == 'no',
                     'mounts: %s flag: %s' % (s['mounts'], s['flag']))
@@ -2004,8 +1991,8 @@ class Scenario:
         why = getattr(self.insp, 'last_error', None) if self.insp else 'no inspector'
         running = APP_ID in self.running_ids()
         rc, out = self.dev.sh(
-            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s.*(killApp|windowPolicy|userTimeout|\"event\":\"close\")"
-            "|com.webos.app.home.*(kill_process|APP_CLOSED)|NL_APP_LAUNCH_BEGIN.*com.webos.app.home' | tail -n 10" % (mark, APP_ID))
+            (messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s.*(killApp|windowPolicy|userTimeout|\"event\":\"close\")"
+            "|com.webos.app.home.*(kill_process|APP_CLOSED)|NL_APP_LAUNCH_BEGIN.*com.webos.app.home' | tail -n 10") % (mark, APP_ID))
         return 'inspector: %s; %s running: %s\n%s' % (why, APP_ID, running, out.strip() or 'no close/kill line since %s' % mark)
 
     def ours_in_front(self, dialog):
@@ -2030,7 +2017,7 @@ class Scenario:
 
     def reboot_ask_log(self):
         """The REBOOT_ASK lines of the service since the choice was confirmed (PmLog -> /var/log/messages)."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8")
                               % getattr(self, 'ask_mark', ''))
         return out
 
@@ -2145,12 +2132,16 @@ class Scenario:
         r = self.rec
         active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
         r.check(label + ': the watcher is active (started from init.d)', bool(active), self.watcher_active())
-        self.wait(lambda: len(self.dev.mounts()) >= 9, 180, 5)
+        self.wait(lambda: self.hook_mounts_match(), 180, 5)
         st, raw = self.kf_status()
         r.check(label + ': the boot hook mounted the patch: status mounted=yes and reboot=no',
                 st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
         r.note(label + ': backport log of the boot apply (its compositor restart is the one allowed)',
                self.dev.sh('tail -n 20 %s 2>&1' % self.BACKPORT_LOG)[1])
+        r.note(label + ': compositor QML and crash evidence from retained messages logs', self.dev.sh(
+            messages_command() + " | grep -E 'surface-manager.*(WebOSCompositorWindow::setCompositorMain|"
+            "Type .*unavailable|Syntax error|is not a type)|crashd.*CRASHED|WebAppMgr.*(SIGSEGV|segfault)'"
+            " | tail -n 24")[1].strip() or 'no matching retained line')
 
     def close_insp(self):
         if self.insp:
@@ -2225,8 +2216,8 @@ class Scenario:
                     self.preload_log())
         self.log_mark = 0  # a new boot, a new /tmp log
         self.check_preload_off('after the reboot', settle=30)
-        if self.a.keyfilter_generated:
-            self.check_generated_status('after reboot')
+        if self.uses_backport():
+            self.check_hook_status('after reboot')
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
         if self.a.api_check:
@@ -2366,7 +2357,7 @@ class Scenario:
 
     def uninstall_alert_id(self):
         """The alertId of the service's createAlert, from its UNINSTALL_ASK log line (PmLog), if logged."""
-        rc, out = self.dev.sh("cat /var/log/messages | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3"
+        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3")
                               % self.uninstall_mark)
         m = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', out)
         return (m[-1] if m else None), out.strip()
@@ -2443,7 +2434,7 @@ class Scenario:
         self.shot('3a-uninstalled')
         r.check('confirm on our screen: uninstallConfirmed removed %s' % DISPOSABLE_ID, bool(gone),
                 'installed: %s; service log: %s' % (d.app_installed(DISPOSABLE_ID), d.sh(
-                    "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E 'UNINSTALL' | tail -n 4" % self.uninstall_mark)[1].strip()))
+                    (messages_command() + " | awk '$1 >= \"%s\"' | grep -E 'UNINSTALL' | tail -n 4") % self.uninstall_mark)[1].strip()))
         d.close(APP_ID)
         self.close_insp()
 
@@ -2612,7 +2603,7 @@ class Scenario:
             self.strat.verify(d, r)
         self.open_app_check('3u-app')
         r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
-            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12" % (t_install, APP_ID))[1])
+            (messages_command() + " | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12") % (t_install, APP_ID))[1])
 
     def step4(self):
         r, d = self.rec, self.dev
@@ -2937,8 +2928,6 @@ def main():
     ap.add_argument('--reboot-check', action='store_true',
                     help='after step 3 reboot the VM (beanjar stop/start) and check that the watcher re-applied '
                          'the stock-home preload policy and the stock home is not running')
-    ap.add_argument('--keyfilter-generated', action='store_true',
-                    help='opt in to the generated keyfilter patch for a webOS 6-9 device run')
     ap.add_argument('--reboot-via', choices=['later', 'alert'], default='later',
                     help="webOS 6-9, the restart the first choice asks for (the service's system alert): close our alert "
                          "with closeAlert and restart the VM with beanjar stop/start (default; no key is pressed), or "
@@ -2961,8 +2950,6 @@ def main():
         ap.error('--vm is required')
     row = entry(args.vm)
     vm = row[1]
-    if args.keyfilter_generated and not 6 <= int(row[0].split('.')[0]) <= 9:
-        ap.error('--keyfilter-generated is valid only for webOS 6-9')
     if args.launchers:
         specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
     else:
@@ -3048,11 +3035,6 @@ def main():
     finally:
         if scenario and scenario.insp:
             scenario.insp.close()
-        if scenario and args.keyfilter_generated and not scenario.generated_markers_cleaned:
-            try:
-                scenario.cleanup_generated_markers()
-            except Exception as e:
-                rec.check('generated-patch markers removed', False, repr(e))
         if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
             if scenario and scenario.viewer_opened:
                 host.viewer_close(vm)

@@ -106,7 +106,7 @@ case "$1" in
         major=$(major_version)
         if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-keyfilter" ]; then
             log "applying the key filter backport"
-            HOMECHOOSER_DATA=$HERE sh "$HERE/homechooser-keyfilter" apply >> "$LOG" 2>&1
+            sh "$HERE/homechooser-keyfilter" apply >> "$LOG" 2>&1
         fi
         start_watcher
         ;;
