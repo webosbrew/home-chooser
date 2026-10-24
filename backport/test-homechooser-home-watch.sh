@@ -115,6 +115,7 @@ case "$3" in
     */createToast) echo "$1 $2" >> $T/notify-args; echo '{"returnValue":true}' ;;
     */getProfiles) cat $T/profiles ;;
     */debug/rescan) echo '{"returnValue":true}' ;;
+    */setPreloadPolicy|*/closeByAppId) echo '{"returnValue":true}' ;;
 esac
 STUB
     sed -i "s|^T=.*|T=$T|" "$T/bin/luna-send"
@@ -541,7 +542,7 @@ echo 'FLAP my.home 1' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "no write" test "$(writes)" = 0
-check "checked twice (and asked once for its title)" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 5
+check "checked twice (and asked once for its title)" test "$(count 'getAppInfo {"id":"my.home"}' "$T/calls")" = 4
 check "no revert logged" hasnt 'not installed' "$T/log"
 cleanup
 setup 8 'my.home\n'
@@ -1348,6 +1349,31 @@ echo APPS >> "$T/stream"
 run
 check "after start the files do not hold back a removal" has '"home":"com.webos.app.home"' "$T/calls"
 cleanup
+
+echo "== the stock home is closed only on 11 and later: never on 5, never on 6 to 10, whatever the launcher"
+for major in 5 6 8 9 10 11 12; do
+    setup $major 'com.webos.app.home\n'
+    live '{"home":"com.webos.app.home"}'
+    reply '{"home":"com.webos.app.home"}'
+    echo APPS >> "$T/stream"
+    echo 'CHOICE my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    run
+    if [ "$major" -le 5 ]; then
+        check "$major: no preload call" hasnt setPreloadPolicy "$T/calls"
+    else
+        check "$major: policy turned off" has 'setPreloadPolicy {"application":{"id":"com.webos.app.home","isEnabled":false}}' "$T/calls"
+    fi
+    if [ "$major" -ge 11 ]; then
+        check "$major: stock home closed" has 'closeByAppId {"id":"com.webos.app.home","forceMode":true}' "$T/calls"
+    else
+        check "$major: stock home not closed" hasnt closeByAppId "$T/calls"
+    fi
+    if [ "$major" -ge 6 ] && [ "$major" -le 10 ]; then
+        check "$major: logged" has "webOS $major: stock home left running until the next reboot" "$T/log"
+    fi
+    cleanup
+done
 
 echo "$PASS passed, $FAIL failed ($SH)"
 [ "$FAIL" = 0 ]

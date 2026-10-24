@@ -37,7 +37,9 @@
 # While a third-party home is chosen (webOS 6 and later) it also keeps LG's stock home,
 # com.webos.app.home, from being preloaded: preloadmanager/setPreloadPolicy with isEnabled false,
 # without "permanent", so nothing is persisted and a reboot starts stock again; then a forced
-# closeByAppId of the stock home, which frees its memory. Once per boot and once per transition
+# closeByAppId of the stock home, which frees its memory (not on webOS 6 to 10, whatever the
+# launcher: sam relaunches the stock home at once as the last-input app, so the close frees nothing;
+# it stays resident until the next reboot, after which the policy keeps it closed). Once per boot and once per transition
 # (choice becomes a third-party home, becomes stock, the chosen app goes missing or returns; at
 # exit 0, i.e. restore to stock or Home Chooser uninstalled, the policy is set back to enabled).
 # Best effort: a short timeout, the reply is logged, a failure is never retried and never blocks
@@ -495,42 +497,15 @@ timed() {
 # close_stock_home: force-close the stock home, only if the policy is still the disabled one.
 close_stock_home() {
     [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || return 0
-    # sam relaunches it as the last-input app on 6 to 10 (measured 8.3.0, 9.2.1, 10.3.1); the close sticks on 11 and 12.
-    if [ "$MAJOR" -le 10 ] && [ "$OVL_VAL" = yes ]; then
-        log "overlay launcher $OVL_ID on webOS $MAJOR: stock home left running (sam relaunches it as the last-input app)"
+    # On 6 to 10 sam relaunches it at once as the last-input app (measured 8.3.0, 9.2.1, 10.3.1), for every
+    # launcher, so the close frees nothing and it is left running. A reboot ends it: the policy is off from boot.
+    # The close sticks on 11 and 12.
+    if [ "$MAJOR" -le 10 ]; then
+        log "webOS $MAJOR: stock home left running until the next reboot (sam relaunches it as the last-input app)"
         return 0
     fi
     out=$(timed_n 5 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
     log "closeByAppId $STOCK_HOME: ${out:-no reply}"
-}
-
-# overlay_check <id>: on webOS 6 to 10, whether the launcher is an overlay window (appinfo
-# defaultWindowType "overlay"): yes, no or unknown. Cached per choice in OVL_ID and OVL_VAL (an unknown
-# is asked again). getAppInfo carries the appinfo fields; failing that the installed appinfo.json is read.
-# Unreadable means unknown, and the stock home is closed as before.
-overlay_check() {
-    [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 10 ] || return 0
-    [ "$OVL_ID" = "$1" ] && [ "$OVL_VAL" != unknown ] && return 0
-    OVL_ID=$1
-    OVL_VAL=unknown
-    out=$(timed "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
-    wt=$(printf '%s' "$out" | sed -n 's/.*"defaultWindowType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    if [ -z "$wt" ]; then
-        for d in $APPS_DIRS; do
-            [ -f "$d/$1/appinfo.json" ] || continue
-            wt=$(flatten < "$d/$1/appinfo.json" | sed -n 's/.*"defaultWindowType"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-            break
-        done
-    fi
-    if [ "$wt" = overlay ]; then
-        OVL_VAL=yes
-    elif [ -n "$wt" ]; then
-        OVL_VAL=no
-    elif ok_reply "$out"; then
-        OVL_VAL=no   # installed, no defaultWindowType declared: an ordinary window
-    else
-        log "window type of $1 not readable, stock home will be closed as usual"
-    fi
 }
 
 # preload_set <true|false>: one setPreloadPolicy call; logs the reply, succeeds on returnValue true.
@@ -596,7 +571,6 @@ preload_follow() {
         preload_sync on "$2"
     else
         remember_title "$1"
-        overlay_check "$1"
         preload_sync off "$2"
     fi
 }
@@ -994,8 +968,6 @@ BAKED=
 FEED_PIDS=
 CLOSE_PID=
 PRELOAD_STATE=
-OVL_ID=
-OVL_VAL=
 TITLE_ID=
 TITLE_VAL=
 NOTIFY_OUT=

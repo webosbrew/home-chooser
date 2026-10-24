@@ -301,7 +301,9 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 
 				// 4. close the previous home
 				const previous = state.recordHome || state.profileHome || STOCK_HOME;
-				if (previous !== appId) await closeApp(run, res, previous);
+				// (not the stock home on 6 to 10: sam relaunches it at once as the last-input app, so the close frees nothing)
+				const keepStock = previous === STOCK_HOME && info.major >= 6 && info.major <= 10;
+				if (previous !== appId && !keepStock) await closeApp(run, res, previous);
 
 				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
 				// (`deferSamRestart`: the caller passes it only when a TV restart will follow, because the patch

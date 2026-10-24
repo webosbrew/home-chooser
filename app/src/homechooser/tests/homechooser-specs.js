@@ -195,12 +195,12 @@ describe('apply', () => {
 		expect(res.restartedSam).toBe(false);
 	});
 
-	test('6.6.0, record absent: write, close stock home, restart sam last', async () => {
+	test('6.6.0, record absent: write, stock home left running, restart sam last', async () => {
 		const tv = fakeTV();
 		const notices = [];
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
 		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
 		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'restartSam']);
 		expect(notices).toHaveLength(1);
@@ -213,7 +213,7 @@ describe('apply', () => {
 		const notices = [];
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {deferSamRestart: true, onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.restartedSam).toBe(false);
 		expect(res.samRestartDeferred).toBe(true);
@@ -238,7 +238,7 @@ describe('apply', () => {
 	test('8.3.0, record absent: restart sam', async () => {
 		const tv = fakeTV();
 		await chooser(tv, [8, 3, 0]).apply(MINE);
-		expect(tv.luna).toEqual([GET, SET({home: MINE}), CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
 		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
 	});
 
@@ -259,7 +259,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {kidsApp: 'k'}});
 		const res = await chooser(tv, [9, 2, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE)]);
 		expect(tv.record()).toEqual({kidsApp: 'k', home: MINE});
 		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
@@ -270,7 +270,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {kidsApp: 'k'}, setDefaultApp: false});
 		const res = await chooser(tv, [9, 2, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), SET({kidsApp: 'k', home: MINE}), CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), SET({kidsApp: 'k', home: MINE})]);
 		expect(res.warnings[0]).toMatch(/setDefaultApp is unknown/);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
@@ -283,12 +283,12 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE)]);
 	});
 
-	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: record, override file, rescan, verify, close', async (version) => {
+	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: record, override file, rescan, verify, close only on 11 and later', async (version) => {
 		const tv = fakeTV({record: {kidsApp: 'k'}, profile: profileReply()});
 		const res = await chooser(tv, version).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(res.needsKeyFilterBackport).toBe(false);
-		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, CLOSE(STOCK)]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, ...(version[0] >= 11 ? [CLOSE(STOCK)] : [])]);
 		expect(tv.files).toHaveLength(2);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
 		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
@@ -297,7 +297,8 @@ describe('apply', () => {
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
 			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.homechooser.json',
-			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(), 'luna:closeByAppId'
+			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(),
+			...(version[0] >= 11 ? ['luna:closeByAppId'] : [])
 		]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
