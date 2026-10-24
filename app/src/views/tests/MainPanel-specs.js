@@ -461,7 +461,7 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText('LG Home (stock)'));
 			fireEvent.click(await screen.findByText('Use LG Home'));
 			expect(await screen.findByText('Restart the TV?')).toBeTruthy();
-			expect(screen.getByText('LG Home is back on the Home button after a restart.')).toBeTruthy();
+			expect(screen.getByText('LG Home is on the Home button now. A restart removes the patch.')).toBeTruthy();
 			expect(backport.remove).toHaveBeenCalled();
 			expect(backport.remove.mock.invocationCallOrder[0]).toBeGreaterThan(env.chooser.restoreStock.mock.invocationCallOrder[0]);
 			expect(env.rebootPrompt).toHaveBeenCalledWith('remove', true);

@@ -172,6 +172,8 @@ mktimeout() { # mktimeout <new|old> <path>: a timeout that accepts only one form
 # live <record json>: the stub keeps the record in step with what is written to it
 live() { touch "$T/live"; echo '{"returnValue":true,"settings":{"defaultApps":'"$1"'}}' > "$T/record"; }
 nohome() { ! grep -q '"home":"[^"]' "$T/record" && grep -q '"home":null' "$T/record"; }
+# webOS 5 to 9 put the stock home id in the record (6 to 9: so the running compositor opens LG Home at once); 10 and later write null
+stockhome() { grep -q '"home":"com.webos.app.home"' "$T/record" && ! grep -q '"home":null' "$T/record"; }
 kfn() { grep -c "$1" "$T/kfcalls"; }
 # one reply per line
 reply() { printf '{"returnValue":true,"subscribed":true,"settings":{"defaultApps":%s}}\n' "$1" >> "$T/stream"; }
@@ -412,7 +414,7 @@ for major in 6 8; do
     echo APPS >> "$T/stream"
     run
     check "$major: exit 1 (subscription ended)" rc 1
-    check "$major: home written as null, other entries kept" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"home":null,"kidsApp":"k.app"}}}' "$T/calls"
+    check "$major: home written as the stock id (not null), other entries kept" has 'CALL luna://com.webos.settingsservice/setSystemSettings {"category":"general","settings":{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}}' "$T/calls"
     check "$major: no home written while the app is missing, then once when it is back" test "$(writes)" = 2
     check "$major: written again with home" has '{"defaultApps":{"home":"my.home","kidsApp":"k.app"}}' "$T/calls"
     check "$major: backport refreshed to stock" test "$(kfn 'refresh stock')" = 1
@@ -458,10 +460,24 @@ echo APPS >> "$T/stream"
 echo 'INSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "removal is a setSystemSettings write" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
+check "removal is a setSystemSettings write" has '{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}' "$T/calls"
 check "return uses setDefaultApp" has 'setDefaultApp {"category":"home","appId":"my.home"}' "$T/calls"
 check "one setDefaultApp" test "$(count setDefaultApp "$T/calls")" = 1
 cleanup
+
+echo "== chosen app uninstalled, webOS 6 to 9: fullhome is the stock id when installed"
+for major in 6 9; do
+    setup $major 'my.home\n'
+    live '{"home":"my.home","kidsApp":"k.app"}'
+    printf 'my.home\norg.webosbrew.homechooser\ncom.webos.app.home\ncom.webos.app.fullhome\n' > "$T/installed"
+    reply '{"home":"my.home","kidsApp":"k.app"}'
+    echo 'UNINSTALL my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    run
+    check "$major: fullhome named while the app is missing" has '{"defaultApps":{"home":"com.webos.app.fullhome","kidsApp":"k.app"}}' "$T/calls"
+    check "$major: never null" hasnt '"home":null' "$T/calls"
+    cleanup
+done
 
 echo "== chosen app uninstalled and installed again, webOS 10 and later"
 for major in 10 11; do
@@ -554,7 +570,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo TIMER >> "$T/stream"
 HOMECHOOSER_RECHECK=1 run
-check "reverted by the timer" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
+check "reverted by the timer" has '{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}' "$T/calls"
 check "mark says timer" has timer "$T/mark"
 cleanup
 
@@ -633,7 +649,7 @@ for major in 6 9; do
     reply '{"home":"other"}'
     run
     check "$major: exit 0" rc 0
-    check "$major: home removed from the record" nohome
+    check "$major: home is the stock id in the record, not null" stockhome
     check "$major: other entries kept" has 'kidsApp' "$T/record"
     check "$major: choice file removed" test ! -f "$T/home"
     check "$major: backport flag removed" test ! -f "$T/flag"
@@ -704,8 +720,8 @@ echo APPS >> "$T/stream"
 run
 check "chosen first: exit 0" rc 0
 check "chosen first: one write in all" test "$(writes)" = 1
-check "chosen first: no home" nohome
-check "chosen first: second revert found nothing to do" has 'nothing to remove' "$T/log"
+check "chosen first: stock id in the record" stockhome
+check "chosen first: second revert found nothing to do" has 'home is already com.webos.app.home' "$T/log"
 check "chosen first: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 cleanup
 setup 8 'my.home\n'
@@ -717,7 +733,7 @@ echo APPS >> "$T/stream"
 run
 check "both at once: exit 0" rc 0
 check "both at once: one write" test "$(writes)" = 1
-check "both at once: stock state, nothing left for a later removal to break" nohome
+check "both at once: stock state, nothing left for a later removal to break" stockhome
 check "both at once: all cleaned" test ! -f "$T/home" -a ! -f "$T/flag" -a ! -L "$T/init.d/homechooser"
 check "both at once: no stop" hasnt 'keyfilter stop' "$T/kfcalls"
 cleanup
@@ -728,7 +744,7 @@ echo 'UNINSTALL org.webosbrew.homechooser' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
 check "Home Chooser first: exit 0, then my.home may go any time" rc 0
-check "Home Chooser first: record is stock" nohome
+check "Home Chooser first: record is stock" stockhome
 check "Home Chooser first: no choice for anything to enforce" test ! -f "$T/home"
 cleanup
 
@@ -744,7 +760,7 @@ touch "$T/flag" "$T/generated-flag"
 : > "$T/stream"
 $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
-check "record is stock" nohome
+check "record is stock" stockhome
 check "choice removed" test ! -f "$T/home"
 check "link removed" test ! -L "$T/init.d/homechooser"
 check "no stop from the runtime copy either" hasnt 'keyfilter stop' "$T/kfcalls"
@@ -756,16 +772,41 @@ live '{"kidsApp":"k.app"}'
 rm -rf "$T/app"
 $SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "runs from the repository copy, app dir missing: exit 0" rc 0
+check "6 to 9: a record without home gets the stock id" test "$(writes)" = 1
+check "6 to 9: record is stock, other entries kept" stockhome
+cleanup
+
+echo "== idempotent: 10 and later, a record without home changes nothing"
+setup 11 'my.home\n'
+live '{"kidsApp":"k.app"}'
+rm -rf "$T/app"
+$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "no write (nothing to remove)" test "$(writes)" = 0
 cleanup
 
-echo "== idempotent: home already null changes nothing"
+echo "== idempotent: 6 to 9, home already the stock id changes nothing"
 setup 8 'my.home\n'
+live '{"home":"com.webos.app.home","kidsApp":"k.app"}'
+rm -rf "$T/app"
+$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+check "no write (already stock)" test "$(writes)" = 0
+cleanup
+
+echo "== idempotent: 10 and later, home already null changes nothing; 6 to 9 replace the null with the stock id"
+setup 11 'my.home\n'
 live '{"home":null,"kidsApp":"k.app"}'
 rm -rf "$T/app"
 $SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "no write (nothing to clear)" test "$(writes)" = 0
+cleanup
+setup 8 'my.home\n'
+live '{"home":null,"kidsApp":"k.app"}'
+rm -rf "$T/app"
+$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+check "exit 0" rc 0
+check "null replaced by the stock id" test "$(writes)" = 1
+check "record is stock" stockhome
 cleanup
 
 echo "== timeout in both forms (BusyBox before 1.30 wants -t)"
@@ -778,7 +819,7 @@ for form in new old none; do
     if [ $form = none ]; then export HOMECHOOSER_TIMEOUT=; else mktimeout $form "$T/bin/timeout"; export HOMECHOOSER_TIMEOUT="$T/bin/timeout"; fi
     run
     unset HOMECHOOSER_TIMEOUT
-    check "$form: removal still detected and reverted" has '{"defaultApps":{"home":null,"kidsApp":"k.app"}}' "$T/calls"
+    check "$form: removal still detected and reverted" has '{"defaultApps":{"home":"com.webos.app.home","kidsApp":"k.app"}}' "$T/calls"
     case $form in
         new) check "new: called as timeout 10" has 'timeout 10 ' "$T/bin/timeout.log"; check "new: no -t call used" hasnt 'timeout -t 10' "$T/bin/timeout.log" ;;
         old) check "old: called as timeout -t 10" has 'timeout -t 10 ' "$T/bin/timeout.log" ;;
@@ -802,7 +843,7 @@ clean_end() {
     check "$1: choice file removed" test ! -f "$T/home"
     check "$1: init.d link removed" test ! -L "$T/init.d/homechooser"
     check "$1: flag removed" test ! -f "$T/flag"
-    check "$1: record restored" nohome
+    if [ "$2" -ge 10 ]; then check "$1: record restored (null)" nohome; else check "$1: record restored (stock id)" stockhome; fi
     check "$1: stock restored line logged" has 'stock Home restored' "$T/log"
     [ "$2" -ge 10 ] && check "$1: override removed" test ! -f "$T/override/o.json"
     if [ "$2" -ge 6 ]; then
@@ -887,14 +928,13 @@ cleanup
 alerts() { grep -c ' CALL luna://com.webos.notification/createAlert' "$T/calls"; }
 toasts() { grep -c ' CALL luna://com.webos.notification/createToast' "$T/calls"; }
 lineof() { grep -n -- "$1" "$T/calls" | head -n 1 | cut -d: -f1; }
-ALERT_MSG='Title of my.home was removed, so the Home button opens LG Home again. Restart the TV to finish the change.'
-ALERT_MSG_OLD='Title of my.home was removed, so the Home button opens LG Home again.'
+ALERT_MSG='Title of my.home was removed, so the Home button opens LG Home again.'
+ALERT_MSG_OLD=$ALERT_MSG
 
 echo "== the chosen app removed: one alert, after the revert, with its title"
 for major in 5 8 10 11; do
     setup $major 'my.home\n'
     msg=$ALERT_MSG_OLD
-    [ "$major" = 8 ] && msg=$ALERT_MSG
     live '{"home":"my.home","kidsApp":"k.app"}'
     reply '{"home":"my.home","kidsApp":"k.app"}'
     echo 'UNINSTALL my.home' >> "$T/stream"
@@ -910,7 +950,7 @@ for major in 5 8 10 11; do
     check "$major: reply logged" has 'notification createAlert: {"returnValue":true}' "$T/log"
     cleanup
 done
-echo "== the alert text on 6 and 9 as on 8; other releases keep the old one"
+echo "== the alert text is the same on 6 and 9 as everywhere: no restart sentence"
 for major in 6 9; do
     setup $major 'my.home\n'
     live '{"home":"my.home","kidsApp":"k.app"}'
@@ -918,7 +958,8 @@ for major in 6 9; do
     echo 'UNINSTALL my.home' >> "$T/stream"
     echo APPS >> "$T/stream"
     run
-    check "$major: restart sentence" has "\"message\":\"$ALERT_MSG\"" "$T/calls"
+    check "$major: same text, no restart sentence" has "\"message\":\"$ALERT_MSG\"" "$T/calls"
+    check "$major: no restart sentence" hasnt 'Restart the TV' "$T/calls"
     cleanup
 done
 echo "== the revert of a removed chosen app never restarts the compositor (6 to 9)"
@@ -943,7 +984,7 @@ reply '{"home":"my.home"}'
 echo 'UNINSTALL my.home' >> "$T/stream"
 echo APPS >> "$T/stream"
 run
-check "id in the message" has '"message":"my.home was removed, so the Home button opens LG Home again. Restart the TV to finish the change."' "$T/calls"
+check "id in the message" has '"message":"my.home was removed, so the Home button opens LG Home again."' "$T/calls"
 cleanup
 echo "== the title is read from appinfo.json when getAppInfo carries none"
 setup 8 'my.home\n'
@@ -1089,7 +1130,6 @@ for major in 5 6 9 10; do
     check "$major: one toast" test "$(toasts)" = 1
     check "$major: no alert" test "$(alerts)" = 0
     toast='Home Chooser was removed. The Home button opens LG Home again.'
-    [ "$major" = 6 -o "$major" = 9 ] && toast='Home Chooser was removed. Restart the TV to put LG Home back on the Home button.'
     check "$major: payload" has "CALL luna://com.webos.notification/createToast {\"sourceId\":\"org.webosbrew.homechooser\",\"noaction\":true,\"message\":\"$toast\"}" "$T/calls"
     check "$major: fixed identity, one reply" test "$(cat "$T/notify-args")" = "-n 1"
     check "$major: after the record revert" test "$(lineof createToast)" -gt "$(lineof 'CALL luna://com.webos.settingsservice/setSystemSettings')"

@@ -14,8 +14,9 @@
 # is only a trigger (the format of the change messages is not relied on), and on every message,
 # and every HOMECHOOSER_RECHECK seconds (300) as a fallback, asks getAppInfo about the chosen app and
 # about org.webosbrew.homechooser:
-#   chosen app gone: the platform is put back to stock (webOS 5: home = the stock launcher;
-#     6 to 9: `home` written as null and the backport's baked id emptied; 10 and later:
+#   chosen app gone: the platform is put back to stock (webOS 5 to 9: home = the stock launcher,
+#     com.webos.app.fullhome if installed, else com.webos.app.home, so on 6 to 9 the running
+#     compositor opens LG Home at once; on 6 to 9 the backport's baked id is also emptied; 10 and later:
 #     override file removed, rescan, `home` written as null), the choice file is kept, and nothing is
 #     written while the app is missing. When it is installed again the choice is applied again.
 #   Home Chooser gone: the same revert, then the choice file, the backport flag and the init.d link
@@ -39,8 +40,7 @@
 # The user is told once about each removal that puts the stock home back (best effort, see
 # docs/settings-app.md, "When apps are removed"): a chosen app removed gets an alert with an OK button
 # (luna://com.webos.notification/createAlert; a refused alert is shown as a toast), Home Chooser
-# removed gets a toast (createToast). On webOS 6 to 9 both texts add that a restart of the TV
-# finishes the change (the running compositor keeps its baked id until then). Both use the fixed HC_LUNA_IDENTITY with `-a`, sent after
+# removed gets a toast (createToast). Both use the fixed HC_LUNA_IDENTITY with `-a`, sent after
 # the revert, under a short timeout; the reply is logged
 # and a failure never blocks the restore. Not sent at a watcher start (a boot with the app still
 # missing is not a new removal) and not for the temporary absence of an update.
@@ -655,11 +655,7 @@ notify_alert() {
 announce_removed() {
     name=$1
     [ "$TITLE_ID" = "$1" ] && [ -n "$TITLE_VAL" ] && name=$TITLE_VAL
-    if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ]; then
-        notify_alert "$name was removed, so the Home button opens LG Home again. Restart the TV to finish the change."
-    else
-        notify_alert "$name was removed, so the Home button opens LG Home again."
-    fi
+    notify_alert "$name was removed, so the Home button opens LG Home again."
 }
 
 # app_state <id>: yes (installed), no (getAppInfo answers returnValue false, which is what an
@@ -721,8 +717,11 @@ remove_home() {
 # revert_platform: put the platform back to stock. Idempotent: it only writes what is not stock.
 revert_platform() {
     log "putting the platform back to stock ($1)"
-    if [ "$MAJOR" -eq 5 ]; then
+    if [ "$MAJOR" -ge 5 ] && [ "$MAJOR" -le 9 ]; then
         # 5.x: the key filter launches the record's home directly, so name a stock launcher.
+        # 6 to 9: the patched QML reads the record first and falls back to the id it loaded at
+        # compositor start (the old launcher, until a reboot), so the stock id is written, not
+        # null; stock firmware ignores the record for the Home key, so it can stay after an uninstall.
         stock=$STOCK_HOME
         [ "$(app_state "$STOCK_FULLHOME")" = yes ] && stock=$STOCK_FULLHOME
         found=$(current_home)
@@ -759,11 +758,7 @@ restore_all() {
         fi
     done
     # No unmount and no compositor restart: the mounts stay until the next boot.
-    if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ]; then
-        notify_toast "Home Chooser was removed. Restart the TV to put LG Home back on the Home button."
-    else
-        notify_toast "Home Chooser was removed. The Home button opens LG Home again."
-    fi
+    notify_toast "Home Chooser was removed. The Home button opens LG Home again."
     finish "stock Home restored, exiting" 0
 }
 

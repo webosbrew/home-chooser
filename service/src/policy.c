@@ -385,6 +385,6 @@ const char *hc_reboot_message(const char *reason)
 {
 	if (!reason) return NULL;
 	if (strcmp(reason, "apply") == 0) return "Restart the TV to finish setting up the Home button.";
-	if (strcmp(reason, "remove") == 0) return "Restart the TV to finish restoring LG Home.";
+	if (strcmp(reason, "remove") == 0) return "Restart the TV to finish removing the Home button patch.";
 	return NULL;
 }

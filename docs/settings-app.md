@@ -143,7 +143,7 @@ restart (the choose, restore and generated patch flows alike). The reason is `ap
 * Screen visible (`document.hidden` is not `true`): the app calls the service's
   `rebootPrompt {"reason", "screen": true}` ([service](service.md)), keeps the one-shot `token` of the
   reply and shows its own dialog, "Restart the TV?", with "The Home button changes after a restart."
-  (`apply`) or "LG Home is back on the Home button after a restart." (`remove`) and the buttons
+  (`apply`) or "LG Home is on the Home button now. A restart removes the patch." (`remove`) and the buttons
   "Reboot" and "Later" (Back is Later). "Reboot" calls `rebootConfirmed {token}`, and the TV restarts; a
   failure toasts "Couldn't restart the TV. Restart it to finish." "Later" toasts "Restart the TV later to
   finish." Focus returns to the list when the dialog closes.
@@ -215,8 +215,12 @@ Home Chooser keeps its own copy of the choice and enforces it.
   then does the platform restore. On 6.x to 9.x it also runs `homechooser-keyfilter refresh`, which
   clears the choice from the mounted `Settings.qml` copy (it does not restart the compositor: the
   running compositor keeps its loaded id until the next start, and the settings record is read first).
-  Clearing `home` is one function in the app, `removeHomeFromRecord()`, and `merged_write ""` in the
-  watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
+  On 5.x to 9.x the restore writes `home` as the stock launcher instead (`com.webos.app.fullhome` if
+  `listApps` shows it, else `com.webos.app.home`), because the patched QML on 6.x to 9.x reads the
+  record first and the running compositor would otherwise fall back to the id it loaded at start
+  (the old launcher, until a reboot); stock firmware ignores the record for the Home key, so the
+  explicit stock id may stay. On 10.x and later clearing `home` is one function in the app,
+  `removeHomeFromRecord()`, and `merged_write ""` in the watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
   `general/defaultApps` can never be removed (a write that leaves `home` out only looks like a
   replace until the settings service restarts; `deleteSystemSettings` and `resetSystemSettings`
   are no-ops), but a stored `null` reads as unset and `launchDefaultApp {"category":"home"}`
@@ -275,7 +279,7 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | `home` written as `null` by the merged `setSystemSettings` write (other entries kept); `homechooser-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` has no record `home` and no baked id, so the stock id; without the backport the stock key filter never used the record |
+| 6.x to 9.x | `home` = the stock launcher (`com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home`) by the merged `setSystemSettings` write (other entries kept; not null, which would let the running compositor fall back to its baked old id); written only if `home` is not that already; `homechooser-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` reads the record first and gets the stock id, so LG Home opens at once; without the backport the stock key filter never used the record |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
@@ -286,9 +290,9 @@ among the installed apps that declare `appCategory: ["home"]`.
 
 **The user is told once.** After the revert (no compositor restart on any release), the watcher shows an alert with one OK button:
 `luna-send -n 1 luna://com.webos.notification/createAlert '{"sourceId":"org.webosbrew.homechooser","title":"Home Chooser","message":"<title> was removed, so the Home button opens LG Home again.","buttons":[{"label":"OK","focus":true}]}'`.
-On 6.x to 9.x the message adds "Restart the TV to finish the change." (the running compositor still
-has the removed app's id baked in; Home falls back to LG Home through `launchHome`'s failure path
-until the restart). Other releases keep the text above.
+The text is the same on every release: on 6.x to 9.x the record already names the stock home, so the
+running compositor (which reads the record before its baked id) opens LG Home at once, with
+`launchHome`'s failure path as a second line of defence.
 The title of an app that is gone cannot be looked up, so the watcher reads it from `getAppInfo`
 (failing that `appinfo.json`) while the app is installed and keeps it per choice, like the window
 type; a title it does not have, or one with a quote or backslash in it, is replaced by the app id.
@@ -306,10 +310,11 @@ retried. `HOMECHOOSER_NOTIFY=0` turns it off. What the notification service real
 call is not tested here; it was read from the firmware (5.6.1 to 11.2.0) and has not been run on a
 device.
 
-Clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
+On 10.x and later clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 [Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
-The key filter backport's `Settings.qml` already takes only a non-empty string as the record's
-`home`, so `null` falls through to the baked id and then the stock launcher.
+On 5.x to 9.x `home` is set to the stock id (the merged write), not cleared. The key filter
+backport's `Settings.qml` takes only a non-empty string as the record's `home` and reads it before
+the baked id, which is why null is not used on 6.x to 9.x.
 
 ### Home Chooser is uninstalled
 
@@ -318,8 +323,8 @@ copies itself, `homechooser-keyfilter` and every release's `manifest.json` into
 `/tmp/homechooser-runtime/` (replacing each file by rename) and runs from there. When Home Chooser is
 gone it does, in order:
 
-1. the platform revert of the table above (webOS 5: `home` = stock launcher; 6 to 9 and 10 and
-   later: the same steps minus the key filter refresh);
+1. the platform revert of the table above (webOS 5 to 9: `home` = stock launcher; 10 and
+   later: override removed, `home` null);
 2. removes the choice file (and its directory if empty) and the key filter flag file;
 3. removes the `init.d/homechooser` symlink (and the earlier `homechooser-keyfilter` link), only if it
    is a symlink;
@@ -329,14 +334,14 @@ gone it does, in order:
    are gone;
 5. shows a toast, once:
    `luna-send -n 1 luna://com.webos.notification/createToast '{"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}'`
-   (on 6.x to 9.x: "Home Chooser was removed. Restart the TV to put LG Home back on the Home button.")
+   (the same text on every release; the record names the stock home on 6.x to 9.x, so no restart is needed for the Home button, only to drop the mounts)
    (plain root, no `-a`, no `iconUrl` because the app's icon is being deleted; 5 s timeout, reply
    logged, never blocks);
 6. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
    stopped.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
-changes nothing: with the record's `home` already unset (null, empty or missing), "nothing to remove" is logged and no write
+changes nothing: with the record's `home` already the stock id (5.x to 9.x) or unset (10.x and later: null, empty or missing), "home is already ..." / "nothing to remove" is logged and no write
 is made. The unit's command is a small wrapper that runs the app's copy of the watcher, else the
 runtime copy, else exits 0, so a watcher that crashes and is restarted after the app is gone still
 finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
@@ -368,7 +373,7 @@ state it leaves:
 | Release | Left behind | Effect |
 | --- | --- | --- |
 | 5.x | record `home` names the missing app | the key filter launches it directly: the Home key launches nothing |
-| 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail |
+| 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail. Repair: write `home` as the stock id |
 | 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
 
 Repair: install Home Chooser again (the link in `init.d` is valid again, and the next boot or
@@ -376,7 +381,7 @@ opening the app starts the watcher, which sees the chosen app missing and revert
 10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.homechooser.json`,
 `luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
 `general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
-entries). On 5.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
+entries). On 5.x to 9.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
 choice stored the watcher is not started, so uninstalling Home Chooser then leaves the flag file, a
 dangling link and, until reboot, mounts that behave as stock.
 
@@ -457,10 +462,13 @@ manager is not touched.
   The record is written with `home` set to `com.webos.app.fullhome` if `listApps` shows it
   installed (the factory value on the studied 5.6.1), else `com.webos.app.home`, and the other
   entries are kept ([5.6.1](research/home-key-and-home-app.md#561-supported-through-the-default-app-record)).
-* 6.x to 9.x: the record is written again with `"home": null` and the other entries kept
-  (`removeHomeFromRecord()`, see [Persistence](#persistence)); `setDefaultApp` cannot
-  remove an entry. `com.webos.app.home` is never written as `home` there:
-  the stock home has no `appCategory` and `sam` refuses it. For that reason choosing
+* 6.x to 9.x: like 5.x, the record is written with `home` set to the stock launcher
+  (`com.webos.app.fullhome` if `listApps` shows it, else `com.webos.app.home`) and the other entries
+  kept, through `setSystemSettings` (not null: the patched QML reads the record first, and the running
+  compositor would fall back to the old launcher it loaded at start until a reboot). The stock id stays
+  in the record after an uninstall; stock firmware ignores the record for the Home key.
+  `setDefaultApp` is not used for this: the stock home has no `appCategory` and `sam` refuses it as a
+  `setDefaultApp` target. For that reason choosing
   `com.webos.app.home` in the candidate list runs this restore instead of `apply` on every
   release (elsewhere it is simply "stock"); other stock homes such as `seniorhome` stay ordinary
   choices.

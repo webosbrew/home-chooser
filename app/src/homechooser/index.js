@@ -105,7 +105,7 @@ export const readDefaultApps = async (run) => {
 export const writeDefaultApps = (run, record) =>
 	run.luna(`${SETTINGS}/setSystemSettings`, {category: 'general', settings: {defaultApps: record}});
 
-// Clear `home` in the general/defaultApps record, keeping the other entries. Sub-keys of the record
+// webOS 10 and later only (5 to 9 write the stock home id, see restoreStock): clear `home` in the general/defaultApps record, keeping the other entries. Sub-keys of the record
 // can never be removed (a write that leaves `home` out only looks like a replace until the settings
 // service restarts; delete and reset are no-ops), so `home` is written as null, which reads as unset
 // and makes launchDefaultApp {"category":"home"} launch the profile's stock home
@@ -332,12 +332,17 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					res.warnings.push(`Could not stop the watcher: ${errorMessage(e)}`);
 				}
 				await run.remove(HOME_FILE);
-				if (info.major <= 5) {
+				if (info.major <= 9) {
 					// 5.x: the key filter launches the record's home directly, so name a stock home.
+					// 6 to 9: the patched QML reads the record before the id it loaded at compositor start (the
+					// old launcher, until a reboot), so the stock id is written, not null. Stock firmware ignores
+					// the record for the Home key, so it can stay.
 					const list = await run.luna(`${SAM}/listApps`, {properties: ['id']});
 					const ids = ((list && list.apps) || []).map((a) => a.id);
 					const stock = ids.indexOf(STOCK_FULLHOME) >= 0 ? STOCK_FULLHOME : STOCK_HOME;
-					if (homeOf(state.record) !== stock) {
+					// (a record that was never written on 6 to 9 has no patched compositor reading it, and the
+					// first write of the key is what sam misses, so it is left absent)
+					if (homeOf(state.record) !== stock && !(info.major >= 6 && state.record === null)) {
 						await writeRecord(run, Object.assign({}, state.record || {}, {home: stock}));
 					}
 				} else if (homeOf(state.record)) {

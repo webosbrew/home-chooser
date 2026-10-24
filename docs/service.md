@@ -105,8 +105,7 @@ stay for manual and debugging use only.
    exactly `reboot=needed` (`hc_reboot_needed`: CR and blanks at line ends are ignored, a longer
    line such as `xreboot=needed` does not count). Otherwise the error is `notPending`.
 2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
-   `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish
-   restoring LG Home.`
+   `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish removing the Home button patch.`
 3. A random 128-bit token is minted (32 hex digits from `/dev/urandom`, own table of four slots,
    one shot, 10 minute lifetime).
 4. `screen: true` answers `{returnValue: true, pending: true, confirm: "screen", token}` and the

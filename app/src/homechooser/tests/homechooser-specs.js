@@ -367,13 +367,14 @@ describe('apply', () => {
 	});
 });
 
+const LIST = ['luna://com.webos.applicationManager/listApps', {properties: ['id']}];
+const withApps = (tv, ids) => {
+	const inner = tv.rootLuna;
+	tv.rootLuna = async (uri, payload) => (uri.endsWith('/listApps') ? (tv.luna.push([uri, payload]), {returnValue: true, apps: ids.map((id) => ({id}))}) : inner(uri, payload));
+	return tv;
+};
+
 describe('restoreStock', () => {
-	const LIST = ['luna://com.webos.applicationManager/listApps', {properties: ['id']}];
-	const withApps = (tv, ids) => {
-		const inner = tv.rootLuna;
-		tv.rootLuna = async (uri, payload) => (uri.endsWith('/listApps') ? (tv.luna.push([uri, payload]), {returnValue: true, apps: ids.map((id) => ({id}))}) : inner(uri, payload));
-		return tv;
-	};
 
 	test('5.6.1: writes fullhome when installed, keeps other entries, closes the custom home', async () => {
 		const tv = withApps(fakeTV({record: {home: MINE, kidsApp: 'k'}}), [STOCK, 'com.webos.app.fullhome']);
@@ -399,26 +400,39 @@ describe('restoreStock', () => {
 		expect(tv2.luna).toEqual([GET, LIST]);
 	});
 
-	test('8.3.0: write home as null, keep the rest, close the custom home', async () => {
-		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}});
+	test('8.3.0: write the stock home id (not null), keep the rest, close the custom home', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE, kidsApp: 'k'}}), [STOCK]);
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SET({home: null, kidsApp: 'k'}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK, kidsApp: 'k'}), CLOSE(MINE)]);
 		expect(tv.files).toEqual([['rm', HOME_FILE]]);
 		expect(tv.commands).toEqual([STOP, REFRESH]);
-		expect(JSON.stringify(tv.luna)).not.toContain('"home":"com.webos.app.home"');
+		expect(JSON.stringify(tv.luna)).not.toContain('"home":null');
 	});
 
-	test('no home entry and nothing to close: no writes', async () => {
-		const tv = fakeTV({record: {kidsApp: 'k'}});
+	test.each([[[6, 6, 0]], [[7, 6, 0]], [[8, 4, 0]], [[9, 2, 4]]])('%j: fullhome is the stock id when installed', async (version) => {
+		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK, 'com.webos.app.fullhome']);
+		await chooser(tv, version).restoreStock();
+		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome'}), CLOSE(MINE)]);
+	});
+
+	test('6 to 9: a record without home gets the stock id; a record already stock is not written; an absent record is left absent', async () => {
+		const tv = withApps(fakeTV({record: {kidsApp: 'k'}}), [STOCK]);
 		await chooser(tv, [8, 3, 0]).restoreStock();
-		expect(tv.luna).toEqual([GET]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK, kidsApp: 'k'})]);
+		const tv2 = withApps(fakeTV({record: {home: STOCK}}), [STOCK]);
+		await chooser(tv2, [8, 3, 0]).restoreStock();
+		expect(tv2.luna).toEqual([GET, LIST]);
+		const tv3 = withApps(fakeTV(), [STOCK]);
+		await chooser(tv3, [8, 3, 0]).restoreStock();
+		expect(tv3.luna).toEqual([GET, LIST]);
 	});
 
 	test('9.2.1 uses setSystemSettings, never setDefaultApp', async () => {
-		const tv = fakeTV({record: {home: MINE}});
+		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
 		await chooser(tv, [9, 2, 1]).restoreStock();
-		expect(tv.luna).toEqual([GET, SET({home: null}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK}), CLOSE(MINE)]);
+		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
 	});
 
 	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: also removes the override and rescans', async (version) => {
@@ -430,15 +444,18 @@ describe('restoreStock', () => {
 		expect(tv.commands).toEqual([STOP]);
 	});
 
-	test.each([[null], ['']])('home %j reads as unset: nothing to clear on 8.x, the stock id written on 5.x', async (value) => {
-		const tv = fakeTV({record: {home: value, kidsApp: 'k'}});
+	test.each([[null], ['']])('home %j reads as unset: the stock id is written on 5.x to 9.x, nothing on 10.x', async (value) => {
+		const tv = withApps(fakeTV({record: {home: value, kidsApp: 'k'}}), [STOCK]);
 		const c = chooser(tv, [8, 3, 0]);
 		expect((await c.readState()).state.recordHome).toBeNull();
 		await c.restoreStock();
-		expect(tv.luna).toEqual([GET, GET]);
+		expect(tv.luna).toEqual([GET, GET, LIST, SET({home: STOCK, kidsApp: 'k'})]);
 		const tv5 = withApps(fakeTV({record: {home: value}}), [STOCK]);
 		await chooser(tv5, [5, 6, 1]).restoreStock();
 		expect(tv5.luna).toEqual([GET, LIST, SET({home: STOCK})]);
+		const tv10 = fakeTV({record: {home: value, kidsApp: 'k'}, profile: profileReply(STOCK)});
+		await chooser(tv10, [10, 3, 1]).restoreStock();
+		expect(JSON.stringify(tv10.luna)).not.toContain('setSystemSettings');
 	});
 
 	test.each([[[6, 6, 0]], [[9, 2, 1]], [[10, 3, 1]], [[5, 6, 1]]])('%j: choosing com.webos.app.home runs restoreStock', async (version) => {
@@ -496,9 +513,10 @@ describe('persistence', () => {
 
 	test('restore: the watcher is stopped and the choice removed before the record changes', async () => {
 		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}});
+		tv.rootLuna = ((inner) => async (uri, payload) => (uri.endsWith('/listApps') ? (tv.calls.push(['luna', uri]), {returnValue: true, apps: [{id: STOCK}]}) : inner(uri, payload)))(tv.rootLuna);
 		await chooser(tv, [8, 3, 0]).restoreStock();
-		expect(tv.calls.slice(0, 4).map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'exec:' + STOP.split('/').pop(), 'remove:home', 'luna:setSystemSettings'
+		expect(tv.calls.slice(0, 5).map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
+			'luna:getSystemSettings', 'exec:' + STOP.split('/').pop(), 'remove:home', 'luna:listApps', 'luna:setSystemSettings'
 		]);
 	});
 
@@ -509,7 +527,7 @@ describe('persistence', () => {
 			if (c === STOP) throw new Error('boom');
 			return inner(c);
 		};
-		const res = await chooser(tv, [8, 3, 0]).restoreStock();
+		const res = await chooser(withApps(tv, [STOCK]), [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(res.warnings).toContain('Could not stop the watcher: boom');
 	});

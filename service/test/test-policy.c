@@ -299,7 +299,7 @@ static void test_reboot(void)
 	CHECK(!hc_reboot_needed("note: reboot=needed\n"));
 	CHECK(!hc_reboot_needed(NULL));
 	CHECK(hc_reboot_message("apply") && strcmp(hc_reboot_message("apply"), "Restart the TV to finish setting up the Home button.") == 0);
-	CHECK(hc_reboot_message("remove") && strcmp(hc_reboot_message("remove"), "Restart the TV to finish restoring LG Home.") == 0);
+	CHECK(hc_reboot_message("remove") && strcmp(hc_reboot_message("remove"), "Restart the TV to finish removing the Home button patch.") == 0);
 	CHECK(!hc_reboot_message("other"));
 	CHECK(!hc_reboot_message("Apply"));
 	CHECK(!hc_reboot_message(""));

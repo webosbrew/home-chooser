@@ -17,7 +17,7 @@ const REBOOT_PROMPT_FAILED_TEXT = 'Restart the TV to finish.';
 // The restart dialog's wording, by reason ('apply' or 'remove').
 export const REBOOT_BODY = {
 	apply: 'The Home button changes after a restart.',
-	remove: 'LG Home is back on the Home button after a restart.'
+	remove: 'LG Home is on the Home button now. A restart removes the patch.'
 };
 
 export const LOG_PREFIX = '[HomeChooser]';

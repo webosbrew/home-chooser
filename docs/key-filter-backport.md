@@ -292,10 +292,12 @@ id (same inode). `refresh stock` (the chosen app is not installed) and the app's
 stock home is restored do the same. Each logs `configured home updated; the running compositor keeps
 its loaded id until the next start (the settings record is read first)`.
 
-If the chosen app is uninstalled, the running compositor keeps its stale baked id until a reboot;
-the Home key falls back to the stock home through `launchHome`'s `returnValue === false` branch
-(present in every set and in the generator), and the watcher's alert says a restart finishes the
-change (webOS 6 to 9).
+If the chosen app is uninstalled, the running compositor keeps its stale baked id until a reboot, but
+it reads the record first. The watcher therefore writes `defaultApps.home` as the stock home id
+(`com.webos.app.fullhome` if installed, else `com.webos.app.home`, the same resolution as webOS 5),
+not null, so the Home key opens LG Home at once; the `launchHome` `returnValue === false` branch
+(present in every set and in the generator) stays as a second line of defence. The watcher's alert
+says only that the Home button opens LG Home again.
 
 ### Restarting the compositor
 
@@ -404,9 +406,12 @@ Restoring LG Home, disabling the generated patch, and uninstalling Home Chooser 
 rule: the flag is removed, the baked id is emptied in the mounted copy, nothing is unmounted and
 nothing restarts. The bind mounts stay until the next boot, when nothing re-applies them (the flag
 is gone). Their sources are the staged copies under `/tmp/homechooser-backport/stage`, not files
-in the app directory, so they survive an uninstall (the tests assert this). Until that reboot the
-running compositor still has the old baked id, so with the record's home cleared the Home key can
-still open the old launcher while it is installed.
+in the app directory, so they survive an uninstall (the tests assert this). The record is not
+left unset: on webOS 6 to 9 restore and uninstall write `defaultApps.home` as the stock home id
+(not null, which would make the running compositor fall back to its old baked id), so the live
+patch opens LG Home immediately. The explicit stock id stays in the record after an uninstall; stock
+firmware ignores the record for the Home key. webOS 5 writes the stock id too; 10 and later write
+null (docs/research/home-key-and-home-app.md).
 
 A Quick Start+ power-off is a suspend, not a reboot (inferred, not measured), so it does not run
 the boot hook; that is why the app offers a real reboot (`com.webos.service.tvpower/power/reboot`).
@@ -469,9 +474,10 @@ Remove (restore LG Home, or disable the generated patch): delete the flag file (
 opt-in where that is what was asked), run `refresh` (it bakes the empty id into the mounted copy
 when no choice is stored), read `status`, and ask for a reboot (`reboot=needed` while something is
 still mounted). Nothing is unmounted and the compositor is not restarted. The init.d link stays,
-since the watcher uses it while a choice is stored. The `defaultApps` record is left as it is.
-Caveat: until the reboot the running compositor has its old baked id, so with the record's home
-cleared the Home key can still open the old launcher while it is installed.
+since the watcher uses it while a choice is stored. The app's restore writes `defaultApps.home` as the stock id before this (webOS 6 to 9), so the
+running compositor, which reads the record first, opens LG Home at once; the reboot only removes the
+patch.
 
 Uninstalling Home Chooser is handled by the watcher in the same way: no `stop`, no restart; the
-toast on webOS 6 to 9 says a restart puts LG Home back on the Home button.
+record gets the stock home id (webOS 6 to 9), so the toast says the Home button opens LG Home again;
+the mounts go at the next reboot.
