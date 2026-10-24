@@ -4,7 +4,9 @@
 #
 #   homechooser         boot: on webOS 6 to 9, when the key filter backport is enabled, apply it
 #                     (homechooser-keyfilter); if a home choice is stored, start the watcher
-#   homechooser watch   start the watcher now, if a choice is stored and it is not running
+#   homechooser watch   start the watcher now unless it is running, with or without a stored choice
+#                     (without one it checks once for a leftover home and exits; the app runs this
+#                     when it opens, so a reinstall repairs what an earlier Home Chooser left)
 #
 # The watcher is a transient systemd unit, homechooser-home, made with systemd-run: no unit file
 # is written and no other service is touched. The flags used (--unit, --property=Restart,
@@ -71,8 +73,9 @@ major_version() {
     echo 0
 }
 
+# start_watcher [any]: start the unit if a choice is stored, or with `any` in any case.
 start_watcher() {
-    [ -f "$CHOICE" ] || return 0
+    [ -f "$CHOICE" ] || [ "$1" = any ] || return 0
     [ -f "$HERE/homechooser-home-watch" ] || { log "no watcher script in $HERE"; return 0; }
     if "$SYSTEMCTL" is-active --quiet "$UNIT"; then
         log "$UNIT is already running"
@@ -93,7 +96,7 @@ locate
 
 case "$1" in
     watch)
-        start_watcher
+        start_watcher any
         exit $?
         ;;
     "")

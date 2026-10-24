@@ -22,8 +22,9 @@
 
 #include "policy.h"
 
+/* From app/package.json, the one source of the version (service/Makefile). */
 #ifndef HC_VERSION
-#define HC_VERSION "0.1.0"
+#error "HC_VERSION is set by service/Makefile from app/package.json"
 #endif
 
 #define CALL_TIMEOUT_S 20
@@ -746,8 +747,7 @@ static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
  * getInfo, listApps, running, closeById, uninstall for apps that declare the permission group,
  * and uninstallConfirmed for the confirmation. The caller is the application id the hub reports. */
 
-#define LAUNCHER_LIST_PROPS "id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible"
-static const char *const LIST_FIELDS[] = {LAUNCHER_LIST_PROPS, NULL};
+#define LIST_FIELDS hc_launcher_list_fields
 static const char *const RUNNING_FIELDS[] = {"id", "instanceId", "processid", "webprocessid", NULL};
 
 #define SAM_URI "luna://com.webos.applicationManager"

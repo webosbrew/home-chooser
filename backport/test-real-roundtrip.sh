@@ -23,15 +23,18 @@ has() { grep -qF -- "$1" "$2"; }
 
 if [ $# -eq 0 ]; then
     DEFAULTS=1
+    # where the roots live on this machine: OPENHOUSE_FIRMWARES and OPENHOUSE_HYPERVISOR override
     P=$HOME/Projects
-    set -- "6.5.2=$P/webos-hypervisor/build/w21a/03.53.25.01-HE_DTV_W21A_AFADATAA/rootfs" \
-           "6.6.0=$P/webos-firmwares/03.70.25.01-HE_DTV_W21P_AFADATAA/rootfs" \
-           "7.6.0=$P/webos-firmwares/04.60.90.01-HE_DTV_W22P_AFADATAA/rootfs" \
-           "8.3.0=$P/webos-hypervisor/scratch/w22-upgrades/number1-extracted/rootfs" \
-           "8.3.0-s23z=${OPENHOUSE_S23Z_ROOTFS:-$P/webos-hypervisor/scratch/firmware/03.30.18.01-HE_MNT_S23Z_AAACGLAA/rootfs.pak.unsquashfs}" \
-           "8.4.0=$P/webos-hypervisor/scratch/firmware/k8hpp/13.41.12.01-HE_DTV_W23H_AFADATAA/rootfs" \
-           "9.2.1=$P/webos-hypervisor/scratch/w22-upgrades/ombre-extracted/rootfs" \
-           "9.2.4=$P/webos-hypervisor/build/k8lpn2-ombre/rootfs"
+    H=${OPENHOUSE_HYPERVISOR:-$P/webos-hypervisor}
+    F=${OPENHOUSE_FIRMWARES:-$P/webos-firmwares}
+    set -- "6.5.2=$H/build/w21a/03.53.25.01-HE_DTV_W21A_AFADATAA/rootfs" \
+           "6.6.0=$F/03.70.25.01-HE_DTV_W21P_AFADATAA/rootfs" \
+           "7.6.0=$F/04.60.90.01-HE_DTV_W22P_AFADATAA/rootfs" \
+           "8.3.0=$H/scratch/w22-upgrades/number1-extracted/rootfs" \
+           "8.3.0-s23z=${OPENHOUSE_S23Z_ROOTFS:-$H/scratch/firmware/03.30.18.01-HE_MNT_S23Z_AAACGLAA/rootfs.pak.unsquashfs}" \
+           "8.4.0=$H/scratch/firmware/k8hpp/13.41.12.01-HE_DTV_W23H_AFADATAA/rootfs" \
+           "9.2.1=$H/scratch/w22-upgrades/ombre-extracted/rootfs" \
+           "9.2.4=$H/build/k8lpn2-ombre/rootfs"
 fi
 
 # seq: the systemctl calls that change something, in order; RESTART: what every release's

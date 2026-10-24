@@ -107,6 +107,10 @@ bool hc_caller_id(const char *raw, char *out, size_t outlen);
 bool hc_perms_grant(const char *const *perms, size_t n);
 /* True when caller is the app named by the choice file's text (trimmed; empty is nobody). */
 bool hc_is_selected_home(const char *caller, const char *choice_text);
+/* The app fields launcher listApps asks sam for and forwards, NULL-terminated. Additive within an
+ * apiVersion: a field may be added, never removed or renamed. appCategory lets a launcher find the
+ * other launchers. */
+extern const char *const hc_launcher_list_fields[];
 
 typedef enum {
 	HC_REMOVE_OK = 0,

@@ -43,6 +43,19 @@ describe('loadEnvironment', () => {
 			log.mockRestore();
 		}
 	});
+	test('the watcher is started after access setup, for its leftover check, and a failure is not fatal', async () => {
+		const p = platform();
+		await loadEnvironment(p);
+		expect(p.exec.mock.calls.map((c) => c[0])).toEqual(['accessApply', 'watch']);
+		const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			const exec = jest.fn((name) => (name === 'watch' ? Promise.reject(new Error('systemd-run failed')) : Promise.resolve({})));
+			await expect(loadEnvironment(platform({exec}))).resolves.toHaveProperty('chooser');
+			expect(exec).toHaveBeenCalledWith('watch');
+		} finally {
+			log.mockRestore();
+		}
+	});
 	test('elevation errors pass through as fatal kinds', async () => {
 		const failing = (kind) => platform({ensureRoot: jest.fn().mockRejectedValue(new FatalError(kind, 'x'))});
 		for (const kind of ['denied', 'unreachable', 'notRoot', 'failed']) {

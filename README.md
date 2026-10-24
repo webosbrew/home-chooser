@@ -44,7 +44,8 @@ homebrew app with three parts:
   mounts) from a copy of its scripts in `/tmp`. Each of the two tells the user once, with an alert
   (the chosen app) or a toast (Home Chooser), that the Home button opens LG Home again. See
   [When apps are removed](docs/settings-app.md#when-apps-are-removed), including what is left if
-  the watcher was not running at the time.
+  the watcher was not running at the time; opening a reinstalled Home Chooser repairs a Home that
+  still names a removed app ([A leftover Home](docs/settings-app.md#a-leftover-home)).
 * While a third-party home is chosen (webOS 6 and later), the watcher keeps LG's stock home,
   `com.webos.app.home`, from being preloaded, so that a force-close of it sticks and its 70 to 105 MB
   stay free: `preloadmanager/setPreloadPolicy` with `isEnabled:false`, then a forced

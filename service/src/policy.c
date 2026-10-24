@@ -315,6 +315,11 @@ int hc_remove_reply_class(const char *text)
 	return strstr(text, "is not removable") ? 0 : -1;
 }
 
+const char *const hc_launcher_list_fields[] = {
+	"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible",
+	"appCategory", NULL
+};
+
 static const char *const LUNA_URIS[] = {
 	"luna://com.webos.notification/createAlert",
 	"luna://com.webos.notification/createToast",

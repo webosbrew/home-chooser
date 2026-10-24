@@ -5,6 +5,7 @@ import {createPlatform, errorMessage, FatalError} from '../platform';
 import {createHomeChooser} from '.';
 import {createBackport} from '../backport';
 import {classifyExecFailure} from './diagnose';
+import {startWatcherCommand} from './persistence';
 
 export {FatalError};
 
@@ -16,6 +17,14 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 		// Access setup is retried by the boot entry and watcher; the settings panel still works.
 		// eslint-disable-next-line no-console
 		console.log(`[HomeChooser] access: ${errorMessage(e)}`);
+	}
+	try {
+		// Starts the watcher if it is not running. Without a stored choice it checks once for a home an
+		// earlier Home Chooser left naming a removed app, so a reinstall repairs it (docs/settings-app.md).
+		await platform.exec(startWatcherCommand());
+	} catch (e) {
+		// eslint-disable-next-line no-console
+		console.log(`[HomeChooser] watcher: ${errorMessage(e)}`);
 	}
 	let release;
 	try {
