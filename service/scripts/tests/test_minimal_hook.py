@@ -9,8 +9,8 @@ import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-BACKPORT = HERE.parent
-REWRITER = BACKPORT / 'homechooser-keyfilter-rewrite.js'
+HOMEKEY = HERE.parent
+REWRITER = HOMEKEY / 'homechooser-homekey-hook.js'
 NODE = os.environ.get('NODE', 'node')
 Q = 'usr/lib/qml/'
 SET = Q + 'WebOSCompositorBase/global/Settings.qml'
@@ -48,7 +48,7 @@ def corpus():
     projects = Path.home() / 'Projects'
     env.setdefault('OPENHOUSE_FIRMWARES', str(projects / 'webos-firmwares'))
     env.setdefault('OPENHOUSE_HYPERVISOR', str(projects / 'webos-hypervisor'))
-    env.setdefault('OPENHOUSE_STOCK_COPIES', str(BACKPORT.parent / 'scratch/hk-universal/rw/stock'))
+    env.setdefault('OPENHOUSE_STOCK_COPIES', str(HOMEKEY.parents[1] / 'scratch/hk-universal/rw/stock'))
     env.setdefault('OPENHOUSE_WEBOS71', str(Path.home() / 'Temp/webos-7.1.0'))
     rows = []
     for line in Path(env.get('OPENHOUSE_CORPUS', HERE / 'corpus.tsv')).read_text().splitlines():

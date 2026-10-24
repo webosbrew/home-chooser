@@ -63,14 +63,14 @@ runs its reach calls for, not the whole matrix every time:
 
 | Change | Runs |
 | --- | --- |
-| Any change | The offline suites: `backport/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
+| Any change | The offline suites: `service/scripts/tests/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
 | Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
-| Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (backport), 11.x (root-shell elevation, profile path) |
+| Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (Home key hook), 11.x (root-shell elevation, profile path) |
 | Only the runner or the docs | One VM |
 | A release or a tag | The whole matrix with `--reboot-check` |
 
 `--reboot-check` is used where boot behaviour is involved (the watcher, the preload policy, the
-backport mounts). There is no shortened mode; settle and sampling times stay as they are.
+Home key hook mounts). There is no shortened mode; settle and sampling times stay as they are.
 
 ## Beanjar host abstraction
 
@@ -177,7 +177,7 @@ depend on it: it runs `beanjar` on each machine over ssh, which works whether or
 ## Steps and what each asserts
 
 Expectations come from `docs/settings-app.md` (Persistence, When apps are removed), the service
-and backport docs.
+and Home key hook docs.
 
 0. Baseline: release matches the row; no Home Chooser, Homebrew Channel present; state recorded.
 1. Install Home Chooser and the launcher; elevate (strategy above).
@@ -186,11 +186,11 @@ and backport docs.
    forwarded with `ares-novacom -f`; rows carry `data-app-id`), moved to the launcher's row, OK,
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
-   `init.d/homechooser` links into the installed app; on 6 to 9 the backport targets are mounted
+   `init.d/homechooser` links into the installed service; on 6 to 9 the Home key hook targets are mounted
    (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
    On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
    toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
-   current texts (`grep -F` on the device: the watcher in the app and its running `/tmp` copy, the
+   current texts (`grep -F` on the device: the watcher in the service package and its running `/tmp` copy, the
    service binary, the app bundle) and none of the old restart wording.
    Also asserted: at the first open after a fresh install there is no error toast (WAM's
    `localStorage` outlives `ares-install --remove`, so a `homechooser.pending` marker left by an
@@ -204,7 +204,7 @@ and backport docs.
 4. `ares-install --remove` the launcher: record `home` is the stock id on 5.x to 9.x
    (`com.webos.app.fullhome` if installed, else `com.webos.app.home`; on 6 to 9 exactly the id the
    baseline resolved, never null) and null or unset on 10+, the
-   override is gone on 10+, on 6 to 9 the backport stays mounted with an emptied baked id and the
+   override is gone on 10+, on 6 to 9 the Home key hook stays mounted with an emptied baked id and the
    compositor was not restarted, the
    choice file stays, the watcher stays active, Home opens the stock launcher at once. The watcher log shows
    the `notification createAlert:` calls and replies (a refusal is retried up to 8 times). The check
@@ -227,8 +227,8 @@ and backport docs.
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
 5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
    watcher unit are gone; the record is stock as in step 4; on 6 to 9 the patch stays mounted until
-   the next boot (its sources are in `/tmp/homechooser-backport/stage`, not in the app), the baked id
-   is not checked (the worker went with the app directory), the compositor was not restarted, and
+   the next boot (its sources are in `/tmp/homechooser-homekey/stage`, not in the app), the baked id
+   is not checked (the installed worker may have been removed with the package), the compositor was not restarted, and
    Home opens stock at once. The toast reads "Home Chooser was removed. The Home button opens LG Home
    again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
@@ -242,7 +242,7 @@ and backport docs.
 ### webOS 6-9: no restart while the TV runs
 
 Since 144ef21 nothing restarts the compositor on a running TV (a bare restart crashed WebAppMgr;
-`docs/key-filter-backport.md` "Restarting the compositor"). The runner follows that:
+`docs/home-key-hook.md` "Restarting the compositor"). The runner follows that:
 
 * Step 2, patch not mounted: the choice mounts nothing. The app asks the service for a system alert
   (Reboot and Later; the app has no restart dialog of its own, because surface-manager closes an overlay
@@ -256,7 +256,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   `2-reboot-alert`: look for the message and the two buttons, focus on Later). A refused alert passes only
   with the fallback: an accepted `createToast` with the message. Through the inspector it also checks that
   the page shows no dialog, lists the "Restart now" row and showed the toast (a page that an overlay timeout
-  closed is noted, not failed). Asserted before the restart: `homechooser-keyfilter status` says
+  closed is noted, not failed). Asserted before the restart: `homechooser-homekey status` says
   `mounted=no` and `reboot=needed`, nothing is mounted, the flag and the `init.d` entry are written, the
   record names the launcher, and the compositor was not restarted.
   * `--reboot-via later` (the default): our alert is closed with `notification/closeAlert` (the `alertId`
@@ -271,13 +271,13 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
     `rebootConfirmed` and `tvpower/power/reboot` (a VM that Beanjar shows off is started again). With no new
     boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
-  least 9 mounts), and the backport log of that boot (its firmware-order compositor restart is the only
+  least 9 mounts), and the Home key hook log of that boot (its firmware-order compositor restart is the only
   one allowed) is noted; the minimal-hook status checks come here. The `rebootConfirmed` path (the
   alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
 * No compositor restart: `surface-manager-daemon` keeps its `MainPID` and `NRestarts`, and no new
-  `restarting surface-manager-daemon` line appears in `/tmp/homechooser-backport.log`. Checked for
+  `restarting surface-manager-daemon` line appears in `/tmp/homechooser-homekey.log`. Checked for
   the choice, the launcher removal and its return (a switch with the patch mounted), the Home Chooser
   uninstall and the API calls. It is skipped when a reboot came in between.
 * No crash: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
@@ -411,14 +411,14 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
 ## The update step (`--update-check`)
 
 The old build comes from `--update-from <git ref>` (default: the last commit before HEAD that changed `app/`,
-`service/` or `backport/`, or HEAD itself if those have uncommitted changes), built by `git archive` into a `/tmp`
+`service/`, or HEAD itself if those have uncommitted changes), built by `git archive` into a `/tmp`
 directory (the working tree and `.git` are not touched; `node_modules` is linked from the main tree) and removed at the
 end. Both builds are `0.1.0` today, so the version does not tell them apart: the runner compares the watcher script's md5
-in the two ipks and in the app directory on the device. The old build is installed in step 1 instead of the current one
+in the two ipks and in the service directory on the device. The old build is installed in step 1 instead of the current one
 and used for step 2 (choose the launcher) and step 3 (Home opens it). Then step 3u installs the current build with
 `ares-install` and no uninstall.
 
-What the design says (`backport/homechooser-home-watch` header and `check_hc`; `docs/settings-app.md` "When apps are
+What the design says (`service/scripts/homechooser-home-watch` header and `check_hc`; `docs/settings-app.md` "When apps are
 removed" and "What is left when the watcher is not running"): an update installs by removing first, so the watcher takes
 Home Chooser as gone only if it is still gone `HOMECHOOSER_CONFIRM_DELAY` (15 s) later, else it logs `Home Chooser is
 back, not removing anything`; no notification is sent for the temporary absence of an update; the watcher runs from a copy
@@ -426,12 +426,12 @@ in `/tmp/homechooser-runtime`, so replacing the app directory does not pull the 
 restarted. So no restart is expected, and the old build's watcher code keeps running until its next start.
 Asserted after a 45 s settle:
 
-* the app directory holds the new build (watcher script md5);
+* the service directory holds the new watcher script (md5), and the app has the new version;
 * the choice file and the record `home` still name the launcher;
 * exactly one watcher unit and one top-level watcher process, with the same `MainPID` and `NRestarts` as before (no duplicate, no restart);
 * the watcher log lines written during the update contain no `watching, home=` (no restart), no restore, revert, `isEnabled=true`, alert or toast; the optional `Home Chooser is back` line is noted either way, as is which build the running watcher is;
-* the `init.d` entry links into the installed app and the target exists;
-* on 6 to 9 the backport mounts are the same set, the flag file exists and the launcher id is still baked in; elsewhere none; on 10 and later the override exists;
+* the `init.d` entry links into the installed service and the target exists;
+* on 6 to 9 the Home key hook mounts are the same set, the flag file exists and the launcher id is still baked in; elsewhere none; on 10 and later the override exists;
 * the stock home preload policy is still disabled (6 and later; 5.x: not disabled);
 * Home opens the launcher (with the fixture proof above);
 * the app opens, lists the launcher, shows no `Couldn't` toast and has the launcher's row ticked.

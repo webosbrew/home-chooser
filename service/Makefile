@@ -7,7 +7,7 @@
 # (make SDK=/path) or in the environment (docs/settings-app.md, "Build and test").
 #   SDK        the webOS buildroot SDK (arm-webos-linux-gnueabi)
 #   SYSROOT    its sysroot; CROSS the tool prefix (gcc, strip, readelf, nm)
-#   FIRMWARES  a directory of unpacked firmware images (else OPENHOUSE_FIRMWARES, as the backport
+#   FIRMWARES  a directory of unpacked firmware images (else OPENHOUSE_FIRMWARES, as the Home key hook
 #              tests read it); ROOTFS the rootfs check-abi reads (5.6.1)
 #   VERSION    the version compiled in: app/package.json's, the one source of the version
 SDK ?= /opt/arm-webos-linux-gnueabi_sdk-buildroot

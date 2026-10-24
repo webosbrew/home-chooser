@@ -3,7 +3,7 @@
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
 import {
-	HOME_FILE, ensureEntryCommand, keyfilterCommand, parsePersistenceStatus, persistenceStatusCommand,
+	HOME_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
 	startWatcherCommand, stopWatcherCommand
 } from './persistence';
 
@@ -33,9 +33,9 @@ export const releaseInfo = (version) => {
 	const major = majorOf(version);
 	return {
 		major,
-		// 6.x to 9.x: the stock key filter names com.webos.app.home, so the Home key ignores the choice
-		// until the key filter backport is installed.
-		needsKeyFilterBackport: major >= 6 && major <= 9,
+		// 6.x to 9.x: the stock Home key hook names com.webos.app.home, so the Home key ignores the choice
+		// until the Home key hook is installed.
+		needsHomeKeyHook: major >= 6 && major <= 9,
 		// 10.x and later: the compositor's home id is the system profile's, so write an override too.
 		usesProfile: major >= 10,
 		// 9.x and later have applicationManager/setDefaultApp.
@@ -257,7 +257,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			const run = runner(log);
 			const res = Object.assign(result(log), {
 				appId,
-				needsKeyFilterBackport: info.needsKeyFilterBackport,
+				needsHomeKeyHook: info.needsHomeKeyHook,
 				restartedSam: false,
 				samRestartDeferred: false
 			});
@@ -324,7 +324,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 		async restoreStock() {
 			const log = [];
 			const run = runner(log);
-			const res = Object.assign(result(log), {needsKeyFilterBackport: info.needsKeyFilterBackport});
+			const res = Object.assign(result(log), {needsHomeKeyHook: info.needsHomeKeyHook});
 			try {
 				const state = await readStateWith(run);
 				// the watcher would put the choice back, so stop it and drop the choice first
@@ -335,7 +335,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				}
 				await run.remove(HOME_FILE);
 				if (info.major <= 9) {
-					// 5.x: the key filter launches the record's home directly, so name a stock home.
+					// 5.x: the Home key hook launches the record's home directly, so name a stock home.
 					// 6 to 9: the patched QML reads the record before the id it loaded at compositor start (the
 					// old launcher, until a reboot), so the stock id is written, not null. Stock firmware ignores
 					// the record for the Home key, so it can stay.
@@ -355,12 +355,12 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					await rescan(run);
 					await readProfile(run);
 				}
-				if (info.needsKeyFilterBackport) {
+				if (info.needsHomeKeyHook) {
 					// the patched Settings.qml carries the stored choice as its fallback; clear it if mounted
 					try {
-						await run.run(keyfilterCommand('refresh'));
+						await run.run(homekeyCommand('refresh'));
 					} catch (e) {
-						res.warnings.push(`Could not refresh the key filter backport: ${errorMessage(e)}`);
+						res.warnings.push(`Could not refresh the Home key hook: ${errorMessage(e)}`);
 					}
 				}
 				const custom = [state.recordHome, state.profileHome].filter((id, i, all) => id && !STOCK_LABELS[id] && all.indexOf(id) === i);

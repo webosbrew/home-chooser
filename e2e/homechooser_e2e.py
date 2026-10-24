@@ -32,10 +32,11 @@ APP_ID = 'org.webosbrew.homechooser'
 SVC_ID = APP_ID + '.service'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
-FLAG = '/var/lib/webosbrew/homechooser/keyfilter'
+FLAG = '/var/lib/webosbrew/homechooser/homekey'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
+SCRIPTS_DIR = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts'
 HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
 
 
@@ -72,7 +73,7 @@ MATRIX = [
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
-# Stock-home preload policy (backport/homechooser-home-watch; docs/settings-app.md "The stock home is
+# Stock-home preload policy (service/scripts/homechooser-home-watch; docs/settings-app.md "The stock home is
 # not preloaded").  On 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app,
 # whatever the launcher (measured on 9.2.1, 8.3.0 and 10.3.1, 75 to 89 MB), so since 8791f6e neither the
 # watcher nor the app closes it there: the expected result is the preload policy off, the skip line in
@@ -98,7 +99,7 @@ REBOOT_BUTTONS = ('Reboot', 'Later')
 # the service's system alert (or the toast when the alert is refused; service/src/policy.c hc_reboot_message)
 REBOOT_PROMPT = {'apply': 'Restart the TV to finish setting up the Home button.',
                  'remove': 'Restart the TV to finish removing the Home button patch.'}
-# the watcher (backport/homechooser-home-watch): the same on every release, no restart mentioned
+# the watcher (service/scripts/homechooser-home-watch): the same on every release, no restart mentioned
 REMOVAL_ALERT = '%s was removed, so the Home button opens LG Home again.'
 UNINSTALL_TOAST = 'Home Chooser was removed. The Home button opens LG Home again.'
 OLD_RESTART_TEXTS = ('Restart the TV to finish the change.', 'Restart the TV to put LG Home back on the Home button.',
@@ -112,12 +113,12 @@ TEXT_SOURCES = [
     (RESTART_NOW, 'app/src/views/MainPanel.js'),
     (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
-    ('$name' + REMOVAL_ALERT[2:], 'backport/homechooser-home-watch'),
-    (UNINSTALL_TOAST, 'backport/homechooser-home-watch'),
+    ('$name' + REMOVAL_ALERT[2:], 'service/scripts/homechooser-home-watch'),
+    (UNINSTALL_TOAST, 'service/scripts/homechooser-home-watch'),
 ]
 
 
-def uses_backport(major):
+def uses_home_key_hook(major):
     return 6 <= major <= 9
 
 
@@ -135,7 +136,7 @@ def stock_record_ok(major, home, stock_id=None):
     `stock_id` when it is known.  10+: null or unset."""
     if major == 5:
         return home in (FULLHOME, STOCK)
-    if uses_backport(major):
+    if uses_home_key_hook(major):
         return home == stock_id if stock_id else home in (FULLHOME, STOCK)
     return home in (None, '', 'null')
 
@@ -143,7 +144,7 @@ def stock_record_ok(major, home, stock_id=None):
 def stock_baseline_ok(major, home):
     """A stock image before Home Chooser: on 6.x to 9.x the record may be unset (fresh image) or the
     stock id an earlier uninstall left (it stays: stock firmware ignores it)."""
-    if uses_backport(major):
+    if uses_home_key_hook(major):
         return home in (None, '', 'null', FULLHOME, STOCK)
     return stock_record_ok(major, home)
 
@@ -151,7 +152,7 @@ def stock_baseline_ok(major, home):
 def expects_reboot_dialog(major, mounted_before):
     """6.x to 9.x: choosing a launcher with the patch not mounted asks for a restart; with the patch
     already mounted (an earlier choice this boot) the switch is live and nothing is asked."""
-    return uses_backport(major) and not mounted_before
+    return uses_home_key_hook(major) and not mounted_before
 
 
 def parse_reboot_ask(text):
@@ -308,7 +309,7 @@ class RebootAlertMonitor:
 
 
 def parse_status(text):
-    """`homechooser-keyfilter status` output -> {key: value} of its key=value lines."""
+    """`homechooser-homekey status` output -> {key: value} of its key=value lines."""
     out = {}
     for line in (text or '').splitlines():
         k, sep, v = line.strip().partition('=')
@@ -561,15 +562,15 @@ def qml_support(major):
 
 
 def default_update_ref():
-    """The previous commit that changed app/, service/ or backport/: the last one before HEAD, unless
+    """The previous commit that changed app/ or service/: the last one before HEAD, unless
     those paths have uncommitted changes (then HEAD is the build the working tree departs from)."""
-    rc, dirty = run(['git', '-C', REPO, 'status', '--porcelain', '--', 'app', 'service', 'backport'], 30)
+    rc, dirty = run(['git', '-C', REPO, 'status', '--porcelain', '--', 'app', 'service'], 30)
     if dirty.strip():
         return 'HEAD'
-    rc, out = run(['git', '-C', REPO, 'log', '-1', '--format=%H', 'HEAD~1', '--', 'app', 'service', 'backport'], 30)
+    rc, out = run(['git', '-C', REPO, 'log', '-1', '--format=%H', 'HEAD~1', '--', 'app', 'service'], 30)
     ref = out.strip()
     if rc != 0 or not ref:
-        raise SystemExit('cannot find a previous commit touching app/, service/ or backport/; use --update-from')
+        raise SystemExit('cannot find a previous commit touching app/ or service/; use --update-from')
     return ref
 
 
@@ -1269,43 +1270,43 @@ class Scenario:
         s['mounts'] = d.mounts()
         return s
 
-    def uses_backport(self):
-        return uses_backport(self.major)
+    def uses_home_key_hook(self):
+        return uses_home_key_hook(self.major)
 
     def uses_override(self):
         return self.major >= 10
 
     def hook_mounts_match(self, mounts=None):
-        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
         planned = [line[5:] for line in out.splitlines() if line.startswith('file=')]
         mounted = self.dev.mounts() if mounts is None else mounts
         return rc == 0 and bool(planned) and set(planned) == set(mounted)
 
     def check_hook_status(self, label):
-        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
         self.rec.check('%s: minimal hook is mounted' % label,
                        rc == 0 and 'mounted=yes' in out and 'patch=possible' in out, out.strip())
 
     def kf_status(self):
-        """(parsed, raw) of `homechooser-keyfilter status` (6.x to 9.x)."""
-        rc, out = self.dev.exec(APPDIR + '/backport/homechooser-keyfilter status')
+        """(parsed, raw) of `homechooser-homekey status` (6.x to 9.x)."""
+        rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
         return parse_status(out), out.strip()
 
     # -- nothing restarts while the TV runs (6.x to 9.x; 144ef21)
-    BACKPORT_LOG = '/tmp/homechooser-backport.log'
+    HOMEKEY_LOG = '/tmp/homechooser-homekey.log'
     COMPOSITOR = 'surface-manager-daemon'
 
     def compositor_snapshot(self):
         d = self.dev
         u = d.unit(self.COMPOSITOR)
-        n = d.sh("grep -c 'restarting %s' %s 2>/dev/null || true" % (self.COMPOSITOR, self.BACKPORT_LOG))[1].strip()
+        n = d.sh("grep -c 'restarting %s' %s 2>/dev/null || true" % (self.COMPOSITOR, self.HOMEKEY_LOG))[1].strip()
         return {'boot': d.boot_id(), 'pid': u.get('MainPID'), 'restarts': u.get('NRestarts'),
                 'log_restarts': n.splitlines()[-1] if n else '0', 'wam': d.unit('webapp-mgr'), 'mark': self.messages_mark()}
 
     def check_no_compositor_restart(self, label, before):
         """The compositor was not restarted since `before` (same boot): same MainPID and NRestarts and no new
-        `restarting surface-manager-daemon` line in the backport log (a /tmp file: it starts empty each boot)."""
-        if not self.uses_backport() or not before:
+        `restarting surface-manager-daemon` line in the Home key hook log (a /tmp file: it starts empty each boot)."""
+        if not self.uses_home_key_hook() or not before:
             return
         now = self.compositor_snapshot()
         if now['boot'] != before['boot']:
@@ -1314,7 +1315,7 @@ class Scenario:
         ok = (now['pid'] == before['pid'] and now['restarts'] == before['restarts']
               and now['log_restarts'] == before['log_restarts'])
         self.rec.check(label + ': no compositor restart (surface-manager-daemon MainPID/NRestarts unchanged, '
-                       'no new "restarting %s" line in %s)' % (self.COMPOSITOR, self.BACKPORT_LOG), ok,
+                       'no new "restarting %s" line in %s)' % (self.COMPOSITOR, self.HOMEKEY_LOG), ok,
                        'before pid=%s NRestarts=%s log=%s; after pid=%s NRestarts=%s log=%s' % (
                            before['pid'], before['restarts'], before['log_restarts'],
                            now['pid'], now['restarts'], now['log_restarts']))
@@ -1322,7 +1323,7 @@ class Scenario:
     def check_no_crash(self, label, before):
         """6.x to 9.x: no crashd CRASHED / WebAppMgr crash line since `before`, and within one boot WebAppMgr
         kept its MainPID and NRestarts.  The boot-time apply's restart is the only restart allowed."""
-        if not self.uses_backport() or not before:
+        if not self.uses_home_key_hook() or not before:
             return
         d = self.dev
         rc, out = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20")
@@ -1427,12 +1428,12 @@ class Scenario:
         where the worker went with the app directory).  10+: null/unset and no override."""
         r = self.rec
         want = {5: 'a stock launcher (%s or %s)' % (FULLHOME, STOCK)}.get(self.major) or (
-            'the stock id %s, not null' % self.stock_id if self.uses_backport() else 'null or unset')
+            'the stock id %s, not null' % self.stock_id if self.uses_home_key_hook() else 'null or unset')
         r.check(label + ': record home is %s' % want, self.stock_record_ok(s['record_home']), s['record_raw'])
         if self.uses_override():
             r.check(label + ': profile override absent', s['override'] == 'no', 'override exists: ' + s['override'])
-        if self.uses_backport():
-            r.check(label + ': backport stays mounted until the next boot', len(s['mounts']) >= 1, 'mounts: %s' % s['mounts'])
+        if self.uses_home_key_hook():
+            r.check(label + ': Home key hook stays mounted until the next boot', len(s['mounts']) >= 1, 'mounts: %s' % s['mounts'])
             if baked_emptied:
                 baked = self.baked_id()
                 r.check(label + ': baked id in the mounted Settings.qml is emptied (refresh stock)',
@@ -1732,7 +1733,7 @@ class Scenario:
         if not fg and expect == STOCK and not self.sam_home_lines(mark):
             r.note(label + ': no sam record of the Home key after the first press; evidence, then one more press',
                    'messages since %s mentioning key/home:\n%s' % (mark, '\n'.join(
-                       self.sam_home_lines(mark, 'homeKey|launchDefaultApp|keyfilter|com.webos.app.home'))))
+                       self.sam_home_lines(mark, 'homeKey|launchDefaultApp|homekey|com.webos.app.home'))))
             self.shot(label + '-first-press')
             mark = self.messages_mark()
             self.press('HOME')
@@ -1863,7 +1864,7 @@ class Scenario:
 
         def guarded(fn, *a):
             # 6.x to 9.x: no crash of WebAppMgr (or anything crashd reports) during the step
-            snap = self.compositor_snapshot() if self.uses_backport() else None
+            snap = self.compositor_snapshot() if self.uses_home_key_hook() else None
             fn(*a)
             self.check_no_crash('end of step', snap)
         try:
@@ -1991,9 +1992,9 @@ class Scenario:
         r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
         if ui.get('text') != 'Use as Home':
             raise RuntimeError('focus is not on "Use as Home" in our dialog; not pressing OK')
-        mounted_before = bool(d.mounts()) if self.uses_backport() else False
-        comp0 = self.compositor_snapshot() if self.uses_backport() else None
-        if self.uses_backport():
+        mounted_before = bool(d.mounts()) if self.uses_home_key_hook() else False
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
+        if self.uses_home_key_hook():
             r.note('patch mounted before choosing: %s (a restart prompt is %s)' % (
                 mounted_before, 'expected' if expects_reboot_dialog(self.major, mounted_before) else 'not expected'), '')
         self.ask_mark = self.messages_mark()
@@ -2021,17 +2022,17 @@ class Scenario:
             self.shot('after-confirm')
             r.note('toasts after confirming', repr(toasts))
             r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast))
-            if self.uses_backport():
+            if self.uses_home_key_hook():
                 # the patch was mounted already (an earlier choice in this boot): a live switch
                 self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
                 st, raw = self.kf_status()
-                r.check('keyfilter status: mounted=yes and reboot=no (nothing to ask)',
+                r.check('homekey status: mounted=yes and reboot=no (nothing to ask)',
                         st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
                 self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
                 baked = self.baked_id()
                 r.check('the watcher baked the launcher id into the mounted Settings.qml (refresh, no restart)',
                         self.launcher in baked, baked)
-        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_backport() or self.hook_mounts_match()), 90)
+        self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_home_key_hook() or self.hook_mounts_match()), 90)
         self.residency('right after "Use as Home" (settled)')
         s = self.state()
         r.note('state after choosing', json.dumps(s))
@@ -2039,14 +2040,14 @@ class Scenario:
         r.check('general/defaultApps record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         r.check('watcher unit homechooser-home is active', s['watcher'] == 'active', s['watcher'])
         r.check('init.d entry is a symlink into the installed app',
-                s['initd'] == APPDIR + '/backport/homechooser', s['initd'])
-        if self.uses_backport():
-            r.check('backport mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
+                s['initd'] == SCRIPTS_DIR + '/homechooser', s['initd'])
+        if self.uses_home_key_hook():
+            r.check('Home key hook mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
                     self.hook_mounts_match(s['mounts']), 'mounts: %s' % s['mounts'])
-            r.check('backport flag file exists', s['flag'] == 'yes', s['flag'])
+            r.check('Home key hook flag file exists', s['flag'] == 'yes', s['flag'])
             self.check_hook_status('after selection' + (' and the boot' if not mounted_before else ''))
         else:
-            r.check('no backport on this release', not s['mounts'] and s['flag'] == 'no',
+            r.check('no Home key hook on this release', not s['mounts'] and s['flag'] == 'no',
                     'mounts: %s flag: %s' % (s['mounts'], s['flag']))
         if self.uses_override():
             r.check('profile override exists (webOS 10+)', s['override'] == 'yes', s['override'])
@@ -2238,11 +2239,11 @@ class Scenario:
         s = self.state()
         st, raw = self.kf_status()
         r.note('state with the restart prompt up', json.dumps(s))
-        r.check('before the reboot: keyfilter status says mounted=no and reboot=needed',
+        r.check('before the reboot: homekey status says mounted=no and reboot=needed',
                 st.get('mounted') == 'no' and st.get('reboot') == 'needed', raw)
         r.check('before the reboot: nothing is mounted', not s['mounts'], 'mounts: %s' % s['mounts'])
         r.check('before the reboot: the flag file and the init.d entry are written',
-                s['flag'] == 'yes' and s['initd'] == APPDIR + '/backport/homechooser', 'flag %s; init.d %s' % (s['flag'], s['initd']))
+                s['flag'] == 'yes' and s['initd'] == SCRIPTS_DIR + '/homechooser', 'flag %s; init.d %s' % (s['flag'], s['initd']))
         r.check('before the reboot: the record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         self.check_no_compositor_restart('choosing the launcher', comp0)
         boot0 = d.boot_id()
@@ -2286,8 +2287,8 @@ class Scenario:
         st, raw = self.kf_status()
         r.check(label + ': the boot hook mounted the patch: status mounted=yes and reboot=no',
                 st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
-        r.note(label + ': backport log of the boot apply (its compositor restart is the one allowed)',
-               self.dev.sh('tail -n 20 %s 2>&1' % self.BACKPORT_LOG)[1])
+        r.note(label + ': Home key hook log of the boot apply (its compositor restart is the one allowed)',
+               self.dev.sh('tail -n 20 %s 2>&1' % self.HOMEKEY_LOG)[1])
         r.note(label + ': compositor QML and crash evidence from retained messages logs', self.dev.sh(
             messages_command() + " | grep -E 'surface-manager.*(WebOSCompositorWindow::setCompositorMain|"
             "Type .*unavailable|Syntax error|is not a type)|crashd.*CRASHED|WebAppMgr.*(SIGSEGV|segfault)'"
@@ -2302,7 +2303,7 @@ class Scenario:
         """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:
         the watcher (app copy and the running /tmp copy), the service binary, the app bundle."""
         r, d = self.rec, self.dev
-        watch = [APPDIR + '/backport/homechooser-home-watch', '/tmp/homechooser-runtime/homechooser-home-watch']
+        watch = [SCRIPTS_DIR + '/homechooser-home-watch', '/tmp/homechooser-runtime/homechooser-home-watch']
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
         def has(text, paths):
@@ -2347,7 +2348,7 @@ class Scenario:
         up = self.beanjar_reboot('3r')
         if not up:
             return
-        if self.uses_backport():
+        if self.uses_home_key_hook():
             self.after_boot_checks('after the boot')  # the watcher, the boot hook's mounts, status
         else:
             active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
@@ -2366,7 +2367,7 @@ class Scenario:
                     self.preload_log())
         self.log_mark = 0  # a new boot, a new /tmp log
         self.check_preload_off('after the reboot', settle=30)
-        if self.uses_backport():
+        if self.uses_home_key_hook():
             self.check_hook_status('after reboot')
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
@@ -2403,7 +2404,7 @@ class Scenario:
         r.check('the launcher appinfo declares requiredPermissions ["%s"] and appCategory "home"' % API_GROUP, perm and home,
                 'requiredPermissions %r; appCategory %r' % (ai.get('requiredPermissions'), ai.get('appCategory')))
         r.note('launcher access files (homechooser-access status; the app applies them when it loads)',
-               d.exec('sh %s/backport/homechooser-access status 2>&1' % APPDIR)[1].strip())
+               d.exec('sh %s/homechooser-access status 2>&1' % SCRIPTS_DIR)[1].strip())
         # the app's accessApply runs while the list loads: allow it a moment (listApps needs the grant)
         self.wait(lambda: (self.api('listApps')[0] or {}).get('returnValue') is True, 30, 3)
         info = self.api_conforms('getInfo', 'before selection')
@@ -2467,7 +2468,7 @@ class Scenario:
         """The launcher is the selected Home (after step 3; on 6-9 after the boot that mounted the patch)."""
         r, d = self.rec, self.dev
         r.begin('3a launcher API with the launcher selected (--api-check)')
-        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         info = self.api_conforms('getInfo', 'selected')
         r.check('selected: getInfo says root true, permitted true, isHome true',
                 info.get('root') is True and info.get('permitted') is True and info.get('isHome') is True, json.dumps(info))
@@ -2666,14 +2667,14 @@ class Scenario:
         s['preload'] = d.preload_policy()[0] if self.major >= 6 else None
         s['log_lines'] = len(self.log_lines())
         s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-home-watch')
-        s['app_md5'] = self.md5(APPDIR + '/backport/homechooser-home-watch')
+        s['service_md5'] = self.md5(SCRIPTS_DIR + '/homechooser-home-watch')
         s['app_version'] = d.sh("sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' %s/appinfo.json | head -1" % APPDIR)[1].strip()
-        s['baked'] = self.baked_id() if self.uses_backport() else ''
+        s['baked'] = self.baked_id() if self.uses_home_key_hook() else ''
         return s
 
     def step_update(self):
         """The Home Chooser update: the current build installed over the old one with ares-install and no
-        uninstall in between.  Design basis (backport/homechooser-home-watch, header and check_hc; docs/settings-app.md
+        uninstall in between.  Design basis (service/scripts/homechooser-home-watch, header and check_hc; docs/settings-app.md
         "When apps are removed"): an update installs by removing first, so the watcher takes Home Chooser as gone only
         if it is still gone HOMECHOOSER_CONFIRM_DELAY (15 s) later (check_hc: "Home Chooser is back, not removing
         anything"); no notification is sent "for the temporary absence of an update"; the watcher runs from a copy in
@@ -2684,7 +2685,7 @@ class Scenario:
         r, d = self.rec, self.dev
         r.begin('3u update Home Chooser over the old build (--update-check)')
         new_files, old_files = ipk_files(self.hc_new), ipk_files(self.a.old_ipk)
-        wk = 'usr/palm/applications/%s/backport/homechooser-home-watch' % APP_ID
+        wk = 'usr/palm/services/%s/scripts/homechooser-home-watch' % SVC_ID
         r.check('both ipks carry the watcher script', wk in new_files and wk in old_files, wk)
         new_md5 = hashlib.md5(new_files.get(wk, b'')).hexdigest()
         old_md5 = hashlib.md5(old_files.get(wk, b'')).hexdigest()
@@ -2707,8 +2708,8 @@ class Scenario:
         r.note('state after the update', json.dumps(after))
         new_log = self.log_lines()[before['log_lines']:]
         r.note('watcher log lines written during the update', '\n'.join(new_log) or '(none)')
-        r.check('after the update: the app directory holds the new build (watcher script md5 = new, version %s)' % after['app_version'],
-                after['app_md5'] == new_md5, 'device %s, new %s' % (after['app_md5'], new_md5))
+        r.check('after the update: the service directory holds the new watcher (md5 = new, app version %s)' % after['app_version'],
+                after['service_md5'] == new_md5, 'device %s, new %s' % (after['service_md5'], new_md5))
         r.check('after the update: choice file unchanged', after['choice'] == before['choice'] == self.launcher, repr(after['choice']))
         r.check('after the update: record home is still the launcher', after['record_home'] == self.launcher, after['record_raw'])
         wp = after['watcher_procs']
@@ -2726,14 +2727,14 @@ class Scenario:
         r.note('after the update: which build the running watcher is (runtime copy md5; the design leaves it the old one until its next start)',
                'runtime %s; old %s; new %s' % (after['runtime_md5'], old_md5, new_md5))
         r.check('after the update: init.d entry is a symlink into the installed app and its target exists',
-                after['initd'] == APPDIR + '/backport/homechooser' and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
-        if self.uses_backport():
-            r.check('after the update: backport mounts unchanged', sorted(after['mounts']) == sorted(before['mounts']) and bool(after['mounts']),
+                after['initd'] == SCRIPTS_DIR + '/homechooser' and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
+        if self.uses_home_key_hook():
+            r.check('after the update: Home key hook mounts unchanged', sorted(after['mounts']) == sorted(before['mounts']) and bool(after['mounts']),
                     'before %s after %s' % (before['mounts'], after['mounts']))
-            r.check('after the update: backport flag still exists', after['flag'] == 'yes', after['flag'])
+            r.check('after the update: Home key hook flag still exists', after['flag'] == 'yes', after['flag'])
             r.check('after the update: the launcher id is still baked into the mounted Settings.qml', self.launcher in after['baked'], after['baked'])
         else:
-            r.check('after the update: no backport mounts or flag on this release', not after['mounts'] and after['flag'] == 'no',
+            r.check('after the update: no Home key hook mounts or flag on this release', not after['mounts'] and after['flag'] == 'no',
                     'mounts %s flag %s' % (after['mounts'], after['flag']))
         if self.uses_override():
             r.check('after the update: profile override still exists', after['override'] == 'yes', after['override'])
@@ -2760,7 +2761,7 @@ class Scenario:
         r.begin('4 sudden launcher uninstall')
         self.popup_mark = self.popup_mark_now()
         alerts_before = len(self.notif_lines('createAlert'))
-        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         rc, out = d.remove(self.launcher)
         r.check('ares-install --remove launcher', rc == 0, out.strip())
         s = {}
@@ -2777,7 +2778,7 @@ class Scenario:
         rc, out = d.sh('tail -n 8 /tmp/homechooser-home.log')
         r.note('watcher log', out)
         self.home_press(STOCK, '4-home-stock')
-        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         # reinstall
         rc, out = d.install(self.L.ipk)
         r.check('reinstall launcher', rc == 0 and 'Installed package' in out, out.strip())
@@ -2788,8 +2789,8 @@ class Scenario:
                 s['record_raw'])
         if self.uses_override():
             r.check('on return the override is rebuilt', s['override'] == 'yes', s['override'])
-        if self.uses_backport():
-            r.check('on return the backport is still mounted', bool(s['mounts']), 'mounts: %s' % s['mounts'])
+        if self.uses_home_key_hook():
+            r.check('on return the Home key hook is still mounted', bool(s['mounts']), 'mounts: %s' % s['mounts'])
             self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
             baked = self.baked_id()
             r.check('on return the id is baked into the mounted Settings.qml again',
@@ -2807,7 +2808,7 @@ class Scenario:
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
         toasts_before = len(self.notif_lines('createToast'))
-        comp0 = self.compositor_snapshot() if self.uses_backport() else None
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         rc, out = d.remove(APP_ID)
         r.check('ares-install --remove Home Chooser', rc == 0, out.strip())
         self.check_toast(toasts_before)
@@ -2823,7 +2824,7 @@ class Scenario:
         self.check_no_compositor_restart('after the Home Chooser uninstall', comp0)
         self.check_preload_on('after the Home Chooser uninstall')
         r.check('init.d entry removed', 'No such file' in s['initd'] or s['initd'] == '', repr(s['initd']))
-        r.check('backport flag removed', s['flag'] == 'no', s['flag'])
+        r.check('Home key hook flag removed', s['flag'] == 'no', s['flag'])
         r.check('watcher unit stopped', s['watcher'] != 'active', s['watcher'])
         rc, out = d.sh('tail -n 12 /tmp/homechooser-home.log')
         r.note('watcher log', out)
@@ -3056,7 +3057,7 @@ def main():
                     help='install an older Home Chooser first, choose the launcher, then install the current build over it '
                          '(step 3u) and check that everything survives')
     ap.add_argument('--update-from', default=None,
-                    help='git ref of the older Home Chooser (default: the previous commit that changed app/, service/ or backport/)')
+                    help='git ref of the older Home Chooser (default: the previous commit that changed app/ or service/)')
     ap.add_argument('--host', default=None,
                     help="the Beanjar machine the VM is on, a name in e2e/hosts.toml (default: the file's default, 'pi')")
     ap.add_argument('--hosts-file', default=None, help='a hosts file instead of e2e/hosts.toml + e2e/hosts.local.toml')

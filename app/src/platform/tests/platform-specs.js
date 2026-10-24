@@ -132,8 +132,8 @@ describe('service client', () => {
 describe('exec', () => {
 	test('a command name runs that command', async () => {
 		const run = jest.fn().mockResolvedValue({stdout: 'out', stderr: '', exitCode: 0});
-		await expect(createExec({run})('keyfilterApply')).resolves.toMatchObject({stdout: 'out'});
-		expect(run).toHaveBeenCalledWith('keyfilterApply');
+		await expect(createExec({run})('homekeyApply')).resolves.toMatchObject({stdout: 'out'});
+		expect(run).toHaveBeenCalledWith('homekeyApply');
 	});
 	test('linkEntry and unlinkEntry use the link methods', async () => {
 		const service = {link: jest.fn().mockResolvedValue({}), unlink: jest.fn().mockResolvedValue({}), run: jest.fn()};
@@ -148,7 +148,7 @@ describe('exec', () => {
 
 describe('persistence status', () => {
 	const service = (over) => Object.assign({
-		linkStatus: async () => ({entry: 'link', target: '/app/backport/homechooser'}),
+		linkStatus: async () => ({entry: 'link', target: '/elsewhere/homechooser'}),
 		run: async (c) => ({stdout: c === 'watcherActive' ? 'active\n' : 'line one\nline two\n', stderr: ''}),
 		readFile: async (p) => (p.endsWith('/home') ? 'my.home\n' : '')
 	}, over);
@@ -156,14 +156,14 @@ describe('persistence status', () => {
 	test('assembles the text parsePersistenceStatus reads', async () => {
 		const {stdout} = await createPersistenceStatus(service())();
 		expect(parsePersistenceStatus(stdout)).toMatchObject({
-			entry: 'other', entryTarget: '/app/backport/homechooser', active: 'active', stored: 'my.home', keyfilterEnabled: true, log: ['line one', 'line two']
+			entry: 'other', entryTarget: '/elsewhere/homechooser', active: 'active', stored: 'my.home', homekeyEnabled: true, log: ['line one', 'line two']
 		});
 	});
 	test('no files, no entry', async () => {
 		const {stdout} = await createPersistenceStatus(service({
 			linkStatus: async () => ({entry: 'none', target: ''}), readFile: async () => null, run: async () => ({stdout: '', stderr: ''})
 		}))();
-		expect(parsePersistenceStatus(stdout)).toMatchObject({entry: 'none', active: '', stored: '', keyfilterEnabled: false, log: []});
+		expect(parsePersistenceStatus(stdout)).toMatchObject({entry: 'none', active: '', stored: '', homekeyEnabled: false, log: []});
 	});
 });
 

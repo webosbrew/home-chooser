@@ -23,7 +23,7 @@ static void test_sender(void)
 static void test_files(void)
 {
 	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/home"));
-	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/keyfilter"));
+	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/homekey"));
 	CHECK(hc_file_allowed("/var/webos-profile/override/org.webosbrew.homechooser.json"));
 	CHECK(!hc_file_allowed(NULL));
 	CHECK(!hc_file_allowed("/etc/passwd"));
@@ -82,14 +82,14 @@ static void test_commands(void)
 	const hc_command *c = hc_command_lookup("restartSam");
 	CHECK(c && strcmp(c->argv[0], "/bin/systemctl") == 0 && strcmp(c->argv[1], "restart") == 0 && strcmp(c->argv[2], "sam") == 0 && !c->argv[3]);
 	c = hc_command_lookup("watch");
-	CHECK(c && strcmp(c->argv[0], "/bin/sh") == 0 && strcmp(c->argv[1], HC_APP_DIR "/backport/homechooser") == 0 && strcmp(c->argv[2], "watch") == 0 && !c->argv[3]);
-	const char *kf[] = {"keyfilterStatus", "status", "keyfilterApply", "apply", "keyfilterStop", "stop", "keyfilterRefresh", "refresh"};
+	CHECK(c && strcmp(c->argv[0], "/bin/sh") == 0 && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "watch") == 0 && !c->argv[3]);
+	const char *kf[] = {"homekeyStatus", "status", "homekeyApply", "apply", "homekeyStop", "stop", "homekeyRefresh", "refresh"};
 	for (int i = 0; i < 8; i += 2) {
 		c = hc_command_lookup(kf[i]);
-		CHECK(c && strcmp(c->argv[1], HC_APP_DIR "/backport/homechooser-keyfilter") == 0 && strcmp(c->argv[2], kf[i + 1]) == 0 && !c->argv[3]);
+		CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], kf[i + 1]) == 0 && !c->argv[3]);
 	}
-	CHECK(!hc_command_lookup("keyfilterApplySam"));
-	CHECK(hc_command_lookup("keyfilterStatus") && hc_command_lookup("keyfilterRefresh"));
+	CHECK(!hc_command_lookup("homekeyApplySam"));
+	CHECK(hc_command_lookup("homekeyStatus") && hc_command_lookup("homekeyRefresh"));
 	c = hc_command_lookup("stopWatcher");
 	CHECK(c && c->tolerant && strcmp(c->argv[2], "homechooser-home") == 0);
 	c = hc_command_lookup("watcherActive");
@@ -110,7 +110,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"restartSam", "watch", "keyfilterStatus", "keyfilterApply", "keyfilterStop", "keyfilterRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
+	static const char *const names[] = {"restartSam", "watch", "homekeyStatus", "homekeyApply", "homekeyStop", "homekeyRefresh", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);

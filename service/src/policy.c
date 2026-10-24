@@ -15,7 +15,7 @@ bool hc_sender_ok(const char *app_id)
 	return app_id[n] == '\0' || app_id[n] == ' ';
 }
 
-static const char *const FILES[] = {HC_HOME_FILE, HC_KEYFILTER_FLAG, HC_OVERRIDE_FILE, NULL};
+static const char *const FILES[] = {HC_HOME_FILE, HC_HOMEKEY_FLAG, HC_OVERRIDE_FILE, NULL};
 
 bool hc_file_allowed(const char *path)
 {
@@ -67,12 +67,12 @@ bool hc_settings_ok(const char *category, const char *const *keys, size_t nkeys)
 static const hc_command COMMANDS[] = {
 	{"restartSam", {"/bin/systemctl", "restart", "sam", NULL}, 60, false, false},
 	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
-	{"keyfilterStatus", {"/bin/sh", HC_KEYFILTER_SCRIPT, "status", NULL}, 20, false, false},
-	/* keyfilterApply and keyfilterStop restart the compositor: debug/manual only, the app never calls them */
-	{"keyfilterApply", {"/bin/sh", HC_KEYFILTER_SCRIPT, "apply", NULL}, 90, false, false},
-	{"keyfilterStop", {"/bin/sh", HC_KEYFILTER_SCRIPT, "stop", NULL}, 90, false, false},
-	{"keyfilterRefresh", {"/bin/sh", HC_KEYFILTER_SCRIPT, "refresh", NULL}, 90, false, false},
-	/* the launcher API's permission group and API permissions (backport/homechooser-access) */
+	{"homekeyStatus", {"/bin/sh", HC_HOMEKEY_SCRIPT, "status", NULL}, 20, false, false},
+	/* homekeyApply and homekeyStop restart the compositor: debug/manual only, the app never calls them */
+	{"homekeyApply", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", NULL}, 90, false, false},
+	{"homekeyStop", {"/bin/sh", HC_HOMEKEY_SCRIPT, "stop", NULL}, 90, false, false},
+	{"homekeyRefresh", {"/bin/sh", HC_HOMEKEY_SCRIPT, "refresh", NULL}, 90, false, false},
+	/* the launcher API's permission group and API permissions (service/scripts/homechooser-access) */
 	{"accessApply", {"/bin/sh", HC_ACCESS_SCRIPT, "apply", NULL}, 30, false, false},
 	{"accessRemove", {"/bin/sh", HC_ACCESS_SCRIPT, "remove", NULL}, 30, false, false},
 	{"accessStatus", {"/bin/sh", HC_ACCESS_SCRIPT, "status", NULL}, 10, true, false},

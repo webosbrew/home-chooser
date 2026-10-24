@@ -10,7 +10,7 @@ import {ServiceError, errorMessage} from './errors';
 import {createBridgeCall} from './bridge';
 import {createServiceClient} from './service';
 import {ensureRoot, FatalError} from './elevate';
-import {HOME_FILE, KEYFILTER_FLAG} from '../homechooser/persistence';
+import {HOME_FILE, HOMEKEY_FLAG} from '../homechooser/persistence';
 
 // Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
 export const parseOsRelease = (text) => {
@@ -56,7 +56,7 @@ export const createReadIcon = (service) => {
 };
 
 // The text parsePersistenceStatus reads: the boot entry link, the watcher, the stored choice,
-// the key filter flag, and the tail of the watcher's log.
+// the Home key hook flag, and the tail of the watcher's log.
 export const createPersistenceStatus = (service) => async () => {
 	const lines = [];
 	const link = await service.linkStatus();
@@ -65,7 +65,7 @@ export const createPersistenceStatus = (service) => async () => {
 	lines.push(`active=${active.stdout.trim()}`);
 	const stored = await service.readFile(HOME_FILE);
 	lines.push(`stored=${stored === null ? '' : stored.trim()}`);
-	lines.push(`keyfilter=${(await service.readFile(KEYFILTER_FLAG)) === null ? 'no' : 'yes'}`);
+	lines.push(`homekey=${(await service.readFile(HOMEKEY_FLAG)) === null ? 'no' : 'yes'}`);
 	lines.push('--log');
 	const log = await service.run('watchLog');
 	return {stdout: lines.join('\n') + '\n' + log.stdout, stderr: ''};

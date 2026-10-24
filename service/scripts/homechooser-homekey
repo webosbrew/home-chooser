@@ -1,16 +1,16 @@
 #!/bin/sh
-# Minimal Home-key hook for webOS 6-9. Called by homechooser at boot only.
+# Minimal Home key hook for webOS 6-9. Called by homechooser at boot only.
 # Rewrites copies under /tmp, bind-mounts them, then restarts the compositor in firmware order.
 # On restart or functional QML readiness failure, removes the mounts and tries one stock restart. No runtime restarts.
 # refresh [stock] rewrites the stored-id fallback in the staged Settings.qml in place.
 # stop and refresh restart retain explicit manual/debug restart support.
 # status reports patch=possible|refused, unpatched-sites=N, skipped=reason and file=/path.
 # Overrides: HOMECHOOSER_{ROOT,WORK,LOG,MOUNTS,MOUNT,UMOUNT,SYSTEMCTL,UNIT,
-# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,KEYFILTER_FLAG,NODE,REWRITER,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
+# CHOICE,LUNA_SEND,SAM_WAIT,SLEEP,TIMEOUT,HOMEKEY_FLAG,NODE,REWRITER,DEPENDANTS,LOCK_WAIT,READY_WAIT,DEBUG_BREAK_SETTINGS}.
 
 ROOT=${HOMECHOOSER_ROOT:-}
-WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-backport}
-LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-backport.log}
+WORK=${HOMECHOOSER_WORK:-/tmp/homechooser-homekey}
+LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-homekey.log}
 MOUNTS=${HOMECHOOSER_MOUNTS:-/proc/mounts}
 MOUNT=${HOMECHOOSER_MOUNT:-mount}
 UMOUNT=${HOMECHOOSER_UMOUNT:-umount}
@@ -25,10 +25,10 @@ READY_WAIT=${HOMECHOOSER_READY_WAIT:-24}
 VERIFY_QML=0
 SLEEP=${HOMECHOOSER_SLEEP:-sleep}
 TIMEOUT=${HOMECHOOSER_TIMEOUT-timeout}
-KEYFILTER_FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
+HOMEKEY_FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
 NODE=${HOMECHOOSER_NODE:-node}
 command -v "$NODE" >/dev/null 2>&1 || NODE=/usr/bin/node
-REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-keyfilter-rewrite.js}
+REWRITER=${HOMECHOOSER_REWRITER:-$(dirname "$0")/homechooser-homekey-hook.js}
 TMO_FORM=
 
 log() {
@@ -203,7 +203,7 @@ take_lock() {
             continue
         fi
         if [ "$waited" -ge "$LOCK_WAIT" ]; then
-            log "ERROR: another keyfilter run holds $LOCKDIR (pid ${owner:-unknown}), giving up"
+            log "ERROR: another homekey run holds $LOCKDIR (pid ${owner:-unknown}), giving up"
             exit 1
         fi
         sleep 1
@@ -241,7 +241,7 @@ patch_status() {
 # compositor_dependants: the compositor's clients that the firmware restarts once the compositor is
 # ready, in its order: the `systemctl start <unit>` lines of lsm-ready.service (/etc before /lib,
 # as systemd reads them). All releases 6.5.2 to 9.2.4 list webapp-mgr, booster and maliit-server,
-# which is also the fallback when the unit is not found (docs/key-filter-backport.md, "Restarting
+# which is also the fallback when the unit is not found (docs/home-key-hook.md, "Restarting
 # the compositor").
 compositor_dependants() {
     if [ -n "${HOMECHOOSER_DEPENDANTS+set}" ]; then
@@ -348,7 +348,7 @@ do_apply() {
         "$SYSTEMCTL" restart sam || log "ERROR: could not restart sam"
     fi
     if any_mounted; then
-        log "key filter backport already mounted, nothing to do"
+        log "Home key hook already mounted, nothing to do"
         return 0
     fi
     rm -rf "$WORK/stage"
@@ -488,12 +488,12 @@ do_status() {
     if any_mounted; then
         echo mounted=yes
         cat "$WORK/applied-status" 2>/dev/null
-        [ -f "$KEYFILTER_FLAG" ] || reboot=needed
+        [ -f "$HOMEKEY_FLAG" ] || reboot=needed
     else
         echo mounted=no
         state=$(patch_status)
         printf '%s\n' "$state"
-        if [ -f "$KEYFILTER_FLAG" ] && printf '%s\n' "$state" | grep -q '^patch=possible$'; then
+        if [ -f "$HOMEKEY_FLAG" ] && printf '%s\n' "$state" | grep -q '^patch=possible$'; then
             reboot=needed
         fi
     fi

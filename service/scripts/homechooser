@@ -1,9 +1,9 @@
 #!/bin/sh
 # Home Chooser boot entry. /var/lib/webosbrew/init.d/homechooser is a symlink to this file inside
-# the installed app; Homebrew Channel's run-parts runs it as root once per boot.
+# the installed service; Homebrew Channel's run-parts runs it as root once per boot.
 #
-#   homechooser         boot: on webOS 6 to 9, when the key filter backport is enabled, apply it
-#                     (homechooser-keyfilter); if a home choice is stored, start the watcher
+#   homechooser         boot: on webOS 6 to 9, when the Home key hook is enabled, apply it
+#                     (homechooser-homekey); if a home choice is stored, start the watcher
 #   homechooser watch   start the watcher now unless it is running, with or without a stored choice
 #                     (without one it checks once for a leftover home and exits; the app runs this
 #                     when it opens, so a reinstall repairs what an earlier Home Chooser left)
@@ -14,27 +14,27 @@
 # Restart=on-failure, not always: the watcher exits 0 when the choice is removed and has to stay
 # stopped then.
 #
-# The unit runs a small wrapper rather than the script itself: if the app directory is gone when
-# the unit restarts (the app was uninstalled after a crash of the watcher), it runs the copy the
+# The unit runs a small wrapper rather than the script itself: if the service scripts directory is gone when
+# the unit restarts (the package was uninstalled after a crash of the watcher), it runs the copy the
 # watcher left in /tmp/homechooser-runtime, so the restore to stock still happens; with neither,
 # it exits 0 and the unit stays stopped.
 #
-# The key filter backport is applied here, at boot, because this hook runs after the compositor has
+# The Home key hook is applied here, at boot, because this hook runs after the compositor has
 # started (systemd starts it long before devmode's startup.sh); the worker's apply therefore mounts
 # and restarts the compositor. The app never does that while the TV runs: it writes the flag and
 # asks for a reboot, and this entry applies the patch on that boot. Home Chooser's uninstall removes
 # the flag and the link, so nothing re-applies after it.
 #
 # Files, all under /var/lib/webosbrew/homechooser/: `home` is the stored choice, the app id alone;
-# `keyfilter` exists while the backport is enabled.
+# `homekey` exists while the Home key hook is enabled.
 #
-# Overrides, for tests: HOMECHOOSER_DIR (the backport directory), HOMECHOOSER_CHOICE,
-# HOMECHOOSER_KEYFILTER_FLAG, HOMECHOOSER_OSRELEASE, HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_SYSTEMD_RUN,
+# Overrides, for tests: HOMECHOOSER_DIR (the Home key hook directory), HOMECHOOSER_CHOICE,
+# HOMECHOOSER_HOMEKEY_FLAG, HOMECHOOSER_OSRELEASE, HOMECHOOSER_SYSTEMCTL, HOMECHOOSER_SYSTEMD_RUN,
 # HOMECHOOSER_LOG.
 
-APP_BACKPORT=/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser/backport
+SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
-FLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
+FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
 SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
@@ -58,9 +58,9 @@ locate() {
             [ -n "$real" ] || real=$0
         fi
         HERE=$(dirname "$real")
-        [ -f "$HERE/homechooser-home-watch" ] || HERE=$APP_BACKPORT
+        [ -f "$HERE/homechooser-home-watch" ] || HERE=$SERVICE_SCRIPTS
     fi
-    if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-keyfilter" ]; then
+    if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-homekey" ]; then
         exit 0
     fi
 }
@@ -104,9 +104,9 @@ case "$1" in
             sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
         fi
         major=$(major_version)
-        if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-keyfilter" ]; then
-            log "applying the key filter backport"
-            sh "$HERE/homechooser-keyfilter" apply >> "$LOG" 2>&1
+        if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-homekey" ]; then
+            log "applying the Home key hook"
+            sh "$HERE/homechooser-homekey" apply >> "$LOG" 2>&1
         fi
         start_watcher
         ;;

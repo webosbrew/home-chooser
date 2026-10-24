@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
-// The minimal structural Home-key hook for webOS 6 to 9.
+// The minimal structural Home key hook for webOS 6 to 9.
 //
-//   node homechooser-keyfilter-rewrite.js check    --root DIR [--skip-version-gate]
-//   node homechooser-keyfilter-rewrite.js generate --root DIR --out DIR
+//   node homechooser-homekey-hook.js check    --root DIR [--skip-version-gate]
+//   node homechooser-homekey-hook.js generate --root DIR --out DIR
 //
 // Core (all or nothing; any failed guard -> exit 2, nothing written, stock stays):
 //   Settings.qml          one constant block before the root's closing brace + one import line
@@ -22,7 +22,7 @@ var STOCK = 'com.webos.app.home';
 var LIT = '"com\\.webos\\.app\\.home"';
 var F = {
 	settings: Q + 'WebOSCompositorBase/global/Settings.qml',
-	keyfilter: Q + 'WebOSCompositor/controllers/StarfishKeyFilter.qml',
+	homekey: Q + 'WebOSCompositor/controllers/StarfishKeyFilter.qml',
 	systemui: Q + 'KeyFilters/systemUi.js',
 	nudge: Q + 'WebOSCompositor/views/StarfishNudgeView.qml',
 	baseluna: Q + 'WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml',
@@ -38,7 +38,7 @@ var SETTINGS_BLOCK = [
 	'',
 	'    // ' + MARK + ': the home app follows general/defaultApps.home, then the stored choice, then the stock launcher.',
 	'    readonly property string stockHomeAppId: "' + STOCK + '"',
-	'    // Set at boot by homechooser-keyfilter from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.',
+	'    // Set at boot by homechooser-homekey from /var/lib/webosbrew/homechooser/home; empty when no choice is stored.',
 	'    readonly property string configuredHomeAppId: "' + PLACEHOLDER + '"',
 	'    // Starts the defaultApps subscription with the compositor, so the first Home press sees the record.',
 	'    readonly property string homeAppId: root.getHomeAppId()',
@@ -57,7 +57,7 @@ var SETTINGS_BLOCK = [
 	'        return appId === root.getHomeAppId();',
 	'    }',
 	'',
-	'    // Key filter launches of the stock id: false when the stock home is the home (the stock path runs);',
+	'    // Home key hook launches of the stock id: false when the stock home is the home (the stock path runs);',
 	'    // otherwise the chosen home is launched with the same params, falling back to the stock one.',
 	'    function redirectHomeLaunch(appId, params, reason) {',
 	'        if (appId !== root.stockHomeAppId || root.getHomeAppId() === root.stockHomeAppId)',
@@ -162,7 +162,7 @@ function patchSettings(t) {
 	return insertAt(t, end.index + 1, SETTINGS_BLOCK);
 }
 
-function patchKeyFilter(t) {
+function patchHomeKey(t) {
 	if (/\b(getHomeAppId|isHomeApp|launchHome|stockHomeAppId|redirectHomeLaunch)\b/.test(t)) abort('StarfishKeyFilter.qml already routes the home id');
 	one(t, /^import WebOSCompositorBase 1\.0$/m, 'StarfishKeyFilter.qml import');
 	var g = one(t, /^[ \t]*readonly property QtObject applicationManager: QtObject \{$/m, 'applicationManager group');
@@ -192,7 +192,7 @@ function patchSystemUi(t) {
 	var defRe = /^var HOME_APP_ID = "com\.webos\.app\.home";\n/m;
 	var nDef = count(defRe, t);
 	var usesAll = count(/\bHOME_APP_ID\b/, t);
-	// every literal must be the definition or the first argument of a key filter launch/checkLaunch
+	// every literal must be the definition or the first argument of a Home key hook launch/checkLaunch
 	var lits = count(new RegExp(LIT), t);
 	var launches = count(new RegExp('applicationManager\\.launch\\(\\s*' + LIT + ',\\s*JSON\\.stringify\\('), t);
 	var checks = count(new RegExp('applicationManager\\.checkLaunch\\(\\s*' + LIT + ',\\s*JSON\\.stringify\\('), t);
@@ -295,13 +295,13 @@ function plan(root, opt) {
 	var major = osMajor(root);
 	if (!opt.skip && (major === null || major < 6 || major > 9)) abort('webOS ' + major + ' is outside 6 to 9');
 	var out = [], skipped = [];
-	var s = read(root, F.settings), k = read(root, F.keyfilter);
+	var s = read(root, F.settings), k = read(root, F.homekey);
 	if (s === null) abort(F.settings + ': core file is missing');
-	if (k === null) abort(F.keyfilter + ': core file is missing');
-	var kk = patchKeyFilter(k);
+	if (k === null) abort(F.homekey + ': core file is missing');
+	var kk = patchHomeKey(k);
 	var ss = patchSettings(s);
 	out.push({path: F.settings, stock: s, text: ss});
-	out.push({path: F.keyfilter, stock: k, text: kk});
+	out.push({path: F.homekey, stock: k, text: kk});
 	OPTIONAL.forEach(function (r) {
 		try {
 			var t = read(root, r.file);
@@ -336,7 +336,7 @@ function main(argv) {
 		else { process.stderr.write('bad argument ' + argv[i] + '\n'); return 1; }
 	}
 	if (['check', 'generate'].indexOf(cmd) < 0 || (cmd === 'generate' && !opt.out)) {
-		process.stderr.write('usage: homechooser-keyfilter-rewrite.js check|generate [--root DIR] [--out DIR] [--manifest FILE]\n');
+		process.stderr.write('usage: homechooser-homekey-hook.js check|generate [--root DIR] [--out DIR] [--manifest FILE]\n');
 		return 1;
 	}
 	try {

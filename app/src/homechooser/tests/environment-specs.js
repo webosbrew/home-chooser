@@ -17,13 +17,13 @@ describe('classifyExecFailure', () => {
 });
 
 describe('loadEnvironment', () => {
-	test('builds a chooser, and a backport only on webOS 6 to 9', async () => {
+	test('builds a chooser, and a homeKeyHook only on webOS 6 to 9', async () => {
 		const a = await loadEnvironment(platform());
 		expect(a.version).toEqual([8, 3, 0]);
-		expect(a.backport).not.toBeNull();
+		expect(a.homeKeyHook).not.toBeNull();
 		expect(typeof a.chooser.apply).toBe('function');
 		const b = await loadEnvironment(platform({osRelease: jest.fn().mockResolvedValue({version: [11, 0, 0]})}));
-		expect(b.backport).toBeNull();
+		expect(b.homeKeyHook).toBeNull();
 	});
 	test('the restart prompt passes through from the platform; the app has no way to confirm it', async () => {
 		const p = platform({rebootPrompt: jest.fn(), rebootConfirmed: jest.fn()});

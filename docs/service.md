@@ -97,13 +97,13 @@ refused by launcher gates.
 
 No step restarts the compositor while the TV runs. When the patch needs a restart to take effect
 (first apply) or to go away (restore), the app asks the user to reboot the TV with a system alert, through two
-methods. `keyfilterApplySam` (`apply samfirst`, which restarted `sam` first) is removed: the app
-no longer restarts anything, so there is no such command. `keyfilterApply` and `keyfilterStop`
+methods. `homekeyApplySam` (`apply samfirst`, which restarted `sam` first) is removed: the app
+no longer restarts anything, so there is no such command. `homekeyApply` and `homekeyStop`
 stay for manual and debugging use only.
 
 `rebootPrompt {reason}` (Home Chooser only, root). `reason` is `apply` or `remove`.
 
-1. The pending check runs the worker's `status` (`keyfilterStatus`, 20 s) and requires a line
+1. The pending check runs the worker's `status` (`homekeyStatus`, 20 s) and requires a line
    exactly `reboot=needed` (`hc_reboot_needed`: CR and blanks at line ends are ignored, a longer
    line such as `xreboot=needed` does not count). Otherwise the error is `notPending`.
 2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
@@ -173,7 +173,7 @@ This identity is device-unverified separately on webOS 5.x, 6.x, 7.x, 8.x, 9.x, 
 
 ## Launcher access files
 
-`backport/homechooser-access apply|remove|status` manages only Home Chooser's API file under
+`service/scripts/homechooser-access apply|remove|status` manages only Home Chooser's API file under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
 `api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`homechooser.applications`: five
@@ -282,7 +282,7 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   array of a get; the keys of `settings` of a set). Anything else is `notAllowed`.
   System profile calls are fixed commands (`profileGet`, `profileRescan`), not generic forwarding.
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
-  `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/keyfilter`,
+  `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/homekey`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
   `/etc/os-release`, because a web app cannot read it and the app needs the release. The
   writable files are opened with `O_NOFOLLOW`. `/etc/os-release` is a symlink to
@@ -293,28 +293,27 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   `..`), requires an image extension (png, jpg, jpeg, gif, svg, webp), resolves symlinks and
   requires the result to lie inside the real `folderPath`, then returns the file if it is a regular
   file of at most 256 KiB.
-* **Boot entry**: `link` creates the directory `/var/lib/webosbrew/init.d`, removes the earlier
-  `homechooser-keyfilter` entry, sets mode 755 on the four scripts in the app's `backport/`
-  directory, and makes `/var/lib/webosbrew/init.d/homechooser` a symlink to the app's
-  `backport/homechooser` (replacing a link or a regular file). `unlink` removes both names.
-  `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The app directory
-  is the fixed `/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser`.
+* **Boot entry**: `link` creates the directory `/var/lib/webosbrew/init.d`, sets mode 755 on the four executable scripts in the installed service's `scripts/`
+  directory, and makes `/var/lib/webosbrew/init.d/homechooser` a symlink to the service's
+  `scripts/homechooser` (replacing a link or a regular file). `unlink` removes the `homechooser` entry.
+  `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
+  is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
 * **Commands** (`run`, by name, fixed argv, no shell, minimal environment, stdin from `/dev/null`,
   output capped at 64 KiB per stream, a timeout each):
 
 | Name | argv | Timeout |
 | --- | --- | --- |
 | `restartSam` | `/bin/systemctl restart sam` | 60 s |
-| `watch` | `/bin/sh <app>/backport/homechooser watch` | 20 s |
-| `keyfilterStatus` | `/bin/sh <app>/backport/homechooser-keyfilter status` | 20 s |
-| `keyfilterApply` | same with `apply` (restarts the compositor; debug only, the app does not call it) | 90 s |
-| `keyfilterStop` | same with `stop` (unmounts and restarts the compositor; debug only) | 90 s |
-| `keyfilterRefresh` | same with `refresh` (never restarts the compositor unless given `restart`) | 90 s |
+| `watch` | `/bin/sh <service>/scripts/homechooser watch` | 20 s |
+| `homekeyStatus` | `/bin/sh <service>/scripts/homechooser-homekey status` | 20 s |
+| `homekeyApply` | same with `apply` (restarts the compositor; debug only, the app does not call it) | 90 s |
+| `homekeyStop` | same with `stop` (unmounts and restarts the compositor; debug only) | 90 s |
+| `homekeyRefresh` | same with `refresh` (never restarts the compositor unless given `restart`) | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
 | `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
-| `accessApply` | `/bin/sh <app>/backport/homechooser-access apply` | 30 s |
+| `accessApply` | `/bin/sh <service>/scripts/homechooser-access apply` | 30 s |
 | `accessRemove` | same with `remove` | 30 s |
 | `accessStatus` | same with `status` (non-zero exit is not an error) | 10 s |
 | `watchLog` | not run: the last 5 lines of `/tmp/homechooser-home.log` | - |
@@ -336,7 +335,7 @@ in the web console.
 * `make -C service test`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
-* `backport/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
+* `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.
 * Device-unverified: hub sender ids, elevation of this package, effective groups for the fixed
   identity, and each launcher API behavior listed in the validation table.

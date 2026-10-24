@@ -30,23 +30,23 @@ Home Chooser is in English only.
   one plain sentence ("Couldn't set the Home app. The Home Chooser service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
   a success; Back closes it.
-* **webOS 6 to 9.** The key filter backport is not shown as a feature, and nothing restarts the compositor
+* **webOS 6 to 9.** The Home key hook is not shown as a feature, and nothing restarts the compositor
   or `sam` while the TV runs, so no step can close the panel. Choosing a launcher applies the choice
   first. If the patch is mounted and enabled, that is all: the patched QML reads `general/defaultApps`
   first, so the record decides live and switching launchers needs no install and no restart. Otherwise
   (not mounted, or mounted with the flag off after a restore that no restart has finished yet) the app
-  then calls `backport.install()`, which writes the flag file and links the boot entry and runs nothing
+  then calls `Home key hook.install()`, which writes the flag file and links the boot entry and runs nothing
   else; its result says `rebootNeeded` when the flag is on and nothing is mounted (the worker's
   `reboot=needed` status line). The patch is mounted by the boot entry on the next boot.
   See [Restart prompt](#restart-prompt). Restoring LG Home removes the flag and bakes the empty id into
-  the mounted copy (`backport.remove()`, which runs `homechooser-keyfilter refresh` and never `stop`); a
+  the mounted copy (`Home key hook.remove()`, which runs `homechooser-homekey refresh` and never `stop`); a
   mounted patch stays until the next boot, so a restart prompt follows. If the structural hook refuses the
   firmware, the dialog says the Home button can't be changed on this TV's software and
   applies nothing. The earlier `localStorage` marker (`homechooser.pending`) is no longer written; on
   startup the app still reads one left by an earlier version, judges it once against the actual home
   and the stored choice (a marker whose id differs from the stored choice is stale and dropped without a
   toast) and clears it.
-* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key patch: active", "Home key patch: not active", or "Home key patch: not available for this TV's software" when the structural hook refuses the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
+* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key hook: active", "Home key hook: not active", or "Home key hook: not available for this TV's software" when the structural hook refuses the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
 * **Before uninstalling Home Chooser, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
   "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
@@ -81,7 +81,7 @@ timeout. The failures map to the problem screens: Homebrew Channel absent (`unre
 `elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
 Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
-content never meets a shell. The shell scripts (`backport/homechooser`, the watcher, the key filter
+content never meets a shell. The shell scripts (`service/scripts/homechooser`, the watcher, the Home key hook
 worker) are unchanged; the service runs them with a fixed argv.
 
 The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
@@ -113,10 +113,10 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   there is shown as a warning.
 * On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
-  `systemctl restart sam` is the last step; when the key filter backport still has to be installed, a TV
+  `systemctl restart sam` is the last step; when the Home key hook still has to be installed, a TV
   restart follows, which restarts `sam` as well, so the step is skipped (below).
-* On 6.x to 9.x the stock key filter launches `com.webos.app.home` by id, so the Home key follows
-  the choice only with the [key filter backport](key-filter-backport.md) installed. The screen
+* On 6.x to 9.x the stock Home key handler launches `com.webos.app.home` by id, so the Home key follows
+  the choice only with the [Home key hook](home-key-hook.md) installed. The screen
   enables it as part of choosing a launcher when it is not mounted and disables it again when
   LG Home is restored; there are no separate Install and Remove buttons. Enabling takes a TV restart to
   mount it, disabling takes one to unmount it.
@@ -133,15 +133,15 @@ When the patch is not mounted yet, the choice is followed by a TV restart (the b
 patch), and that restart restarts `sam` as well, so the panel passes `apply(id, {deferSamRestart: true})`,
 which skips the restart and returns `samRestartDeferred`. It passes it only then: with the patch
 mounted and enabled, or when no restart will follow, the apply restarts `sam` itself when it has to, as
-before. The panel never restarts the compositor: `backport.install()` writes the flag and links the entry
+before. The panel never restarts the compositor: `Home key hook.install()` writes the flag and links the entry
 and runs no worker, so there is nothing that could close the panel between the choice and the install.
 
 ### Restart prompt
 
-After `backport.install()` or `backport.remove()` reports `rebootNeeded`, the choose and restore
+After `Home key hook.install()` or `Home key hook.remove()` reports `rebootNeeded`, the choose and restore
 flows ask for a TV restart. The reason is `apply` after an install and `remove` after a
 restore. Only webOS 6 to 9 have a patch, so only they ever ask;
-on 5.x and 10 and later `backport` is null, no step reports `rebootNeeded` and nothing changes.
+on 5.x and 10 and later `Home key hook` is null, no step reports `rebootNeeded` and nothing changes.
 
 The prompt is always the service's system alert, never a dialog of the app. Home Chooser is an overlay
 window and surface-manager closes an overlay after about 90 to 120 s without a key press
@@ -176,26 +176,25 @@ Home Chooser keeps its own copy of the choice and enforces it.
 
 * **The stored choice** is `/var/lib/webosbrew/homechooser/home`, a plain text file holding the app
   id and nothing else, written as root by the app. An absent file means stock: nothing is
-  enforced. Every reader (the watcher, the boot entry, the key filter worker) trims spaces, tabs,
+  enforced. Every reader (the watcher, the boot entry, the Home key hook worker) trims spaces, tabs,
   CR and LF, treats an empty result as no choice, and accepts only letters, digits, `.`, `-` and
   `_`; anything else is logged and ignored, never put into a luna payload or into QML.
 * **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`, a symlink (never a copy) to
-  `backport/homechooser` in the installed app, which the app creates (`ln -sf`; a regular file from an
-  earlier install is replaced, and the earlier `homechooser-keyfilter` entry is removed). Homebrew
+  `scripts/homechooser` in the installed service, which the service creates (a regular file at that path is replaced). Homebrew
   Channel's `run-parts` runs it as root once per boot. The package keeps the scripts executable
   (`ares-package` keeps mode 755, checked in the ipk), and `apply` runs `chmod 755` on them
   anyway. The script finds its files next to its real path (`readlink -f`, else `readlink`, else the
-  fixed app path) and exits 0 without output when the app directory is gone (the app was
+  fixed service path) and exits 0 without output when the service scripts directory is gone (the service was
   uninstalled and the link dangles; the link then does nothing and `apply` or an uninstall of the
   link can clean it up; see [When apps are removed](#when-apps-are-removed)). It does two things: on webOS 6 to 9, when the flag file
-  `/var/lib/webosbrew/homechooser/keyfilter` exists, it runs `homechooser-keyfilter apply` (the
-  [key filter backport](key-filter-backport.md)); and if the choice file exists it starts the watcher.
+  `/var/lib/webosbrew/homechooser/homekey` exists, it runs `homechooser-homekey apply` (the
+  [Home key hook](home-key-hook.md)); and if the choice file exists it starts the watcher.
   `homechooser watch` does only the second, and starts the watcher with or without a stored choice:
   the app runs it after a choice and each time it opens, so a reinstalled Home Chooser looks for a
   [leftover Home](#a-leftover-home) without waiting for a choice or a boot.
-* **The watcher** is `backport/homechooser-home-watch`, started as a transient unit,
+* **The watcher** is `service/scripts/homechooser-home-watch`, started as a transient unit,
   `systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
-  '<wrapper>' homechooser-home-watch <app>/backport/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
+  '<wrapper>' homechooser-home-watch <service>/scripts/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
   where the wrapper runs the first script that exists and exits 0 if neither does. No unit file is written and no other service's unit,
   environment file or binary is touched. The flags are those of systemd 230 and later, which is
   what is assumed for webOS 5; the newest flag (`--collect`, 236) is not used, and a failed unit is
@@ -228,7 +227,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
     subscription ends. Started without a usable choice it makes the one
     [leftover Home](#a-leftover-home) check and exits 0.
 * **Restoring stock** stops the watcher (`systemctl stop homechooser-home`), removes the choice file,
-  then does the platform restore. On 6.x to 9.x it also runs `homechooser-keyfilter refresh`, which
+  then does the platform restore. On 6.x to 9.x it also runs `homechooser-homekey refresh`, which
   clears the choice from the mounted `Settings.qml` copy (it does not restart the compositor: the
   running compositor keeps its loaded id until the next start, and the settings record is read first).
   On 5.x to 9.x the restore writes `home` as the stock launcher instead (`com.webos.app.fullhome` if
@@ -249,7 +248,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
 
 The watcher does not use a mocked preload manager in its tests; the preload calls only have to be tolerated by the stub.
 
-Tests: `backport/test-homechooser-home-watch.sh` (a stub `luna-send` plays a stream of replies:
+Tests: `service/scripts/tests/test-homechooser-home-watch.sh` (a stub `luna-send` plays a stream of replies:
 present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
 file in each form, the override on 10.x; a fake clock and sleep check the rate limiting; markers in
 the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
@@ -258,10 +257,10 @@ the full restore, both in either order and one removed during the other's confir
 check, the restore from the runtime copy after the app directory is deleted, the leftover Home
 without a stored choice on 5, 6 to 9 and 10+ with what it leaves alone, and the start-time
 files-on-disk guard),
-`backport/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
-6 to 9 and 10+ paths, the flag, the symlink, an app directory that is gone, the unit's wrapper),
-`backport/test-homechooser-keyfilter.sh` and `backport/test-real-roundtrip.sh` (see the
-[backport](key-filter-backport.md#deployment)), run as `sh` and `busybox sh`, and the Jest specs
+`service/scripts/tests/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
+6 to 9 and 10+ paths, the flag, the symlink, a service scripts directory that is gone, the unit's wrapper),
+`service/scripts/tests/test-homechooser-homekey.sh` and `service/scripts/tests/test-real-roundtrip.sh` (see the
+[Home key hook](home-key-hook.md#deployment)), run as `sh` and `busybox sh`, and the Jest specs
 for `apply`, `restoreStock`, the status parsing and the missing-choice message.
 
 ## When apps are removed
@@ -270,7 +269,7 @@ The stock launcher has to keep working when the chosen app is uninstalled, when 
 uninstalled, and when the second follows the first. Both writes the platform keeps (the `home`
 entry, and on 10.x and later the profile override) name an app, and a name that is missing makes
 things worse than no name: on 10.3.1 and 11.2.0 `launchDefaultApp` fails for a record entry that
-names a missing app and does **not** fall back to the profile, and on 5.6.1 the key filter launches
+names a missing app and does **not** fall back to the profile, and on 5.6.1 the Home key hook launches
 the record's `home` directly
 ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
 So the watcher notices a removal and undoes the writes itself. Nothing here relies on the format of
@@ -301,12 +300,12 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | `home` = the stock launcher (`com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home`) by the merged `setSystemSettings` write (other entries kept; not null, which would let the running compositor fall back to its baked old id); written only if `home` is not that already; `homechooser-keyfilter refresh stock` empties the id baked into the mounted `Settings.qml` | the backport's `getHomeAppId()` reads the record first and gets the stock id, so LG Home opens at once; without the backport the stock key filter never used the record |
+| 6.x to 9.x | `home` = the stock launcher (`com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home`) by the merged `setSystemSettings` write (other entries kept; not null, which would let the running compositor fall back to its baked old id); written only if `home` is not that already; `homechooser-homekey refresh stock` empties the id baked into the mounted `Settings.qml` | the Home key hook's `getHomeAppId()` reads the record first and gets the stock id, so LG Home opens at once; without the Home key hook the stock Home key handler never used the record |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
-`getProfiles`; 6.x to 9.x run `homechooser-keyfilter refresh`, which bakes the id back in. The
+`getProfiles`; 6.x to 9.x run `homechooser-homekey refresh`, which bakes the id back in. The
 screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
@@ -334,24 +333,23 @@ device.
 
 On 10.x and later clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 [Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
-On 5.x to 9.x `home` is set to the stock id (the merged write), not cleared. The key filter
-backport's `Settings.qml` takes only a non-empty string as the record's `home` and reads it before
+On 5.x to 9.x `home` is set to the stock id (the merged write), not cleared. The Home key hook
+Home key hook's `Settings.qml` takes only a non-empty string as the record's `home` and reads it before
 the baked id, which is why null is not used on 6.x to 9.x.
 
 ### Home Chooser is uninstalled
 
 The app's files go with it, so the watcher cannot run anything from the app directory. At start it
-copies itself, `homechooser-keyfilter` and every release's `manifest.json` into
+copies itself, `homechooser-homekey` and `homechooser-access` into
 `/tmp/homechooser-runtime/` (replacing each file by rename) and runs from there. When Home Chooser is
 gone it does, in order:
 
 1. the platform revert of the table above (webOS 5 to 9: `home` = stock launcher; 10 and
    later: override removed, `home` null);
-2. removes the choice file (and its directory if empty) and the key filter flag file;
-3. removes the `init.d/homechooser` symlink (and the earlier `homechooser-keyfilter` link), only if it
-   is a symlink;
+2. removes the choice file (and its directory if empty) and the Home key hook flag file;
+3. removes the `init.d/homechooser` symlink, only if it is a symlink;
 4. on webOS 6 to 9, nothing is unmounted and nothing restarts: the bind mounts stay until the next
-   boot (their sources are under `/tmp/homechooser-backport/stage`, not in the app directory, so they
+   boot (their sources are under `/tmp/homechooser-homekey/stage`, not in the app directory, so they
    survive the uninstall), and at that boot nothing re-applies because the init.d link and the flag
    are gone;
 5. shows a toast, once:
@@ -394,8 +392,8 @@ state it leaves:
 
 | Release | Left behind | Effect |
 | --- | --- | --- |
-| 5.x | record `home` names the missing app | the key filter launches it directly: the Home key launches nothing |
-| 6.x to 9.x | record `home` names the missing app; the backport stays mounted until reboot | the stock key filter ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the backport falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail. Repair: write `home` as the stock id |
+| 5.x | record `home` names the missing app | the Home key hook launches it directly: the Home key launches nothing |
+| 6.x to 9.x | record `home` names the missing app; the Home key hook stays mounted until reboot | the stock Home key handler ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the Home key hook falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail. Repair: write `home` as the stock id |
 | 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
 
 Repair: install Home Chooser again and open it once. Opening it starts the watcher: with the choice
@@ -407,7 +405,7 @@ next boot does the first case too. Or by hand on
 10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.homechooser.json`,
 `luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
 `general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
-entries). On 5.x to 9.x write `home` as `com.webos.app.home`. With the key filter backport enabled but no
+entries). On 5.x to 9.x write `home` as `com.webos.app.home`. With the Home key hook enabled but no
 choice stored the watcher is not started, so uninstalling Home Chooser then leaves the flag file, a
 dangling link and, until reboot, mounts that behave as stock.
 
@@ -432,7 +430,7 @@ opened after a reinstall, through `homechooser watch`):
 * A gone id is reverted the way the removal of a chosen app is, without the notification (it is not
   a removal the user just made): 5.x to 9.x write `home` as the stock launcher by the merged write
   (`com.webos.app.fullhome` if installed, else `com.webos.app.home`); 6.x to 9.x also run
-  `homechooser-keyfilter refresh stock`; 10.x and later remove the override and rescan when the
+  `homechooser-homekey refresh stock`; 10.x and later remove the override and rescan when the
   override names the gone id, and write `home` as `null` when the record does. On 10.x the two are
   separate: a stale override with a record naming an installed app removes only the override, and
   the other way round.
@@ -497,7 +495,7 @@ manager is not touched.
   uninstall cleanup go on. `HOMECHOOSER_PRELOAD=0` turns the feature off.
 * **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
   `com.webos.app.home` is not running, so there is nothing to free; the preload lists of 5.6.1 name
-  both homes, and the 5.x restore path hands the key filter either of them, so a policy change would
+  both homes, and the 5.x restore path hands the Home key hook either of them, so a policy change would
   have risk and no gain. The watcher makes no preload call on 5.x.
 * **6.x to 10.x: the stock home is not closed, for any launcher.** On these releases `sam` relaunches
   the stock home immediately as the "last input" app (`NL_APP_LAUNCH_BEGIN`, `caller_app_id:
@@ -534,7 +532,7 @@ manager is not touched.
 
 ## Restoring the stock home
 
-* 5.x: both stock homes declare `appCategory: ["home"]` and the key filter launches the record's
+* 5.x: both stock homes declare `appCategory: ["home"]` and the Home key hook launches the record's
   `home` directly, so a record without `home` could leave the Home key with nothing to launch.
   The record is written with `home` set to `com.webos.app.fullhome` if `listApps` shows it
   installed (the factory value on the studied 5.6.1), else `com.webos.app.home`, and the other
@@ -584,7 +582,7 @@ package` passes through to `make -C service`:
 | `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
 | `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
 | `OUT` | `../build/service` | `service/Makefile`: where the binary goes |
-| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `backport/test-real-roundtrip.sh` and `backport/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
+| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `service/scripts/tests/test-real-roundtrip.sh` and `service/scripts/tests/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
 | `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
 
 `make -C service test` and the Jest specs need none of them.
@@ -604,15 +602,15 @@ limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
 directories, drops the other locale directories and the character maps, and rewrites iLib's
 manifest to the remaining files. The UI strings are English and come from the source and from
-Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/copy-backport.js` then copies `backport/`
-(the five runtime scripts at mode 755) into `dist`. Reviewed release manifests and diffs are
-offline test references and are excluded from the package.
+Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/stage-service.js` copies the five runtime scripts from `service/scripts/` into
+the service package beside the native binary, at mode 755. The app bundle carries no scripts;
+reviewed release manifests and diffs stay in the offline tests.
 
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
-`app/package.json`. `backport/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
+`app/package.json`. `service/scripts/tests/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
 6.6.0, 8.3.0, 9.2.1, 10.3.1 and 11.2.0 and assert the payloads.
 
-The webOS 6–9 hook has a two-file core (Settings and StarfishKeyFilter). The systemUi refresh and
+The webOS 6–9 hook has a two-file core (Settings.qml and StarfishKeyFilter.qml). The systemUi refresh and
 four supporting files are best effort; status lists skipped files. If systemUi cannot be rewritten,
 Home over the chosen launcher relaunches it instead of handing it the key, and LG Home in front
-can keep the key through the stock comparison. See [the minimal hook](key-filter-backport.md).
+can keep the key through the stock comparison. See [the minimal hook](home-key-hook.md).

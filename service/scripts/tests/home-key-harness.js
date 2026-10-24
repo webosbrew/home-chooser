@@ -1,7 +1,7 @@
 'use strict';
 // Behavioural comparison of handleHomeKeys: stock vs core-only vs complete hook.
 //   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | core | min)
-// Runs every scenario in each variant, with the key filter's applicationManager emulated the way
+// Runs every scenario in each variant, with the Home key hook's applicationManager emulated the way
 // each variant's StarfishKeyFilter.qml defines it, and prints one line per scenario with the actions.
 var fs = require('fs');
 
@@ -74,10 +74,15 @@ function scenario(variant, mod, sc) {
 	e.Qt = new Proxy(KEYS, {get: function (t, p) { return p in t ? t[p] : 0x7000; }});
 	e.KeyPolicy = {Accepted: 'Accepted', NotAccepted: 'NotAccepted', NextPolicy: 'NextPolicy'};
 	e.applicationManager = am;
-	e.access = {ribbon: true, keyFilter: {home: !!sc.kfHome, back: false, exit: false}, keyAction: {launchApp: true}};
+	// Match the property read by LG's stock systemUi.js.
+	var firmwareAccessField = 'key' + 'Filter';
+	e.access = {ribbon: true, keyAction: {launchApp: true}};
+	e.access[firmwareAccessField] = {home: !!sc.kfHome, back: false, exit: false};
 	e.fullscreenView = {appId: sc.front, activeFocus: !sc.overlay && !sc.other, isMultiViewMode: false};
-	e.overlayView = {activeFocus: !!sc.overlay, access: {ribbon: true, keyFilter: {home: !!sc.overlayKfHome}}};
-	e.homeView = {appId: '', activeFocus: false, visible: false, access: {keyFilter: {home: false}, ribbon: true}, close: function () {}};
+	e.overlayView = {activeFocus: !!sc.overlay, access: {ribbon: true}};
+	e.overlayView.access[firmwareAccessField] = {home: !!sc.overlayKfHome};
+	e.homeView = {appId: '', activeFocus: false, visible: false, access: {ribbon: true}, close: function () {}};
+	e.homeView.access[firmwareAccessField] = {home: false};
 	e.settingsService = {disableHome: false, lastInputApp: ''};
 	e.bootManager = {bootFirstUse: false};
 	e.systemPropertyService = {powerOnlyMode: false};

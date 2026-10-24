@@ -16,12 +16,12 @@
 # about org.webosbrew.homechooser:
 #   chosen app gone: the platform is put back to stock (webOS 5 to 9: home = the stock launcher,
 #     com.webos.app.fullhome if installed, else com.webos.app.home, so on 6 to 9 the running
-#     compositor opens LG Home at once; on 6 to 9 the backport's baked id is also emptied; 10 and later:
+#     compositor opens LG Home at once; on 6 to 9 the Home key hook's baked id is also emptied; 10 and later:
 #     override file removed, rescan, `home` written as null), the choice file is kept, and nothing is
 #     written while the app is missing. When it is installed again the choice is applied again.
-#   Home Chooser gone: the same revert, then the choice file, the backport flag and the init.d link
-#     are removed and the watcher exits 0. The backport's bind mounts (webOS 6 to 9) stay until the
-#     next reboot: their sources are under /tmp/homechooser-backport, not in the app directory, and
+#   Home Chooser gone: the same revert, then the choice file, the Home key hook flag and the init.d link
+#     are removed and the watcher exits 0. The Home key hook's bind mounts (webOS 6 to 9) stay until the
+#     next reboot: their sources are under /tmp/homechooser-homekey, not in the app directory, and
 #     nothing re-applies them at boot once the init.d link and the flag are gone.
 # An app is taken as gone only if it is still gone HOMECHOOSER_CONFIRM_DELAY seconds (15) later,
 # because an update installs by removing first. At a watcher start (a boot, where sam may not have
@@ -56,10 +56,10 @@
 # missing is not a new removal) and not for the temporary absence of an update.
 #
 # The watcher never restarts the compositor: it calls the worker as `refresh` or `refresh stock`,
-# which only rewrite the baked id in the mounted copy (docs/key-filter-backport.md).
+# which only rewrite the baked id in the mounted copy (docs/home-key-hook.md).
 #
-# The app's files are deleted with the app, so at start the watcher copies itself, the key filter
-# worker into /tmp/homechooser-runtime/ and runs from there.
+# The service's scripts are deleted with the package, so at start the watcher copies itself and
+# the Home key hook worker into /tmp/homechooser-runtime/ and runs from there.
 #
 # Storms: at most one write per interval (10 s); each write that follows the last one closely
 # doubles the interval, up to 5 min. Every action is logged to /tmp/homechooser-home.log.
@@ -69,7 +69,7 @@
 # Overrides, for tests: HOMECHOOSER_CHOICE, HOMECHOOSER_LUNA_SEND, HOMECHOOSER_WATCH_LOG,
 # HOMECHOOSER_OSRELEASE, HOMECHOOSER_OVERRIDE, HOMECHOOSER_MIN_INTERVAL, HOMECHOOSER_BACKOFF_CAP,
 # HOMECHOOSER_LOG_MAX, HOMECHOOSER_CLOCK (command printing epoch seconds), HOMECHOOSER_SLEEP,
-# HOMECHOOSER_TMP, HOMECHOOSER_RUNTIME, HOMECHOOSER_SHELL, HOMECHOOSER_APPDIR, HOMECHOOSER_KEYFILTER_FLAG,
+# HOMECHOOSER_TMP, HOMECHOOSER_RUNTIME, HOMECHOOSER_SHELL, HOMECHOOSER_APPDIR, HOMECHOOSER_HOMEKEY_FLAG,
 # HOMECHOOSER_INITD, HOMECHOOSER_RECHECK, HOMECHOOSER_TIMER_SLEEP, HOMECHOOSER_CONFIRM_DELAY,
 # HOMECHOOSER_TIMEOUT, HOMECHOOSER_CHECK_MARK (file that gets a line after each app check),
 # HOMECHOOSER_APPS_DIRS, HOMECHOOSER_INSTALL_DIRS (directories of installed apps),
@@ -94,9 +94,8 @@ APPDIR=${HOMECHOOSER_APPDIR:-/media/developer/apps/usr/palm/applications/org.web
 APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications /usr/palm/applications"}
 # Where installed apps' files are, for "still on disk": the appinfo directories and the store's.
 INSTALL_DIRS=${HOMECHOOSER_INSTALL_DIRS:-"$APPS_DIRS /media/cryptofs/apps/usr/palm/applications"}
-KEYFLAG=${HOMECHOOSER_KEYFILTER_FLAG:-/var/lib/webosbrew/homechooser/keyfilter}
+KEYFLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
-OLD_INITD=$(dirname "$INITD")/homechooser-keyfilter
 RECHECK=${HOMECHOOSER_RECHECK:-300}
 TIMER_SLEEP=${HOMECHOOSER_TIMER_SLEEP:-sleep}
 CONFIRM_DELAY=${HOMECHOOSER_CONFIRM_DELAY:-15}
@@ -140,12 +139,12 @@ major_version() {
     echo 0
 }
 
-# Copy what the removal path needs out of the app directory: this script, the key filter worker
+# Copy what the removal path needs out of the service scripts directory: this script, the Home key hook worker
 # and the access helper. Each file is
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
-    for f in homechooser-home-watch homechooser-keyfilter homechooser-access; do
+    for f in homechooser-home-watch homechooser-homekey homechooser-access; do
         if [ ! -f "$1/$f" ]; then
             [ "$f" != homechooser-home-watch ] && continue
             return 1
@@ -670,8 +669,8 @@ hc_gone() {
 # (the worker never restarts the compositor here, and does nothing if not mounted).
 kf_refresh() {
     [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
-    [ -f "$KEYFILTER" ] || return 0
-    $WSH "$KEYFILTER" refresh $1 >> "$LOG" 2>&1
+    [ -f "$HOMEKEY" ] || return 0
+    $WSH "$HOMEKEY" refresh $1 >> "$LOG" 2>&1
 }
 
 # sync_baked <choice>: the stored choice changed while the app is installed: write it into the
@@ -716,7 +715,7 @@ drop_override() {
 revert_platform() {
     log "putting the platform back to stock ($1)"
     if [ "$MAJOR" -ge 5 ] && [ "$MAJOR" -le 9 ]; then
-        # 5.x: the key filter launches the record's home directly, so name a stock launcher.
+        # 5.x: the Home key hook launches the record's home directly, so name a stock launcher.
         # 6 to 9: the patched QML reads the record first and falls back to the id it loaded at
         # compositor start (the old launcher, until a reboot), so the stock id is written, not
         # null; stock firmware ignores the record for the Home key, so it can stay after an uninstall.
@@ -744,7 +743,7 @@ restore_all() {
     revert_platform "Home Chooser uninstalled"
     rm -f "$CHOICE" "$KEYFLAG"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
-    for l in "$INITD" "$OLD_INITD"; do
+    for l in "$INITD"; do
         if [ -L "$l" ]; then
             rm -f "$l"
             log "removed $l"
@@ -944,7 +943,7 @@ if [ "$SRC" != "$RTDIR" ]; then
     fi
     log "cannot copy the scripts to $RT, running from $SRC"
 fi
-KEYFILTER=$SRC/homechooser-keyfilter
+HOMEKEY=$SRC/homechooser-homekey
 
 trap 'finish "stopped by signal" 0' TERM INT HUP
 

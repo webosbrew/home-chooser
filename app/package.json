@@ -12,7 +12,7 @@
 		"check-ilib": "node scripts/check-ilib.js dist",
 		"check-version": "node scripts/check-version.js",
 		"version": "node scripts/check-version.js --write",
-		"package": "npm run check-version && npm run pack-p && node scripts/prune-ilib.js dist && node scripts/check-ilib.js dist && node scripts/copy-backport.js dist && make -C ../service && node scripts/stage-service.js ../build/service-pkg && mkdir -p ../build/ipk && rm -f ../build/ipk/*.ipk && ares-package dist ../build/service-pkg --outdir ../build/ipk"
+		"package": "npm run check-version && npm run pack-p && node scripts/prune-ilib.js dist && node scripts/check-ilib.js dist && make -C ../service && node scripts/stage-service.js ../build/service-pkg && mkdir -p ../build/ipk && rm -f ../build/ipk/*.ipk && ares-package dist ../build/service-pkg --outdir ../build/ipk"
 	},
 	"license": "Apache-2.0",
 	"private": true,

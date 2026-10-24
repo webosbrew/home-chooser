@@ -470,12 +470,11 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	if (!gate(msg, "link", true)) return true;
-	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_KEYFILTER_SCRIPT, HC_WATCH_SCRIPT, HC_ACCESS_SCRIPT, NULL};
+	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_HOMEKEY_SCRIPT, HC_WATCH_SCRIPT, HC_ACCESS_SCRIPT, NULL};
 	if (!mkdir_p(HC_INIT_DIR)) {
 		send_error(msg, "linkFailed", "Could not create %s: %s", HC_INIT_DIR, strerror(errno));
 		return true;
 	}
-	unlink(HC_OLD_INIT_LINK);
 	for (int i = 0; scripts[i]; i++) {
 		if (chmod(scripts[i], 0755) != 0) {
 			send_error(msg, "linkFailed", "Could not make %s executable: %s", scripts[i], strerror(errno));
@@ -502,7 +501,6 @@ static bool on_unlink(LSHandle *sh, LSMessage *msg, void *ctx)
 	if (!gate(msg, "unlink", true)) return true;
 	bool ok = true;
 	if (unlink(HC_INIT_LINK) != 0 && errno != ENOENT) ok = false;
-	if (unlink(HC_OLD_INIT_LINK) != 0 && errno != ENOENT) ok = false;
 	if (!ok) {
 		send_error(msg, "unlinkFailed", "Could not remove the boot entry: %s", strerror(errno));
 		return true;
@@ -1303,7 +1301,7 @@ static int g_reboot_next;
 /* True when the worker's status says reboot=needed right now. */
 static bool reboot_pending(void)
 {
-	const hc_command *cmd = hc_command_lookup("keyfilterStatus");
+	const hc_command *cmd = hc_command_lookup("homekeyStatus");
 	if (!cmd) return false;
 	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
 	int code = run_argv(cmd->argv, cmd->timeout_s, out, err, NULL);

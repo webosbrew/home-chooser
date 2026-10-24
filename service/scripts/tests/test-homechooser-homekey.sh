@@ -1,9 +1,9 @@
 #!/bin/sh
-# Tests for homechooser-keyfilter against a fake root with stubbed mount, umount and systemctl.
-# usage: test-homechooser-keyfilter.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
+# Tests for homechooser-homekey against a fake root with stubbed mount, umount and systemctl.
+# usage: test-homechooser-homekey.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}
-HERE=$(cd "$(dirname "$0")" && pwd)
-SCRIPT=${KF_SCRIPT:-$HERE/homechooser-keyfilter}
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT=${KF_SCRIPT:-$HERE/homechooser-homekey}
 PASS=0
 FAIL=0
 
@@ -121,7 +121,7 @@ echo 'file=/usr/lib/qml/b.js'
 STUB
     sed -i "s|@T@|$T|" "$T/bin/node"
     : > "$T/rewriter.js"
-    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_REWRITER="$T/rewriter.js" HOMECHOOSER_KEYFILTER_FLAG="$T/keyfilter-flag"
+    export HOMECHOOSER_NODE="$T/bin/node" HOMECHOOSER_REWRITER="$T/rewriter.js" HOMECHOOSER_HOMEKEY_FLAG="$T/homekey-flag"
     chmod +x "$T/bin/"*
     export HOMECHOOSER_LUNA_SEND="$T/bin/luna-send" HOMECHOOSER_SAM_WAIT=0 HOMECHOOSER_SLEEP="$T/bin/sleep"
     export HOMECHOOSER_ROOT="$T/root" HOMECHOOSER_WORK="$T/work" \
@@ -477,12 +477,12 @@ check "polls until the third answer" test "$(wc -l < "$T/ready-calls")" = 3
 check "late answer does not restart again" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 1
 rm -rf "${T:?}"
 setup
-touch "$T/keyfilter-flag" "$T/ready-patched-only"
+touch "$T/homekey-flag" "$T/ready-patched-only"
 HOMECHOOSER_READY_WAIT=0 run apply
 check "failed patched QML reports failure" rc 1
 check "functional failure rolls all mounts back" test ! -s "$T/mounts"
 check "exactly one stock recovery restart" test "$(ncmds 'systemctl restart surface-manager-daemon')" = 2
-check "enable flag retained" test -f "$T/keyfilter-flag"
+check "enable flag retained" test -f "$T/homekey-flag"
 run status
 check "status reports stock recovery" has 'recovered=stock' "$T/out"
 check "status reports readiness reason" has 'reason=QML getCurrentState unavailable' "$T/out"
@@ -528,12 +528,12 @@ reboot_of() { run status; grep '^reboot=' "$T/out"; }
 setup
 check "no flag, unmounted: no" test "$(reboot_of)" = reboot=no
 check "status prints the line once" test "$(grep -c '^reboot=' "$T/out")" = 1
-touch "$T/keyfilter-flag"
+touch "$T/homekey-flag"
 check "flag, unmounted, anchors match: needed" test "$(reboot_of)" = reboot=needed
 check "existing lines unchanged" has 'patch=possible' "$T/out"
 run apply
 check "flag, mounted: no" test "$(reboot_of)" = reboot=no
-rm "$T/keyfilter-flag"
+rm "$T/homekey-flag"
 check "no flag, mounted: needed" test "$(reboot_of)" = reboot=needed
 check "mounted lines unchanged" has 'patch=possible' "$T/out"
 run stop

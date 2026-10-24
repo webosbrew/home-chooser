@@ -10,7 +10,7 @@ the luna API that Home Chooser's root service offers to a launcher.
 * **It makes your app the Home app on webOS 5 to 12.** The owner picks your app in Home Chooser;
   from then on the Home button opens it. The choice survives reboots: a small watcher re-applies it
   at boot, and puts LG Home back if your app is uninstalled (and re-applies the choice if it comes
-  back). On webOS 6 to 9 it installs a key filter patch for this, which needs one TV restart the
+  back). On webOS 6 to 9 it installs a Home key hook patch for this, which needs one TV restart the
   first time. See [Per-release notes](#per-release-notes).
 * **It tells the owner when your launcher is removed.** If the chosen launcher is uninstalled, the
   owner sees one alert saying that the Home button opens LG Home again, instead of a Home button
@@ -88,8 +88,8 @@ The owner decides. This is a request only:
 * the request is dropped without any message when the id is the stock home, unknown, not in the
   Home category or malformed, and also when Home Chooser still shows a setup problem (for example
   the service is not elevated yet) or is busy;
-* on webOS 6 to 9, the dialog changes nothing if the structural Home-key hook refuses the firmware
-  (see [the minimal hook](key-filter-backport.md));
+* on webOS 6 to 9, the dialog changes nothing if the structural Home key hook refuses the firmware
+  (see [the minimal hook](home-key-hook.md));
 * the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch` (dispatched on `document`; `window` is listened to as well), so the
   request works whether or not Home Chooser is already open.
 
@@ -330,7 +330,7 @@ the owner sees, and how the permission reaches you.
 
 ### 5.x
 
-The stock key filter launches the `home` entry of the `general/defaultApps` settings record
+The stock Home key handler launches the `home` entry of the `general/defaultApps` settings record
 directly, so Home Chooser only writes that record. No patch, no restart. The stock launcher is
 `com.webos.app.fullhome` (an overlay window), and LG Home is not running, so Home Chooser does not
 touch the stock home's memory here. The permission arrives through the hub group in the same way as
@@ -338,8 +338,8 @@ on 6.x to 10.x (below).
 
 ### 6.x to 9.x
 
-The stock key filter launches LG Home by its fixed id, whatever the record says. Home Chooser ships
-a key filter patch that makes the Home key follow the record, and mounts patched copies of the
+The stock Home key handler launches LG Home by its fixed id, whatever the record says. Home Chooser ships
+a Home key hook patch that makes the Home key follow the record, and mounts patched copies of the
 system files at boot. For a launcher this means:
 
 * **Restart on first setup.** The first selection stores the choice and enables the patch, then
@@ -347,9 +347,9 @@ system files at boot. For a launcher this means:
   launcher after that restart. Until then the choice is stored (`isHome` is true) but the Home
   button still opens LG Home. Later changes between launchers need no restart. Nothing restarts the
   compositor while the TV runs, so setup never closes your window.
-* **Structural Home-key hook.** Every webOS 6–9 build uses the same guarded rewriter at boot.
+* **Structural Home key hook.** Every webOS 6–9 build uses the same guarded rewriter at boot.
   Essential hooks apply together; supporting files are patched or skipped independently. A refusal
-  leaves stock behavior and prevents selecting a custom Home. See [the minimal hook](key-filter-backport.md).
+  leaves stock behavior and prevents selecting a custom Home. See [the minimal hook](home-key-hook.md).
 
 * **When the owner restores LG Home or your launcher is removed**, the record is written with the
   stock home id (not cleared), so LG Home opens at once; the patch stays mounted until the next
