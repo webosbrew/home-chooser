@@ -2307,16 +2307,17 @@ class Scenario:
         """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:
         the watcher (app copy and the running /tmp copy), the service binary, the app bundle."""
         r, d = self.rec, self.dev
-        watch = [SCRIPTS_DIR + '/homechooser-home-watch', '/tmp/homechooser-runtime/homechooser-home-watch']
+        notify = [SCRIPTS_DIR + '/lib/watch-notify.sh', '/tmp/homechooser-runtime/lib/watch-notify.sh']
+        restore = [SCRIPTS_DIR + '/lib/watch-restore.sh', '/tmp/homechooser-runtime/lib/watch-restore.sh']
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
         def has(text, paths):
             rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(text), ' '.join(paths)))
             return [l for l in out.split() if l.startswith('/')]
-        for text in (REMOVAL_ALERT[2:], UNINSTALL_TOAST):
-            got = has(text, watch)
+        for text, sources in ((REMOVAL_ALERT[2:], notify), (UNINSTALL_TOAST, restore)):
+            got = has(text, sources)
             r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
-        old = [(t, has(t, watch + [APPDIR])) for t in OLD_RESTART_TEXTS]
+        old = [(t, has(t, [SCRIPTS_DIR + '/lib', '/tmp/homechooser-runtime/lib', APPDIR])) for t in OLD_RESTART_TEXTS]
         r.check('device texts: no old restart wording in the watcher or the app', not any(g for _, g in old),
                 '; '.join('%r in %s' % (t, g) for t, g in old if g) or 'none')
         for reason, text in sorted(REBOOT_PROMPT.items()):
