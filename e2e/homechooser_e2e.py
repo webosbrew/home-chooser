@@ -81,7 +81,7 @@ PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 # {normal,overlay}), or any app id with --launcher-ipk.
 # ---------------------------------------------------------------------------------------------
 DOCK_ID = 'org.webosbrew.dock'
-DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'
+DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'  # default; hosts.toml [paths] dock_ipk, --dock-ipk
 FIXTURE_TYPES = ('native', 'qml', 'web')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
@@ -139,9 +139,9 @@ def fixture_specs():
     return ['fixture:%s.%s' % (t, w) for t in FIXTURE_TYPES for w in FIXTURE_WINDOWS]
 
 
-def make_launcher(spec, ipk_override=None, announce=print):
+def make_launcher(spec, ipk_override=None, announce=print, dock_ipk=DOCK_IPK):
     if spec == 'dock':
-        return Launcher(spec, DOCK_ID, ipk_override or DOCK_IPK, 'dock')
+        return Launcher(spec, DOCK_ID, ipk_override or dock_ipk, 'dock')
     if spec.startswith('fixture:'):
         t, _, w = spec[8:].partition('.')
         if t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS:
@@ -222,6 +222,37 @@ def entry(release_or_vm):
 
 
 # ---------------------------------------------------------------------------------------------
+# Beanjar machines: e2e/hosts.toml, then the git-ignored e2e/hosts.local.toml over it.  Without
+# either file the one machine is today's: `pi`, reached with `ssh raspberrypi`.
+# ---------------------------------------------------------------------------------------------
+HOSTS_FILE = os.path.join(HERE, 'hosts.toml')
+HOSTS_LOCAL_FILE = os.path.join(HERE, 'hosts.local.toml')
+DEFAULT_HOSTS = {'default': 'pi', 'hosts': {'pi': {'ssh': 'raspberrypi'}}, 'paths': {}}
+
+
+def load_hosts(path=None):
+    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]},
+    'paths': {...}}.  path: one file instead of hosts.toml + hosts.local.toml."""
+    import tomllib
+    files = [path] if path else [f for f in (HOSTS_FILE, HOSTS_LOCAL_FILE) if os.path.exists(f)]
+    if not files:
+        return json.loads(json.dumps(DEFAULT_HOSTS))
+    cfg = {'default': None, 'hosts': {}, 'paths': {}}
+    for f in files:
+        with open(f, 'rb') as fh:
+            d = tomllib.load(fh)
+        cfg['default'] = d.get('default', cfg['default'])
+        for name, h in d.get('hosts', {}).items():
+            cfg['hosts'].setdefault(name, {}).update(h)
+        cfg['paths'].update(d.get('paths', {}))
+    for name, h in cfg['hosts'].items():
+        if not h.get('local') and not h.get('ssh'):
+            raise SystemExit('host %s in %s has neither ssh = "<alias>" nor local = true' % (name, ', '.join(files)))
+    cfg['default'] = cfg['default'] or next(iter(cfg['hosts']), None)
+    return cfg
+
+
+# ---------------------------------------------------------------------------------------------
 # Running things
 # ---------------------------------------------------------------------------------------------
 def run(argv, timeout=120, input=None):
@@ -239,13 +270,21 @@ class BeanjarHost:
 
     local mode: beanjar and friends run as local commands.  remote mode: each command line is
     run with `ssh <host>` (an ssh config alias; BatchMode, so it never prompts) and files come
-    back with scp.  The rest of the runner never quotes for the remote.
+    back with scp.  The rest of the runner never quotes for the remote.  The mode comes from the
+    host's entry in hosts.toml, never from `beanjar` being on PATH: this PC has Beanjar's own
+    multi-host CLI, which is not the machine the VMs and their QMP sockets are on.
     """
 
-    def __init__(self, mode='auto', device='raspberrypi'):
-        if mode == 'auto':
-            mode = 'local' if shutil.which('beanjar') else 'remote'
-        self.mode, self.device = mode, device
+    def __init__(self, mode='remote', device='raspberrypi', name='pi'):
+        self.mode, self.device, self.name = mode, device, name
+        self._dirs = {}
+
+    @classmethod
+    def from_config(cls, cfg, name, mode=None, device=None):
+        h = cfg['hosts'].get(name)
+        if h is None:
+            raise SystemExit('unknown Beanjar host %r; hosts: %s (e2e/hosts.toml)' % (name, ', '.join(cfg['hosts'])))
+        return cls(mode or ('local' if h.get('local') else 'remote'), device or h.get('ssh') or 'localhost', name)
 
     # -- plumbing
     def sh(self, cmd, timeout=120):
@@ -268,17 +307,29 @@ class BeanjarHost:
         return self.sh('beanjar ' + self._q(*args), timeout)
 
     # -- Beanjar
-    def vm_table(self):
-        rc, out = self.beanjar('list')
-        rows = {}
-        for line in out.splitlines()[1:]:
-            f = line.split()
-            if len(f) >= 3:
-                rows[f[0]] = {'state': f[1], 'line': line}
-        return rows
+    def list_vms(self):
+        """[{name, state, ...}] of this machine's own VMs (`beanjar list --local --json`; a host whose
+        beanjar has remote hosts configured would otherwise list theirs too).  Raises on failure, so an
+        unreachable host never reads as an idle one."""
+        rc, out = self.beanjar('list', '--local', '--json', timeout=60)
+        if rc == 2:  # a beanjar without --local: no remote hosts there either
+            rc, out = self.beanjar('list', '--json', timeout=60)
+        try:
+            rows = json.loads(out[re.search(r'^\[', out, re.M).start():]) if rc == 0 else None
+        except (ValueError, AttributeError):
+            rows = None
+        if not isinstance(rows, list):
+            raise RuntimeError('beanjar list on %s failed (rc=%s): %s' % (self.name, rc, out.strip()[-300:]))
+        return [r for r in rows if r.get('host') in (None, 'local')]
 
     def running_vms(self):
-        return [n for n, r in self.vm_table().items() if r['state'] not in ('Off', 'off')]
+        """Every VM that is not Off (Starting, Running, Stopping all hold the machine)."""
+        return [r['name'] for r in self.list_vms() if r.get('state') not in ('Off', 'off')]
+
+    def vm_dir(self, vm):
+        if vm not in self._dirs:
+            self._dirs[vm] = self.info(vm).get('dir') or '$HOME/.local/share/beanjar/vms/' + vm
+        return self._dirs[vm]
 
     def info(self, vm):
         rc, out = self.beanjar('info', vm)
@@ -304,7 +355,7 @@ class BeanjarHost:
 
     # -- input and capture
     def sendkey(self, vm, key):
-        sock = '$HOME/.local/share/beanjar/vms/%s/run/qmp.sock' % vm
+        sock = self.vm_dir(vm) + '/run/qmp.sock'
         cmd = ('(echo \'{"execute":"qmp_capabilities"}\'; echo \'{"execute":"human-monitor-command",'
                '"arguments":{"command-line":"sendkey %s"}}\'; sleep 0.5) | socat - UNIX-CONNECT:%s | tail -1'
                % (key, sock))
@@ -319,7 +370,7 @@ class BeanjarHost:
     def tv_screenshot(self, vm, local_path):
         """`beanjar screenshot` (0.3.1+): the TV picture of the running VM, headless or through a viewer.
         Returns (ok, detail); detail is the command's output (--json: path, taken_by)."""
-        tmp = '/tmp/e2e-tv-%d.png' % os.getpid()
+        tmp = '/tmp/e2e-tv-%s-%d.png' % (vm, os.getpid())
         rc, out = self.beanjar('screenshot', vm, tmp, '--json', timeout=60)
         ok = rc == 0 and self.fetch(tmp, local_path)
         self.sh('rm -f ' + tmp)
@@ -470,14 +521,19 @@ ELEVATIONS = {'luna': LunaElevation, 'root-shell': RootShellElevation}
 # ---------------------------------------------------------------------------------------------
 class Inspector:
     def __init__(self, vm):
-        s = socket.socket()
-        s.bind(('127.0.0.1', 0))
-        self.port = s.getsockname()[1]
-        s.close()
-        self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                     start_new_session=True)
-        time.sleep(2)
+        # A free port is picked and released before ares-novacom binds it, so a parallel run can take
+        # it in between; then our forward exits at once and another port is tried.
+        for _ in range(3):
+            s = socket.socket()
+            s.bind(('127.0.0.1', 0))
+            self.port = s.getsockname()[1]
+            s.close()
+            self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+            time.sleep(2)
+            if self.proc.poll() is None:
+                break
 
     def close(self):
         try:
@@ -1698,56 +1754,105 @@ def ensure_devices(host, vm, rec):
                     break
             except OSError:
                 pass
-    p = os.path.expanduser('~/.webos/ose/novacom-devices.json')
-    devs = json.load(open(p))
-    byname = {x['name']: x for x in devs}
-    changed = False
     keyname = 'beanjar-%s-root' % vm
-    keypath = os.path.expanduser('~/.ssh/' + keyname)
-    if not os.path.exists(keypath):
-        src = '%s/identity/id_ed25519' % info['dir']
-        if not host.fetch(src, keypath):
-            raise SystemExit('could not fetch the root key of %s' % vm)
-        os.chmod(keypath, 0o600)
+    if fetch_key(host, '%s/identity/id_ed25519' % info['dir'], keyname):
         rec.say('fetched the root key of %s to ~/.ssh/%s' % (vm, keyname))
+    dkeyname = 'beanjar-%s_devmode' % vm
+    with devices_file() as devs:
+        # the devmode device (prisoner, 9922) uses the VM's devmode key, fetched only when it is added
+        if not any(x.get('name') == vm for x in devs) and fetch_key(host, '%s/identity/devmode_rsa' % info['dir'], dkeyname):
+            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
+        update_devices(devs, vm, addr, keyname, dkeyname, rec.say)
+
+
+def fetch_key(host, src, keyname):
+    """~/.ssh/<keyname> from the host unless it is there; True if fetched.  Fetched under a temp name and
+    renamed, so an interrupted copy never leaves a truncated key behind."""
+    keypath = os.path.expanduser('~/.ssh/' + keyname)
+    if os.path.exists(keypath):
+        return False
+    tmp = '%s.%d.tmp' % (keypath, os.getpid())
+    try:
+        if not host.fetch(src, tmp):
+            raise SystemExit('could not fetch %s from %s' % (src, host.name))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, keypath)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return True
+
+
+DEVICES_FILE = os.path.expanduser('~/.webos/ose/novacom-devices.json')
+
+
+class devices_file:
+    """`with devices_file() as devs:` read-modify-write of the ares device list, which runs in parallel
+    share.  An exclusive flock on <file>.lock serialises our runs; the new list is written to a temp file
+    in the same directory and renamed over the old one, so an ares command reading it at that moment
+    sees the old list or the new one, never a truncated file.  ares-cli-rs itself writes the file in
+    place without a lock (common/device/src/io.rs write_in), so `ares-setup-device` by hand during a run
+    is still unsafe.  The file is rewritten only if the list changed."""
+
+    def __init__(self, path=None):
+        self.path = path or DEVICES_FILE
+
+    def __enter__(self):
+        import fcntl
+        self.lock = open(self.path + '.lock', 'a')
+        fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try:
+            with open(self.path) as f:
+                self.devs = json.load(f)
+        except BaseException:
+            self.lock.close()
+            raise
+        self.before = json.dumps(self.devs)
+        return self.devs
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None and json.dumps(self.devs) != self.before:
+                tmp = '%s.%d.tmp' % (self.path, os.getpid())
+                with open(tmp, 'w') as f:
+                    json.dump(self.devs, f, indent=2)
+                os.replace(tmp, self.path)
+        finally:
+            self.lock.close()  # releases the flock
+        return False
+
+
+def update_devices(devs, vm, addr, keyname, dkeyname, say=print):
+    """Add or fix `<vm>-root` (root, 6622) and `<vm>` (devmode, prisoner, 9922) in an ares device list."""
+    byname = {x['name']: x for x in devs}
     want = {vm + '-root': (6622, 'root', {'openSsh': keyname})}
     for name, (port, user, key) in want.items():
         e = byname.get(name)
         if e is None:
             devs.append({'profile': 'ose', 'name': name, 'host': addr, 'port': port, 'username': user,
                          'privateKey': key, 'files': 'sftp'})
-            changed = True
-            rec.say('added ares device %s -> %s:%d' % (name, addr, port))
+            say('added ares device %s -> %s:%d' % (name, addr, port))
         elif e.get('host') != addr:
-            rec.say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
+            say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
             e['host'] = addr
-            changed = True
     dv = byname.get(vm)
     if dv is None:
-        # the devmode device (prisoner, 9922) with the VM's devmode key, fetched from the host
-        dkeyname = 'beanjar-%s_devmode' % vm
-        dkeypath = os.path.expanduser('~/.ssh/' + dkeyname)
-        if not os.path.exists(dkeypath):
-            if not host.fetch('%s/identity/devmode_rsa' % info['dir'], dkeypath):
-                raise SystemExit('could not fetch the devmode key of %s' % vm)
-            os.chmod(dkeypath, 0o600)
-            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
         devs.append({'profile': 'ose', 'name': vm, 'host': addr, 'port': 9922, 'username': 'prisoner',
                      'privateKey': {'openSsh': dkeyname}, 'files': 'sftp'})
-        rec.say('added ares device %s -> %s:9922' % (vm, addr))
-        changed = True
+        say('added ares device %s -> %s:9922' % (vm, addr))
     elif dv.get('host') != addr:
-        rec.say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
+        say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
         dv['host'] = addr
-        changed = True
-    if changed:
-        json.dump(devs, open(p, 'w'), indent=2)
 
 
 def prepare_vm(host, vm, rec):
-    running = host.running_vms()
+    """Refuse a busy machine, set the VM's layers and link.  The caller starts it."""
+    try:
+        running = host.running_vms()
+    except RuntimeError as e:
+        raise SystemExit(str(e))
     if running:
-        raise SystemExit('VMs already running, not touching anything: %s' % running)
+        raise SystemExit('VMs already running on %s, not touching anything: %s' % (host.name, running))
     s = host.settings(vm)
     layers = (s.get('layers') or '').split(',')
     want = {}
@@ -1759,8 +1864,6 @@ def prepare_vm(host, vm, rec):
         rec.say('VM %s is off; settings %s' % (vm, want))
         rc, out = host.set_settings(vm, **want)
         rec.say(out.strip()[-300:])
-    rc, out = host.start(vm)
-    rec.say('beanjar start: %s' % out.strip()[-200:])
 
 
 def wait_for_device(vm, rec, timeout=300):
@@ -1774,6 +1877,10 @@ def wait_for_device(vm, rec, timeout=300):
                 return True
         time.sleep(5)
     return False
+
+
+def interrupted(*_):
+    raise KeyboardInterrupt
 
 
 def main():
@@ -1790,9 +1897,16 @@ def main():
                          '(step 3u) and check that everything survives')
     ap.add_argument('--update-from', default=None,
                     help='git ref of the older Home Chooser (default: the previous commit that changed app/, service/ or backport/)')
-    ap.add_argument('--host-mode', choices=['auto', 'local', 'remote'], default='auto',
-                    help='where beanjar runs: local if on PATH, else over ssh (default auto)')
-    ap.add_argument('--host-device', default='raspberrypi', help='ssh host (config alias) of the Beanjar host in remote mode')
+    ap.add_argument('--host', default=None,
+                    help="the Beanjar machine the VM is on, a name in e2e/hosts.toml (default: the file's default, 'pi')")
+    ap.add_argument('--hosts-file', default=None, help='a hosts file instead of e2e/hosts.toml + e2e/hosts.local.toml')
+    ap.add_argument('--host-mode', choices=['local', 'remote'], default=None,
+                    help="override the host's mode: beanjar run here, or over ssh")
+    ap.add_argument('--host-device', default=None, help="override the host's ssh target (an ssh config alias)")
+    ap.add_argument('--dock-ipk', default=None, help='the Dock ipk (default: hosts.toml [paths] dock_ipk, else %s)' % DOCK_IPK)
+    ap.add_argument('--hc-ipk', default=None, help='the Home Chooser ipk to test (default: the newest build/ipk/*.ipk)')
+    ap.add_argument('--old-ipk', default=None, help='--update-check: the older Home Chooser ipk, already built (skips the build)')
+    ap.add_argument('--outdir', default=None, help='the result directory (default e2e/results/<vm>-<timestamp>); must not exist')
     ap.add_argument('--elevation', choices=sorted(ELEVATIONS), default=None,
                     help="override the matrix's elevation strategy")
     ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',
@@ -1827,14 +1941,19 @@ def main():
     args.multi = len(specs) > 1
     if args.multi and vm in KEEP_LAUNCHER_VMS:
         ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
+    cfg = load_hosts(args.hosts_file)
+    dock_ipk = args.dock_ipk or cfg['paths'].get('dock_ipk') or DOCK_IPK
     launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
-                               lambda t: print(t, flush=True)) for sp in specs]
-    args.new_ipk = args.old_ipk = args.old_ref = None
-    host = BeanjarHost(args.host_mode, args.host_device)
-    outdir = os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
+                               lambda t: print(t, flush=True), dock_ipk) for sp in specs]
+    host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
+    args.new_ipk, args.old_ref = args.hc_ipk, None
+    outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
     rec.say('artefacts: ' + outdir)
+    rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
+    # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
+    signal.signal(signal.SIGTERM, interrupted)
     started = False
     scenario = None
     old_tmp = None
@@ -1845,12 +1964,15 @@ def main():
             args.old_ref = args.update_from or default_update_ref()
             rc, full = run(['git', '-C', REPO, 'rev-parse', '--short', args.old_ref], 30)
             rec.say('--update-check: old build from git ref %s (%s)' % (args.old_ref, full.strip()))
-            args.new_ipk = current_home_chooser_ipk(rec, args.build)
-            args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
+            args.new_ipk = args.new_ipk or current_home_chooser_ipk(rec, args.build)
+            if not args.old_ipk:
+                args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
             for label, f in (('old', args.old_ipk), ('current', args.new_ipk)):
                 rec.say('%s Home Chooser ipk %s version %s' % (label, f, ipk_appinfo(f).get('version')))
         prepare_vm(host, vm, rec)
-        started = True
+        started = True  # before the start, so a start interrupted half-way is stopped too
+        rc, out = host.start(vm)
+        rec.say('beanjar start: %s' % out.strip()[-200:])
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
         end = time.time() + 120
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):

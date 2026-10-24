@@ -1,0 +1,16 @@
+# The Beanjar machines the E2E suite runs on (e2e/README.md "Beanjar machines").
+# e2e/hosts.local.toml (git-ignored) is read over this file: a host table there adds a machine or
+# changes keys of one here, and [paths] there sets this PC's own paths.
+#
+# Use the names `beanjar host list` uses on this PC, so `beanjar start <host>/<vm>` means the same machine.
+# Which VMs a machine has is asked from it (`beanjar list --local --json`); `vms` pins one only when a
+# VM name exists on more than one machine.
+
+default = "pi"
+
+[hosts.pi]
+ssh = "raspberrypi"            # an ssh config alias (BatchMode); `local = true` when beanjar runs on this PC
+# vms = ["w22o-ponytail-us"]
+
+# [paths]
+# dock_ipk = "/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk"
