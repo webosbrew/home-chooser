@@ -237,12 +237,13 @@ prove Home Chooser is absent: it can also mean the permission is missing from yo
 Lists the installed apps.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}]}
+{"returnValue": true, "apiVersion": 1, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}
 ```
 
 Each app carries `id`, `title`, `icon`, `largeIcon`, `folderPath`, `version`, `vendor`, `type`,
-`removable` and `visible`, when the platform has them; absent fields are omitted. `appCategory` is
-not forwarded, so the list cannot be filtered to Home apps. `icon` and `largeIcon` are file names
+`removable`, `visible` and `appCategory`, when the platform has them; absent fields are omitted.
+`appCategory` is the category array as sam reports it (for example `["home"]`), so a launcher can
+find the other launchers. Within an `apiVersion` this field list only grows. `icon` and `largeIcon` are file names
 relative to `folderPath`. There is no icon proxy for launchers: a web launcher may not be able to
 read another app's files, and Home Chooser's own icon service is for its settings app only.
 
