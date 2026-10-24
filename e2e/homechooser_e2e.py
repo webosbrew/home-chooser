@@ -810,11 +810,16 @@ class Inspector:
         print('  inspector evaluate -> None (%s); /json pages: %s' % (why, pages), flush=True)
 
     def evaluate(self, expr):
-        """Runtime.evaluate in the Home Chooser page; None if it is not there."""
+        """Runtime.evaluate in the Home Chooser page; None if it is not there.  Why a call gave None is
+        kept in self.last_error (no page, the forward gone, a socket error, an error reply, a JS exception)."""
+        self.last_error = None
         page = self._page()
         if not page:
+            self.last_error = 'no page for %s in /json (forward %s)' % (
+                APP_ID, 'alive' if self.proc.poll() is None else 'exited rc=%s' % self.proc.returncode)
             self.log_pages('no page for %s' % APP_ID)
             return None
+        s = None
         try:
             s = socket.create_connection(('127.0.0.1', self.port), timeout=8)
             key = base64.b64encode(os.urandom(16)).decode()
@@ -839,20 +844,28 @@ class Inspector:
             while True:
                 frame, buf = self._frame(s, buf)
                 if frame is None:
+                    self.last_error = 'websocket gave no frame'
                     return None
                 try:
                     d = json.loads(frame.decode('utf-8', 'replace'))
                 except ValueError:
                     continue
                 if d.get('id') == 1:
-                    return d.get('result', {}).get('result', {}).get('value')
-        except (OSError, ValueError):
+                    res = d.get('result') or {}
+                    v = (res.get('result') or {}).get('value')
+                    if v is None:
+                        self.last_error = 'reply without a value: %s' % json.dumps(d)[:400]
+                    return v
+        except (OSError, ValueError) as e:
+            self.last_error = 'websocket %s: %r (page %s, forward %s)' % (
+                'handshake/read', e, page.get('id'), 'alive' if self.proc.poll() is None else 'exited')
             return None
         finally:
-            try:
-                s.close()
-            except Exception:
-                pass
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def _frame(s, buf):
@@ -884,6 +897,10 @@ FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.clos
             "dialogText:(function(){var d=document.querySelector('[role=dialog]');return d?(d.textContent||'').trim().slice(0,300):null})(),"
             "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
             "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
+# Key focus of the Home Chooser page: on 9.x its window is an overlay (appinfo defaultWindowType), so sam's
+# foreground app stays the card beneath (com.webos.app.home) while our dialog has the keys; the page's own
+# document.hasFocus() is what says the keys reach it.
+PAGE_JS = ("JSON.stringify({focus:document.hasFocus(),visibility:document.visibilityState,href:location.href})")
 PLANT_JS = ("(function(){localStorage.setItem('homechooser.pending',JSON.stringify("
             "{id:'%s',title:'stale',at:Date.now()-86400000}));return localStorage.getItem('homechooser.pending')})()")
 MARKER_JS = "String(localStorage.getItem('homechooser.pending'))"
@@ -1902,12 +1919,36 @@ class Scenario:
 
     def focus_button(self, label, first=True):
         """Move focus inside our dialog to the button `label` (buttons sit in a row: the confirm one
-        first, LEFT; the cancel one last, RIGHT).  True when focus is on it."""
+        first, LEFT; the cancel one last, RIGHT).  True when focus is on it.  No key is pressed once the
+        page cannot be read (the app may have been closed: the next key would go to whatever is beneath)."""
         for k in ['LEFT', 'UP'] if first else ['RIGHT', 'DOWN']:
-            if (self.ui() or {}).get('text') == label:
+            ui = self.ui()
+            if ui is None:
+                return False
+            if ui.get('text') == label:
                 return True
             self.press(k)
         return (self.ui() or {}).get('text') == label
+
+    def page_state(self):
+        """The Home Chooser page's own focus/visibility/url, or None when it cannot be read."""
+        v = self.insp.evaluate(PAGE_JS) if self.insp else None
+        try:
+            return json.loads(v) if v else None
+        except ValueError:
+            return None
+
+    def page_gone_evidence(self, mark):
+        """Why our page went away since `mark`: the inspector's reason, whether sam still runs the app,
+        and the sam/WAM lines about closing it (windowPolicy when a card is put under our overlay, e.g.
+        the stock home relaunched as the last-input app after a close; userTimeout after a stretch with
+        no input) and about the stock home being killed and relaunched."""
+        why = getattr(self.insp, 'last_error', None) if self.insp else 'no inspector'
+        running = APP_ID in self.running_ids()
+        rc, out = self.dev.sh(
+            "cat /var/log/messages | awk '$1 >= \"%s\"' | grep -E '%s.*(killApp|windowPolicy|userTimeout|\"event\":\"close\")"
+            "|com.webos.app.home.*(kill_process|APP_CLOSED)|NL_APP_LAUNCH_BEGIN.*com.webos.app.home' | tail -n 10" % (mark, APP_ID))
+        return 'inspector: %s; %s running: %s\n%s' % (why, APP_ID, running, out.strip() or 'no close/kill line since %s' % mark)
 
     def ours_in_front(self, dialog):
         """The Home Chooser inspector page shows its own ConfirmDialog by aria-label.
@@ -1919,11 +1960,15 @@ class Scenario:
         """
         page = self.insp._page() if self.insp else None
         ui = self.ui() or {}
+        ps = self.page_state() or {}
         title = ui.get('dialog') or ''
         matches = title == dialog if not dialog.endswith('*') else title.startswith(dialog[:-1])
-        ok = bool(page and APP_ID in page.get('url', '') and matches)
-        return ok, 'inspector page %r; dialog %r; focus %r; foreground %s' % (
-            page.get('url') if page else None, title, ui.get('text'), self.dev.foreground()[0])
+        ok = bool(page and APP_ID in page.get('url', '') and APP_ID in (ps.get('href') or '') and matches
+                  and ps.get('focus') is True and ps.get('visibility') == 'visible')
+        return ok, 'inspector page %r; dialog %r; focus %r; document.hasFocus %r, visibility %r; foreground %s (on 9.x our ' \
+                   'overlay leaves the card beneath as the foreground app)' % (
+            page.get('url') if page else None, title, ui.get('text'), ps.get('focus'), ps.get('visibility'),
+            self.dev.foreground()[0])
 
     def reboot_after_choice(self, comp0):
         """webOS 6-9, the patch not mounted: the choice mounts nothing and restarts nothing; the app asks
@@ -1932,6 +1977,7 @@ class Scenario:
         is restarted with beanjar stop/start.  Then the boot hook mounts the patch."""
         r, d = self.rec, self.dev
         ui = self.wait(lambda: (lambda u: u if u.get('dialog') == REBOOT_TITLE else None)(self.ui() or {}), 90, 1)
+        dialog_mark = self.messages_mark()
         if not ui and self.a.update_check and d.mounts():
             r.note('no restart dialog and the patch is mounted: the OLD build of --update-check mounts live (before 144ef21)', '')
             return
@@ -1971,13 +2017,32 @@ class Scenario:
             # exercising LEFT=confirm and RIGHT=cancel, this proves remote keys are reaching the
             # inspected app rather than a popup that may have taken global key focus.
             cancel_ok = self.focus_button('Later', first=False)
-            r.check('RIGHT moves focus to "Later" (cancel)', cancel_ok, json.dumps(self.ui()))
-            if not cancel_ok:
-                raise RuntimeError('RIGHT did not focus Later; not pressing OK')
-            ok = self.focus_button('Reboot')
-            r.check('LEFT moves focus to "Reboot" (confirm)', ok, json.dumps(self.ui()))
+            ui = self.ui()
+            r.check('RIGHT moves focus to "Later" (cancel)', cancel_ok,
+                    json.dumps(ui) if ui is not None else self.page_gone_evidence(dialog_mark))
+            ok = cancel_ok and self.focus_button('Reboot')
+            if cancel_ok:
+                ui = self.ui()
+                r.check('LEFT moves focus to "Reboot" (confirm)', ok,
+                        json.dumps(ui) if ui is not None else self.page_gone_evidence(dialog_mark))
+            if not ok and (ui is None or ui.get('dialog') != REBOOT_TITLE):
+                # our dialog is gone (the app closed under it): no key is pressed any more; the restart
+                # still has to happen for the rest of the run, so it is done with Beanjar
+                r.check('our "%s" dialog stayed up while its keys were checked' % REBOOT_TITLE, False,
+                        self.page_gone_evidence(dialog_mark))
+                self.close_insp()
+                up = self.beanjar_reboot('2 reboot (fallback: our dialog was closed, beanjar stop/start)')
+                if not up:
+                    raise RuntimeError('the VM did not come back after the reboot')
+                self.after_boot_checks('after the reboot')
+                return
             if not ok:
                 raise RuntimeError('focus is not on Reboot; not pressing OK')
+            ps = self.page_state() or {}
+            r.check('just before OK: our page has key focus (document.hasFocus) and is visible',
+                    ps.get('focus') is True and ps.get('visibility') == 'visible', json.dumps(ps))
+            if not (ps.get('focus') is True and ps.get('visibility') == 'visible'):
+                raise RuntimeError('our page does not have key focus; not pressing OK')
             self.press('OK')
             self.close_insp()
             how = self.wait_reboot(boot0)

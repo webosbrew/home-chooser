@@ -245,9 +245,17 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   TV?" ("The Home button changes after a restart.", Reboot and Later). Asserted before the restart:
   `homechooser-keyfilter status` says `mounted=no` and `reboot=needed`, nothing is mounted, the flag
   and the `init.d` entry are written, the record names the launcher, and the compositor was not
-  restarted. With `--reboot-via dialog` (the default) the runner checks that Home Chooser is the
-  foreground app and that the dialog in front is "Restart the TV?" (by the DOM, through the
-  inspector), moves focus to Reboot and presses OK there, on its own screen; the TV then restarts through
+  restarted. With `--reboot-via dialog` (the default) the runner checks, through the inspector, that the
+  Home Chooser page (its URL) shows "Restart the TV?" and has key focus (`document.hasFocus()`,
+  `visibilityState` visible). sam's foreground app is not used: Home Chooser's window is an overlay
+  (appinfo `defaultWindowType`), so on 9.x `getForegroundAppInfo` keeps naming the card beneath,
+  `com.webos.app.home`, while our dialog has the keys. It checks RIGHT (Later) and LEFT (Reboot), re-reads
+  the page before every key and presses nothing once the page is gone, checks the key focus again and
+  presses OK on Reboot, on its own screen. If the page goes away under the dialog, the runner records why:
+  the inspector's reason, whether sam still runs the app, and sam/WAM close lines. On 9.2.1 (2026-10-24)
+  surface-manager closed our overlay with `close ... reason:"windowPolicy"` when sam relaunched a
+  force-closed stock home as the last-input app; WAM also closes it with `userTimeout` after a few minutes
+  without input. That is a `FAIL`, and the VM is restarted with beanjar so the run can go on. The TV then restarts through
   `rebootConfirmed` and `tvpower/power/reboot`, which this exercises. The runner waits for a new
   `boot_id`. If none comes in 240 s that is a `FAIL`, and the VM is restarted with beanjar so the
   run can go on; a VM that Beanjar shows off is started again. With `--reboot-via later` it presses
