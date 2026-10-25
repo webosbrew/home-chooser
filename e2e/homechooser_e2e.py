@@ -2634,6 +2634,14 @@ exit "$rc"
         r.check('watcher regenerated the cache after boot', bool(rebuilt), raw)
         r.check('rebuilt cache requests the next restart with the original stale reason',
                 st.get('hook') == 'stale' and st.get('reason') == 'stock-changed' and st.get('reboot') == 'needed', raw)
+        # The service's PmLog lines may be unavailable by the time the app finishes opening.
+        # Observe the notification call as well, just as the first-choice prompt does.
+        self.ask_mark = self.messages_mark()
+        self.ask_monitor = RebootAlertMonitor(d)
+        if not self.ask_monitor.start():
+            r.note('notification bus monitor did not start; using PmLog evidence', '')
+            self.ask_monitor.close()
+            self.ask_monitor = None
         self.insp = Inspector(self.vm)
         d.launch(APP_ID)
         def rendered():
@@ -2647,9 +2655,13 @@ exit "$rc"
             return item if item.get('alert') else None
         info = self.wait(cache_alert, 45, 2) or {}
         r.check('app raises the restart alert once for the rebuilt cache',
-                info.get('alert') == 'accepted' and info.get('message') == REBOOT_PROMPT['apply'], repr(info))
+                info.get('alert') == 'accepted' and info.get('message') == REBOOT_PROMPT['apply'],
+                self.reboot_ask_evidence()[1])
         if info.get('alert') == 'accepted':
             self.close_reboot_alert('3c rebuilt cache', info)
+        if self.ask_monitor:
+            self.ask_monitor.close()
+            self.ask_monitor = None
         d.close(APP_ID)
         self.insp.close()
         self.insp = None

@@ -660,17 +660,18 @@ class ApiLaunchers(unittest.TestCase):
         self.assertNotIn('HC_FIXTURE_PERMISSION"]', body)
 
     def test_matrix_dry_run_passes_api_check(self):
-        tmp = tempfile.mkdtemp()
-        hosts = os.path.join(tmp, 'hosts.toml')
-        with open(hosts, 'w') as f:
-            f.write('default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n')
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--vms', '9.x', '--api-check', '--reboot-via', 'later',
-                                  '--results', tmp], lister=lambda h: ['w24g-ombre'], busy=lambda h: False)
-        self.assertEqual(rc, 0, out.getvalue())
-        self.assertIn('--api-check', out.getvalue())
-        self.assertIn('--reboot-via later', out.getvalue())
+        with tempfile.TemporaryDirectory() as tmp:
+            hosts = os.path.join(tmp, 'hosts.toml')
+            with open(hosts, 'w') as f:
+                f.write('default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n')
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--vms', '9.x', '--api-check',
+                                      '--reboot-via', 'later', '--results', tmp],
+                                     lister=lambda h: ['w24g-ombre'], busy=lambda h: False)
+            self.assertEqual(rc, 0, out.getvalue())
+            self.assertIn('--api-check', out.getvalue())
+            self.assertIn('--reboot-via later', out.getvalue())
 
 
 if __name__ == '__main__':
