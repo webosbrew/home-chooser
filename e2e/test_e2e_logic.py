@@ -304,6 +304,44 @@ class Crashes(unittest.TestCase):
         self.assertEqual(e2e.crash_lines('WebAppMgr: ok\n'), [])
 
 
+class KnownDvbCrash(unittest.TestCase):
+    """Real lines of e2e/results/w24g-ombre-20261025-040724/run.log (9.2.4)."""
+    CRASHD = '2026-10-24T19:14:39.699944Z [38.504729568] user.info crashd [] crashd CRASHED {"process":"legacy-broadcas.4892"} '
+    FAULT = {"faultType": "crash", "faultContent": "RDXDErr3_legacy-broadcas__Linux Crash: legacy-broadcas crashes at location "
+             "\u0002usr\u0002sbin\u0002legacy-broadcast-dvb (API_SI_GetLinkageUriInfo+0x197) [0xf9efdc]"
+             "____legacy-broadcas.4892.YOpk2V.gz", "faultTime": "38.523512976"}
+    NOISE = {"faultType": "general", "faultContent": "keyCheck2_4433_sysfaultdetector", "faultTime": "28.193528519"}
+
+    def reply(self, *faults):
+        return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': len(faults), 'detectedFaults': list(faults)}})
+
+    def test_known_crash_is_noted_not_failed(self):
+        self.assertEqual(e2e.crash_lines(self.CRASHD), [self.CRASHD])
+        known, other = e2e.split_known_crashes([self.CRASHD], self.reply(self.NOISE, self.FAULT))
+        self.assertEqual((known, other), ([self.CRASHD], []))
+        self.assertEqual(list(e2e.known_fault_pids(self.reply(self.NOISE, self.FAULT))), ['4892'])
+
+    def test_other_location_fails(self):
+        f = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10'))
+        self.assertEqual(e2e.split_known_crashes([self.CRASHD], self.reply(f)), ([], [self.CRASHD]))
+
+    def test_other_process_fails(self):
+        web = '2026-10-23T04:26:50Z [194.2] user.info crashd [] crashd CRASHED {"process":"WebAppMgr.5823"}'
+        f = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('legacy-broadcas', 'WebAppMgr'))
+        self.assertEqual(e2e.split_known_crashes([web], self.reply(self.FAULT)), ([], [web]))
+        self.assertEqual(e2e.known_fault_pids(self.reply(f)), {})
+
+    def test_other_pid_or_no_fault_entry_fails(self):
+        other = self.CRASHD.replace('4892', '999')
+        self.assertEqual(e2e.split_known_crashes([other], self.reply(self.FAULT)), ([], [other]))
+        self.assertEqual(e2e.split_known_crashes([self.CRASHD], 'Error: timeout'), ([], [self.CRASHD]))
+
+    def test_mixed_lines(self):
+        web = 'x crashd CRASHED {"process":"WebAppMgr.5823"}'
+        known, other = e2e.split_known_crashes([self.CRASHD, web], self.reply(self.FAULT))
+        self.assertEqual((known, other), ([self.CRASHD], [web]))
+
+
 class WaitForDevice(unittest.TestCase):
     """2026-10-24: three VMs whose previous boot was cut at ~9 s came up in HBC failsafe mode (telnetd,
     no Dropbear): developer mode answered, root SSH never did.  The wait names that state."""
@@ -406,6 +444,11 @@ class FakeDev:
     def boot_id(self):
         return self.boot
 
+    fault_reply = ''
+
+    def exec(self, cmd, timeout=60):
+        return 0, self.fault_reply
+
     def sh(self, cmd, timeout=60):
         if cmd.startswith('date'):
             return 0, '2026-10-24T01:00:00\n'
@@ -457,6 +500,26 @@ class RestartDetection(unittest.TestCase):
         s.dev.units = {'webapp-mgr': {'MainPID': '300', 'NRestarts': '1'}}
         s.check_no_crash('x', snap)
         self.assertEqual([ok for _, ok in s.rec.checks], [False, False])
+
+    def test_known_dvb_crash_is_a_note_not_a_fail(self):
+        s = scenario()
+        snap = s.compositor_snapshot()
+        s.dev.messages = KnownDvbCrash.CRASHD + '\n'
+        s.dev.fault_reply = KnownDvbCrash().reply(KnownDvbCrash.NOISE, KnownDvbCrash.FAULT)
+        s.check_no_crash('x', snap)
+        self.assertEqual([ok for _, ok in s.rec.checks], [True, True])
+        self.assertTrue(any('known LG crash' in n for n in s.rec.notes), s.rec.notes)
+
+    def test_dvb_crash_at_another_location_or_with_wam_crash_fails(self):
+        for fault_reply, extra in (('', ''), (KnownDvbCrash().reply(
+                dict(KnownDvbCrash.FAULT, faultContent='RDXDErr3_legacy-broadcas__x (API_SI_Other+0x1)__legacy-broadcas.4892.a.gz')), ''),
+                (KnownDvbCrash().reply(KnownDvbCrash.FAULT), 'x crashd CRASHED {"process":"WebAppMgr.1"}\n')):
+            s = scenario()
+            snap = s.compositor_snapshot()
+            s.dev.messages = KnownDvbCrash.CRASHD + '\n' + extra
+            s.dev.fault_reply = fault_reply
+            s.check_no_crash('x', snap)
+            self.assertEqual([ok for _, ok in s.rec.checks], [False, True], fault_reply)
 
     def test_only_6_to_9(self):
         for major in (5, 10, 12):

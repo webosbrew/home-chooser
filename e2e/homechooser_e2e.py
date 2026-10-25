@@ -376,6 +376,43 @@ def classify_faults(reply, since_uptime):
     return real, noise
 
 
+# A known LG crash, accepted as a limitation (docs/home-key-hook.md "Known limitations"): on webOS 9.2.4 the
+# boot compositor restart intermittently (about 1 boot in 10 on the VM) sets off a legacy-broadcast-dvb crash
+# at API_SI_GetLinkageUriInfo+0x197.  crashd names only the process (`legacy-broadcas.<pid>`); the location is
+# in the faultmanager entry, whose gz name carries the same pid.  So a crashd line is known only when a fault
+# entry for the same pid has the known location.  Anything else (other process, other location, WebAppMgr)
+# stays a crash.
+KNOWN_CRASH_DOC = 'docs/research/home-key-hook-early-mount-study.md'
+KNOWN_FAULT_RE = re.compile(r'^RDXDErr3_legacy-broadcas__.*legacy-broadcast-dvb \(API_SI_GetLinkageUriInfo\+0x197\)'
+                            r'.*legacy-broadcas\.(\d+)\.')
+KNOWN_CRASHD_RE = re.compile(r'crashd.*CRASHED.*"process":\s*"legacy-broadcas\.(\d+)"')
+
+
+def known_fault_pids(reply):
+    """pid -> fault entry for every getFaultDetectedStatus entry that is the known legacy-broadcast-dvb crash."""
+    found = {}
+    try:
+        faults = (json.loads(reply).get('faultDetectedStatus') or {}).get('detectedFaults') or []
+    except (ValueError, AttributeError):
+        return found
+    for f in faults:
+        m = isinstance(f, dict) and f.get('faultType') == 'crash' and KNOWN_FAULT_RE.match(str(f.get('faultContent') or ''))
+        if m:
+            found[m.group(1)] = f
+    return found
+
+
+def split_known_crashes(lines, reply):
+    """(known, other) crash lines: known are crashd lines of the known legacy-broadcast-dvb crash, confirmed by a
+    fault entry of the same pid in `reply` (getFaultDetectedStatus)."""
+    pids = known_fault_pids(reply)
+    known, other = [], []
+    for l in lines:
+        m = KNOWN_CRASHD_RE.search(l)
+        (known if m and m.group(1) in pids else other).append(l)
+    return known, other
+
+
 # ---------------------------------------------------------------------------------------------
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
@@ -1233,6 +1270,8 @@ class Scenario:
                 if not first:
                     r.say('key focus restored: the popup was dismissed')
                 return True
+            if first and self.dismiss_known_popup('keys blocked') is True:
+                continue
             if first:
                 fg = self.dev.foreground()
                 epl = self.dev.luna('luna://com.webos.service.oledepl/isPixelRefresherCondition')
@@ -1329,6 +1368,11 @@ class Scenario:
         rc, out = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20")
                        % (before['mark'], shlex.quote(CRASH_RE.pattern)))
         bad = crash_lines(out)
+        if bad:
+            known, bad = split_known_crashes(bad, self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus'))
+            if known:
+                self.rec.note('%s: known LG crash (legacy-broadcast-dvb, API_SI_GetLinkageUriInfo+0x197), accepted limitation, '
+                              'not a FAIL; see %s' % (label, KNOWN_CRASH_DOC), '\n'.join(known[-3:]))
         self.rec.check(label + ': no crashd CRASHED or WebAppMgr crash line in /var/log/messages since %s' % before['mark'],
                        not bad, '\n'.join(bad[-6:]) or 'none')
         if d.boot_id() == before['boot']:
@@ -1460,7 +1504,26 @@ class Scenario:
             up = None
         return self.messages_mark(), up
 
-    def foreign_popup(self, label):
+    def dismiss_known_popup(self, label):
+        """The "[crash] Fault Occured" popup of the known legacy-broadcast-dvb crash (YES and NO do the same
+        there) may be dismissed with BACK, once per fault.  Only a fault entry that is that known crash
+        qualifies.  Verified through getFaultDetectedStatus: the entry must be gone before any further key.
+        Returns None when no such fault is pending, else whether the popup was verified gone."""
+        done = self.__dict__.setdefault('dismissed_known', set())
+        uri = 'luna://com.webos.service.faultmanager/getFaultDetectedStatus'
+        pending = {p for p in known_fault_pids(self.priv_luna(uri)) if p not in done}
+        if not pending:
+            return None
+        self.rec.note('%s: known LG crash popup (see %s); dismissing it with BACK' % (label, KNOWN_CRASH_DOC),
+                      'pids %s' % ', '.join(sorted(pending)))
+        done |= pending
+        self.press('BACK')
+        gone = self.wait(lambda: not (pending & set(known_fault_pids(self.priv_luna(uri)))), 15, 3)
+        self.rec.check('%s: known LG crash popup gone from the fault status after BACK' % label, bool(gone),
+                       self.priv_luna(uri))
+        return bool(gone)
+
+    def foreign_popup(self, label, dismiss=False):
         """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
         faultmanager (9.2.1 rootfs: /usr/sbin/faultmanager) raises the "[crash] Fault Occured" popup through
         notificationmgr and answers luna://com.webos.service.faultmanager/getFaultDetectedStatus with
@@ -1475,9 +1538,20 @@ class Scenario:
         t_mark, up_mark = mark
         reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
         real, noise = classify_faults(reply, up_mark)
+        kpids = known_fault_pids(reply)
+        kfaults = [f for f in real if f in kpids.values()]
+        real = [f for f in real if f not in kfaults]
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
         rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
-        ev += [l for l in out.splitlines() if l.strip()]
+        lines = [l for l in out.splitlines() if l.strip()]
+        known_lines = split_known_crashes(lines, reply)[0]
+        ev += [l for l in lines if l not in known_lines]
+        if kfaults or known_lines:
+            self.rec.note('%s: known LG crash popup (legacy-broadcast-dvb, API_SI_GetLinkageUriInfo+0x197), accepted '
+                          'limitation, not a FAIL; see %s' % (label, KNOWN_CRASH_DOC),
+                          ' | '.join([json.dumps(f) for f in kfaults] + known_lines))
+            if kfaults and not ev and dismiss and self.dismiss_known_popup(label) is False:
+                ev.append('known LG crash popup still listed by the fault status after BACK')
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
                           % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))
@@ -1709,7 +1783,7 @@ class Scenario:
         if from_app:
             self.front_app()
         if proof:
-            popup = self.foreign_popup(label)
+            popup = self.foreign_popup(label, dismiss=True)
             if popup:
                 r.check('%s: no foreign LG fault popup before the Home-key proof' % label, False, popup)
                 raise RuntimeError('foreign LG fault popup detected; not sending keys')

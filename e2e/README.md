@@ -226,7 +226,14 @@ and Home key hook docs.
    line, or faultmanager's `getFaultDetectedStatus` lists a fault whose `faultTime` (seconds since boot) is after
    the mark. `general` / `keyCheck2_<N>_sysfaultdetector` (one per boot, 27-34 s after it, constant within the
    boot, seen on passing steps; only `faultmanager FAULT_RESPONSE` lines, no crashd line) and faults raised
-   before the mark are noted, never counted. It never presses keys at a popup. Reinstall: the
+   before the mark are noted, never counted. It never presses keys at a popup, with one exception: the known
+   9.2.4 `legacy-broadcast-dvb` crash (`API_SI_GetLinkageUriInfo+0x197`, a crashd line for `legacy-broadcas.<pid>`
+   confirmed by the fault entry of the same pid; accepted limitation, see docs/home-key-hook.md "Known limitations"
+   and `docs/research/home-key-hook-early-mount-study.md`). That crash is recorded as a note, not a `FAIL`, in the
+   end-of-step crash check and the popup check; any other crash, a WebAppMgr crash, or a legacy-broadcast crash at
+   another location still fails. If its popup holds key focus (before a Home proof, or when the probe key is
+   blocked) the runner sends BACK once per fault (YES and NO do the same there) and continues only when
+   `getFaultDetectedStatus` no longer lists the fault. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
 5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
