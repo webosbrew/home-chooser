@@ -121,6 +121,8 @@ hc_remove_verdict hc_remove_check(const char *id, const char *caller, int remova
 const char *hc_remove_verdict_text(hc_remove_verdict v);
 /* True only for a SAM error that explicitly says the target app is absent. */
 bool hc_sam_app_missing(const char *error_text);
+/* SAM uses this text for both a missing id and an unsupported installed app type. */
+bool hc_sam_app_ambiguous(const char *error_text);
 /* Launcher failure classification shared by the handlers. */
 const char *hc_unusable_reply_code(int exit_status);
 const char *hc_sam_refusal_code(bool target_lookup, const char *error_text);

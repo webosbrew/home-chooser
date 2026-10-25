@@ -383,6 +383,11 @@ static void test_api_v1(void)
 	CHECK(!hc_sam_app_missing("Permission does not exist"));
 	CHECK(!hc_sam_app_missing("temporary failure"));
 	CHECK(!hc_sam_app_missing(NULL));
+	CHECK(hc_sam_app_ambiguous("Invalid appId specified OR Unsupported Application Type: org.example.absent"));
+	CHECK(hc_sam_app_ambiguous("INVALID APPID SPECIFIED OR UNSUPPORTED APPLICATION TYPE"));
+	CHECK(!hc_sam_app_ambiguous("Permission denied"));
+	CHECK(!hc_sam_app_ambiguous("App not found"));
+	CHECK(!hc_sam_app_ambiguous(NULL));
 	CHECK(strcmp(hc_unusable_reply_code(-2), "timeout") == 0);
 	CHECK(strcmp(hc_unusable_reply_code(-1), "badReply") == 0);
 	CHECK(strcmp(hc_unusable_reply_code(0), "badReply") == 0);

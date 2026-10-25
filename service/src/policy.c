@@ -294,6 +294,17 @@ bool hc_sam_app_missing(const char *error_text)
 		strstr(lower, "application not installed");
 }
 
+bool hc_sam_app_ambiguous(const char *error_text)
+{
+	if (!error_text) return false;
+	char lower[512];
+	size_t n = strlen(error_text);
+	if (n >= sizeof lower) n = sizeof lower - 1;
+	for (size_t i = 0; i < n; i++) lower[i] = (char)tolower((unsigned char)error_text[i]);
+	lower[n] = '\0';
+	return strstr(lower, "invalid appid specified or unsupported application type") != NULL;
+}
+
 const char *hc_unusable_reply_code(int exit_status)
 {
 	return exit_status == -2 ? "timeout" : "badReply";

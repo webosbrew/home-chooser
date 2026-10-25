@@ -854,6 +854,7 @@ typedef struct LOp {
 	bool need_consent;
 	char *target_title;
 	char *target_folder;
+	char *lookup_text; /* Original SAM refusal while resolving an ambiguous target id. */
 	int target_removable;
 } LOp;
 
@@ -863,6 +864,7 @@ static void op_free(LOp *op)
 	g_free(op->target);
 	g_free(op->target_title);
 	g_free(op->target_folder);
+	g_free(op->lookup_text);
 	g_free(op);
 }
 
@@ -915,13 +917,25 @@ static void consent_done(Call *c, jvalue_ref reply)
 	char *folder = info ? get_string(info, "folderPath") : NULL;
 	char *file = NULL;
 	jvalue_ref file_json = NULL;
+	bool appinfo_unreadable = false;
 	if ((!perms || !jis_valid(perms) || !jis_array(perms)) && folder && folder[0] == '/' && !strstr(folder, "..")) {
 		/* getAppInfo did not carry the appinfo's own fields: read the file the app was installed with */
 		char *path = g_strdup_printf("%s/appinfo.json", folder);
 		ssize_t n = slurp(path, 65536, &file, NULL);
 		g_free(path);
 		file_json = n >= 0 ? parse_object(file) : NULL;
+		appinfo_unreadable = !file_json;
 		perms = file_json ? jobject_get(file_json, key_buf("requiredPermissions")) : NULL;
+	} else if (!perms || !jis_valid(perms) || !jis_array(perms)) {
+		appinfo_unreadable = true;
+	}
+	if (op->need_consent && appinfo_unreadable) {
+		send_error_for(op->msg, op->method, "lookupFailed", "Could not read the caller's installed appinfo.json");
+		j_release(&file_json);
+		g_free(file);
+		g_free(folder);
+		op_free(op);
+		return;
 	}
 	GPtrArray *list = g_ptr_array_new_with_free_func(g_free);
 	if (perms && jis_valid(perms) && jis_array(perms)) {
@@ -1139,6 +1153,50 @@ static bool sam_failure(LOp *op, Call *c, jvalue_ref reply, bool target_lookup)
 	return true;
 }
 
+static void target_absence_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	if (!sam_failure(op, c, reply, false)) {
+		jvalue_ref apps = jobject_get(reply, key_buf("apps"));
+		if (!apps || !jis_valid(apps) || !jis_array(apps)) {
+			send_error_for(op->msg, op->method, "badReply", "The application manager did not return an app array");
+		} else {
+			bool present = false, usable = true;
+			for (ssize_t i = 0; i < jarray_size(apps); i++) {
+				jvalue_ref app = jarray_get(apps, i);
+				char *id = jis_object(app) ? get_string(app, "id") : NULL;
+				if (!id) usable = false;
+				else if (strcmp(id, op->target) == 0) present = true;
+				g_free(id);
+			}
+			if (!usable) {
+				send_error_for(op->msg, op->method, "badReply", "The application manager returned an app without an id");
+			} else {
+				char *message = g_strdup_printf("%s: %s", present ?
+					"The application manager refused the target lookup" : "No such app",
+					op->lookup_text);
+				send_error_for(op->msg, op->method, present ? "refused" : "notFound", message);
+				g_free(message);
+			}
+		}
+	}
+	op_free(op);
+}
+
+/* SAM's combined missing/unsupported error needs a second lookup to tell the conditions apart. */
+static bool check_ambiguous_target(LOp *op, jvalue_ref reply)
+{
+	if (!reply || reply_ok(reply)) return false;
+	char *sam_text = get_string(reply, "errorText");
+	if (!hc_sam_app_ambiguous(sam_text)) {
+		g_free(sam_text);
+		return false;
+	}
+	op->lookup_text = sam_text;
+	call_start(SAM_URI "/listApps", "{\"properties\":[\"id\"]}", target_absence_done, op);
+	return true;
+}
+
 static void foreground_done(Call *c, jvalue_ref reply)
 {
 	LOp *op = c->ctx;
@@ -1184,6 +1242,7 @@ static jvalue_ref appinfo_object(jvalue_ref reply)
 static void appinfo_done(Call *c, jvalue_ref reply)
 {
 	LOp *op = c->ctx;
+	if (check_ambiguous_target(op, reply)) return;
 	if (!sam_failure(op, c, reply, true)) {
 		jvalue_ref info = appinfo_object(reply);
 		if (!info || !jis_object(info)) {
@@ -1402,6 +1461,7 @@ static void uninstall_ask(LOp *op)
 static void uninstall_info_done(Call *c, jvalue_ref reply)
 {
 	LOp *op = c->ctx;
+	if (check_ambiguous_target(op, reply)) return;
 	jvalue_ref info = reply ? jobject_get(reply, key_buf("appInfo")) : NULL;
 	if (!info || !jis_valid(info) || !jis_object(info)) info = reply;
 	if (!reply || !reply_ok(reply) || !info) {
