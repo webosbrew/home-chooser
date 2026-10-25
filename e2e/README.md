@@ -341,25 +341,32 @@ Opt-in steps that test the contract of `docs/launcher-api.md` on the device. Eve
 launcher with root `luna-send -a <launcher id> -n 1 luna://org.webosbrew.homechooser.service/<method>`
 through `ares-do exec` (`luna-send` under `ares-shell -r` prints nothing). The hub then takes the caller to
 be that installed app, with its own client permissions. The launcher must declare
-`requiredPermissions: ["homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
-web fixture built with the permission (`HC_FIXTURE_PERMISSION=homechooser.applications sh
+`requiredPermissions: ["org.webosbrew.homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
+web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh
 e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
 declare it and are refused. The run also installs a disposable non-home app,
 `org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
 
 * 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
-  permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps` and `running`
-  succeed with the documented fields and nothing beyond them (`getInfo`: `root`, `permitted` true and `isHome`
-  false; `listApps` names the launcher and the disposable app); the disposable app (no permission) is
-  refused `listApps`, `running`, `closeById` and `uninstall` and gets `permitted:false` from `getInfo` (or a
-  hub denial); a caller without an app id is refused; `closeById` and `uninstall` as the launcher answer
+  permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps`, `listRunning`,
+  `getForegroundApp`, `getAppInfo` and `getAppIcon`
+  succeed with the documented fields and allow additional fields (`getInfo`: `root`, `permitted` true and `isSelectedHome`
+  false; `listApps` names the launcher and the disposable app); the launcher gets `noIcon` when
+  requesting the disposable app's absent `largeIcon`, while the web fixture's oversized `largeIcon`
+  checks `iconTooLarge`. Stock LG Home and Homebrew Channel exercise appinfo's real icon paths;
+  when an advertised file is absent (as on 11.2.0 LG Home), the runner verifies that path on the VM
+  and accepts `noIcon`.
+  The disposable app (no permission) is
+  refused with `noPermission` for the five methods callable before selection, and with `notHome`
+  for `closeApp` and `uninstallApp` because the Home check comes first; `getInfo` reports
+  `permitted:false` (or a hub denial); a caller without an app id is refused; `closeApp` and `uninstallApp` as the launcher answer
   `notHome`; `uninstallConfirmed` as the launcher is refused. Then the `request` launch parameter is tested:
   `ares-launch org.webosbrew.homechooser -p '{"request":"<launcher>"}'` opens "Use <title> as Home?", the
   runner checks that this dialog is ours and in front, presses Back, and checks that the choice is unchanged.
-* 3a, after step 3 (the launcher is Home; on 6-9 after the boot of step 2): `getInfo` says `isHome:true`;
-  `closeById` closes the running disposable app (accepted, then gone from `running`); `closeById` without an
-  id is `badRequest`; `uninstall` of Home Chooser, Homebrew Channel and the launcher itself is `notAllowed`.
-  `uninstall` of the disposable app answers `pending` with `confirm:"alert"` or `"screen"`, and the
+* 3a, after step 3 (the launcher is Home; on 6-9 after the boot of step 2): `getInfo` says `isSelectedHome:true`;
+  `closeApp` closes the running disposable app (accepted, then gone from `listRunning`); `closeApp` without an
+  id is `badRequest`; `uninstallApp` of Home Chooser, Homebrew Channel and the launcher itself is `protected`.
+  `uninstallApp` of the disposable app answers `pending` with `confirmation:"alert"` or `"screen"`, and the
   confirmation is dismissed, never confirmed: the alert by `closeAlert` (its `alertId` is read from the
   service's `UNINSTALL_ASK` log line) or by Back when the id is not logged; the screen (Home Chooser
   opened with `confirmUninstall`) by Back on our own "Uninstall HC Fixture disposable?" dialog. The app must
@@ -367,7 +374,7 @@ declare it and are refused. The run also installs a disposable non-home app,
   our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
   (the token is only in the system alert's button). Then a `request` while the launcher is Home must give
   the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
-* With `--reboot-check`, after the boot: `getInfo` (root, permitted, isHome), `listApps` and `running`
+* With `--reboot-check`, after the boot: `getInfo` (root, permitted, isSelectedHome), `listApps` and `listRunning`
   still succeed: the grants and the elevation survive a boot.
 * After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in
   time), and luna still answers.
@@ -416,7 +423,7 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
      read the 12.x homeKey check uses); the event stream is the second source and is recorded either way.
   2. the id is in `applicationManager/running` afterwards, with a live pid (dead-pid ghost entries dropped).
 
-  The formats are firmware-derived, not yet device-confirmed for a third-party launcher: see
+  The formats are firmware-derived and verified on Beanjar VMs for supported fixtures: see
   `e2e/fixtures/README.md` "What the runner proves". A missing proof is a `FAIL` for every type; on a release where
   `fixtures/qml/support.json` says `false` (12.x: no qml-runner or Qt in the firmware) the qml fixture is skipped with an `XFAIL`.
 * With `--launchers all-fixtures` a failure in one launcher is recorded and the next one runs.

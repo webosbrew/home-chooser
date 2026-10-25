@@ -58,8 +58,8 @@ homebrew app with three parts:
 
 ## Launchers
 
-Authors: see the [launcher developer guide](docs/launcher-api.md). Home Chooser supports a launcher only through its appinfo: an app that declares `appCategory: ["home"]` (and, if it is an
-overlay window, `defaultWindowType: "overlay"`) is listed and can be chosen. Apps that patch the system themselves
+Authors: see the [launcher developer guide](docs/launcher-api.md). Home Chooser supports a launcher through its appinfo: an app that declares `appCategory: ["home"]` is listed and can be chosen.
+An overlay launcher may use `defaultWindowType: "overlay"` for its window; Home Chooser does not read that field. Apps that patch the system themselves
 (AltHome style) are out of scope. The end-to-end test checks this with six fixture launchers
 ([`e2e/fixtures`](e2e/fixtures/README.md)) besides Dock:
 

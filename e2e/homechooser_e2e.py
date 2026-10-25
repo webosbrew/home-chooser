@@ -416,17 +416,17 @@ def split_known_crashes(lines, reply):
 # ---------------------------------------------------------------------------------------------
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
-API_GROUP = 'homechooser.applications'
+API_GROUP = 'org.webosbrew.homechooser.applications'
 API_VERSION = 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
-API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'group', 'permitted', 'isHome')
+API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')
 API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory')
-API_RUNNING_FIELDS = ('id', 'instanceId', 'processid', 'webprocessid')
+API_RUNNING_FIELDS = ('id', 'instanceId', 'processId', 'webProcessId')
 
 
 def api_reply_problems(method, reply):
-    """What a successful launcher-API reply lacks or carries beyond the contract; [] when it conforms."""
+    """Missing documented fields or wrong types in a successful launcher reply."""
     if not isinstance(reply, dict):
         return ['no JSON reply']
     if reply.get('returnValue') is not True:
@@ -436,11 +436,59 @@ def api_reply_problems(method, reply):
         p += ['missing %s' % f for f in API_INFO_FIELDS if f not in reply]
         if reply.get('apiVersion') != API_VERSION:
             p.append('apiVersion %r, expected %d' % (reply.get('apiVersion'), API_VERSION))
-        if 'group' in reply and reply['group'] != API_GROUP:
-            p.append('group %r' % reply['group'])
-        p += ['%s is not a boolean' % f for f in ('root', 'permitted', 'isHome') if f in reply and not isinstance(reply[f], bool)]
+        if 'permission' in reply and reply['permission'] != API_GROUP:
+            p.append('permission %r' % reply['permission'])
+        if 'version' in reply and not isinstance(reply['version'], str):
+            p.append('version is not a string')
+        p += ['%s is not a boolean' % f for f in ('root', 'permitted', 'isSelectedHome') if f in reply and not isinstance(reply[f], bool)]
         return p
-    key, allowed = {'listApps': ('apps', API_LIST_FIELDS), 'running': ('running', API_RUNNING_FIELDS)}[method]
+    if method in ('closeApp', 'uninstallApp'):
+        if reply.get('apiVersion') != API_VERSION:
+            p.append('apiVersion %r, expected %d' % (reply.get('apiVersion'), API_VERSION))
+        if not isinstance(reply.get('id'), str) or not reply['id']:
+            p.append('missing or invalid id')
+        if method == 'uninstallApp':
+            if reply.get('pending') is not True:
+                p.append('pending is not true')
+            if reply.get('confirmation') not in ('alert', 'screen'):
+                p.append('missing or invalid confirmation')
+        return p
+    if method == 'getForegroundApp':
+        if reply.get('apiVersion') != API_VERSION:
+            p.append('invalid apiVersion')
+        if not isinstance(reply.get('appId'), str):
+            p.append('appId is not a string')
+        if 'windowId' in reply and not isinstance(reply['windowId'], str):
+            p.append('windowId is not a string')
+        if 'processId' in reply and (not isinstance(reply['processId'], int) or isinstance(reply['processId'], bool)):
+            p.append('processId is not an integer')
+        return p
+    if method == 'getAppIcon':
+        if reply.get('apiVersion') != API_VERSION:
+            p.append('invalid apiVersion')
+        if reply.get('mimeType') not in ('image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/webp'):
+            p.append('invalid mimeType')
+        if not isinstance(reply.get('data'), str):
+            p.append('data is not a string')
+        if not isinstance(reply.get('byteLength'), int) or isinstance(reply.get('byteLength'), bool):
+            p.append('byteLength is not an integer')
+        else:
+            try:
+                import base64
+                if len(base64.b64decode(reply.get('data', ''), validate=True)) != reply['byteLength']:
+                    p.append('decoded data length differs from byteLength')
+            except (ValueError, TypeError):
+                p.append('data is not base64')
+        return p
+    if method == 'getAppInfo':
+        if reply.get('apiVersion') != API_VERSION:
+            p.append('invalid apiVersion')
+        item = reply.get('app')
+        if not isinstance(item, dict):
+            return p + ['app is not an object']
+        reply = {'returnValue': True, 'apiVersion': API_VERSION, 'apps': [item]}
+        method = 'listApps'
+    key, allowed = {'listApps': ('apps', API_LIST_FIELDS), 'listRunning': ('running', API_RUNNING_FIELDS)}[method]
     if reply.get('apiVersion') != API_VERSION:
         p.append('apiVersion %r, expected %d' % (reply.get('apiVersion'), API_VERSION))
     items = reply.get(key)
@@ -450,9 +498,21 @@ def api_reply_problems(method, reply):
         if not isinstance(it, dict) or not it.get('id'):
             p.append('an item without id: %r' % (it,))
             continue
-        extra = sorted(set(it) - set(allowed))
-        if extra:
-            p.append('%s carries fields beyond the contract: %s' % (it['id'], ', '.join(extra)))
+        if not isinstance(it['id'], str):
+            p.append('an item with non-string id: %r' % (it,))
+        for field in allowed:
+            if field not in it or field == 'id':
+                continue
+            value = it[field]
+            if field in ('removable', 'visible') and not isinstance(value, bool):
+                p.append('%s has nonboolean %s' % (it['id'], field))
+            elif field == 'appCategory' and (not isinstance(value, list) or any(not isinstance(v, str) for v in value)):
+                p.append('%s has invalid appCategory' % it['id'])
+            elif field not in ('removable', 'visible', 'appCategory', 'processId', 'webProcessId') and not isinstance(value, str):
+                p.append('%s has nonstring %s' % (it['id'], field))
+        for field in allowed:
+            if field in it and field in ('processId', 'webProcessId') and (not isinstance(it[field], int) or isinstance(it[field], bool)):
+                p.append('%s has nonnumeric %s' % (it['id'], field))
     return p
 
 
@@ -531,13 +591,16 @@ def fixture_specs():
 
 
 def api_fixture_ipks(announce=print):
-    """--api-check: the web fixtures built with requiredPermissions ["homechooser.applications"] and the
+    """--api-check: the web fixtures built with requiredPermissions ["org.webosbrew.homechooser.applications"] and the
     disposable non-home app, in build/fixtures-api/ (offline, built once).  {app id: ipk}."""
     def found():
         out = {}
         for ident in [FIXTURE_ID % ('web', w) for w in FIXTURE_WINDOWS] + [DISPOSABLE_ID]:
             g = sorted(glob.glob(os.path.join(API_FIXTURE_DIR, ident + '_*.ipk')))
-            if g:
+            info = ipk_appinfo(g[-1]) if g and ident != DISPOSABLE_ID else {}
+            if g and (ident == DISPOSABLE_ID or (
+                    API_GROUP in info.get('requiredPermissions', [])
+                    and info.get('largeIcon') == 'oversize.png')):
                 out[ident] = g[-1]
         return out
     have = found()
@@ -1802,7 +1865,7 @@ class Scenario:
                   ' (close did not stop it: this check does not discriminate)' if pre else ''))
         if from_app:
             self.front_app()
-        if proof:
+        if proof or self.uses_home_key_hook():
             popup = self.foreign_popup(label, dismiss=True)
             if popup:
                 r.check('%s: no foreign LG fault popup before the Home-key proof' % label, False, popup)
@@ -2586,7 +2649,7 @@ exit "$rc"
     def api_conforms(self, method, label, payload=None):
         rep, raw = self.api(method, payload)
         probs = api_reply_problems(method, rep)
-        self.rec.check('%s: %s as %s succeeds with the documented fields only' % (label, method, self.launcher), not probs,
+        self.rec.check('%s: %s as %s has the documented fields and types' % (label, method, self.launcher), not probs,
                        '%s\n%s' % ('; '.join(probs) or 'conforms', raw[:800]))
         return rep or {}
 
@@ -2594,6 +2657,68 @@ exit "$rc"
         if self.L.is_fixture:
             return 'the web fixture built with requiredPermissions [%s]' % API_GROUP
         return 'an author launcher (%s, ipk %s): fixture-only parts are skipped' % (self.launcher, self.L.ipk)
+
+    def api_new_methods(self, label):
+        """Exercise the v1 refresh, foreground and icon calls with real installed apps."""
+        r = self.rec
+        def icon_result(info, field, reply):
+            icon, folder = info.get(field), info.get('folderPath')
+            if not icon or not folder:
+                return (api_refused(reply) and reply.get('errorCode') == 'noIcon'
+                        and reply.get('apiVersion') == API_VERSION), 'appinfo has no %s' % field
+            path = os.path.join(folder, icon)
+            _, presence = self.dev.sh('if test -f %s; then echo present; else echo missing; fi' % shlex.quote(path))
+            if presence.strip().endswith('missing'):
+                return (api_refused(reply) and reply.get('errorCode') == 'noIcon'
+                        and reply.get('apiVersion') == API_VERSION), 'appinfo path is missing: %s' % path
+            if not presence.strip().endswith('present'):
+                return False, 'could not inspect appinfo path: %s (%s)' % (path, presence[:200])
+            return not api_reply_problems('getAppIcon', reply), 'appinfo path exists: %s' % path
+        start = time.monotonic()
+        foreground, raw = self.api('getForegroundApp')
+        elapsed = (time.monotonic() - start) * 1000
+        r.check('%s: getForegroundApp contract' % label,
+                not api_reply_problems('getForegroundApp', foreground), raw[:400])
+        platform_id, platform_raw = self.dev.foreground()
+        r.check('%s: getForegroundApp matches platform foreground' % label,
+                (foreground or {}).get('appId') == platform_id,
+                'service=%r platform=%r; platform reply=%s' % ((foreground or {}).get('appId'), platform_id, platform_raw[:400]))
+        r.note('%s: getForegroundApp timing and reply size' % label,
+               '%.1f ms; %d bytes; %s' % (elapsed, len(raw.encode()), raw[:400]))
+        for appid in (STOCK, 'org.webosbrew.hbchannel', self.launcher):
+            if not self.dev.app_installed(appid):
+                continue
+            app_info = None
+            for method, payload in (('getAppInfo', {'id': appid}), ('getAppIcon', {'id': appid})):
+                start = time.monotonic()
+                reply, raw = self.api(method, payload)
+                elapsed = (time.monotonic() - start) * 1000
+                problems = api_reply_problems(method, reply)
+                ok, evidence = icon_result(app_info or {}, 'icon', reply) if method == 'getAppIcon' else (not problems, '')
+                r.check('%s: %s %s contract' % (label, method, appid), ok,
+                        '; '.join(problems) if problems and not ok else
+                        '%s; %d reply bytes' % (evidence, len(raw.encode())))
+                r.note('%s: %s %s timing and size' % (label, method, appid),
+                       '%.1f ms; reply=%d bytes; icon=%s bytes; %s' %
+                       (elapsed, len(raw.encode()), (reply or {}).get('byteLength', '-'),
+                        raw[:400] if method == 'getAppInfo' else repr((reply or {}).get('mimeType'))))
+                if method == 'getAppInfo':
+                    app_info = (reply or {}).get('app') or {}
+            if app_info is not None:
+                reply, raw = self.api('getAppIcon', {'id': appid, 'size': 'largeIcon'})
+                if appid == self.launcher and self.L.is_fixture and app_info.get('largeIcon') == 'oversize.png':
+                    r.check('%s: getAppIcon rejects the oversized fixture largeIcon' % label,
+                            api_refused(reply) and reply.get('errorCode') == 'iconTooLarge'
+                            and reply.get('apiVersion') == API_VERSION, raw[:400])
+                elif app_info.get('largeIcon'):
+                    ok, evidence = icon_result(app_info, 'largeIcon', reply)
+                    r.check('%s: getAppIcon largeIcon %s contract' % (label, appid),
+                            ok, '%s; icon=%s bytes; reply=%d bytes' %
+                            (evidence, (reply or {}).get('byteLength', '-'), len(raw.encode())))
+                else:
+                    r.check('%s: getAppIcon largeIcon %s has no fallback' % (label, appid),
+                            api_refused(reply) and reply.get('errorCode') == 'noIcon'
+                            and reply.get('apiVersion') == API_VERSION, raw[:400])
 
     def api_before_selection(self):
         """Home Chooser open and elevated, the launcher installed but not chosen."""
@@ -2606,27 +2731,52 @@ exit "$rc"
                 'requiredPermissions %r; appCategory %r' % (ai.get('requiredPermissions'), ai.get('appCategory')))
         r.note('launcher access files (homechooser-access status; the app applies them when it loads)',
                d.exec('sh %s/homechooser-access status 2>&1' % SCRIPTS_DIR)[1].strip())
+        if self.major >= 11:
+            _, raw = d.sh('for root in /var/luna-service2-dev /var/luna-service2; do '
+                          'file="$root/api-permissions.d/org.webosbrew.homechooser.launcher.api.json"; '
+                          'test ! -f "$file" || cat "$file"; done')
+            files = []
+            for line in raw.splitlines():
+                try:
+                    files.append(json.loads(line))
+                except ValueError:
+                    pass
+            methods = {SVC_ID + '/' + name for name in
+                       ('getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo',
+                        'getAppIcon', 'closeApp', 'uninstallApp')}
+            r.check('11+: namespaced permission and ares.webos.cli grant all eight launcher methods',
+                    bool(files) and all(set(f.get(API_GROUP, [])) == methods
+                                        and set(f.get('ares.webos.cli', [])) == methods
+                                        and 'homechooser.applications' not in f for f in files), raw[:1200])
         # the app's accessApply runs while the list loads: allow it a moment (listApps needs the grant)
         self.wait(lambda: (self.api('listApps')[0] or {}).get('returnValue') is True, 30, 3)
         info = self.api_conforms('getInfo', 'before selection')
-        r.check('before selection: getInfo says root true, permitted true, isHome false',
-                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is False, json.dumps(info))
+        r.check('before selection: getInfo says root true, permitted true, isSelectedHome false',
+                info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is False, json.dumps(info))
         apps = self.api_conforms('listApps', 'before selection')
         ids = [a.get('id') for a in apps.get('apps') or [] if isinstance(a, dict)]
         r.check('listApps names the launcher and the disposable app', self.launcher in ids and DISPOSABLE_ID in ids,
                 '%d apps; launcher %s, disposable %s' % (len(ids), self.launcher in ids, DISPOSABLE_ID in ids))
-        self.api_conforms('running', 'before selection')
+        self.api_conforms('listRunning', 'before selection')
+        self.api_new_methods('before selection')
+        rep, raw = self.api('getAppIcon', {'id': DISPOSABLE_ID, 'size': 'largeIcon'})
+        r.check('getAppIcon of an app without largeIcon has no fallback',
+                api_refused(rep) and rep.get('errorCode') == 'noIcon'
+                and rep.get('apiVersion') == API_VERSION, raw[:400])
         # an installed app without the permission
-        for m, payload in (('listApps', {}), ('running', {}), ('closeById', {'id': APP_ID}), ('uninstall', {'id': self.launcher})):
+        for m, payload in (('listApps', {}), ('listRunning', {}), ('getForegroundApp', {}),
+                           ('getAppInfo', {'id': self.launcher}), ('getAppIcon', {'id': self.launcher}),
+                           ('closeApp', {'id': APP_ID}), ('uninstallApp', {'id': self.launcher})):
             rep, raw = self.api(m, payload, app=DISPOSABLE_ID)
-            r.check('%s as %s (no %s in its appinfo) is refused' % (m, DISPOSABLE_ID, API_GROUP), api_refused(rep),
-                    raw[:400])
+            expected = 'notHome' if m in ('closeApp', 'uninstallApp') else 'noPermission'
+            r.check('%s as %s fails with %s (check order)' % (m, DISPOSABLE_ID, expected),
+                    api_refused(rep) and rep.get('errorCode') == expected, raw[:400])
         rep, raw = self.api('getInfo', app=DISPOSABLE_ID)
         r.check('getInfo as the app without the permission: permitted false, or refused by the hub',
                 api_refused(rep) or (rep or {}).get('permitted') is False, raw[:400])
         rep, raw = self.api('listApps', app=None)
         r.check('listApps without an application id (a plain root luna-send) is refused', api_refused(rep), raw[:400])
-        for m in ('closeById', 'uninstall'):
+        for m in ('closeApp', 'uninstallApp'):
             rep, raw = self.api(m, {'id': DISPOSABLE_ID})
             r.check('%s as %s while it is not the selected Home: refused with notHome' % (m, self.launcher),
                     api_refused(rep) and rep.get('errorCode') == 'notHome', raw[:400])
@@ -2665,33 +2815,101 @@ exit "$rc"
         time.sleep(2)
         r.check('request cancelled: the choice is unchanged', self.state()['choice'] == choice0, repr(self.state()['choice']))
 
+    def api_close_probe(self, appid, label):
+        """Observe SAM, the public list, process liveness and WAM pages around closeApp."""
+        r, d = self.rec, self.dev
+        def snapshot(prior=None):
+            sam = parse_luna(d.luna('luna://com.webos.applicationManager/running')) or {}
+            api, _ = self.api('listRunning')
+            sam_row = next((x for x in sam.get('running', []) if x.get('id') == appid), None)
+            api_row = next((x for x in (api or {}).get('running', []) if x.get('id') == appid), None)
+            pids = {}
+            for field in ('processid', 'webprocessid'):
+                pid = str((sam_row or {}).get(field) or (prior or {}).get('pids', {}).get(field, {}).get('pid') or '')
+                if pid.isdigit():
+                    pids[field] = {'pid': pid, 'alive': 'alive=0' in d.sh('test -d /proc/%s; echo alive=$?' % pid)[1]}
+            if not self.insp:
+                self.insp = Inspector(self.vm)
+            try:
+                with urllib.request.urlopen('http://127.0.0.1:%d/json' % self.insp.port, timeout=5) as response:
+                    pages = [x.get('url') for x in json.loads(response.read().decode()) if appid in x.get('url', '')]
+            except Exception as error:
+                pages = ['inspector error: %s' % error]
+            wam = d.sh("ps -eo pid,ppid,args | grep '[W]ebAppMgr' | head -4")[1].strip()
+            return {'sam': sam_row, 'listRunning': api_row, 'pids': pids, 'wamPages': pages, 'WebAppMgr': wam}
+        before = snapshot()
+        r.note('%s before closeApp' % label, json.dumps(before))
+        rep, raw = self.api('closeApp', {'id': appid})
+        r.check('%s closeApp accepts the target' % label,
+                (rep or {}).get('returnValue') is True and rep.get('id') == appid
+                and not api_reply_problems('closeApp', rep), raw[:400])
+        self.wait(lambda: appid not in self.running_ids(), 20, 2)
+        for process in before['pids'].values():
+            pid = process['pid']
+            self.wait(lambda: 'alive=1' in d.sh('test -d /proc/%s; echo alive=$?' % pid)[1], 15, 1)
+        after = snapshot(before)
+        r.note('%s after closeApp' % label, json.dumps(after))
+        r.check('%s absent from SAM running and listRunning after closeApp' % label,
+                before['sam'] is not None and before['listRunning'] is not None
+                and after['sam'] is None and after['listRunning'] is None, json.dumps(after))
+        return before, after
+
     def step_api(self):
         """The launcher is the selected Home (after step 3; on 6-9 after the boot that mounted the patch)."""
         r, d = self.rec, self.dev
         r.begin('3a launcher API with the launcher selected (--api-check)')
         comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         info = self.api_conforms('getInfo', 'selected')
-        r.check('selected: getInfo says root true, permitted true, isHome true',
-                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is True, json.dumps(info))
+        r.check('selected: getInfo says root true, permitted true, isSelectedHome true',
+                info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is True, json.dumps(info))
         self.api_conforms('listApps', 'selected')
-        self.api_conforms('running', 'selected')
-        # closeById closes a running app
+        self.api_conforms('listRunning', 'selected')
+        self.api_new_methods('selected')
+        # closeApp closes a running web app; record whether WAM retains its page or process.
         d.launch(DISPOSABLE_ID)
         running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
-        r.check('the disposable app is running before closeById', bool(running), str(self.running_ids()))
-        rep, raw = self.api('closeById', {'id': DISPOSABLE_ID})
-        r.check('closeById {id:%s} as the selected Home is accepted' % DISPOSABLE_ID,
-                (rep or {}).get('returnValue') is True and rep.get('id') == DISPOSABLE_ID, raw[:400])
-        closed = self.wait(lambda: DISPOSABLE_ID not in self.running_ids(), 20, 2)
-        r.check('closeById closed the app (not in applicationManager/running)', bool(closed), str(self.running_ids()))
-        rep, raw = self.api('closeById', {})
-        r.check('closeById without an id: badRequest', api_refused(rep) and rep.get('errorCode') == 'badRequest', raw[:400])
+        r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
+        self.api_close_probe(DISPOSABLE_ID, 'web disposable')
+        # The native fixture is optional; use it where a package was built and remove it afterward.
+        native = sorted(glob.glob(os.path.join(FIXTURE_DIR, FIXTURE_ID % ('native', 'normal') + '_*.ipk')))
+        if native and self.major == 9:
+            native_id = FIXTURE_ID % ('native', 'normal')
+            try:
+                rc, out = d.install(native[-1])
+                r.check('install native closeApp probe', rc == 0, out.strip()[-400:])
+                if rc == 0:
+                    rc, out = d.launch(native_id)
+                    r.check('launch native closeApp probe', rc == 0, out.strip()[-400:])
+                    self.wait(lambda: native_id in self.running_ids(), 30, 2)
+                    self.api_close_probe(native_id, 'native fixture')
+            finally:
+                rc, out = d.remove(native_id)
+                r.check('remove native closeApp probe', rc == 0, out.strip()[-400:])
+        rep, raw = self.api('closeApp', {})
+        r.check('closeApp without an id: badRequest', api_refused(rep) and rep.get('errorCode') == 'badRequest', raw[:400])
         # the uninstall refusal list
         for target, why in ((APP_ID, 'Home Chooser itself'), ('org.webosbrew.hbchannel', 'Homebrew Channel'),
                             (self.launcher, 'the requesting launcher')):
-            rep, raw = self.api('uninstall', {'id': target})
-            r.check('uninstall of %s is refused (notAllowed)' % why, api_refused(rep) and rep.get('errorCode') == 'notAllowed',
+            rep, raw = self.api('uninstallApp', {'id': target})
+            r.check('uninstall of %s is refused (protected)' % why, api_refused(rep) and rep.get('errorCode') == 'protected',
                     raw[:400])
+        if d.app_installed(STOCK):
+            rep, raw = self.api('uninstallApp', {'id': STOCK})
+            r.check('uninstallApp of LG Home is refused (notRemovable)',
+                    api_refused(rep) and rep.get('errorCode') == 'notRemovable', raw[:400])
+        rep, raw = self.api('uninstallApp', {'id': 'org.webosbrew.hcfixture.notinstalled'})
+        r.check('uninstallApp of an absent app is notFound',
+                api_refused(rep) and rep.get('errorCode') == 'notFound', raw[:400])
+        for method in ('getAppInfo', 'getAppIcon'):
+            rep, raw = self.api(method, {'id': 'org.webosbrew.hcfixture.notinstalled'})
+            r.check('%s of an absent app is notFound' % method,
+                    api_refused(rep) and rep.get('errorCode') == 'notFound', raw[:400])
+            rep, raw = self.api(method, {'id': '../bad'})
+            r.check('%s rejects malformed id' % method,
+                    api_refused(rep) and rep.get('errorCode') == 'badRequest', raw[:400])
+        rep, raw = self.api('getAppIcon', {'id': self.launcher, 'size': 'invalid'})
+        r.check('getAppIcon rejects an unknown size',
+                api_refused(rep) and rep.get('errorCode') == 'badRequest', raw[:400])
         self.api_uninstall_cancel()
         self.api_uninstall_confirm()
         self.api_request(selected=True)
@@ -2701,10 +2919,11 @@ exit "$rc"
         """uninstall {id: disposable} as the Home: (confirm route 'alert'|'screen'|None, reply)."""
         r = self.rec
         self.uninstall_mark = self.messages_mark()
-        rep, raw = self.api('uninstall', {'id': DISPOSABLE_ID})
-        how = (rep or {}).get('confirm')
+        rep, raw = self.api('uninstallApp', {'id': DISPOSABLE_ID})
+        how = (rep or {}).get('confirmation')
         r.check('%s: uninstall {id:%s} replies pending with a confirm route' % (label, DISPOSABLE_ID),
-                (rep or {}).get('returnValue') is True and rep.get('pending') is True and how in ('alert', 'screen'), raw[:400])
+                (rep or {}).get('returnValue') is True and rep.get('pending') is True and how in ('alert', 'screen')
+                and not api_reply_problems('uninstallApp', rep), raw[:400])
         return how if (rep or {}).get('returnValue') is True else None
 
     def uninstall_alert_id(self):
@@ -2763,7 +2982,7 @@ exit "$rc"
         """The confirm path, only where the runner presses a key on its own screen: the screen route. On the
         alert route confirming means pressing Uninstall on a system popup: MANUAL."""
         r, d = self.rec, self.dev
-        how = self.uninstall_ask('confirm')
+        how = self.uninstall_ask('confirmation')
         if how == 'alert':
             self.dismiss_alert('3a-uninstall-alert-2')
             r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> uninstallConfirmed '
@@ -2795,10 +3014,10 @@ exit "$rc"
         r = self.rec
         self.wait(lambda: (self.api('getInfo')[0] or {}).get('returnValue') is True, 60, 5)
         info = self.api_conforms('getInfo', 'after the reboot')
-        r.check('after the reboot: getInfo says root true, permitted true, isHome true',
-                info.get('root') is True and info.get('permitted') is True and info.get('isHome') is True, json.dumps(info))
+        r.check('after the reboot: getInfo says root true, permitted true, isSelectedHome true',
+                info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is True, json.dumps(info))
         self.api_conforms('listApps', 'after the reboot')
-        self.api_conforms('running', 'after the reboot')
+        self.api_conforms('listRunning', 'after the reboot')
 
     def api_after_uninstall(self):
         """Home Chooser is gone: the launcher's calls fail cleanly (a JSON refusal, in time) and luna is up."""
@@ -3288,7 +3507,7 @@ def main():
     ap.add_argument('--api-check', action='store_true',
                     help='the launcher-API contract (docs/launcher-api.md): calls as the launcher before and after it is '
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
-                         'The launcher must declare homechooser.applications: the default is the web fixture built with it; '
+                         'The launcher must declare org.webosbrew.homechooser.applications: the default is the web fixture built with it; '
                          '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')

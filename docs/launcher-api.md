@@ -17,16 +17,17 @@ the luna API that Home Chooser's root service offers to a launcher.
   that does nothing.
 * **It gives your launcher an app list and a few other calls without root.** Your app has no root
   of its own. Home Chooser's service (`org.webosbrew.homechooser.service`) runs as root and offers
-  `listApps`, `running`, `closeById` and `uninstall` to a launcher that declares one permission.
+  `listApps`, `listRunning`, `getForegroundApp`, `getAppInfo`, `getAppIcon`, `closeApp` and `uninstallApp` to a launcher that declares one permission.
   Closing and uninstalling work only while your app is the selected Home, and an uninstall always
   asks the owner first.
 
-What it needs: a TV with Homebrew Channel, and the owner must have opened Home Chooser once, so
-that Homebrew Channel elevated its service. Until then only `getInfo` works, and it tells you so.
+What it needs: a TV with Homebrew Channel and a Home Chooser service running as root. On 5.x to
+10.x, opening Home Chooser asks Homebrew Channel to elevate the service. On 11.x and 12.x the
+current Homebrew Channel may refuse that request; see [Per-release notes](#per-release-notes).
+Until elevation, only `getInfo` works, and it tells you so.
 
-Status: the API is implemented and covered by host tests, and the selection flow runs end to end on
-VMs of every release. The API calls themselves have not been verified on a device yet; see
-[Stability](#stability). Please report what you see on yours.
+Status: the API is implemented and covered by host tests. Its calls have been verified on Beanjar
+VMs. See [Stability](#stability) for the version policy.
 
 ## Quick start
 
@@ -44,24 +45,25 @@ A complete, minimal web launcher `appinfo.json`:
   "title": "Example Launcher",
   "icon": "icon.png",
   "appCategory": ["home"],
-  "requiredPermissions": ["homechooser.applications"]
+  "requiredPermissions": ["org.webosbrew.homechooser.applications"]
 }
 ```
 
 * `"appCategory": ["home"]` makes the app eligible: Home Chooser lists every installed app that
   has it. This is the whole contract for being chosen as Home. It works for `type` `web`, `native`
   and `qml`, and needs no variant per webOS release.
-* `"requiredPermissions": ["homechooser.applications"]` opts into the API below. Leave it out if
+* `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` opts into the API below. Leave it out if
   you only want to be selectable. Merge both entries with your other categories and permissions.
-* **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Add
-  `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. See
+* **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Consider
+  `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. These
+  are windowing advice, not part of Home Chooser's contract: Home Chooser does not read them. See
   [The stock home](#the-stock-home) for what happens to LG's own home app.
 
 The permission is read from the appinfo the app was installed with, so reinstall after any change
 to `requiredPermissions`. Install Home Chooser, and open it once, before you install a launcher
 that requests the permission: the group is made available by Home Chooser's access files, which it
 applies after elevation. If the install is refused with `Not allowed permission is used`, open
-Home Chooser and install again (not yet confirmed on a device).
+Home Chooser and install again.
 
 ### 2. How the owner selects your launcher
 
@@ -83,7 +85,7 @@ with the parameter `request`, set to your own app id, through
 Home Chooser opens, loads the eligible launchers, and shows the same `Use <title> as Home?` dialog.
 The owner decides. This is a request only:
 
-* there is no reply that tells you the result; call `getInfo` later and read `isHome`;
+* there is no reply that tells you the result; call `getInfo` later and read `isSelectedHome`;
 * if your app is already the selected Home, Home Chooser shows an "already your Home" toast;
 * the request is dropped without any message when the id is the stock home, unknown, not in the
   Home category or malformed, and also when Home Chooser still shows a setup problem (for example
@@ -93,6 +95,11 @@ The owner decides. This is a request only:
 * the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch` (dispatched on `document`; `window` is listened to as well), so the
   request works whether or not Home Chooser is already open.
 
+When Home is pressed, launch parameters come from the platform and are passed through, not
+guaranteed by this API. On webOS 6 to 9 the stock launch's parameters are forwarded with
+`checkUpdateOnLaunch:false`, `autoInstallation:false` and `reason` (the stock reason, or `hotKey`).
+On webOS 10 and later the platform uses `{launchType:"homeKey", activateType:...}`.
+
 ### 4. Check where you stand, then use the API
 
 At start, call `getInfo`, then branch:
@@ -101,9 +108,10 @@ At start, call `getInfo`, then branch:
    Chooser is missing or too old. Offer to install or open it.
 2. `apiVersion` is not `1`: this guide does not describe that service.
 3. `root` is false: the owner has not finished setup; ask them to open Home Chooser.
-4. `permitted` is false: your installed appinfo lacks the permission; fix it and reinstall.
-5. `isHome` is false and you want to be Home: send the request above.
-6. Otherwise call `listApps` and `running`; use `closeById` and `uninstall` while `isHome` is true.
+4. `permitted` is false: check the installed appinfo for the permission and reinstall after a change;
+   an appinfo lookup failure can also make this false.
+5. `isSelectedHome` is false and you want to be Home: send the request above.
+6. Otherwise call the launcher methods. `closeApp` and `uninstallApp` require `isSelectedHome` to be true.
 
 ## Calling the service
 
@@ -117,7 +125,7 @@ client (`app/src/platform/bridge.js`), with no dependencies:
 
 ```js
 const SERVICE = 'luna://org.webosbrew.homechooser.service';
-const TIMEOUT_MS = 30000;
+const TIMEOUT_MS = 70000;
 
 // Resolves with the parsed reply whatever its returnValue; rejects when there is no bridge, the
 // reply is not JSON, or nothing answers within TIMEOUT_MS.
@@ -164,7 +172,7 @@ async function start() {
   render(apps);
 }
 
-// Ask the owner to make this app the Home app (fire and forget; read getInfo().isHome later).
+// Ask the owner to make this app the Home app (fire and forget; read getInfo().isSelectedHome later).
 function requestHome() {
   return lunaCall('luna://com.webos.applicationManager/launch', {
     id: 'org.webosbrew.homechooser',
@@ -176,17 +184,18 @@ function requestHome() {
 `webOS.service.request` from webOSTV.js does the same through the same bridge; its failure callback
 receives the same `returnValue:false` object. A native or QML launcher uses its own luna client
 (libluna-service2, or the QML `LunaService` element) and the same URI and payloads. No native or QML
-example is given here because none has been checked on a device.
+example is given here because the bridge example is sufficient to show the API shape.
 
-Successful replies have `returnValue: true`. Failures from Home Chooser look like this:
+Successful replies have `returnValue: true`. Every reply produced by a launcher method includes
+`apiVersion`. Failures from Home Chooser look like this:
 
 ```json
-{"returnValue": false, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
+{"returnValue": false, "apiVersion": 1, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
 ```
 
-Show your own plain failure message to the user and keep `errorText` in your logs. Allow 30 seconds
-per call, as Home Chooser's own client does; the service makes bounded calls one after another, so
-a slow platform call delays the others.
+Show your own plain failure message to the user and keep `errorText` in your logs. Allow 70 seconds
+per call. An uninstall request can make two 20 second appinfo calls, an 8 second alert call and a
+15 second screen launch, for about 63 seconds in the worst case.
 
 ## Methods
 
@@ -196,38 +205,41 @@ All methods are on the service's root category, and all were introduced in API v
 | --- | --- | --- | --- | --- |
 | `getInfo` | no | no (reports it) | no (reports it) | yes |
 | `listApps` | yes | yes | no | yes |
-| `running` | yes | yes | no | yes |
-| `closeById` | yes | yes | yes | no |
-| `uninstall` | yes | yes | yes | no |
+| `listRunning` | yes | yes | no | yes |
+| `getForegroundApp` | yes | yes | no | yes |
+| `getAppInfo` | yes | yes | no | yes |
+| `getAppIcon` | yes | yes | no | yes |
+| `closeApp` | yes | yes | yes | yes |
+| `uninstallApp` | yes | yes | yes | yes |
 
 Every method needs a caller with a valid application id (1 to 128 characters of `A-Za-z0-9._-`).
 When several checks fail, the first of these is reported: `forbidden`, `notRoot`, `notHome`,
-`badRequest`, `noPermission`. "The permission" is `homechooser.applications` in your installed
+`badRequest`, `noPermission`. "The permission" is `org.webosbrew.homechooser.applications` in your installed
 `requiredPermissions`. "The selected Home" means your app id is the one Home Chooser has stored as
-the owner's choice; this is not the same as what the Home key opens at this moment (see `isHome`).
+the owner's choice; this is not the same as what the Home key opens at this moment (see `isSelectedHome`).
 
 ### `getInfo {}`
 
 Feature detection and status. Works for any app, before elevation and without the permission.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "version": "0.1.0", "root": true, "group": "homechooser.applications", "permitted": true, "isHome": true}
+{"returnValue": true, "apiVersion": 1, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
 ```
 
 * `apiVersion`: the version of this contract, independent of the package version. Check it before
   relying on this guide.
 * `version`: the Home Chooser package version.
 * `root`: false means the owner has not finished setup (open Home Chooser).
-* `group`: the permission name to list in `requiredPermissions`.
+* `permission`: the permission name to list in `requiredPermissions`.
 * `permitted`: your installed appinfo lists the permission. It is also false when the service
   could not read your appinfo, which can happen while `root` is false; look at `root` first.
-* `isHome`: your app id equals the choice Home Chooser has stored. While the chosen app is missing,
+* `isSelectedHome`: your app id equals the choice Home Chooser has stored. While the chosen app is missing,
   the watcher puts LG Home back but keeps the stored choice, so this can be true while the Home key
   opens LG Home. On webOS 6 to 9 it is also true between the selection and the TV restart.
 
 Errors: `forbidden` (no valid application id).
 
-There is no list of supported methods yet. To detect the service, use the platform's own failure
+There is no capability list. To detect the service, use the platform's own failure
 (the service is unknown, or the method is unknown) and `apiVersion`. A denial by itself does not
 prove Home Chooser is absent: it can also mean the permission is missing from your installed app.
 
@@ -242,58 +254,111 @@ Lists the installed apps.
 Each app carries `id`, `title`, `icon`, `largeIcon`, `folderPath`, `version`, `vendor`, `type`,
 `removable`, `visible` and `appCategory`, when the platform has them; absent fields are omitted.
 `appCategory` is the category array as sam reports it (for example `["home"]`), so a launcher can
-find the other launchers. Within an `apiVersion` this field list only grows. `icon` and `largeIcon` are file names
-relative to `folderPath`. There is no icon proxy for launchers: a web launcher may not be able to
-read another app's files, and Home Chooser's own icon service is for its settings app only.
+find the other launchers. Within an `apiVersion` this field list only grows. `icon` and `largeIcon` are appinfo
+paths, usually relative to `folderPath`. Use `getAppIcon` to read them from a jailed launcher.
 
-Errors: `forbidden`, `notRoot`, `noPermission`, `timeout`, `callFailed`, `badReply`.
+Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
 
-### `running {}`
+### `listRunning {}`
 
 Lists running apps.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "running": [{"id": "org.example.app", "instanceId": "instance", "processid": 123, "webprocessid": 456}]}
+{"returnValue": true, "apiVersion": 1, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
 ```
 
-Each item carries `id`, `instanceId`, `processid` and `webprocessid`, when present, with the
-platform's own spelling and types. Errors: as `listApps`; `badReply` also means the platform did
-not return a `running` array.
+Each item carries `id`, `instanceId`, `processId` and `webProcessId`, when present. The service
+renames the platform's lowercase PID keys and includes PID values only when they are numeric.
+Errors: as `listApps`; `badReply` also means the platform did not return a `running` array.
 
-### `closeById {id, force?}`
+### `getForegroundApp {}`
+
+One lookup of the platform's current foreground app. This call does not subscribe to changes.
+
+```json
+{"returnValue": true, "apiVersion": 1, "appId": "org.example.app", "windowId": "window", "processId": 123}
+```
+
+`appId` is an empty string if the platform reports no foreground app. `windowId` is included when
+the platform gives it. `processId` is included only when the platform gives a numeric PID; it is
+normalized to a JSON number. A launcher overlay may not become the platform's foreground app: on
+webOS 9 the stock home remains reported in front of a Home Chooser overlay. On the 11.2.0 Beanjar
+VM, Live TV remained reported in front under that overlay. Errors: `forbidden`,
+`notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
+
+### `getAppInfo {id}`
+
+Fetches one installed app without refreshing the full list. `app` has exactly the same documented
+fields and types as one `listApps` item, including `appCategory` when the platform supplies it.
+
+```json
+{"returnValue": true, "apiVersion": 1, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}
+```
+
+Errors: `forbidden`, `notRoot`, `badRequest`, `noPermission`, `lookupFailed`, `notFound` for an
+absent id, `refused` for another SAM refusal, `badReply`, `timeout`. When SAM gives its combined
+missing-id/unsupported-type error, Home Chooser checks the installed app list before choosing
+`notFound` or `refused`.
+
+### `getAppIcon {id, size?}`
+
+Reads the icon referenced in that app's appinfo inside that app's folder, for a jailed launcher.
+`size` is `"icon"` (the default) or `"largeIcon"`. Paths that leave the app folder, including
+symlink escapes, are rejected. There is no fallback to the other icon field.
+
+```json
+{"returnValue": true, "apiVersion": 1, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
+```
+
+`data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 262144 bytes, so
+the base64 payload is at most 349528 characters. Luna replies carry the base64 as JSON; the cap
+keeps that message near 350 KiB and matches the existing internal icon reader. On the 9.2.4
+Beanjar VM, LG Home, Homebrew Channel and the web fixture icons measured 2831, 3258 and 172 bytes.
+No cross-release LS2 reply limit is claimed here; this is Home Chooser's own conservative limit.
+On the 11.2.0 Beanjar VM, LG Home's appinfo advertises `icon.png` but has no file at that path;
+`getAppIcon` reports `noIcon` for it. Show a placeholder for this case.
+Errors: as `getAppInfo`, plus `noIcon` when no readable
+icon is referenced and `iconTooLarge` when the icon exceeds the byte limit. An invalid `size` is
+`badRequest`.
+
+### `closeApp {id, force?}`
 
 Closes an app. Only the selected Home may call it. `id` is an application id; `force: true` (a JSON
-boolean) asks the platform for a forced close. Reply `{"returnValue": true, "id": "<id>"}`.
+boolean) asks the platform for a forced close. Reply
+`{"returnValue": true, "apiVersion": 1, "id": "<id>"}`.
 
-There is no restriction on the target: the Home app may close any app, including Home Chooser, LG's
-own apps and itself. Errors: `forbidden`, `notRoot`, `notHome`, `badRequest` (missing or malformed
-`id`), `noPermission`, `callFailed`, `timeout`.
+There is no restriction on the target: the Home app may close any app, including Home Chooser,
+Homebrew Channel, LG Home and itself. Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`
+(missing or malformed `id`), `noPermission`, `lookupFailed`, `refused`, `badReply`, `timeout`.
 
-### `uninstall {id}`
+### `uninstallApp {id}`
 
 Asks the owner to uninstall an app. Only the selected Home may call it.
 
-Home Chooser refuses these targets, with `notAllowed` and an `errorText` that says which rule
-applied: Home Chooser itself, Homebrew Channel, the calling launcher, an app that is not removable,
-and an app outside the developer and store application folders
+Home Chooser refuses Home Chooser itself, Homebrew Channel and the calling launcher with
+`protected`. It refuses a system app, an app marked `removable:false`, or one outside the
+developer and store application folders with `notRemovable`
 (`/media/developer/apps/usr/palm/applications/`, `/media/cryptofs/apps/usr/palm/applications/`). An
-unknown id is `notFound`.
+unknown id is `notFound`; Home Chooser resolves SAM's combined missing-id/unsupported-type error
+against the installed app list. Other lookup refusals are `refused`. An optional `force` field is
+ignored by `uninstallApp`.
 
 **The owner always confirms.** Home Chooser raises an alert, `Uninstall <title>?`, with Uninstall
 and Cancel; if the alert is refused it opens its own confirmation screen with the same question.
 Your launcher cannot confirm for the owner and cannot call the confirmation method.
 
 ```json
-{"returnValue": true, "pending": true, "id": "org.example.app", "confirm": "alert"}
+{"returnValue": true, "apiVersion": 1, "pending": true, "id": "org.example.app", "confirmation": "alert"}
 ```
 
-`confirm` is `alert` or `screen`. **A pending uninstall is not a completed removal.** There is no
+`confirmation` is `alert` or `screen`. **A pending uninstall is not a completed removal.** There is no
 second reply: the owner may cancel, ignore it (the question expires after 120 seconds) or confirm,
 and nothing tells you which. Call `listApps` again to see whether the app is gone. If neither the
 alert nor the screen could be shown, the call fails with `confirmFailed`.
 
-Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`, `noPermission`, `notFound`, `notAllowed`,
-`timeout`, `confirmFailed`, `internal` (no confirmation token could be made). How the confirmation
+Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`, `noPermission`, `lookupFailed`, `notFound`,
+`protected`, `notRemovable`, `refused`, `badReply`, `timeout`, `confirmFailed`, `internal`
+(no confirmation token could be made). How the confirmation
 and the removal work is in [the service reference](service.md#launcher-api-confirmation-and-removal).
 
 ## Error handling
@@ -308,15 +373,19 @@ answers with a string `errorCode` from the table.
 | platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old, or the bus denied delivery because the permission was not installed with your app | Call `getInfo`; offer to install or open Home Chooser; ask for a reinstall if `permitted` was false |
 | `forbidden` | The caller has no valid application id | Call from the app. A shell `luna-send` needs `-a <app id>` |
 | `notRoot` | The service is not elevated | Ask the owner to open Home Chooser |
-| `noPermission` | The installed appinfo lacks `homechooser.applications` | Fix `requiredPermissions`, reinstall |
+| `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
+| `lookupFailed` | The service could not read the caller's installed appinfo, from SAM or its file fallback | Retry later; log `errorText` |
 | `notHome` | Your app is not the selected Home | Send the `request` launch, wait for the owner |
-| `badRequest` | `id` is missing or not an app id | A bug in the launcher |
-| `notFound` | `uninstall`: no such app | Refresh the list |
-| `notAllowed` | `uninstall`: the target is refused by rule (`errorText` says which) | Do not retry; hide the action for this app |
-| `confirmFailed` | `uninstall`: the owner could not be asked | Try again later; tell the user |
-| `timeout` | No usable reply from the application manager in time, or none at all | Retry once; log `errorText` |
-| `callFailed` | The application manager refused the call | Log `errorText`; do not loop |
-| `badReply` | The application manager's reply had an unexpected shape | Log it; report it |
+| `badRequest` | `id` is missing or not an app id, or `getAppIcon.size` is invalid | A bug in the launcher |
+| `notFound` | A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent | Refresh the list |
+| `noIcon` | `getAppIcon`: no readable icon from the requested appinfo field inside that app's folder | Show a placeholder |
+| `iconTooLarge` | `getAppIcon`: the icon exceeds 262144 bytes | Show a placeholder |
+| `protected` | `uninstallApp`: target is Home Chooser, Homebrew Channel or the caller | Do not offer uninstall for this app |
+| `notRemovable` | `uninstallApp`: target is a system app, marked `removable:false` or outside the user app folders | Do not offer uninstall for this app |
+| `confirmFailed` | `uninstallApp`: the owner could not be asked | Try again later; tell the user |
+| `timeout` | A bounded application manager call reached its time limit | Retry once; log `errorText` |
+| `refused` | The application manager explicitly refused an operation or target lookup for a reason other than absence | Log `errorText`; do not loop |
+| `badReply` | The application manager did not provide usable JSON, or its successful list reply lacked the expected array | Log it; report it |
 | `internal` | The service could not make a confirmation token | Retry once |
 
 Treat an unknown `errorCode` as a failure and log it.
@@ -344,7 +413,7 @@ system files at boot. For a launcher this means:
 
 * **Restart on first setup.** The first selection stores the choice and enables the patch, then
   asks the owner to restart the TV with a system alert (Reboot or Later). The Home button opens your
-  launcher after that restart. Until then the choice is stored (`isHome` is true) but the Home
+  launcher after that restart. Until then the choice is stored (`isSelectedHome` is true) but the Home
   button still opens LG Home. Later changes between launchers need no restart. Nothing restarts the
   compositor while the TV runs, so setup never closes your window.
 * **Structural Home key hook.** Every webOS 6–9 build uses the same guarded rewriter at boot.
@@ -367,12 +436,12 @@ the profile's own stock launcher.
 ### Permission on 5.x to 10.x and on 11.x and 12.x
 
 On 5.x to 10.x a developer app's declared permission becomes one of its client permissions, and
-Home Chooser's access file maps the group `homechooser.applications` to the five launcher methods.
+Home Chooser's access file maps the group `org.webosbrew.homechooser.applications` to the eight launcher methods.
 
 On 11.x and 12.x a developer app keeps only the groups `ares.webos.cli` and `public` in its own
 client-permissions file, whatever its `requiredPermissions` says, so the permission is not listed
 there. Access comes through Home Chooser's API file instead, which on these releases also grants
-the five methods to `ares.webos.cli`. The service still demands the declared permission in the
+the eight methods to `ares.webos.cli`. The service still demands the declared permission in the
 installed appinfo, so nothing changes for your appinfo: declare the permission, and `getInfo`
 reports `permitted`. Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate
 Home Chooser's service from an ordinary app (`Denied method call`), so `root` stays false until the
@@ -389,7 +458,7 @@ is left alone.
 On 11.x and 12.x Home Chooser also force-closes it, and the close sticks. On 6.x to 10.x it does not,
 for any launcher, overlay or not: the system relaunches the stock home at once as the last-input
 app, so a close frees nothing. The stock home can therefore stay resident until the next reboot, and
-`running` will list `com.webos.app.home` (a `closeById` of it by your launcher will not stick
+`listRunning` will list `com.webos.app.home` (a `closeApp` of it by your launcher will not stick
 either). After a reboot it is gone, because its preload is off from boot. Details are in
 [The stock home is not preloaded](settings-app.md#the-stock-home-is-not-preloaded).
 
@@ -402,10 +471,10 @@ tests nothing.
 ```sh
 luna-send -a org.example.launcher -n 1 luna://org.webosbrew.homechooser.service/getInfo '{}'
 luna-send -a org.example.launcher -n 1 luna://org.webosbrew.homechooser.service/listApps '{}'
-luna-send -a org.example.launcher -n 1 luna://org.webosbrew.homechooser.service/running '{}'
+luna-send -a org.example.launcher -n 1 luna://org.webosbrew.homechooser.service/listRunning '{}'
 ```
 
-Use a disposable app on a test device for `uninstall`.
+Use a disposable app on a test device for `uninstallApp`.
 
 **With the fixtures.** [`e2e/fixtures`](../e2e/fixtures/README.md) holds six minimal launchers
 (`native`, `qml` and `web`, each `normal` and `overlay`). The web ones can declare a permission when
@@ -413,7 +482,7 @@ built, through the environment variable `HC_FIXTURE_PERMISSION` (the native and 
 Building only the web fixtures needs python3 and `ares-package`, no webOS SDK:
 
 ```sh
-HC_FIXTURE_PERMISSION=homechooser.applications sh e2e/fixtures/web/build.sh build/fixtures
+HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh e2e/fixtures/web/build.sh build/fixtures
 ```
 
 Install `build/fixtures/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk` and use its id with `-a`.
@@ -428,10 +497,8 @@ python3 -I e2e/homechooser_e2e.py --vm 9.x --launcher org.example.launcher --lau
 ```
 
 `--vm` takes a VM name or a release (`5.x` to `12.x`); the matrix and the options are in
-[`e2e/README.md`](../e2e/README.md). The runner checks selection, persistence and restore. It does
-not call the methods above yet: an `--api-check` suite that exercises the API contract for a
-launcher (the checks in this guide, with the fixtures as controls) is being added to the runner.
-Treat its flags as unstable until it is documented in the E2E README.
+[`e2e/README.md`](../e2e/README.md). The runner checks selection, persistence and restore.
+Add `--api-check` to exercise the launcher methods and permission with fixture controls.
 
 Beanjar VMs are the maintainers' test devices (one per release, 5.6.1 to 12.0.0). Run one test at a
 time on a device or VM, remove test apps when done, and check `df -h /media/developer` first: the
@@ -439,20 +506,12 @@ partition is small and a full one makes the next install fail for an unrelated-l
 
 ## Stability
 
-Home Chooser is not 1.0 and API version 1 is not frozen. Write your launcher to ignore reply fields
-and `errorCode` values it does not know, to check `apiVersion` at start, and to fail with a plain
-message when a call fails. After the freeze, replies may gain fields and methods may be added
-within version 1; removing a field or changing a meaning will raise `apiVersion`. The device status
-of each call, release by release, is in [the service reference](service.md#launcher-api-device-status).
+**API version 1: frozen.** The eight launcher methods, permission,
+`appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch
+parameter are the v1 contract. Reply fields and methods may be added within v1. Removing a field
+or method, or changing a documented meaning, raises `apiVersion`. Check `apiVersion` at start and
+ignore unknown fields and error codes. The [service reference](service.md#launcher-api-device-status)
+records VM coverage by release.
 
-**Before 1.0**, these names may still change:
-
-* the permission `homechooser.applications` (un-namespaced, and broader than its name suggests);
-* `getInfo.group` (it is the permission) and `isHome` (it reflects the stored choice, not what the
-  Home key opens);
-* `closeById` (the platform's name is `closeByAppId`) and its lack of a target restriction;
-* the error codes `notAllowed` (one code for several reasons) and `timeout` (also used when no
-  reply came at all);
-* the pass-through spelling of the `running` fields (`processid`, `webprocessid`);
-* the `request` launch parameter, the `confirm` field of the `uninstall` reply, and the lack of a
-  capability list in `getInfo`.
+Settings-only and confirmation methods, files, status output and log ids are internal and are not
+frozen by this contract.

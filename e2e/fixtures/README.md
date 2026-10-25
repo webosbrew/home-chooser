@@ -56,15 +56,16 @@ otherwise it runs and the launch proof decides.
 
 `index.html` only: a solid-colour page, or for the overlay a transparent page with one strip. No script: a web app
 needs none to stay registered with sam and WAM. `build.sh` sets the body class per variant.
-`HC_FIXTURE_PERMISSION=homechooser.applications sh web/build.sh <outdir>` adds
-`requiredPermissions: ["homechooser.applications"]`, the launcher API's opt-in (`docs/launcher-api.md`); the runner's
+`HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh web/build.sh <outdir>` adds
+`requiredPermissions: ["org.webosbrew.homechooser.applications"]`, the launcher API's opt-in (`docs/launcher-api.md`); the runner's
+web fixture also declares a valid oversized `largeIcon` to check `getAppIcon`'s `iconTooLarge` reply.
 `--api-check` builds them so into `build/fixtures-api/`, apart from the plain ones.
 
 ## disposable/
 
 `build.sh <outdir>` packages `org.webosbrew.hcfixture.disposable`, an ordinary web app with no `home` category and no
 `requiredPermissions` (`HC_FIXTURE_PERMISSION` is ignored). `--api-check` uses it as the caller without the
-permission, as the app `closeById` closes, and as the target of `uninstall`. It is never a launcher and is not part of
+permission, as the app `closeApp` closes, and as the target of `uninstallApp`. It is never a launcher and is not part of
 the six built by `build.sh`.
 
 ## What the runner proves
