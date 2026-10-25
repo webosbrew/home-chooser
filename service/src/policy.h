@@ -78,6 +78,8 @@ const hc_command *hc_command_lookup(const char *name);
 /* App icon: joins folder and icon (an absolute icon is taken as is), refusing relative folders,
  * ".." components, NULs and a result that does not fit. */
 bool hc_icon_path(const char *folder, const char *icon, char *out, size_t outlen);
+/* Resolve an appinfo icon under the real app folder; rejects traversal and symlink escapes. */
+bool hc_icon_resolve(const char *folder, const char *icon, char *out, size_t outlen);
 /* True when path is dir or lies below it (component-wise). */
 bool hc_path_within(const char *path, const char *dir);
 /* MIME type for an icon file name, NULL when its extension is not an image type. */

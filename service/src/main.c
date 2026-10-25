@@ -680,40 +680,59 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 
 /* ---- readIcon: an app's icon, found through getAppInfo ---- */
 
-static void icon_reply(Pending *p, jvalue_ref info)
+typedef enum { ICON_OK, ICON_NONE, ICON_TOO_BIG } IconResult;
+
+static IconResult load_app_icon(jvalue_ref info, const char *field, size_t max,
+	char **bytes, size_t *length, const char **mime)
 {
 	jvalue_ref inner = info ? jobject_get(info, key_buf("appInfo")) : NULL;
 	if (inner && !(jis_valid(inner) && jis_object(inner))) inner = NULL;
 	jvalue_ref src = inner ? inner : info;
 	char *folder = src ? get_string(src, "folderPath") : NULL;
-	char *icon = src ? get_string(src, "icon") : NULL;
-	char path[1024], real_icon[PATH_MAX], real_dir[PATH_MAX];
-	const char *mime = NULL;
-	if (!folder || !icon || !hc_icon_path(folder, icon, path, sizeof path) || !(mime = hc_icon_mime(path))
-		|| !realpath(path, real_icon) || !realpath(folder, real_dir) || !hc_path_within(real_icon, real_dir)) {
-		LOGI("ICON_NONE", "%s", p->icon_app);
-		send_error(p->msg, "noIcon", "No readable icon for %s", p->icon_app);
-	} else {
-		char *buf = NULL;
-		bool big = false;
-		ssize_t n = slurp(real_icon, ICON_MAX_BYTES, &buf, &big);
-		if (n < 0) {
-			send_error(p->msg, big ? "tooBig" : "noIcon", "Could not read the icon of %s", p->icon_app);
-		} else {
-			size_t outlen = 4 * (((size_t)n + 2) / 3) + 1;
-			char *b64 = g_malloc(outlen);
-			hc_base64((const unsigned char *)buf, (size_t)n, b64, outlen);
-			jvalue_ref o = jobject_create();
-			put_bool(o, "returnValue", true);
-			put_str(o, "mime", mime);
-			put_str(o, "data", b64);
-			send_reply(p->msg, o);
-			g_free(b64);
-			g_free(buf);
-		}
+	char *icon = src ? get_string(src, field) : NULL;
+	char resolved[PATH_MAX];
+	*mime = icon ? hc_icon_mime(icon) : NULL;
+	IconResult result = ICON_NONE;
+	if (folder && icon && *mime && hc_icon_resolve(folder, icon, resolved, sizeof resolved)) {
+		bool too_big = false;
+		ssize_t n = slurp(resolved, max, bytes, &too_big);
+		if (n >= 0) { *length = (size_t)n; result = ICON_OK; }
+		else if (too_big) result = ICON_TOO_BIG;
 	}
 	g_free(folder);
 	g_free(icon);
+	return result;
+}
+
+static char *icon_base64(const char *bytes, size_t length)
+{
+	size_t outlen = 4 * ((length + 2) / 3) + 1;
+	char *b64 = g_malloc(outlen);
+	hc_base64((const unsigned char *)bytes, length, b64, outlen);
+	return b64;
+}
+
+static void icon_reply(Pending *p, jvalue_ref info)
+{
+	char *buf = NULL;
+	size_t n = 0;
+	const char *mime = NULL;
+	IconResult result = load_app_icon(info, "icon", ICON_MAX_BYTES, &buf, &n, &mime);
+	if (result == ICON_NONE) {
+		LOGI("ICON_NONE", "%s", p->icon_app);
+		send_error(p->msg, "noIcon", "No readable icon for %s", p->icon_app);
+	} else if (result == ICON_TOO_BIG) {
+		send_error(p->msg, "tooBig", "Could not read the icon of %s", p->icon_app);
+	} else {
+		char *b64 = icon_base64(buf, n);
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_str(o, "mime", mime);
+		put_str(o, "data", b64);
+		send_reply(p->msg, o);
+		g_free(b64);
+	}
+	g_free(buf);
 }
 
 static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
@@ -742,7 +761,7 @@ static bool on_read_icon(LSHandle *sh, LSMessage *msg, void *ctx)
 }
 
 /* ---- the launcher API (docs/launcher-api.md) ----
- * getInfo, listApps, listRunning, closeApp, uninstallApp for apps that declare the permission group,
+ * The launcher methods below are for apps that declare the permission group,
  * and uninstallConfirmed for the confirmation. The caller is the application id the hub reports. */
 
 #define LIST_FIELDS hc_launcher_list_fields
@@ -830,6 +849,7 @@ typedef struct LOp {
 	char *target;      /* the id parameter */
 	bool consent;
 	bool force;
+	bool icon_large;
 	void (*next)(struct LOp *op);
 	bool need_consent;
 	char *target_title;
@@ -958,6 +978,19 @@ static void launcher_begin(LSMessage *msg, const char *method, bool need_root, b
 		bool force = false;
 		if (f && jis_valid(f) && jis_boolean(f)) jboolean_get(f, &force);
 		op->force = force;
+		if (strcmp(method, "getAppIcon") == 0) {
+			jvalue_ref size = req ? jobject_get(req, key_buf("size")) : NULL;
+			char *name = size && jis_valid(size) ? get_string(req, "size") : NULL;
+			if (size && jis_valid(size) && (!name || (strcmp(name, "icon") && strcmp(name, "largeIcon")))) {
+				send_error_for(msg, method, "badRequest", "size must be icon or largeIcon");
+				g_free(name);
+				j_release(&req);
+				op_free(op);
+				return;
+			}
+			op->icon_large = name && strcmp(name, "largeIcon") == 0;
+			g_free(name);
+		}
 		j_release(&req);
 		if (!hc_app_id_ok(op->target)) {
 			send_error_for(msg, method, "badRequest", "This method needs an id: the app id");
@@ -966,6 +999,37 @@ static void launcher_begin(LSMessage *msg, const char *method, bool need_root, b
 		}
 	}
 	launcher_consent(op);
+}
+
+static jvalue_ref pick_app(jvalue_ref app, const char *id)
+{
+	jvalue_ref out = jobject_create();
+	for (int f = 0; LIST_FIELDS[f]; f++) {
+		jvalue_ref v = jobject_get(app, key_buf(LIST_FIELDS[f]));
+		if (v && jis_valid(v) && !jis_null(v)) jobject_set(out, key_buf(LIST_FIELDS[f]), jvalue_duplicate(v));
+	}
+	jvalue_ref existing = jobject_get(out, key_buf("id"));
+	if (!existing || !jis_valid(existing)) put_str(out, "id", id);
+	return out;
+}
+
+static void put_normalized_pid(jvalue_ref out, const char *dest, jvalue_ref item, const char *source)
+{
+	jvalue_ref v = jobject_get(item, key_buf(source));
+	if (!v || !jis_valid(v) || jis_null(v)) return;
+	if (jis_number(v)) {
+		int64_t pid = 0;
+		if (jnumber_get_i64(v, &pid) == CONV_OK && pid >= 0)
+			jobject_set(out, key_buf(dest), jnumber_create_i64(pid));
+	} else if (jis_string(v)) {
+		char *value = get_string(item, source);
+		char *end = NULL;
+		errno = 0;
+		long long pid = value ? strtoll(value, &end, 10) : 0;
+		if (value && end && end != value && !*end && !errno && pid >= 0)
+			jobject_set(out, key_buf(dest), jnumber_create_i64(pid));
+		g_free(value);
+	}
 }
 
 /* Keep only the listed fields of each object of an array. */
@@ -1001,19 +1065,7 @@ static jvalue_ref pick_running(jvalue_ref arr)
 			if (!v || !jis_valid(v) || jis_null(v)) continue;
 			if (f < 2) {
 				if (jis_string(v)) jobject_set(o, key_buf(RUNNING_FIELDS[f]), jvalue_duplicate(v));
-			} else if (jis_number(v)) {
-				int64_t pid = 0;
-				if (jnumber_get_i64(v, &pid) == CONV_OK && pid >= 0)
-					jobject_set(o, key_buf(RUNNING_FIELDS[f]), jnumber_create_i64(pid));
-			} else if (jis_string(v)) {
-				char *value = get_string(item, source);
-				char *end = NULL;
-				errno = 0;
-				long long pid = value ? strtoll(value, &end, 10) : 0;
-				if (value && end && end != value && !*end && !errno && pid >= 0)
-					jobject_set(o, key_buf(RUNNING_FIELDS[f]), jnumber_create_i64(pid));
-				g_free(value);
-			}
+			} else put_normalized_pid(o, RUNNING_FIELDS[f], item, source);
 		}
 		jarray_append(out, o);
 	}
@@ -1070,6 +1122,124 @@ static bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	launcher_begin(msg, "listRunning", true, false, true, false, list_next);
+	return true;
+}
+
+static bool sam_failure(LOp *op, Call *c, jvalue_ref reply, bool target_lookup)
+{
+	if (reply && reply_ok(reply)) return false;
+	char *sam_text = reply ? get_string(reply, "errorText") : NULL;
+	const char *code = !reply ? hc_unusable_reply_code(c->status) :
+		hc_sam_refusal_code(target_lookup, sam_text);
+	char *message = g_strdup_printf("%s%s%s", reply ? "The application manager refused the call" :
+		"No reply from the application manager", sam_text ? ": " : "", sam_text ? sam_text : "");
+	send_error_for(op->msg, op->method, code, message);
+	g_free(message);
+	g_free(sam_text);
+	return true;
+}
+
+static void foreground_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	if (!sam_failure(op, c, reply, false)) {
+		jvalue_ref v = jobject_get(reply, key_buf("appId"));
+		if (v && jis_valid(v) && !jis_null(v) && !jis_string(v)) {
+			send_error_for(op->msg, op->method, "badReply", "The application manager returned an invalid appId");
+		} else {
+			char *app_id = get_string(reply, "appId");
+			char *window_id = get_string(reply, "windowId");
+			jvalue_ref o = jobject_create();
+			put_bool(o, "returnValue", true);
+			put_int(o, "apiVersion", HC_API_VERSION);
+			put_str(o, "appId", app_id ? app_id : "");
+			if (window_id) put_str(o, "windowId", window_id);
+			put_normalized_pid(o, "processId", reply, "processId");
+			send_reply(op->msg, o);
+			g_free(app_id);
+			g_free(window_id);
+		}
+	}
+	op_free(op);
+}
+
+static void foreground_next(LOp *op)
+{
+	call_start(SAM_URI "/getForegroundAppInfo", "{}", foreground_done, op);
+}
+
+static bool on_launcher_get_foreground(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "getForegroundApp", true, false, true, false, foreground_next);
+	return true;
+}
+
+static jvalue_ref appinfo_object(jvalue_ref reply)
+{
+	jvalue_ref info = reply ? jobject_get(reply, key_buf("appInfo")) : NULL;
+	return info && jis_valid(info) && jis_object(info) ? info : reply;
+}
+
+static void appinfo_done(Call *c, jvalue_ref reply)
+{
+	LOp *op = c->ctx;
+	if (!sam_failure(op, c, reply, true)) {
+		jvalue_ref info = appinfo_object(reply);
+		if (!info || !jis_object(info)) {
+			send_error_for(op->msg, op->method, "badReply", "The application manager returned no app info");
+		} else if (strcmp(op->method, "getAppInfo") == 0) {
+			jvalue_ref o = jobject_create();
+			put_bool(o, "returnValue", true);
+			put_int(o, "apiVersion", HC_API_VERSION);
+			jobject_set(o, key_buf("app"), pick_app(info, op->target));
+			send_reply(op->msg, o);
+		} else {
+			char *bytes = NULL;
+			size_t length = 0;
+			const char *mime = NULL;
+			IconResult result = load_app_icon(reply, op->icon_large ? "largeIcon" : "icon",
+				ICON_MAX_BYTES, &bytes, &length, &mime);
+			if (result == ICON_NONE) {
+				send_error_for(op->msg, op->method, "noIcon", "The app has no readable icon of the requested size");
+			} else if (result == ICON_TOO_BIG) {
+				send_error_for(op->msg, op->method, "iconTooLarge", "The icon exceeds 262144 bytes");
+			} else {
+				char *data = icon_base64(bytes, length);
+				jvalue_ref o = jobject_create();
+				put_bool(o, "returnValue", true);
+				put_int(o, "apiVersion", HC_API_VERSION);
+				put_str(o, "mimeType", mime);
+				put_str(o, "data", data);
+				put_int(o, "byteLength", (int)length);
+				send_reply(op->msg, o);
+				g_free(data);
+			}
+			g_free(bytes);
+		}
+	}
+	op_free(op);
+}
+
+static void appinfo_next(LOp *op)
+{
+	jvalue_ref q = jobject_create();
+	put_str(q, "id", op->target);
+	call_start(SAM_URI "/getAppInfo", jvalue_stringify(q), appinfo_done, op);
+	j_release(&q);
+}
+
+static bool on_launcher_get_app_info(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "getAppInfo", true, false, true, true, appinfo_next);
+	return true;
+}
+
+static bool on_launcher_get_app_icon(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)sh; (void)ctx;
+	launcher_begin(msg, "getAppIcon", true, false, true, true, appinfo_next);
 	return true;
 }
 
@@ -1529,6 +1699,9 @@ static LSMethod methods[] = {
 	{"listRunning", on_launcher_running, LUNA_METHOD_FLAGS_NONE},
 	{"closeApp", on_launcher_close_by_id, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallApp", on_launcher_uninstall, LUNA_METHOD_FLAGS_NONE},
+	{"getForegroundApp", on_launcher_get_foreground, LUNA_METHOD_FLAGS_NONE},
+	{"getAppInfo", on_launcher_get_app_info, LUNA_METHOD_FLAGS_NONE},
+	{"getAppIcon", on_launcher_get_app_icon, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{"rebootPrompt", on_reboot_prompt, LUNA_METHOD_FLAGS_NONE},
 	{"rebootConfirmed", on_reboot_confirmed, LUNA_METHOD_FLAGS_NONE},

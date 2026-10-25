@@ -38,7 +38,7 @@ for name in ['dev','system']:
     assert path.exists()==(mode!='removed')
     if mode=='removed': continue
     api=json.loads(path.read_text())
-    expected=['org.webosbrew.homechooser.service/'+s for s in ['listApps','listRunning','closeApp','uninstallApp','getInfo']]
+    expected=['org.webosbrew.homechooser.service/'+s for s in ['listApps','listRunning','closeApp','uninstallApp','getInfo','getForegroundApp','getAppInfo','getAppIcon']]
     assert api['org.webosbrew.homechooser.applications']==expected
     assert ('ares.webos.cli' in api)==(mode=='11')
     if mode=='11': assert api['ares.webos.cli']==expected
