@@ -3,7 +3,7 @@
 # Packages the disposable app of the launcher-API check (homechooser_e2e.py --api-check) with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.disposable_1.0.0_all.ipk
 # An ordinary web app: no "home" category and no requiredPermissions (HC_FIXTURE_PERMISSION is ignored), so it
-# is the caller without the permission, the app closeById closes, and the target of uninstall.
+# is the caller without the permission, the app closeApp closes, and the target of uninstall.
 # Offline: python3 stdlib + ares-package only.
 set -eu
 [ $# -eq 1 ] || { echo "usage: $0 <outdir>" >&2; exit 2; }

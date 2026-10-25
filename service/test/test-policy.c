@@ -1,6 +1,9 @@
 /* Host-side test of src/policy.c: make test */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "policy.h"
 
@@ -146,6 +149,40 @@ static void test_icons(void)
 	CHECK(hc_icon_mime("/x.d/shadow") == NULL);
 	CHECK(hc_icon_mime("/x/icon.png.sh") == NULL);
 	CHECK(hc_icon_mime(NULL) == NULL);
+}
+
+static void test_icon_confinement(void)
+{
+	char root[] = "test/iconXXXXXX";
+	CHECK(mkdtemp(root) != NULL);
+	char app[256], outside[256], icon[512], secret[512], escape[512], local[512], link[512], resolved[1024];
+	char abs_app[1024], abs_icon[1024], abs_secret[1024];
+	snprintf(app, sizeof app, "%s/app", root);
+	snprintf(outside, sizeof outside, "%s/outside", root);
+	snprintf(icon, sizeof icon, "%s/icon.png", app);
+	snprintf(secret, sizeof secret, "%s/secret.png", outside);
+	snprintf(escape, sizeof escape, "%s/escape.png", app);
+	snprintf(local, sizeof local, "%s/local.png", app);
+	snprintf(link, sizeof link, "%s/link", app);
+	CHECK(mkdir(app, 0700) == 0 && mkdir(outside, 0700) == 0);
+	FILE *f = fopen(icon, "w");
+	CHECK(f != NULL);
+	if (f) { fputs("safe", f); fclose(f); }
+	f = fopen(secret, "w");
+	CHECK(f != NULL);
+	if (f) { fputs("secret", f); fclose(f); }
+	CHECK(symlink("../outside/secret.png", escape) == 0);
+	CHECK(symlink("icon.png", local) == 0);
+	CHECK(symlink("../outside", link) == 0);
+	CHECK(realpath(app, abs_app) != NULL && realpath(icon, abs_icon) != NULL && realpath(secret, abs_secret) != NULL);
+	CHECK(hc_icon_resolve(abs_app, "icon.png", resolved, sizeof resolved) && strcmp(resolved, abs_icon) == 0);
+	CHECK(hc_icon_resolve(abs_app, "local.png", resolved, sizeof resolved) && strcmp(resolved, abs_icon) == 0);
+	CHECK(!hc_icon_resolve(abs_app, "../outside/secret.png", resolved, sizeof resolved));
+	CHECK(!hc_icon_resolve(abs_app, "escape.png", resolved, sizeof resolved));
+	CHECK(!hc_icon_resolve(abs_app, "link/secret.png", resolved, sizeof resolved));
+	CHECK(!hc_icon_resolve(abs_app, abs_secret, resolved, sizeof resolved));
+	unlink(link); unlink(local); unlink(escape); unlink(icon); unlink(secret);
+	rmdir(app); rmdir(outside); rmdir(root);
 }
 
 static void test_base64_and_lines(void)
@@ -332,6 +369,38 @@ static void test_reboot(void)
 		&& strcmp(argv[6], "{\"reason\":\"remoteKey\"}") == 0 && !argv[7]);
 }
 
+static void test_api_v1(void)
+{
+	CHECK(strcmp(HC_GROUP, "org.webosbrew.homechooser.applications") == 0);
+	CHECK(hc_sam_app_missing("Application not found"));
+	CHECK(hc_sam_app_missing("app does not exist"));
+	CHECK(hc_sam_app_missing("No such app"));
+	CHECK(hc_sam_app_missing("APP IS NOT INSTALLED"));
+	CHECK(!hc_sam_app_missing("Permission denied"));
+	CHECK(!hc_sam_app_missing("Service does not exist: com.webos.applicationManager"));
+	CHECK(!hc_sam_app_missing("Method not found"));
+	CHECK(!hc_sam_app_missing("Permission not found"));
+	CHECK(!hc_sam_app_missing("Permission does not exist"));
+	CHECK(!hc_sam_app_missing("temporary failure"));
+	CHECK(!hc_sam_app_missing(NULL));
+	CHECK(hc_sam_app_ambiguous("Invalid appId specified OR Unsupported Application Type: org.example.absent"));
+	CHECK(hc_sam_app_ambiguous("INVALID APPID SPECIFIED OR UNSUPPORTED APPLICATION TYPE"));
+	CHECK(!hc_sam_app_ambiguous("Permission denied"));
+	CHECK(!hc_sam_app_ambiguous("App not found"));
+	CHECK(!hc_sam_app_ambiguous(NULL));
+	CHECK(strcmp(hc_unusable_reply_code(-2), "timeout") == 0);
+	CHECK(strcmp(hc_unusable_reply_code(-1), "badReply") == 0);
+	CHECK(strcmp(hc_unusable_reply_code(0), "badReply") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(true, "App not found"), "notFound") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(true, "Permission denied"), "refused") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(false, "App not found"), "refused") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_SELF), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_HBC), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_CALLER), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_SYSTEM), "notRemovable") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_BADID), "badRequest") == 0);
+}
+
 int main(void)
 {
 	test_sender();
@@ -339,12 +408,14 @@ int main(void)
 	test_calls();
 	test_commands();
 	test_icons();
+	test_icon_confinement();
 	test_base64_and_lines();
 	test_caller();
 	test_remove();
 	test_luna_run();
 	test_reboot();
 	test_list_fields();
+	test_api_v1();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

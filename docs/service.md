@@ -55,17 +55,45 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `readIcon` | `{appId}` | `{returnValue, mime, data}` with `data` base64; at most 256 KiB |
 | `link` / `unlink` / `linkStatus` | `{}` | the boot entry, below |
 | `run` | `{command}` | `{returnValue, exitCode, stdoutString, stderrString}` |
-| `getInfo` | `{}` | `{returnValue, apiVersion, version, root, group, permitted, isHome}` |
+| `getInfo` | `{}` | `{returnValue, apiVersion, version, root, permission, permitted, isSelectedHome}` |
 | `listApps` | `{}` | `{returnValue, apiVersion, apps:[…]}`; selected app fields only |
-| `running` | `{}` | `{returnValue, apiVersion, running:[…]}`; selected process fields only |
-| `closeById` | `{id, force?}` | `{returnValue, id}`; selected Home only |
-| `uninstall` | `{id}` | `{returnValue, pending:true, id, confirm}` (`alert` or `screen`); selected Home only |
+| `listRunning` | `{}` | `{returnValue, apiVersion, running:[…]}`; selected process fields only |
+| `getForegroundApp` | `{}` | `{returnValue, apiVersion, appId, windowId?, processId?}`; one SAM lookup |
+| `getAppInfo` | `{id}` | `{returnValue, apiVersion, app:{…}}`; one `listApps` item |
+| `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
+| `closeApp` | `{id, force?}` | `{returnValue, apiVersion, id}`; selected Home only |
+| `uninstallApp` | `{id}` | `{returnValue, apiVersion, pending:true, id, confirmation}` (`alert` or `screen`); selected Home only |
 | `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; internal confirmation only |
 | `rebootPrompt` | `{reason}` | `{returnValue, pending:true, confirm}` (`alert`, or `toast` when the alert is refused); Home Chooser only |
 | `rebootConfirmed` | `{token}` | `{returnValue}`; internal confirmation only |
 
 Every method except `status`, `quit` and `getInfo` is privileged: when the service is not root it answers
 `errorCode: "notRoot"` and does nothing.
+
+The [launcher guide](launcher-api.md#error-handling) defines every launcher error code. The
+settings and confirmation methods are internal; their additional codes have these conditions:
+
+| Code | Condition |
+| --- | --- |
+| `forbidden` | A settings caller is not Home Chooser, or a confirmation caller is another app |
+| `notAllowed` | A forwarded URI, settings payload, file path or named command is outside the allow-list |
+| `badRequest` | A required JSON object, field or reboot reason is invalid |
+| `timeout` | A bounded settings call or named command reaches its time limit |
+| `badReply` | A settings call returns no usable JSON, including a spawn failure |
+| `readFailed`, `writeFailed` | An allowed file cannot be read or written |
+| `fileRemoveFailed` | `removeFile` cannot unlink an allowed file |
+| `tooBig` | File text or an icon exceeds its method's size limit |
+| `noIcon` | The requested app has no usable icon |
+| `linkFailed`, `unlinkFailed` | The boot entry cannot be linked or unlinked |
+| `spawnFailed`, `exitStatus` | A named command cannot start, or exits unsuccessfully |
+| `badToken` | A confirmation token is unknown, expired or already used |
+| `notHome` | The uninstall requester is no longer the selected Home at confirmation time |
+| `notRemovable` | `removeLaunchPoint` explicitly says the target is not removable |
+| `removeFailed` | Both uninstall removal routes fail or time out |
+| `notPending` | A reboot prompt or confirmation has no pending restart |
+| `rebootFailed` | The reboot call is refused |
+| `confirmFailed` | Neither confirmation route can ask the owner |
+| `internal` | A confirmation token cannot be generated |
 
 ## Who may call
 
@@ -75,8 +103,8 @@ space is accepted). Others receive `forbidden`. `make -C service dev` relaxes th
 it is never packaged.
 
 Launcher methods use a separate gate: a valid hub-reported application id, root and the caller's
-installed `requiredPermissions` containing `homechooser.applications`. `getAppInfo` supplies the
-permissions, with an installed `appinfo.json` fallback. `closeById` and `uninstall` also require the
+installed `requiredPermissions` containing `org.webosbrew.homechooser.applications`. SAM's `getAppInfo` supplies the
+permissions, with an installed `appinfo.json` fallback. `closeApp` and `uninstallApp` also require the
 caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
 root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
 
@@ -158,7 +186,7 @@ ACG: the method is in group `tv.management` (`tv.internal.api.json`; on 12.0
 
 Every privileged luna call in the native service uses
 `/usr/bin/luna-send -a com.webos.applicationManager`, the constant `HC_LUNA_IDENTITY`. There are no
-calls under the native service's own luna identity. This includes `listApps`, `running`, every
+calls under the native service's own luna identity. This includes `listApps`, `listRunning`, every
 `getAppInfo` lookup (consent, icons, uninstall, forwarding), `closeByAppId`, settings/default-app
 calls, notifications, removal and the fixed profile commands. Arguments go directly to `execve`,
 without a shell, using allow-listed URIs and the settings payload restriction below. Watcher
@@ -169,17 +197,17 @@ confirmation can delay other requests. The alert and screen-launch bounds are 8 
 streamed removal has a 90 second bound. Output is capped at 64 KiB per stream. JSON replies retain
 UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the same argv identity.
 
-This identity is device-unverified separately on webOS 5.x, 6.x, 7.x, 8.x, 9.x, 10.x, 11.x and
-12.x. Prior service-identity denials do not establish this identity's groups on every release.
+This identity has been exercised on Beanjar VMs for some releases. Prior service-identity
+denials do not establish its groups on every release.
 
 ## Launcher access files
 
 `service/scripts/homechooser-access apply|remove|status` manages only Home Chooser's API file under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
-`api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`homechooser.applications`: five
+`api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: eight
 launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
-missing. On major 11+ the same five methods are also under `ares.webos.cli`. Neither includes
+missing. On major 11+ the same eight methods are also under `ares.webos.cli`. Neither includes
 `uninstallConfirmed`, `rebootPrompt` or `rebootConfirmed`. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
 
@@ -204,16 +232,18 @@ without needing a Home choice, and the watcher applies at start. The watcher sta
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
 Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`.
 
-The group format, manifest keys and app-id naming, non-dev root persistence across reboot, and
-effective CLI permissions on 11+ are device-unverified. So are permission metadata in `getAppInfo`,
-`running` availability/shape, launch-point ids, alert button payloads and click sender identity,
-and the terminal removal status. The [device status](#launcher-api-device-status) below records
-this separately for each release.
+The group format, manifest keys, app-id naming, permission metadata in `getAppInfo` and
+`listRunning` availability have been exercised on Beanjar VMs for some releases. The
+[device status](#launcher-api-device-status) below records coverage by release.
+
+The settings-only methods (`status`, `quit`, `call`, file methods, `readIcon`, `link`,
+`unlink`, `linkStatus`, `run`), confirmation and reboot methods, files, `status` output and log ids
+are internal and are not part of the frozen launcher API.
 
 ## Launcher API: confirmation and removal
 
 The launcher-facing contract (parameters, replies, errors) is in [Launcher API](launcher-api.md).
-This is what the service does behind `uninstall` and `uninstallConfirmed`.
+This is what the service does behind `uninstallApp` and `uninstallConfirmed`.
 
 * **Token.** The service stores at most four random, one-shot tokens, valid for 120 seconds; a newer
   request can replace an older slot. Tokens stay inside Home Chooser's confirmation flow: the alert
@@ -236,37 +266,32 @@ This is what the service does behind `uninstall` and `uninstallConfirmed`.
   can complete the removal; the token is the capability.
 * **Caller identity and launcher gates.** The caller is `LSMessageGetApplicationID` (dropping an
   instance suffix after a space). The service independently reads the caller's installed
-  `requiredPermissions`; `closeById` and `uninstall` also compare the id with the stored choice in
+  `requiredPermissions`; `closeApp` and `uninstallApp` also compare the id with the stored choice in
   `/var/lib/webosbrew/homechooser/home`. These are service checks even where the hub allows the call
   through a broader group.
 
 ## Launcher API device status
 
-The launcher API has host policy, shell and UI tests; none of the following is claimed as verified
-on a device. This applies separately to each supported release:
+The launcher API has host policy, shell and UI tests, plus targeted Beanjar VM verification.
+The table tracks release coverage; a VM result is not a physical TV result.
 
 | webOS major | API/group files | privileged `-a` identity | developer CLI group |
 | --- | --- | --- | --- |
-| 5.x | device-unverified | device-unverified | not added |
-| 6.x | device-unverified | device-unverified | not added |
-| 7.x | device-unverified | device-unverified | not added |
-| 8.x | device-unverified | device-unverified | not added |
-| 9.x | device-unverified | device-unverified | not added |
-| 10.x | device-unverified | device-unverified | not added |
-| 11.x | device-unverified | device-unverified | device-unverified |
-| 12.x | device-unverified | device-unverified | device-unverified |
+| 5.x | v1 not yet verified | v1 not yet verified | not added |
+| 6.x | v1 not yet verified | v1 not yet verified | not added |
+| 7.x | v1 not yet verified | v1 not yet verified | not added |
+| 8.x | v1 not yet verified | v1 not yet verified | not added |
+| 9.x | verified on Beanjar VM 9.2.4 | verified on Beanjar VM 9.2.4 | not added |
+| 10.x | v1 not yet verified | v1 not yet verified | not added |
+| 11.x | v1 not yet verified | v1 not yet verified | v1 not yet verified |
+| 12.x | v1 not yet verified | v1 not yet verified | v1 not yet verified |
 
-Specifically device-unverified: `getAppInfo` returning `requiredPermissions` (installed appinfo
-fallback exists); a group declared only by an API file being grantable to launchers, the manifest
-key `apiPermissionFiles`, and the manifest being named after the app id; `/var/luna-service2`
-surviving reboot; `<id>_default` being the correct launch-point id; alert button `onclick`/`params`
-and the click sender's application identity; `running` being callable and returning a `running`
-array; status 31 reliably being the final successful removal status; and `ares.webos.cli` alone
-allowing delivery on 11+.
+Physical TV behaviour is still unverified for the permission grant and the confirmation
+routes. A VM test of the alert route does not press its Uninstall button.
 
 For a device validation session, the order is: install/elevate Home Chooser and inspect the access
 files; install a consenting Home fixture and inspect its effective client permissions; call
-`getInfo`, `listApps` and `running`; test the Home request and close checks before/after selection;
+`getInfo`, `listApps` and `listRunning`; test the Home request and close checks before/after selection;
 exercise cancel and confirm for removal of a disposable user app, including the screen fallback;
 then check access restoration after reboot and cleanup after Home Chooser removal. As root,
 simulate an installed caller with its real id (see
@@ -290,9 +315,9 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   `../usr/lib/os-release` (webOS 5.6 to 26 roots checked: W20L, W20H, W21P, W22L, W22P, W22H 43.x), so
   it is resolved with `realpath()` and read only when the result is `/etc/os-release` or
   `/usr/lib/os-release`; any other target is `notAllowed`.
-* **Icons**: `readIcon` asks `getAppInfo` for the app's `folderPath` and `icon`, joins them (no
-  `..`), requires an image extension (png, jpg, jpeg, gif, svg, webp), resolves symlinks and
-  requires the result to lie inside the real `folderPath`, then returns the file if it is a regular
+* **Icons**: `readIcon` and `getAppIcon` ask SAM for the app's `folderPath` and chosen icon field.
+  They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
+  symlinks and require the result to lie inside the real `folderPath`, then return a regular
   file of at most 256 KiB.
 * **Boot entry**: `link` creates the directory `/var/lib/webosbrew/init.d`, sets mode 755 on the four executable scripts in the installed service's `scripts/`
   directory, and makes `/var/lib/webosbrew/init.d/homechooser` a symlink to the service's
@@ -328,10 +353,12 @@ process that outlives the command (the `watch` script starts a transient unit).
 ## Logs
 
 Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
-(read it from the journal or with `PmLogCtl`; not verified on a TV): message ids `START`, `CALL`, `CALL_FORWARD`,
-`CALL_DENIED`, `CALL_TIMEOUT`, `RUN`, `RUN_DENIED`, `WROTE`, `REMOVED`, `LINKED`, `UNLINKED`,
-`PATH_DENIED`, `REFUSED`, `NOT_ROOT`, `ICON_NONE`, `EXIT`. The app logs its side with `[HomeChooser]`
-in the web console.
+(read it from the journal or with `PmLogCtl`). Current message ids: `START`, `CALL`,
+`CALL_FORWARD`, `CALL_DENIED`, `CALL_FAILED`, `REPLY_FAILED`, `RUN`, `RUN_DENIED`,
+`RUN_STDERR`, `WROTE`, `REMOVED`, `LINKED`, `UNLINKED`, `PATH_DENIED`, `REFUSED`,
+`NOT_ROOT`, `ICON_NONE`, `LAUNCHER_ERROR`, `UNINSTALL_ASK`, `UNINSTALL`, `REBOOT_ASK`,
+`REBOOT`, `REGISTER_FAILED`, `EXIT`. These ids are internal. The app logs its side with
+`[HomeChooser]` in the web console.
 
 ## Tests
 
@@ -340,5 +367,5 @@ in the web console.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.
-* Device-unverified: hub sender ids, elevation of this package, effective groups for the fixed
-  identity, and each launcher API behavior listed in the validation table.
+* Beanjar VM runs verify the hub sender ids, elevation, effective permissions and launcher calls
+  for the rows marked verified above. Physical TV behavior remains unverified.

@@ -260,27 +260,53 @@ class Luna(unittest.TestCase):
         self.assertIsNone(e2e.parse_luna('[timeout]'))
 
     def test_get_info_contract(self):
-        ok = {'returnValue': True, 'apiVersion': 1, 'version': '0.1.0', 'root': True, 'group': e2e.API_GROUP,
-              'permitted': True, 'isHome': False}
+        ok = {'returnValue': True, 'apiVersion': 1, 'version': '0.1.0', 'root': True, 'permission': e2e.API_GROUP,
+              'permitted': True, 'isSelectedHome': False}
         self.assertEqual(e2e.api_reply_problems('getInfo', ok), [])
         bad = dict(ok, apiVersion=2)
-        del bad['isHome']
+        del bad['isSelectedHome']
         p = e2e.api_reply_problems('getInfo', bad)
-        self.assertTrue(any('isHome' in x for x in p) and any('apiVersion' in x for x in p), p)
+        self.assertTrue(any('isSelectedHome' in x for x in p) and any('apiVersion' in x for x in p), p)
         self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, root='yes')))
-        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, group='other')))
+        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, permission='other')))
+        self.assertEqual(e2e.api_reply_problems('getInfo', dict(ok, futureField=1)), [])
+        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, version=3)))
 
     def test_list_and_running_contract(self):
         apps = {'returnValue': True, 'apiVersion': 1, 'apps': [
             {'id': 'a', 'title': 'A', 'icon': 'i.png', 'folderPath': '/x', 'removable': True, 'visible': True}]}
         self.assertEqual(e2e.api_reply_problems('listApps', apps), [])
         leak = {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
-        self.assertTrue(e2e.api_reply_problems('listApps', leak), 'a field beyond the contract')
+        self.assertEqual(e2e.api_reply_problems('listApps', leak), [])
+        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
         self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1}))
-        run = {'returnValue': True, 'apiVersion': 1, 'running': [{'id': 'a', 'instanceId': 'x', 'processid': 12,
-                                                                  'webprocessid': 34}]}
-        self.assertEqual(e2e.api_reply_problems('running', run), [])
-        self.assertTrue(e2e.api_reply_problems('running', {'returnValue': True, 'apiVersion': 1, 'running': [{}]}))
+        run = {'returnValue': True, 'apiVersion': 1, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
+                                                                  'webProcessId': 34}]}
+        self.assertEqual(e2e.api_reply_problems('listRunning', run), [])
+        self.assertEqual(e2e.api_reply_problems('listRunning', dict(run, running=[dict(run['running'][0], futureField=5)])), [])
+        self.assertTrue(e2e.api_reply_problems('listRunning', dict(run, running=[{'id': 'a', 'processId': '12'}])))
+        self.assertTrue(e2e.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 1, 'running': [{}]}))
+
+    def test_close_and_uninstall_reply_contract(self):
+        close = {'returnValue': True, 'apiVersion': 1, 'id': 'a'}
+        self.assertEqual(e2e.api_reply_problems('closeApp', dict(close, later=1)), [])
+        self.assertTrue(e2e.api_reply_problems('closeApp', {'returnValue': True, 'id': 'a'}))
+        self.assertEqual(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='alert')), [])
+        self.assertTrue(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='bad')))
+
+    def test_new_launcher_replies(self):
+        front = {'returnValue': True, 'apiVersion': 1, 'appId': '', 'processId': 123}
+        self.assertEqual(e2e.api_reply_problems('getForegroundApp', dict(front, futureField=True)), [])
+        self.assertTrue(e2e.api_reply_problems('getForegroundApp', dict(front, processId='123')))
+        app = {'returnValue': True, 'apiVersion': 1,
+               'app': {'id': 'a', 'appCategory': ['home'], 'removable': True}}
+        self.assertEqual(e2e.api_reply_problems('getAppInfo', dict(app, futureField=True)), [])
+        self.assertTrue(e2e.api_reply_problems('getAppInfo', dict(app, app={'id': 'a', 'appCategory': 'home'})))
+        icon = {'returnValue': True, 'apiVersion': 1, 'mimeType': 'image/png',
+                'data': 'YWJj', 'byteLength': 3}
+        self.assertEqual(e2e.api_reply_problems('getAppIcon', dict(icon, futureField=True)), [])
+        self.assertTrue(e2e.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
+        self.assertTrue(e2e.api_reply_problems('getAppIcon', dict(icon, data='not-base64')))
 
     def test_refusals(self):
         self.assertTrue(e2e.api_refused({'returnValue': False, 'errorCode': 'noPermission'}))

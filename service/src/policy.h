@@ -28,7 +28,7 @@
 
 /* The launcher-facing API (docs/launcher-api.md). */
 #define HC_API_VERSION 1
-#define HC_GROUP "homechooser.applications"
+#define HC_GROUP "org.webosbrew.homechooser.applications"
 #define HC_HBC_APP_ID "org.webosbrew.hbchannel"
 #define HC_STOCK_HOME_ID "com.webos.app.home"
 /* Every privileged luna call the service makes through luna-send runs as this identity (`luna-send
@@ -78,6 +78,8 @@ const hc_command *hc_command_lookup(const char *name);
 /* App icon: joins folder and icon (an absolute icon is taken as is), refusing relative folders,
  * ".." components, NULs and a result that does not fit. */
 bool hc_icon_path(const char *folder, const char *icon, char *out, size_t outlen);
+/* Resolve an appinfo icon under the real app folder; rejects traversal and symlink escapes. */
+bool hc_icon_resolve(const char *folder, const char *icon, char *out, size_t outlen);
 /* True when path is dir or lies below it (component-wise). */
 bool hc_path_within(const char *path, const char *dir);
 /* MIME type for an icon file name, NULL when its extension is not an image type. */
@@ -117,6 +119,14 @@ typedef enum {
 /* removable: 1 / 0 from the app info, -1 when it has no such field. */
 hc_remove_verdict hc_remove_check(const char *id, const char *caller, int removable, const char *folder);
 const char *hc_remove_verdict_text(hc_remove_verdict v);
+/* True only for a SAM error that explicitly says the target app is absent. */
+bool hc_sam_app_missing(const char *error_text);
+/* SAM uses this text for both a missing id and an unsupported installed app type. */
+bool hc_sam_app_ambiguous(const char *error_text);
+/* Launcher failure classification shared by the handlers. */
+const char *hc_unusable_reply_code(int exit_status);
+const char *hc_sam_refusal_code(bool target_lookup, const char *error_text);
+const char *hc_remove_verdict_code(hc_remove_verdict verdict);
 
 /* Folders user apps live in: developer-mode (dev/remove) and store (appInstallService/remove). */
 typedef enum { HC_FOLDER_OTHER = 0, HC_FOLDER_DEV, HC_FOLDER_STORE } hc_folder_kind;

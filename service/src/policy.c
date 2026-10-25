@@ -3,6 +3,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <strings.h>
+#include <ctype.h>
+#include <limits.h>
+#include <stdlib.h>
 
 bool hc_sender_ok(const char *app_id)
 {
@@ -140,6 +143,16 @@ bool hc_path_within(const char *path, const char *dir)
 	return path[dl] == '/' || path[dl] == '\0';
 }
 
+bool hc_icon_resolve(const char *folder, const char *icon, char *out, size_t outlen)
+{
+	char joined[1024], real_file[PATH_MAX], real_dir[PATH_MAX];
+	if (!out || !outlen || !hc_icon_path(folder, icon, joined, sizeof joined)) return false;
+	if (!realpath(folder, real_dir) || !realpath(joined, real_file)) return false;
+	if (!hc_path_within(real_file, real_dir) || strlen(real_file) >= outlen) return false;
+	strcpy(out, real_file);
+	return true;
+}
+
 const char *hc_icon_mime(const char *path)
 {
 	static const struct { const char *ext, *mime; } T[] = {
@@ -266,6 +279,49 @@ const char *hc_remove_verdict_text(hc_remove_verdict v)
 	return "refused";
 }
 
+bool hc_sam_app_missing(const char *error_text)
+{
+	if (!error_text) return false;
+	char lower[512];
+	size_t n = strlen(error_text);
+	if (n >= sizeof lower) n = sizeof lower - 1;
+	for (size_t i = 0; i < n; i++) lower[i] = (char)tolower((unsigned char)error_text[i]);
+	lower[n] = '\0';
+	return strstr(lower, "no such app") || strstr(lower, "app not found") ||
+		strstr(lower, "application not found") || strstr(lower, "app does not exist") ||
+		strstr(lower, "application does not exist") || strstr(lower, "app is not installed") ||
+		strstr(lower, "app not installed") || strstr(lower, "application is not installed") ||
+		strstr(lower, "application not installed");
+}
+
+bool hc_sam_app_ambiguous(const char *error_text)
+{
+	if (!error_text) return false;
+	char lower[512];
+	size_t n = strlen(error_text);
+	if (n >= sizeof lower) n = sizeof lower - 1;
+	for (size_t i = 0; i < n; i++) lower[i] = (char)tolower((unsigned char)error_text[i]);
+	lower[n] = '\0';
+	return strstr(lower, "invalid appid specified or unsupported application type") != NULL;
+}
+
+const char *hc_unusable_reply_code(int exit_status)
+{
+	return exit_status == -2 ? "timeout" : "badReply";
+}
+
+const char *hc_sam_refusal_code(bool target_lookup, const char *error_text)
+{
+	return target_lookup && hc_sam_app_missing(error_text) ? "notFound" : "refused";
+}
+
+const char *hc_remove_verdict_code(hc_remove_verdict verdict)
+{
+	if (verdict == HC_REMOVE_SYSTEM) return "notRemovable";
+	if (verdict == HC_REMOVE_BADID) return "badRequest";
+	return "protected";
+}
+
 bool hc_remove_step(int step, const char *id, const char *folder, hc_remove_call *out)
 {
 	if (!out || !hc_app_id_ok(id)) return false;
@@ -331,6 +387,7 @@ static const char *const LUNA_URIS[] = {
 	"luna://com.webos.applicationManager/listApps",
 	"luna://com.webos.applicationManager/running",
 	"luna://com.webos.applicationManager/getAppInfo",
+	"luna://com.webos.applicationManager/getForegroundAppInfo",
 	"luna://com.webos.applicationManager/closeByAppId",
 	"luna://com.webos.appInstallService/remove",
 	"luna://com.webos.appInstallService/dev/remove",
