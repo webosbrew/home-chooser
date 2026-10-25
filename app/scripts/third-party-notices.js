@@ -59,19 +59,7 @@ const counts = {};
 for (const r of rows) counts[r.license] = (counts[r.license] || 0) + 1;
 out.push('Licence counts: ' + Object.entries(counts).sort().map(([k, v]) => `${k} ${v}`).join(', ') + '.', '');
 
-const fontDir = path.join(appDir, 'node_modules/@enact/moonstone/fonts');
-out.push('## Fonts (bundled from @enact/moonstone)', '');
-out.push('These are not covered by the Apache-2.0 licence of this project or of Enact. Each font family ships its own licence file in `@enact/moonstone/fonts`; the text is reproduced below.', '');
-const fonts = [['Miso', 'Miso/LICENSE.txt'], ['Museo Sans', 'MuseoSans/LICENSE.txt']];
-out.push('| Family | Files | Licence |', '| --- | --- | --- |');
-out.push('| Moonstone (icon font) | Moonstone.ttf | Copyright LG Electronics; distributed as part of @enact/moonstone (' + (rows.find((r) => r.name === '@enact/moonstone') || {}).license + ') |');
-for (const [name, f] of fonts) {
-	const n = fs.readdirSync(path.join(fontDir, path.dirname(f))).filter((x) => x.endsWith('.ttf')).length;
-	out.push(`| ${name} | ${n} x .ttf | custom font licence, see below |`);
-}
-out.push('');
-for (const [name, f] of fonts) {
-	out.push(`### ${name} font licence`, '', '```text', fs.readFileSync(path.join(fontDir, f), 'utf8').trim(), '```', '');
-}
+out.push('## Fonts', '');
+out.push('No Moonstone font files are bundled in the IPK. Enact prefers the TV\'s installed LG Smart UI and Moonstone fonts through CSS `local()` sources. The Miso and Museo Sans font files supplied with `@enact/moonstone` are removed from the package after the Enact build.', '');
 fs.writeFileSync(path.join(appDir, '..', 'THIRD_PARTY_NOTICES.md'), out.join('\n'));
 console.log('wrote THIRD_PARTY_NOTICES.md: ' + rows.length + ' packages');
