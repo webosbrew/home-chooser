@@ -3,7 +3,9 @@
 All notable changes to Home Chooser are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased — 0.1.0
+## [Unreleased]
+
+These changes are planned for 0.1.0.
 
 ### Added
 

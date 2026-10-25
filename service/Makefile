@@ -44,6 +44,7 @@ test/test-policy: test/test-policy.c src/policy.c src/policy.h
 	$(CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isrc -o $@ test/test-policy.c src/policy.c
 
 check-abi: $(OUT)/homechooser-service
+	@test -d "$(ROOTFS)" || { echo 'webOS firmware rootfs not found: $(ROOTFS); set ROOTFS=/path/to/rootfs or FIRMWARES=/path/to/unpacked-firmwares' >&2; exit 1; }
 	CROSS=$(CROSS) sh test/check-abi.sh $(OUT)/homechooser-service $(ROOTFS)
 
 clean:
