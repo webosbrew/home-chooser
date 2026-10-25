@@ -192,13 +192,20 @@ from the study's corpus. The original scratch study and its corpus are in `scrat
 The minimal hook's device results are recorded here after VM verification. Offline coverage alone
 does not mark a build as device verified.
 
-| webOS | VM / build | Minimal hook verified | Evidence |
-| --- | --- | --- | --- |
-| 9.2.4 | w24g-ombre / 33.20.23.01 W24G | 154 full E2E checks; API, reboot and automatic rollback verified | [Runtime evidence](research/minimal-hook-verification.md) |
-| 9.2.1 | w22h-ombre / 23.21.20.01 W22H | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
-| 6.5.2 | w21a-kisscurl / 03.53.25.01 W21A | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
-| 7.6.0 | w22p-mullet / 04.60.90.01 W22P | 106 full E2E checks including reboot | [Runtime evidence](research/minimal-hook-verification.md) |
+These are the latest timestamped result directories for each VM at the time of this review.
+The commit is inferred from the run directory's local start time (latest commit before it),
+not recorded by the runner. Every run below **predates the current tip** `f392cf4` and is
+evidence for that earlier build only. Incomplete runs are identified explicitly; a full
+matrix rerun on the current tip is still needed.
 
-The 8.3.0 VM is not yet device verified. An LG country-change confirmation held key focus
-before Home Chooser could select a launcher; the hook was never enabled. See the dated
-[verification record](research/minimal-hook-verification.md).
+| webOS | VM / build | Latest run (local date; inferred commit) | Result | Hook |
+| --- | --- | --- | --- | --- |
+| 5.6.1 | w20l-jhericurl / W20L | `e2e/results/w20l-jhericurl-20261024-151120` (2026-10-24; `88bde96`) | 1 FAIL, setup stopped; earlier `…015912` had 54 PASS | no hook needed |
+| 6.5.2 | w21a-kisscurl / W21A | `e2e/results/w21a-kisscurl-20261024-214245` (2026-10-24; `4818acf`) | 106 PASS, reboot checked | verified |
+| 7.6.0 | w22p-mullet / W22P | `e2e/results/w22p-mullet-20261024-220405` (2026-10-24; `5d89b26`) | 106 PASS, reboot checked | verified |
+| 8.3.0 | w22o-number1 / W22O | `e2e/results/w22o-number1-20261025-000109` (2026-10-25; `4e0bad5`) | 106 PASS, reboot checked | verified |
+| 9.2.1 | w22h-ombre / W22H | `e2e/results/w22h-ombre-20261024-212139` (2026-10-24; `4818acf`) | 106 PASS, reboot checked | verified |
+| 9.2.4 | w24g-ombre / W24G | `e2e/results/w24g-ombre-20261025-201151` (2026-10-25; `7bf58f6`) | 186 PASS, 1 MANUAL; API checked | verified in earlier [runtime study](research/minimal-hook-verification.md) |
+| 10.3.1 | w22o-ponytail-us / W22O | `e2e/results/w22o-ponytail-us-20261025-020532` (2026-10-25; `c9a0e20`) | 64 PASS, plain run | no hook needed |
+| 11.2.0 | w22o-queue-us / W22O | `e2e/results/w22o-queue-us-20261025-200110` (2026-10-25; `304d9c4`) | 139 PASS, 1 MANUAL; API checked | no hook needed |
+| 12.0.0 | w24g-spacebuns / W24G | `e2e/results/w24g-spacebuns-20261024-140502` (2026-10-24; `247dd5c`) | 28 PASS, partial run; earlier `…145915` had 54 PASS | no hook needed |
