@@ -6,7 +6,7 @@ import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
 import {
 	HOME_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
-	stopWatcherCommand, ENTRY_SCRIPT
+	stopWatcherCommand, BOOT_SCRIPT
 } from '../persistence';
 
 const MINE = 'org.webosbrew.homechooser.launcher';
@@ -550,13 +550,13 @@ describe('persistence', () => {
 		const tv = fakeTV({record: {}});
 		tv.exec = async (c) => ({
 			stdout: c === persistenceStatusCommand()
-				? `entry=link:${ENTRY_SCRIPT}\nactive=active\nstored=my.home\nhomekey=yes\n--log\nline one\nline two\n`
+				? `entry=link:${BOOT_SCRIPT}\nactive=active\nstored=my.home\nhomekey=yes\n--log\nline one\nline two\n`
 				: '',
 			stderr: ''
 		});
 		const res = await chooser(tv, [8, 3, 0]).readPersistence();
 		expect(res.ok).toBe(true);
-		expect(res.persistence).toEqual({entry: 'ok', entryTarget: ENTRY_SCRIPT, active: 'active', stored: 'my.home', homekeyEnabled: true, log: ['line one', 'line two']});
+		expect(res.persistence).toEqual({entry: 'ok', entryTarget: BOOT_SCRIPT, active: 'active', stored: 'my.home', homekeyEnabled: true, log: ['line one', 'line two']});
 	});
 
 	test.each([

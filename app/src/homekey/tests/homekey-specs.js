@@ -1,6 +1,6 @@
 import {ServiceError} from '../../platform/errors';
 import {homeKeyHookApplies, createHomeKeyHook, parseStatus} from '..';
-import {ENTRY_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';
+import {BOOT_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
 const RUN_WORKER = 'homekeyApply';
 const RUN_WORKER_SAM = 'homekeyApplySam';
@@ -41,7 +41,7 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 	const exec = async (command) => {
 		calls.push(['exec', command]);
 		if (command === persistenceStatusCommand()) {
-			const entry = tv.entry === 'ok' ? `link:${ENTRY_SCRIPT}` : tv.entry;
+			const entry = tv.entry === 'ok' ? `link:${BOOT_SCRIPT}` : tv.entry;
 			return {stdout: `entry=${entry}\nactive=\nstored=\nhomekey=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
 		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};

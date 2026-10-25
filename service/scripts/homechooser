@@ -2,7 +2,8 @@
 # Homebrew Channel init.d entry: apply the prepared hook and start the watcher.
 # The watcher unit uses its /tmp copy if the service is removed after a crash.
 
-SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
+SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
+BOOT_DIR=${HOMECHOOSER_BOOT_DIR:-/var/lib/webosbrew/homechooser/boot}
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
@@ -12,11 +13,13 @@ LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-boot.log}
 UNIT=homechooser-home
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
 
-# The directory this script really lives in: follow the symlink (readlink -f, else one readlink),
-# then the fixed app path. Exit quietly when the app is gone.
+# Prefer the installed scripts while the app is present; after uninstall the init.d link still
+# reaches the boot copy, which has the watcher and its helpers beside it.
 locate() {
     if [ -n "$HOMECHOOSER_DIR" ]; then
         HERE=$HOMECHOOSER_DIR
+    elif [ -f "$SERVICE_SCRIPTS/homechooser-home-watch" ]; then
+        HERE=$SERVICE_SCRIPTS
     else
         real=$(readlink -f "$0" 2>/dev/null)
         if [ -z "$real" ]; then
@@ -29,6 +32,20 @@ locate() {
     if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-homekey" ]; then
         exit 0
     fi
+}
+
+stage_boot() {
+    mkdir -p "$BOOT_DIR/lib" || return 1
+    for f in homechooser homechooser-home-watch homechooser-homekey homechooser-homekey-hook.js homechooser-access; do
+        [ -f "$HERE/$f" ] || return 1
+        cp "$HERE/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
+            mv "$BOOT_DIR/$f.new" "$BOOT_DIR/$f" || return 1
+    done
+    for f in "$HERE"/lib/*.sh "$HERE"/lib/*.js; do
+        [ -f "$f" ] || continue
+        cp "$f" "$BOOT_DIR/lib/$(basename "$f").new" &&
+            mv "$BOOT_DIR/lib/$(basename "$f").new" "$BOOT_DIR/lib/$(basename "$f")" || return 1
+    done
 }
 
 # start_watcher [any]: start the unit if a choice is stored, or with `any` in any case.
@@ -53,12 +70,30 @@ start_watcher() {
 locate
 . "$HERE/lib/common.sh"
 
+# The app is gone: the cached watcher restores stock even when it had been stopped before
+# uninstall, or when no launcher was chosen. The watcher removes this cache after restoring.
+if [ "$HERE" = "$BOOT_DIR" ] && [ ! -f "$SERVICE_SCRIPTS/homechooser-home-watch" ]; then
+    start_watcher any
+    exit $?
+fi
+
 case "$1" in
+    stage)
+        stage_boot
+        exit $?
+        ;;
+    unstage)
+        rm -rf "$BOOT_DIR"
+        rmdir "$(dirname "$BOOT_DIR")" 2>/dev/null || :
+        exit 0
+        ;;
     watch)
+        stage_boot || { log "could not refresh the boot restore copy"; exit 1; }
         start_watcher any
         exit $?
         ;;
     "")
+        stage_boot || log "could not refresh the boot restore copy"
         if [ -f "$HERE/homechooser-access" ]; then
             sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
         fi

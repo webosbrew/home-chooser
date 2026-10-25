@@ -36,6 +36,8 @@ FLAG = '/var/lib/webosbrew/homechooser/homekey'
 HOOK_CACHE = '/var/lib/webosbrew/homechooser/hook'
 HOOK_STALE = '/var/lib/webosbrew/homechooser/hook-stale'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
+BOOT_DIR = '/var/lib/webosbrew/homechooser/boot'
+BOOT_SCRIPT = BOOT_DIR + '/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 SCRIPTS_DIR = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts'
@@ -44,10 +46,9 @@ HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.se
 
 def uninstall_remnant_paths():
     """Files owned by Home Chooser that must disappear after watcher restoration."""
-    paths = [HOOK_CACHE, HOOK_STALE]
+    paths = [HOOK_CACHE, HOOK_STALE, BOOT_DIR]
     for root in ('/var/luna-service2-dev', '/var/luna-service2'):
-        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
-                       'groups.d/homechooser.groups.json'):
+        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',):
             paths.append(root + '/' + suffix)
     return paths
 
@@ -2219,8 +2220,8 @@ class Scenario:
         r.check('choice file holds the launcher id', s['choice'] == self.launcher, repr(s['choice']))
         r.check('general/defaultApps record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         r.check('watcher unit homechooser-home is active', s['watcher'] == 'active', s['watcher'])
-        r.check('init.d entry is a symlink into the installed app',
-                s['initd'] == SCRIPTS_DIR + '/homechooser', s['initd'])
+        r.check('init.d entry points to the persistent boot restore copy',
+                s['initd'] == BOOT_SCRIPT, s['initd'])
         if self.uses_home_key_hook():
             r.check('Home key hook mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
                     self.hook_mounts_match(s['mounts']), 'mounts: %s' % s['mounts'])
@@ -2423,7 +2424,7 @@ class Scenario:
                 st.get('mounted') == 'no' and st.get('reboot') == 'needed', raw)
         r.check('before the reboot: nothing is mounted', not s['mounts'], 'mounts: %s' % s['mounts'])
         r.check('before the reboot: the flag file and the init.d entry are written',
-                s['flag'] == 'yes' and s['initd'] == SCRIPTS_DIR + '/homechooser', 'flag %s; init.d %s' % (s['flag'], s['initd']))
+                s['flag'] == 'yes' and s['initd'] == BOOT_SCRIPT, 'flag %s; init.d %s' % (s['flag'], s['initd']))
         r.check('before the reboot: the record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         self.check_no_compositor_restart('choosing the launcher', comp0)
         boot0 = d.boot_id()
@@ -3180,8 +3181,8 @@ exit "$rc"
                '\n'.join(l for l in new_log if 'is back' in l) or 'not logged')
         r.note('after the update: which build the running watcher is (runtime copy md5; the design leaves it the old one until its next start)',
                'runtime %s; old %s; new %s' % (after['runtime_md5'], old_md5, new_md5))
-        r.check('after the update: init.d entry is a symlink into the installed app and its target exists',
-                after['initd'] == SCRIPTS_DIR + '/homechooser' and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
+        r.check('after the update: init.d points to the persistent boot restore copy and its target exists',
+                after['initd'] == BOOT_SCRIPT and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
         if self.uses_home_key_hook():
             r.check('after the update: Home key hook mounts unchanged', sorted(after['mounts']) == sorted(before['mounts']) and bool(after['mounts']),
                     'before %s after %s' % (before['mounts'], after['mounts']))
@@ -3337,6 +3338,34 @@ exit "$rc"
             r.check('leftover profile override removed', s['override'] == 'no', json.dumps(s))
         r.note('watcher repair log', d.sh('tail -n 30 /tmp/homechooser-home.log')[1])
         self.home_press(STOCK, '3f-home-after-repair')
+        rc, out = d.remove(APP_ID)
+        r.check('uninstall reinstalled Home Chooser with no choice and no watcher',
+                rc == 0 and self.watcher_active() != 'active', out.strip()[-400:])
+        before_boot = self.state()
+        r.note('state immediately after the stopped-watcher uninstall', json.dumps(before_boot))
+        if not self.beanjar_reboot('3f cleanup boot'):
+            return
+        self.wait(lambda: self.stock_record_ok(d.record_home()[0])
+                  and 'No such file' in self.state()['initd'], 90, 3)
+        after_boot = self.state()
+        r.note('state after the cleanup boot', json.dumps(after_boot))
+        r.check('after the cleanup boot: Home record is stock',
+                self.stock_record_ok(after_boot['record_home']), after_boot['record_raw'])
+        r.check('after the cleanup boot: init.d entry and choice removed',
+                'No such file' in after_boot['initd'] and 'No such file' in after_boot['choice'],
+                json.dumps(after_boot))
+        command = 'for path in %s; do test ! -e "$path" || printf "%%s\\n" "$path"; done' % (
+            ' '.join(shlex.quote(path) for path in uninstall_remnant_paths() + [FLAG]))
+        rc, remaining = d.sh(command)
+        r.check('after the cleanup boot: flag, cache, stale marker, boot copy and Luna access files removed',
+                rc == 0 and not remaining.strip(), remaining.strip() or 'none remain')
+        if self.uses_home_key_hook():
+            r.check('after the cleanup boot: Home key hook mounts gone', not after_boot['mounts'],
+                    str(after_boot['mounts']))
+        if self.uses_override():
+            r.check('after the cleanup boot: profile override removed',
+                    after_boot['override'] == 'no', after_boot['override'])
+        self.check_preload_on('after the cleanup boot')
 
     def step5(self):
         r, d = self.rec, self.dev

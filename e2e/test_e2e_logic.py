@@ -79,10 +79,9 @@ class StockRecord(unittest.TestCase):
         self.assertEqual(set(paths), {
             '/var/lib/webosbrew/homechooser/hook',
             '/var/lib/webosbrew/homechooser/hook-stale',
+            '/var/lib/webosbrew/homechooser/boot',
             '/var/luna-service2-dev/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
-            '/var/luna-service2-dev/groups.d/homechooser.groups.json',
             '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
-            '/var/luna-service2/groups.d/homechooser.groups.json',
         })
 
     def test_5x_is_unchanged_a_stock_launcher(self):

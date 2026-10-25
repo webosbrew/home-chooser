@@ -222,7 +222,7 @@ and Home key hook docs.
    forwarded with `ares-novacom -f`; rows carry `data-app-id`), moved to the launcher's row, OK,
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
-   `init.d/homechooser` links into the installed service; on 6 to 9 the Home key hook targets are mounted
+   `init.d/homechooser` links to the persistent boot restore copy; on 6 to 9 the Home key hook targets are mounted
    (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
    On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
    toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
@@ -270,7 +270,7 @@ and Home key hook docs.
    is not back the step FAILs and no more keys are sent. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
-5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
+5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, boot restore copy, flag and the
    watcher unit are gone; the record is stock as in step 4; on 6 to 9 the patch stays mounted until
    the next boot (its sources are in `/tmp/homechooser-homekey/stage`, not in the app), the baked id
    is not checked (the installed worker may have been removed with the package), the compositor was not restarted, and
@@ -282,7 +282,7 @@ and Home key hook docs.
    removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
    and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
-   file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
+   file behind until the next boot's restore copy runs. Stop the VM.
 
 ### webOS 6-9: no restart while the TV runs
 
@@ -482,7 +482,7 @@ Asserted after a 45 s settle:
 * the choice file and the record `home` still name the launcher;
 * exactly one watcher unit and one top-level watcher process, with the same `MainPID` and `NRestarts` as before (no duplicate, no restart);
 * the watcher log lines written during the update contain no `watching, home=` (no restart), no restore, revert, `isEnabled=true`, alert or toast; the optional `Home Chooser is back` line is noted either way, as is which build the running watcher is;
-* the `init.d` entry links into the installed service and the target exists;
+* the `init.d` entry links to the persistent boot restore copy and the target exists;
 * on 6 to 9 the Home key hook mounts are the same set, the flag file exists and the launcher id is still baked in; elsewhere none; on 10 and later the override exists;
 * the stock home preload policy is still disabled (6 and later; 5.x: not disabled);
 * Home opens the launcher (with the fixture proof above);

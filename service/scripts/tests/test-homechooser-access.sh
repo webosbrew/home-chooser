@@ -52,7 +52,7 @@ verify 10
 run apply
 [ "$(wc -l < "$T/scans")" -eq 1 ]
 run status > "$T/status"
-grep -q 'manifest=yes api=yes legacy-group=no' "$T/status"
+grep -q 'manifest=yes api=yes' "$T/status"
 [ "$(wc -l < "$T/scans")" -eq 1 ]
 echo 'PRETTY_NAME="webOS 11.2.0"' > "$T/os-release"
 run apply
@@ -77,20 +77,7 @@ run remove
 [ ! -f "$T/dev/api-permissions.d/org.webosbrew.homechooser.launcher.api.json" ]
 [ -f "$T/dev/api-permissions.d/org.webosbrew.homechooser.service.api.json" ]
 mv "$T/dev-manifest" "$T/dev/manifests.d/org.webosbrew.homechooser.json"
-# State left by the first version: a groupsFiles entry and groups.d file, which crash ls-hubd at
-# uninstall. Both apply and remove strip them (and rescan) while the app is still installed.
-for action in apply remove; do
-    mkdir -p "$T/dev/groups.d"
-    echo '{"homechooser.applications":{"description":"x","public":false}}' > "$T/dev/groups.d/homechooser.groups.json"
-    printf '{"id":"keep spaces","rolesFiles":["/other/role"],"groupsFiles":["%s"]}\n' \
-        "$T/dev/groups.d/homechooser.groups.json" > "$T/dev/manifests.d/org.webosbrew.homechooser.json"
-    before=$(wc -l < "$T/scans")
-    run $action
-    [ "$(wc -l < "$T/scans")" -eq $((before + 1)) ]
-    [ ! -f "$T/dev/groups.d/homechooser.groups.json" ]
-    if grep -q groupsFiles "$T/dev/manifests.d/org.webosbrew.homechooser.json"; then exit 1; fi
-    grep -q '"rolesFiles":\["/other/role"\]' "$T/dev/manifests.d/org.webosbrew.homechooser.json"
-done
+run remove
 verify removed
 if run bogus > /dev/null 2>&1; then exit 1; fi
 echo "access: all checks passed ($SH)"

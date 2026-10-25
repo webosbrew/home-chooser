@@ -85,7 +85,7 @@ revert_platform() {
         if [ "$found" = "$stock" ]; then
             log "home is already $stock"
         else
-            merged_write "$stock"
+            merged_write "$stock" || return 1
         fi
         return 0
     fi
@@ -97,20 +97,21 @@ revert_platform() {
 # that do not live in the app directory, and the watcher ends.
 restore_all() {
     log "Home Chooser is uninstalled, restoring the stock Home"
-    if [ -f "$SRC/homechooser-access" ]; then
-        $WSH "$SRC/homechooser-access" remove >> "$LOG" 2>&1 || log "could not remove launcher access"
-    fi
-    revert_platform "Home Chooser uninstalled"
+    [ -f "$SRC/homechooser-access" ] || finish "launcher access worker missing, restore pending" 1
+    $WSH "$SRC/homechooser-access" remove >> "$LOG" 2>&1 ||
+        finish "could not remove launcher access, restore pending" 1
+    revert_platform "Home Chooser uninstalled" || finish "could not restore stock Home, restore pending" 1
     rm -f "$CHOICE" "$KEYFLAG"
     rm -rf "${HOMECHOOSER_CACHE:-/var/lib/webosbrew/homechooser/hook}"
     rm -f "${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}"
-    rmdir "$(dirname "$CHOICE")" 2>/dev/null
     for l in "$INITD"; do
         if [ -L "$l" ]; then
             rm -f "$l"
             log "removed $l"
         fi
     done
+    rm -rf "$BOOT_DIR"
+    rmdir "$(dirname "$CHOICE")" 2>/dev/null
     # No unmount and no compositor restart: the mounts stay until the next boot.
     notify_toast "Home Chooser was removed. The Home button opens LG Home again."
     finish "stock Home restored, exiting" 0

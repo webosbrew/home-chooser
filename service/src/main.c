@@ -466,6 +466,8 @@ static bool on_remove_file(LSHandle *sh, LSMessage *msg, void *ctx)
 
 /* ---- the boot entry link ---- */
 
+static int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err, int (*done)(const char *));
+
 static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
@@ -481,16 +483,29 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 			return true;
 		}
 	}
+	/* Cache the restore scripts before publishing the link. The package can be removed while
+	 * the watcher is stopped; this copy must still be runnable at the next boot. */
+	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
+	const char *const stage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "stage", NULL};
+	int stage_rc = run_argv(stage, 20, out, err, NULL);
+	if (stage_rc != 0 || access(HC_BOOT_SCRIPT, X_OK) != 0) {
+		send_error(msg, "linkFailed", "Could not prepare the boot restore copy: %s", err->str);
+		g_string_free(out, TRUE);
+		g_string_free(err, TRUE);
+		return true;
+	}
+	g_string_free(out, TRUE);
+	g_string_free(err, TRUE);
 	/* a link is replaced, a regular file from an earlier install too */
 	if (unlink(HC_INIT_LINK) != 0 && errno != ENOENT) {
 		send_error(msg, "linkFailed", "Could not replace %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	if (symlink(HC_ENTRY_SCRIPT, HC_INIT_LINK) != 0) {
+	if (symlink(HC_BOOT_SCRIPT, HC_INIT_LINK) != 0) {
 		send_error(msg, "linkFailed", "Could not link %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	LOGI("LINKED", "%s -> %s", HC_INIT_LINK, HC_ENTRY_SCRIPT);
+	LOGI("LINKED", "%s -> %s", HC_INIT_LINK, HC_BOOT_SCRIPT);
 	send_ok(msg);
 	return true;
 }
@@ -505,6 +520,18 @@ static bool on_unlink(LSHandle *sh, LSMessage *msg, void *ctx)
 		send_error(msg, "unlinkFailed", "Could not remove the boot entry: %s", strerror(errno));
 		return true;
 	}
+	/* A deliberate return to stock no longer needs the persistent restore copy. */
+	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
+	const char *const unstage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "unstage", NULL};
+	int unstage_rc = run_argv(unstage, 20, out, err, NULL);
+	if (unstage_rc != 0) {
+		send_error(msg, "unlinkFailed", "Could not remove the boot restore copy: %s", err->str);
+		g_string_free(out, TRUE);
+		g_string_free(err, TRUE);
+		return true;
+	}
+	g_string_free(out, TRUE);
+	g_string_free(err, TRUE);
 	LOGI("UNLINKED", "%s", HC_INIT_LINK);
 	send_ok(msg);
 	return true;

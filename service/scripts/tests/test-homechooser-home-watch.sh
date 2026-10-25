@@ -31,6 +31,8 @@ setup() {
     printf '#!/bin/sh\necho "homekey $* from=$0" >> %s/kfcalls\necho "$(cat %s/clock) KF $*" >> %s/calls\n' "$T" "$T" "$T" > "$T/service/scripts/homechooser-homekey"
     printf '#!/bin/sh\necho "access $* from=$0" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"
     printf '#!/bin/sh\n' > "$T/service/scripts/homechooser"
+    printf '#!/bin/sh\nexit 1\n' > "$T/bin/systemctl"
+    printf '#!/bin/sh\nshift 3\nexec "$@"\n' > "$T/bin/systemd-run"
     touch "$T/flag"
     ln -s "$T/service/scripts/homechooser" "$T/init.d/homechooser"
     : > "$T/calls"
@@ -107,7 +109,8 @@ case "$3" in
         fi ;;
     */setSystemSettings)
         cat $T/r-setsys
-        [ -f $T/live ] && echo "$4" | sed 's/^{"category":"general","settings":\(.*\)}$/{"returnValue":true,"settings":\1}/' > $T/record ;;
+        [ -f $T/live ] && grep -q '"returnValue":true' $T/r-setsys &&
+            echo "$4" | sed 's/^{"category":"general","settings":\(.*\)}$/{"returnValue":true,"settings":\1}/' > $T/record ;;
     */createAlert)
         echo "$1 $2" >> $T/notify-args
         if [ -f $T/alert-deny ]; then echo '{"returnValue":false,"errorText":"Denied method call"}'; else echo '{"returnValue":true}'; fi ;;
@@ -144,6 +147,9 @@ if [ -s $T/napq ]; then
             echo "${l#INSTALL }" >> $T/installed
             [ "${l#INSTALL }" = org.webosbrew.homechooser ] && mkdir -p $T/app
             echo '{"returnValue":true,"subscribed":true,"apps":[]}' > $T/appsfeed ;;
+        "QUIET-INSTALL "*)
+            echo "${l#QUIET-INSTALL }" >> $T/installed
+            [ "${l#QUIET-INSTALL }" = org.webosbrew.homechooser ] && mkdir -p $T/app ;;
         RMCHOICE) rm -f $T/home ;;
         "CHOICE "*) echo "${l#CHOICE }" > $T/home ;;
     esac
@@ -157,6 +163,9 @@ SLEEPSTUB
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
            HOMECHOOSER_CACHE="$T/cache" HOMECHOOSER_STALE="$T/hook-stale" \
+           HOMECHOOSER_BOOT_DIR="$T/boot" HOMECHOOSER_SERVICE_SCRIPTS="$T/service/scripts" \
+           HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" \
+           HOMECHOOSER_LOG="$T/boot-log" \
            HOMECHOOSER_HOMEKEY_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
            HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark" \
            HOMECHOOSER_INSTALL_DIRS="$T/apps"
@@ -1380,6 +1389,78 @@ for major in 5 6 8 9 10 11 12; do
     fi
     cleanup
 done
+
+echo "== uninstall while chosen or unchosen: running copy or next boot restores stock and leaves no residue"
+for major in 5 6 9 10 12; do
+    for choice in chosen unchosen; do
+        for mode in running stopped; do
+            if [ "$choice" = chosen ]; then setup "$major" 'my.home\n'; else setup "$major" ''; fi
+            live '{"home":"my.home","kidsApp":"k.app"}'
+            cp "$HERE/homechooser" "$T/service/scripts/homechooser"
+            cp "$HERE/homechooser-homekey-hook.js" "$T/service/scripts/homechooser-homekey-hook.js"
+            HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" stage > "$T/stage-out" 2>&1
+            check "$major/$choice/$mode: boot copy staged" test -f "$T/boot/homechooser-home-watch" -a -f "$T/boot/lib/watch-restore.sh"
+            rm -f "$T/init.d/homechooser"
+            ln -s "$T/boot/homechooser" "$T/init.d/homechooser"
+            mkdir -p "$T/cache"
+            touch "$T/cache/generated" "$T/hook-stale"
+            if [ "$mode" = running ]; then cp -R "$T/boot" "$T/rt"; fi
+            rm -rf "$T/app" "$T/service"
+            if [ "$mode" = stopped ]; then
+                $SH "$T/init.d/homechooser" > "$T/out" 2>&1; echo $? > "$T/rc"
+            else
+                $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
+            fi
+            [ "$(cat "$T/rc")" = 0 ] || { echo "$major/$choice/$mode output:"; cat "$T/out"; }
+            check "$major/$choice/$mode: restore exits 0" rc 0
+            if [ "$major" -le 9 ]; then
+                check "$major/$choice/$mode: stock record" stockhome
+            else
+                check "$major/$choice/$mode: cleared record" nohome
+            fi
+            check "$major/$choice/$mode: access removed" has 'access remove' "$T/access"
+            check "$major/$choice/$mode: entry, cache, flag, marker and stored choice gone" \
+                test ! -L "$T/init.d/homechooser" -a ! -e "$T/boot" -a ! -e "$T/cache" \
+                -a ! -e "$T/flag" -a ! -e "$T/hook-stale" -a ! -e "$T/home"
+            cleanup
+        done
+    done
+done
+
+echo "== a failed Home write keeps the boot restore copy for a retry"
+for major in 9 10; do
+    setup "$major" 'my.home\n'
+    live '{"home":"my.home"}'
+    cp "$HERE/homechooser" "$T/service/scripts/homechooser"
+    cp "$HERE/homechooser-homekey-hook.js" "$T/service/scripts/homechooser-homekey-hook.js"
+    HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" stage > "$T/stage-out" 2>&1
+    rm -f "$T/init.d/homechooser"
+    ln -s "$T/boot/homechooser" "$T/init.d/homechooser"
+    cp -R "$T/boot" "$T/rt"
+    rm -rf "$T/app" "$T/service"
+    echo '{"returnValue":false}' > "$T/r-setsys"
+    $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
+    check "$major: failed write exits nonzero" rc 1
+    check "$major: entry and cache kept" test -L "$T/init.d/homechooser" -a -d "$T/boot" -a -f "$T/flag"
+    check "$major: record still names the launcher" has '"home":"my.home"' "$T/record"
+    echo '{"returnValue":true}' > "$T/r-setsys"
+    $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
+    check "$major: retry succeeds" rc 0
+    if [ "$major" -le 9 ]; then check "$major: stock record" stockhome; else check "$major: null record" nohome; fi
+    check "$major: retry removes boot state" test ! -L "$T/init.d/homechooser" -a ! -e "$T/boot" -a ! -f "$T/flag"
+    cleanup
+done
+
+echo "== no-choice startup during an update waits for Home Chooser to return"
+setup 9 ''
+live '{"home":"my.home"}'
+rm -rf "$T/app"
+echo 'QUIET-INSTALL org.webosbrew.homechooser' > "$T/napq"
+HOMECHOOSER_CONFIRM_DELAY=15 run
+check "temporary absence: no stock write" test "$(writes)" = 0
+check "temporary absence: state kept" test -L "$T/init.d/homechooser" -a -f "$T/flag"
+check "temporary absence: return logged" has 'Home Chooser is back' "$T/log"
+cleanup
 
 echo "$PASS passed, $FAIL failed ($SH)"
 [ "$FAIL" = 0 ]
