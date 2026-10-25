@@ -488,21 +488,29 @@ HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh e2e/fixtures/web
 Install `build/fixtures/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk` and use its id with `-a`.
 Without the variable you get a launcher with no permission, which is the control for `noPermission`.
 
-**The end-to-end runner.** `e2e/homechooser_e2e.py` runs the whole Home selection lifecycle on a
-Beanjar VM through the `ares-*` tools: install, elevate, choose through the real UI, the Home key
-launching your app, removal of your launcher and of Home Chooser. For your own launcher:
+**On your own TV.** Use a rooted webOS TV with Homebrew Channel installed and an ares device
+configured for root access. Install Home Chooser first, or pass its ipk with `--hc-ipk`. The
+ares-only compatibility kit installs a permission-declaring web fixture and a disposable control
+app, checks the v1 API before and after choosing the fixture, then restores LG Home and removes
+the test apps. It does not reboot, need Beanjar, or require Dock. It requires LG Home to be the
+starting choice so cleanup can restore it. On webOS 6–9, a pending hook restart alert is closed
+without rebooting; Home-key behavior itself needs a separate reboot test.
 
 ```sh
-python3 -I e2e/homechooser_e2e.py --vm 9.x --launcher org.example.launcher --launcher-ipk path/to/launcher.ipk
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check \
+  --launcher org.example.launcher --launcher-ipk path/to/launcher.ipk
 ```
 
-`--vm` takes a VM name or a release (`5.x` to `12.x`); the matrix and the options are in
-[`e2e/README.md`](../e2e/README.md). The runner checks selection, persistence and restore.
-Add `--api-check` to exercise the launcher methods and permission with fixture controls.
+Your launcher ipk must declare `appCategory:["home"]` and
+`requiredPermissions:["org.webosbrew.homechooser.applications"]`. If Home Chooser is absent, add
+`--hc-ipk path/to/homechooser.ipk`. The web fixture is built with `ares-package`; your own ipk
+is used as supplied. The kit will not replace an already installed launcher or disturb a
+nonstock Home choice. Results are in `e2e/results/<device>-<timestamp>/`.
 
-Beanjar VMs are the maintainers' test devices (one per release, 5.6.1 to 12.0.0). Run one test at a
-time on a device or VM, remove test apps when done, and check `df -h /media/developer` first: the
-partition is small and a full one makes the next install fail for an unrelated-looking reason.
+For a complete Home-key lifecycle test, maintainers use `--vm` on Beanjar VMs as described in
+[`e2e/README.md`](../e2e/README.md). Check `df -h /media/developer` before installing: a full
+partition makes an installation fail for an unrelated-looking reason.
 
 ## Stability
 

@@ -1,8 +1,38 @@
 # End-to-end test
 
-`homechooser_e2e.py` runs one scenario on one Beanjar VM and records every assertion with its raw
-evidence. Python 3 standard library only; the device is reached with the `ares-*` tools by device
-name (never raw ssh).
+`homechooser_e2e.py` records each assertion with its raw evidence. Python 3 standard library
+only; televisions and VMs are reached with `ares-*` by device name (never raw ssh).
+
+## Launcher author: your own TV
+
+Use a rooted webOS TV with Homebrew Channel and an ares root device configured. With Home
+Chooser installed and LG Home currently selected, run the API compatibility kit:
+
+```sh
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check \
+  --launcher org.example.launcher --launcher-ipk path/to/launcher.ipk
+```
+
+The first command builds and installs the permission-declaring web fixture and a disposable
+control app. The second tests your launcher ipk, whose appinfo must declare both
+`appCategory:["home"]` and
+`requiredPermissions:["org.webosbrew.homechooser.applications"]`. Pass `--hc-ipk
+path/to/homechooser.ipk` if Home Chooser is not installed yet. The kit selects the launcher on
+the verified Home Chooser screen with ares keys, checks the v1 methods before and after
+selection, then restores LG Home and removes what it installed. It refuses to replace an
+already installed launcher or change an existing nonstock Home choice. It uses no Beanjar,
+QMP, screenshots, or reboot. On webOS 6–9 the Home key hook still needs a separate reboot test.
+The output is `e2e/results/<device>-<timestamp>/results.json` and `run.log`.
+
+`ares-package`, `ares-install`, `ares-launch`, `ares-do`, `ares-shell` and `ares-novacom` must be
+on `PATH`. The root ares name must support `ares-do exec` and the web inspector forward. See
+[Testing your launcher](../docs/launcher-api.md#testing-your-launcher) for manual calls.
+
+## Maintainer VM scenario
+
+This mode runs the full Home-key lifecycle on one Beanjar VM. It needs the maintainer's Beanjar
+host and VM setup in addition to ares:
 
 ```
 python3 -I e2e/homechooser_e2e.py --list
@@ -16,7 +46,9 @@ screenshots carry the launcher's name), `--update-check` and `--update-from <git
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
 Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
-`--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
+`--dock-ipk <path>` (required for Dock unless configured in `hosts.toml`);
+`--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
+`--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
 (webOS 6-9, how the restart the first choice asks for is done: `later`, the default, closes our alert and restarts the VM with

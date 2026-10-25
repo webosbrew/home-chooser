@@ -33,11 +33,23 @@ SVC_ID = APP_ID + '.service'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/homekey'
+HOOK_CACHE = '/var/lib/webosbrew/homechooser/hook'
+HOOK_STALE = '/var/lib/webosbrew/homechooser/hook-stale'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 SCRIPTS_DIR = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts'
 HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
+
+
+def uninstall_remnant_paths():
+    """Files owned by Home Chooser that must disappear after watcher restoration."""
+    paths = [HOOK_CACHE, HOOK_STALE]
+    for root in ('/var/luna-service2-dev', '/var/luna-service2'):
+        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
+                       'groups.d/homechooser.groups.json'):
+            paths.append(root + '/' + suffix)
+    return paths
 
 
 def messages_command(path='/var/log/messages'):
@@ -526,7 +538,7 @@ def api_refused(reply):
 # {normal,overlay}), or any app id with --launcher-ipk.
 # ---------------------------------------------------------------------------------------------
 DOCK_ID = 'org.webosbrew.dock'
-DOCK_IPK = '/home/mariotaku/Projects/webosbrew/Dock.app/dist/org.webosbrew.dock_0.1.0_arm.ipk'  # default; hosts.toml [paths] dock_ipk, --dock-ipk
+DOCK_IPK = None  # Dock is optional; supply --dock-ipk or hosts.toml [paths] dock_ipk
 FIXTURE_TYPES = ('native', 'qml', 'web')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
@@ -626,6 +638,8 @@ def make_launcher(spec, ipk_override=None, announce=print, dock_ipk=DOCK_IPK, ap
     """api (--api-check): a web fixture comes from the build with the permission; native and qml
     fixtures cannot declare it."""
     if spec == 'dock':
+        if not (ipk_override or dock_ipk):
+            raise SystemExit('Dock has no default ipk; use --dock-ipk or --launcher-ipk, or choose fixture:web.normal')
         return Launcher(spec, DOCK_ID, ipk_override or dock_ipk, 'dock')
     if spec.startswith('fixture:'):
         t, _, w = spec[8:].partition('.')
@@ -745,11 +759,11 @@ def load_hosts(path=None):
 # ---------------------------------------------------------------------------------------------
 # Running things
 # ---------------------------------------------------------------------------------------------
-def run(argv, timeout=120, input=None):
+def run(argv, timeout=120, input=None, env=None):
     """(rc, stdout+stderr) of a local process."""
     try:
         p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
-                           input=input)
+                           input=input, env=env)
         return p.returncode, p.stdout.decode('utf-8', 'replace')
     except subprocess.TimeoutExpired as e:
         return 124, (e.stdout or b'').decode('utf-8', 'replace') + '\n[timeout]'
@@ -884,8 +898,8 @@ class BeanjarHost:
 # Device access (ares-* only)
 # ---------------------------------------------------------------------------------------------
 class Device:
-    def __init__(self, vm):
-        self.vm, self.root = vm, vm + '-root'
+    def __init__(self, vm, root=None):
+        self.vm, self.root = vm, root or vm + '-root'
 
     def exec(self, cmd, timeout=60):
         return run(['ares-do', '--timeout', str(timeout * 1000), 'exec', '-d', self.root, cmd], timeout + 10)
@@ -2037,6 +2051,11 @@ class Scenario:
                         guarded(self.step_cache)
                 if i == 3 and self.a.update_check:
                     guarded(self.step_update)
+                if i == 3 and self.a.launcher_update_check:
+                    guarded(self.step_launcher_update)
+                if i == 3 and self.a.restore_repair_check:
+                    guarded(self.step_restore_repair)
+                    break
         finally:
             if getattr(self, 'ask_monitor', None):
                 self.ask_monitor.close()
@@ -2887,7 +2906,7 @@ exit "$rc"
         self.api_close_probe(DISPOSABLE_ID, 'web disposable')
         # The native fixture is optional; use it where a package was built and remove it afterward.
         native = sorted(glob.glob(os.path.join(FIXTURE_DIR, FIXTURE_ID % ('native', 'normal') + '_*.ipk')))
-        if native and self.major == 9:
+        if native and self.major == 9 and not getattr(self.a, 'device', None):
             native_id = FIXTURE_ID % ('native', 'normal')
             try:
                 rc, out = d.install(native[-1])
@@ -3239,6 +3258,80 @@ exit "$rc"
                     'isEnabled=%r; %s' % (enabled, raw))
         self.home_press(self.launcher, '4-home-launcher-back')
 
+    def step_launcher_update(self):
+        """Install a higher version of the selected id without removing it first."""
+        r, d = self.rec, self.dev
+        r.begin('3v update the chosen launcher to a new version')
+        old_version = self.L.appinfo.get('version')
+        temp = None
+        ipk = self.a.launcher_update_ipk
+        if not ipk and self.L.is_fixture and self.L.fixture[0] == 'web':
+            temp = tempfile.mkdtemp(prefix='launcher-update-', dir=os.path.join(REPO, 'build'))
+            new_version = '1.0.1'
+            env = dict(os.environ, HC_FIXTURE_VERSION=new_version)
+            rc, out = run(['sh', os.path.join(HERE, 'fixtures', 'web', 'build.sh'), temp], 600, env=env)
+            if not r.check('build updated web fixture', rc == 0, out.strip()[-400:]):
+                shutil.rmtree(temp)
+                return
+            ipk = os.path.join(temp, self.launcher + '_' + new_version + '_all.ipk')
+        try:
+            info = ipk_appinfo(ipk) if ipk and os.path.isfile(ipk) else {}
+            r.check('update ipk has the same app id and a new version',
+                    info.get('id') == self.launcher and info.get('version') != old_version,
+                    'old=%s; new=%s; id=%s' % (old_version, info.get('version'), info.get('id')))
+            if info.get('id') != self.launcher or info.get('version') == old_version:
+                return
+            comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
+            rc, out = d.install(ipk)
+            r.check('install updated launcher over the selected id', rc == 0 and 'Installed package' in out,
+                    out.strip()[-400:])
+            self.wait(lambda: d.record_home()[0] == self.launcher, 60, 3)
+            s = self.state()
+            r.check('updated launcher remains selected Home', s['choice'] == self.launcher
+                    and s['record_home'] == self.launcher, json.dumps(s))
+            actual = parse_luna(d.luna('luna://com.webos.applicationManager/getAppInfo',
+                                       json.dumps({'id': self.launcher}))) or {}
+            r.check('SAM reports the new launcher version', (actual.get('appInfo') or {}).get('version') == info['version'],
+                    json.dumps(actual)[:400])
+            self.check_no_compositor_restart('chosen launcher version update', comp0)
+            self.home_press(self.launcher, '3v-home-after-launcher-update')
+        finally:
+            if temp:
+                shutil.rmtree(temp)
+
+    def step_restore_repair(self):
+        """Reinstall after the watcher was stopped and could not undo the Home setting."""
+        r, d = self.rec, self.dev
+        r.begin('3f uninstall with watcher stopped, then repair a leftover Home')
+        rc, out = d.sh('systemctl stop homechooser-home')
+        r.check('stop the watcher before uninstall', rc == 0 and self.watcher_active() != 'active', out.strip())
+        rc, out = d.remove(APP_ID)
+        r.check('uninstall Home Chooser without a running watcher', rc == 0, out.strip()[-400:])
+        left = self.state()
+        r.check('the stopped watcher left the chosen app in the Home record',
+                left['record_home'] == self.launcher, json.dumps(left))
+        # Model a partial restore that removed its own choice file before the Luna write failed.
+        # The documented leftover repair runs only when no usable choice is stored.
+        rc, out = d.sh('rm -f %s' % shlex.quote(CHOICE))
+        r.check('model interrupted restore: choice file removed, Home record retained',
+                rc == 0 and 'No such file' in self.state()['choice']
+                and d.record_home()[0] == self.launcher, out.strip())
+        rc, out = d.remove(self.launcher)
+        r.check('remove the launcher named by the leftover Home record', rc == 0, out.strip()[-400:])
+        rc, out = d.install(self.hc_new)
+        r.check('reinstall current Home Chooser', rc == 0 and 'Installed package' in out, out.strip()[-400:])
+        if self.strat.name == 'root-shell':
+            self.strat.prepare(d, r)
+        rc, out = d.launch(APP_ID)
+        r.check('open reinstalled Home Chooser to start leftover repair', rc == 0, out.strip()[-400:])
+        repaired = self.wait(lambda: self.stock_record_ok(d.record_home()[0]), 90, 3)
+        s = self.state()
+        r.check('leftover Home record repaired to stock', bool(repaired), json.dumps(s))
+        if self.uses_override():
+            r.check('leftover profile override removed', s['override'] == 'no', json.dumps(s))
+        r.note('watcher repair log', d.sh('tail -n 30 /tmp/homechooser-home.log')[1])
+        self.home_press(STOCK, '3f-home-after-repair')
+
     def step5(self):
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
@@ -3258,6 +3351,13 @@ exit "$rc"
         self.assert_stock('after uninstall', s, baked_emptied=False)
         self.check_no_compositor_restart('after the Home Chooser uninstall', comp0)
         self.check_preload_on('after the Home Chooser uninstall')
+        command = 'for path in %s; do test ! -e "$path" || printf "%%s\\n" "$path"; done' % (
+            ' '.join(shlex.quote(path) for path in uninstall_remnant_paths()))
+        rc, remaining = d.sh(command)
+        r.check('hook cache, stale marker and Home Chooser Luna access files removed',
+                rc == 0 and not remaining.strip(), remaining.strip() or 'none remain')
+        if self.uses_override():
+            r.check('profile override removed after Home Chooser uninstall', s['override'] == 'no', s['override'])
         r.check('init.d entry removed', 'No such file' in s['initd'] or s['initd'] == '', repr(s['initd']))
         r.check('Home key hook flag removed', s['flag'] == 'no', s['flag'])
         r.check('watcher unit stopped', s['watcher'] != 'active', s['watcher'])
@@ -3297,6 +3397,153 @@ exit "$rc"
                         bool(done) and ('No such file' in s['initd'] or s['initd'] == ''), json.dumps(s))
                 r.note('watcher log', d.sh('tail -n 12 /tmp/homechooser-home.log')[1])
         r.note('df /media/developer', d.sh('df -h /media/developer | tail -1')[1])
+
+
+class DeviceApiScenario(Scenario):
+    """API contract on an existing rooted ares device; no Beanjar or reboot operations."""
+
+    def __init__(self, args, rec, launcher):
+        super().__init__(args, None, rec, ('device', args.device, 'luna', 'ares', 'author TV'), launcher)
+        self.dev = Device(args.device, args.device)
+        self.major, os_release = self.dev.release()
+        self.rec.note('device release', os_release)
+        self.stock_id = stock_home_id(self.major, self.dev.app_installed(FULLHOME))
+
+    def shot(self, label):
+        self.rec.note('screenshot %s skipped in --device mode' % label)
+        return None
+
+    def choose_on_device(self, target):
+        """Use the inspected Home Chooser page; keys are sent only while it has focus."""
+        r, d = self.rec, self.dev
+        self.close_insp()
+        self.insp = Inspector(self.vm)
+        rc, out = d.launch(APP_ID)
+        r.check('open Home Chooser to choose %s' % target, rc == 0, out.strip()[-300:])
+        ui = self.wait(lambda: (lambda u: u if u and target in (u.get('rows') or []) else None)(self.ui()), 90, 1)
+        if not ui or not self.ensure_page('device selection'):
+            raise RuntimeError('Home Chooser does not show %s' % target)
+        rows = ui['rows']
+        self.ensure_key_focus(rows)
+        for _ in range(len(rows) + 2):
+            ui = self.ui() or {}
+            if ui.get('row') == target:
+                break
+            if ui.get('row') not in rows:
+                raise RuntimeError('focus left Home Chooser; no more keys sent')
+            self.press('DOWN' if rows.index(target) > rows.index(ui['row']) else 'UP')
+        ui = self.ui() or {}
+        if ui.get('row') != target or not self.ensure_page('device selection confirm'):
+            raise RuntimeError('target row is not focused; no OK sent')
+        self.press('OK')
+        want = 'Use LG Home?' if target == STOCK else 'Use %s as Home?' % self.L.title
+        ui = self.wait(lambda: (lambda u: u if u and u.get('dialog') == want else None)(self.ui()), 20, 1) or {}
+        ok, why = self.ours_in_front(want)
+        r.check('selection dialog is ours and focused', ok, why)
+        if not ok:
+            raise RuntimeError('selection dialog is not verified; no OK sent')
+        label = 'Use LG Home' if target == STOCK else 'Use as Home'
+        if ui.get('text') != label:
+            self.press('UP')
+            ui = self.ui() or {}
+        if ui.get('text') != label:
+            raise RuntimeError('confirmation button %s is not focused; no OK sent' % label)
+        self.ask_mark = self.messages_mark()
+        self.ask_monitor = RebootAlertMonitor(d) if self.uses_home_key_hook() else None
+        if self.ask_monitor and not self.ask_monitor.start():
+            self.ask_monitor.close()
+            self.ask_monitor = None
+        self.press('OK')
+        selected = self.wait(lambda: self.state()['choice'] == target if target != STOCK
+                             else self.stock_record_ok(d.record_home()[0]), 90, 3)
+        r.check('choice applied without reboot', bool(selected), json.dumps(self.state()))
+        if self.uses_home_key_hook():
+            info = self.wait(lambda: (lambda x: x if x['alert'] else None)(self.reboot_ask_evidence()[0]), 30, 2)
+            if info and info['alert'] == 'accepted':
+                self.close_reboot_alert('device mode: no reboot', info)
+            elif info:
+                r.note('restart alert refused; no popup to close', json.dumps(info))
+        if self.ask_monitor:
+            self.ask_monitor.close()
+            self.ask_monitor = None
+        self.close_insp()
+        return bool(selected)
+
+    def run_contract(self):
+        r, d = self.rec, self.dev
+        r.begin('device preflight')
+        rc, uid = d.exec('id -u')
+        if not r.check('ares device has a root shell', rc == 0 and uid.strip().endswith('0'), uid.strip()):
+            return
+        if not r.check('Homebrew Channel installed', d.app_installed('org.webosbrew.hbchannel'), ''):
+            return
+        if not r.check('launcher ipk exists', os.path.isfile(self.L.ipk), self.L.ipk):
+            return
+        prior = self.state()
+        r.note('original Home setting', json.dumps(prior))
+        original_choice_stock = (not prior['choice'] or 'No such file' in prior['choice']
+                                 or prior['choice'] in (STOCK, FULLHOME))
+        if not r.check('original Home is stock, so it can be restored after the contract run',
+                       original_choice_stock and stock_baseline_ok(self.major, prior['record_home']),
+                       'choice=%r record=%r' % (prior['choice'], prior['record_home'])):
+            return
+        if not r.check('launcher and disposable fixture are not already installed',
+                       not d.app_installed(self.launcher) and not d.app_installed(DISPOSABLE_ID),
+                       '%s, %s' % (self.launcher, DISPOSABLE_ID)):
+            return
+        installed_hc = False
+        installed_launcher = False
+        installed_disposable = False
+        try:
+            if not d.app_installed(APP_ID):
+                if not self.a.hc_ipk:
+                    raise RuntimeError('Home Chooser is absent: pass --hc-ipk to install it')
+                rc, out = d.install(self.a.hc_ipk)
+                installed_hc = rc == 0
+                if not r.check('install Home Chooser', installed_hc, out.strip()[-400:]):
+                    return
+            rc, out = d.install(self.L.ipk)
+            installed_launcher = rc == 0
+            if not r.check('install launcher', installed_launcher, out.strip()[-400:]):
+                return
+            rc, out = d.install(self.a.disposable_ipk)
+            installed_disposable = rc == 0
+            if not r.check('install disposable API control', installed_disposable, out.strip()[-400:]):
+                return
+            strategy = ELEVATIONS[self.a.elevation or ('root-shell' if self.major >= 11 else 'luna')]()
+            strategy.prepare(d, r)
+            self.insp = Inspector(self.vm)
+            d.launch(APP_ID)
+            if not self.wait(lambda: (self.ui() or {}).get('rows'), 90, 1):
+                raise RuntimeError('Home Chooser UI did not load')
+            strategy.verify(d, r)
+            self.api_before_selection()
+            r.begin('device selection')
+            if not self.choose_on_device(self.launcher):
+                return
+            self.step_api()
+        finally:
+            r.begin('device cleanup')
+            self.close_insp()
+            if installed_launcher and d.app_installed(self.launcher):
+                if self.state()['choice'] == self.launcher:
+                    try:
+                        self.choose_on_device(STOCK)
+                    except Exception as error:
+                        r.check('restore LG Home through its verified UI', False, repr(error))
+                rc, out = d.remove(self.launcher)
+                r.check('remove test launcher', rc == 0, out.strip()[-300:])
+            if installed_disposable and d.app_installed(DISPOSABLE_ID):
+                rc, out = d.remove(DISPOSABLE_ID)
+                r.check('remove disposable fixture', rc == 0, out.strip()[-300:])
+            if installed_hc and d.app_installed(APP_ID):
+                rc, out = d.remove(APP_ID)
+                r.check('remove Home Chooser installed for this run', rc == 0, out.strip()[-300:])
+                self.wait(lambda: self.watcher_active() != 'active', 90, 3)
+                self.api_after_uninstall()
+            r.check('original stock Home setting restored', self.stock_record_ok(d.record_home()[0]),
+                    d.record_home()[1][:300])
+            r.check('test apps gone', not d.app_installed(self.launcher) and not d.app_installed(DISPOSABLE_ID), '')
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3478,9 +3725,44 @@ def interrupted(*_):
     raise KeyboardInterrupt
 
 
+def run_device_api(args, ap):
+    """Run the launcher contract using only ares tools on an author's TV."""
+    if args.vm or not args.api_check or args.launchers or args.update_check or args.reboot_check or args.build:
+        ap.error('--device requires --api-check and cannot be combined with VM, matrix, update, reboot or build options')
+    args.input = 'ares'
+    spec = args.launcher or 'fixture:web.normal'
+    if spec == 'dock' and not (args.launcher_ipk or args.dock_ipk):
+        ap.error('Dock is optional: pass --dock-ipk or --launcher-ipk, or use the web fixture')
+    launcher = make_launcher(spec, args.launcher_ipk, dock_ipk=args.dock_ipk, api=True)
+    args.disposable_ipk = api_fixture_ipks()[DISPOSABLE_ID]
+    outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' %
+                                        (args.device, time.strftime('%Y%m%d-%H%M%S')))
+    os.makedirs(outdir)
+    rec = Recorder(outdir)
+    rec.say('ares-only device API contract: %s; artefacts: %s' % (args.device, outdir))
+    scenario = None
+    try:
+        if not shutil.which('ares-do'):
+            raise RuntimeError('ares-do not on PATH')
+        scenario = DeviceApiScenario(args, rec, launcher)
+        scenario.run_contract()
+    except Exception as error:
+        import traceback
+        rec.say('device runner error:\n' + traceback.format_exc())
+        rec.check('device contract ran to completion', False, repr(error))
+    finally:
+        if scenario:
+            scenario.close_insp()
+            if getattr(scenario, 'ask_monitor', None):
+                scenario.ask_monitor.close()
+        counts = rec.finish()
+    return 1 if counts.get('FAIL') else 0
+
+
 def main():
-    ap = argparse.ArgumentParser(description='Home Chooser end-to-end test on one Beanjar VM')
+    ap = argparse.ArgumentParser(description='Home Chooser E2E on a Beanjar VM or API contract on an ares TV')
     ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
+    ap.add_argument('--device', help='an existing root-capable ares device name; run --api-check without Beanjar or reboot')
     ap.add_argument('--launcher', default=None,
                     help="'dock' (default; with --api-check fixture:web.normal), 'fixture:<native|qml|web>.<normal|overlay>', "
                          "or an app id with --launcher-ipk (an author's own launcher)")
@@ -3488,6 +3770,12 @@ def main():
                     help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
                          "same VM, in sequence, with cleanup between")
     ap.add_argument('--launcher-ipk', default=None, help='ipk of --launcher when it is an app id (or to replace Dock\'s)')
+    ap.add_argument('--launcher-update-check', action='store_true',
+                    help='after selection install a newer version of the same launcher id and verify Home stays selected')
+    ap.add_argument('--launcher-update-ipk', default=None,
+                    help='updated launcher ipk for --launcher-update-check (web fixture builds version 1.0.1 automatically)')
+    ap.add_argument('--restore-repair-check', action='store_true',
+                    help='after selection stop the watcher, uninstall, model a partial restore, and verify reinstall repairs Home')
     ap.add_argument('--update-check', action='store_true',
                     help='install an older Home Chooser first, choose the launcher, then install the current build over it '
                          '(step 3u) and check that everything survives')
@@ -3499,7 +3787,7 @@ def main():
     ap.add_argument('--host-mode', choices=['local', 'remote'], default=None,
                     help="override the host's mode: beanjar run here, or over ssh")
     ap.add_argument('--host-device', default=None, help="override the host's ssh target (an ssh config alias)")
-    ap.add_argument('--dock-ipk', default=None, help='the Dock ipk (default: hosts.toml [paths] dock_ipk, else %s)' % DOCK_IPK)
+    ap.add_argument('--dock-ipk', default=None, help='optional Dock ipk (otherwise hosts.toml [paths] dock_ipk in VM mode)')
     ap.add_argument('--hc-ipk', default=None, help='the Home Chooser ipk to test (default: the newest build/ipk/*.ipk)')
     ap.add_argument('--old-ipk', default=None, help='--update-check: the older Home Chooser ipk, already built (skips the build)')
     ap.add_argument('--outdir', default=None, help='the result directory (default e2e/results/<vm>-<timestamp>); must not exist')
@@ -3532,8 +3820,10 @@ def main():
             print('%-5s %-18s %-10s %-9s %s' % m)
         print('launchers: dock, %s' % ', '.join(fixture_specs()))
         return 0
+    if args.device:
+        return run_device_api(args, ap)
     if not args.vm:
-        ap.error('--vm is required')
+        ap.error('--vm or --device is required')
     row = entry(args.vm)
     vm = row[1]
     if args.launchers:
@@ -3541,6 +3831,8 @@ def main():
     else:
         specs = [args.launcher or ('fixture:web.normal' if args.api_check else 'dock')]
     args.multi = len(specs) > 1
+    if args.launcher_update_check and not args.launcher_update_ipk and any(not s.startswith('fixture:web.') for s in specs):
+        ap.error('--launcher-update-check needs --launcher-update-ipk unless using a web fixture')
     if args.multi and vm in KEEP_LAUNCHER_VMS:
         ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
     cfg = load_hosts(args.hosts_file)
