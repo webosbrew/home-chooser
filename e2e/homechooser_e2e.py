@@ -2719,6 +2719,21 @@ exit "$rc"
                     r.check('%s: getAppIcon largeIcon %s has no fallback' % (label, appid),
                             api_refused(reply) and reply.get('errorCode') == 'noIcon'
                             and reply.get('apiVersion') == API_VERSION, raw[:400])
+        if self.major == 9 and label == 'before selection' and self.L.is_fixture:
+            # This one-shot method has no target parameter: put each sampled app in front first.
+            for appid in (STOCK, 'org.webosbrew.hbchannel', self.launcher):
+                rc, out = self.dev.launch(appid)
+                r.check('getForegroundApp probe launches %s' % appid, rc == 0, out.strip()[-400:])
+                platform = self.wait(lambda: self.dev.foreground()[0] == appid, 20, 2)
+                r.check('getForegroundApp probe sees %s in front' % appid, bool(platform), self.dev.foreground()[1][:400])
+                start = time.monotonic()
+                reply, raw = self.api('getForegroundApp')
+                elapsed = (time.monotonic() - start) * 1000
+                r.check('getForegroundApp %s contract and appId' % appid,
+                        not api_reply_problems('getForegroundApp', reply)
+                        and (reply or {}).get('appId') == appid, raw[:400])
+                r.note('getForegroundApp %s timing and reply size' % appid,
+                       '%.1f ms; %d bytes; %s' % (elapsed, len(raw.encode()), raw[:400]))
 
     def api_before_selection(self):
         """Home Chooser open and elevated, the launcher installed but not chosen."""
