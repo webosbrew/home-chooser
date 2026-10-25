@@ -332,6 +332,31 @@ static void test_reboot(void)
 		&& strcmp(argv[6], "{\"reason\":\"remoteKey\"}") == 0 && !argv[7]);
 }
 
+static void test_api_v1(void)
+{
+	CHECK(strcmp(HC_GROUP, "org.webosbrew.homechooser.applications") == 0);
+	CHECK(hc_sam_app_missing("Application not found"));
+	CHECK(hc_sam_app_missing("app does not exist"));
+	CHECK(hc_sam_app_missing("No such app"));
+	CHECK(hc_sam_app_missing("APP IS NOT INSTALLED"));
+	CHECK(!hc_sam_app_missing("Permission denied"));
+	CHECK(!hc_sam_app_missing("Service does not exist: com.webos.applicationManager"));
+	CHECK(!hc_sam_app_missing("Method not found"));
+	CHECK(!hc_sam_app_missing("temporary failure"));
+	CHECK(!hc_sam_app_missing(NULL));
+	CHECK(strcmp(hc_unusable_reply_code(-2), "timeout") == 0);
+	CHECK(strcmp(hc_unusable_reply_code(-1), "badReply") == 0);
+	CHECK(strcmp(hc_unusable_reply_code(0), "badReply") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(true, "App not found"), "notFound") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(true, "Permission denied"), "refused") == 0);
+	CHECK(strcmp(hc_sam_refusal_code(false, "App not found"), "refused") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_SELF), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_HBC), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_CALLER), "protected") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_SYSTEM), "notRemovable") == 0);
+	CHECK(strcmp(hc_remove_verdict_code(HC_REMOVE_BADID), "badRequest") == 0);
+}
+
 int main(void)
 {
 	test_sender();
@@ -345,6 +370,7 @@ int main(void)
 	test_luna_run();
 	test_reboot();
 	test_list_fields();
+	test_api_v1();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 }

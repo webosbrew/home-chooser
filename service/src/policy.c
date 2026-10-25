@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <strings.h>
+#include <ctype.h>
 
 bool hc_sender_ok(const char *app_id)
 {
@@ -264,6 +265,35 @@ const char *hc_remove_verdict_text(hc_remove_verdict v)
 	case HC_REMOVE_SYSTEM: return "this is a system app or is not removable";
 	}
 	return "refused";
+}
+
+bool hc_sam_app_missing(const char *error_text)
+{
+	if (!error_text) return false;
+	char lower[512];
+	size_t n = strlen(error_text);
+	if (n >= sizeof lower) n = sizeof lower - 1;
+	for (size_t i = 0; i < n; i++) lower[i] = (char)tolower((unsigned char)error_text[i]);
+	lower[n] = '\0';
+	if (strstr(lower, "service does not exist") || strstr(lower, "method not found")) return false;
+	return strstr(lower, "not found") || strstr(lower, "does not exist") || strstr(lower, "no such app") || strstr(lower, "not installed");
+}
+
+const char *hc_unusable_reply_code(int exit_status)
+{
+	return exit_status == -2 ? "timeout" : "badReply";
+}
+
+const char *hc_sam_refusal_code(bool target_lookup, const char *error_text)
+{
+	return target_lookup && hc_sam_app_missing(error_text) ? "notFound" : "refused";
+}
+
+const char *hc_remove_verdict_code(hc_remove_verdict verdict)
+{
+	if (verdict == HC_REMOVE_SYSTEM) return "notRemovable";
+	if (verdict == HC_REMOVE_BADID) return "badRequest";
+	return "protected";
 }
 
 bool hc_remove_step(int step, const char *id, const char *folder, hc_remove_call *out)

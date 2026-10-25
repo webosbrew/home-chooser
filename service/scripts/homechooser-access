@@ -74,8 +74,8 @@ for root in $ROOTS; do
         drop_entry groupsFiles "$legacy_group"
         if [ "$action" = apply ]; then
             mkdir -p "$root/api-permissions.d"
-            methods='["org.webosbrew.homechooser.service/listApps","org.webosbrew.homechooser.service/running","org.webosbrew.homechooser.service/closeById","org.webosbrew.homechooser.service/uninstall","org.webosbrew.homechooser.service/getInfo"]'
-            permissions="{\"homechooser.applications\":$methods"
+            methods='["org.webosbrew.homechooser.service/listApps","org.webosbrew.homechooser.service/listRunning","org.webosbrew.homechooser.service/closeApp","org.webosbrew.homechooser.service/uninstallApp","org.webosbrew.homechooser.service/getInfo"]'
+            permissions="{\"org.webosbrew.homechooser.applications\":$methods"
             [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods"
             write_changed "$api" "$permissions}"
             add_entry apiPermissionFiles "$api"
