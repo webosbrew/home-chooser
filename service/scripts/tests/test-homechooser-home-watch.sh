@@ -156,6 +156,7 @@ SLEEPSTUB
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_OVERRIDE="$T/override/o.json" \
            HOMECHOOSER_CLOCK="$T/bin/clock" HOMECHOOSER_SLEEP="$T/bin/sleep" HOMECHOOSER_TMP="$T/run" \
            HOMECHOOSER_RUNTIME="$T/rt" HOMECHOOSER_SHELL="$SH" HOMECHOOSER_APPDIR="$T/app" \
+           HOMECHOOSER_CACHE="$T/cache" HOMECHOOSER_STALE="$T/hook-stale" \
            HOMECHOOSER_HOMEKEY_FLAG="$T/flag" HOMECHOOSER_INITD="$T/init.d/homechooser" \
            HOMECHOOSER_RECHECK=100000 HOMECHOOSER_CONFIRM_DELAY=0 HOMECHOOSER_CHECK_MARK="$T/mark" \
            HOMECHOOSER_INSTALL_DIRS="$T/apps"
@@ -753,6 +754,9 @@ cleanup
 
 echo "== the restore runs from the runtime copy after the app is gone (unit restart)"
 setup 8 'my.home\n'
+mkdir -p "$T/cache/subdir"
+printf 'cached\n' > "$T/cache/subdir/patched.qml"
+touch "$T/hook-stale"
 live '{"home":"my.home","kidsApp":"k.app"}'
 reply '{"home":"my.home","kidsApp":"k.app"}'
 run
@@ -768,6 +772,8 @@ $SH "$T/rt/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "record is stock" stockhome
 check "choice removed" test ! -f "$T/home"
+check "runtime restore removes the populated hook cache" test ! -e "$T/cache"
+check "runtime restore removes the stale marker" test ! -e "$T/hook-stale"
 check "link removed" test ! -L "$T/init.d/homechooser"
 check "no stop from the runtime copy either" hasnt 'homekey stop' "$T/kfcalls"
 cleanup
