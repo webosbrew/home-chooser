@@ -3950,12 +3950,20 @@ def main():
             state = wait_for_device(vm, rec)
         if state != READY:
             raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
-        for launcher in launchers:
+        for index, launcher in enumerate(launchers):
             rec.tag = '[%s]' % launcher.spec if args.multi else ''
             rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))
             scenario = Scenario(args, host, rec, row, launcher)
             try:
                 scenario.run()
+                if index + 1 < len(launchers) and scenario.uses_home_key_hook() and args.until >= 5:
+                    # Uninstall removes the cached hook, but its bind mounts survive until boot. The
+                    # next install must start from stock or it correctly asks for another reboot.
+                    if not scenario.beanjar_reboot('between fixtures: stock boot after cleanup'):
+                        raise SystemExit('the VM did not return for the next fixture')
+                    mounts = scenario.dev.mounts()
+                    rec.check('between fixtures: Home key hook mounts are gone',
+                              not mounts, repr(mounts))
             except Exception as e:  # with several launchers: keep going, the failure is recorded
                 if not args.multi:
                     raise
