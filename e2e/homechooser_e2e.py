@@ -922,6 +922,8 @@ class Device:
 
     def installed(self):
         rc, out = run(['ares-install', '-d', self.vm, '-l'], 60)
+        if rc != 0 or out.startswith('Failed to connect'):
+            raise RuntimeError('ares-install -l on %s failed (rc=%s): %s' % (self.vm, rc, out.strip()[-300:]))
         return out.split()
 
     def launch(self, appid, params=None):
@@ -3414,13 +3416,22 @@ exit "$rc"
         else:
             removed_hc = False
             apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else [])
+            try:
+                installed = d.installed()
+            except RuntimeError as e:
+                r.check('cleanup can list installed apps', False, str(e))
+                return
             for app in apps:
-                if app in d.installed():
+                if app in installed:
                     rc, out = d.remove(app)
                     r.say('removed %s: %s' % (app, out.strip()))
                     removed_hc = removed_hc or app == APP_ID
-            r.check('no test apps left installed', not (set(apps) & set(d.installed())),
-                    str(d.installed()))
+            try:
+                installed = d.installed()
+            except RuntimeError as e:
+                r.check('no test apps left installed', False, str(e))
+                return
+            r.check('no test apps left installed', not (set(apps) & set(installed)), str(installed))
             if removed_hc:
                 # The watcher needs about 15 s per removal it has to confirm, one after the other, and a VM
                 # stopped before it finishes leaves the choice file behind (a dangling init.d link
@@ -3736,11 +3747,15 @@ def wait_for_device(vm, rec, timeout=300):
     state = None
     while True:
         rc, out = dev.sh('echo up', 20)
+        try:
+            installed = dev.installed()
+        except RuntimeError:
+            installed = []
         if out.strip().endswith('up'):
-            now = READY if 'org.webosbrew.hbchannel' in dev.installed() else NO_HBCHANNEL
+            now = READY if 'org.webosbrew.hbchannel' in installed else NO_HBCHANNEL
         else:
             # the devmode device (prisoner, 9922) is Developer Mode's own Dropbear, not HBC's
-            now = NO_ROOT_SSH if 'org.webosbrew.hbchannel' in dev.installed() else DOWN
+            now = NO_ROOT_SSH if 'org.webosbrew.hbchannel' in installed else DOWN
         if now != state:
             state = now
             rec.say('VM %s: %s (%s)' % (vm, state, WAIT_STATES[state]))

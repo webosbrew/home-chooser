@@ -451,6 +451,8 @@ class WaitForDevice(unittest.TestCase):
                 return (0, 'up') if root_up else (255, 'connection refused')
 
             def installed(self):
+                if isinstance(apps, Exception):
+                    raise apps
                 return apps
 
         said = []
@@ -463,6 +465,14 @@ class WaitForDevice(unittest.TestCase):
             return e2e.wait_for_device('vm', Rec(), timeout=0), said
         finally:
             e2e.Device = orig
+
+    def test_ares_app_list_failure_does_not_mean_no_apps(self):
+        import unittest.mock
+        with unittest.mock.patch.object(e2e, 'run', return_value=(1, 'Failed to connect to vm: disconnected')):
+            with self.assertRaisesRegex(RuntimeError, 'ares-install -l on vm failed'):
+                e2e.Device('vm').installed()
+        state, _ = self.wait(False, RuntimeError('Failed to connect'))
+        self.assertEqual(state, e2e.DOWN)
 
     def test_states(self):
         hb = ['org.webosbrew.hbchannel']
