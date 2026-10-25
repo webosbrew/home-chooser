@@ -195,8 +195,9 @@ does not mark a build as device verified.
 These are the latest timestamped result directories for each VM as of 2026-10-25.
 Commits are inferred from each run's local start time against `git log`, not recorded by
 the runner. The 5–8, 9.2.4 and 11.x runs predate the starting tip `f392cf4`; the newer
-9.2.1, 10.3.1 and 12.0.0 runs are targeted checks on `prerelease-tasks`. The 12.0.0 run
-started at `8eadf3c` with an uncommitted assertion later committed as `9d459fd`.
+9.2.1, 10.3.1 and 12.0.0 runs are targeted checks on `prerelease-tasks`. The latest 9.2.1
+and 10.3.1 runs started at `69795e6` with the boot restore fix later committed as `a3a2d2b`.
+The 12.0.0 run started at `8eadf3c` with an uncommitted assertion later committed as `9d459fd`.
 Incomplete and failed runs are identified explicitly; the full matrix has not been rerun.
 
 | webOS | VM / build | Latest run (local date; inferred commit) | Result | Hook |
@@ -205,8 +206,8 @@ Incomplete and failed runs are identified explicitly; the full matrix has not be
 | 6.5.2 | w21a-kisscurl / W21A | `e2e/results/w21a-kisscurl-20261024-214245` (2026-10-24; `4818acf`) | 106 PASS, reboot checked | verified |
 | 7.6.0 | w22p-mullet / W22P | `e2e/results/w22p-mullet-20261024-220405` (2026-10-24; `5d89b26`) | 106 PASS, reboot checked | verified |
 | 8.3.0 | w22o-number1 / W22O | `e2e/results/w22o-number1-20261025-000109` (2026-10-25; `4e0bad5`) | 106 PASS, reboot checked | verified |
-| 9.2.1 | w22h-ombre / W22H | `e2e/results/w22h-ombre-20261025-224555` (2026-10-25; `9d459fd`) | 214 PASS, 1 MANUAL; update and API checked | verified |
+| 9.2.1 | w22h-ombre / W22H | `e2e/results/w22h-ombre-20261025-231546` (2026-10-25; `69795e6`–`a3a2d2b`) | 76 PASS; stopped-watcher uninstall and next-boot cleanup | verified in earlier `…224555` run (214 PASS, 1 MANUAL) |
 | 9.2.4 | w24g-ombre / W24G | `e2e/results/w24g-ombre-20261025-201151` (2026-10-25; `7bf58f6`) | 186 PASS, 1 MANUAL; API checked | verified in earlier [runtime study](research/minimal-hook-verification.md) |
-| 10.3.1 | w22o-ponytail-us / W22O | `e2e/results/w22o-ponytail-us-20261025-221650` (2026-10-25; `8eadf3c`) | 47 PASS, 1 FAIL; leftover repair passed, uninstall left a dangling link (removed after run) | no hook needed |
+| 10.3.1 | w22o-ponytail-us / W22O | `e2e/results/w22o-ponytail-us-20261025-232305` (2026-10-25; `69795e6`–`a3a2d2b`) | 55 PASS; stopped-watcher uninstall and next-boot cleanup | no hook needed |
 | 11.2.0 | w22o-queue-us / W22O | `e2e/results/w22o-queue-us-20261025-200110` (2026-10-25; `304d9c4`) | 139 PASS, 1 MANUAL; API checked | no hook needed |
 | 12.0.0 | w24g-spacebuns / W24G | `e2e/results/w24g-spacebuns-20261025-223559` (2026-10-25; `8eadf3c`–`9d459fd`) | 166 PASS, 1 MANUAL; update and API checked | no hook needed |
