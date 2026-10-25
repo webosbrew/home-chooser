@@ -342,6 +342,64 @@ class KnownDvbCrash(unittest.TestCase):
         self.assertEqual((known, other), ([self.CRASHD], [web]))
 
 
+class DismissKnownPopup(unittest.TestCase):
+    """dismiss_known_popup: BACK at most once per fault; the outcome is key focus, not the fault status."""
+    def make(self, fault_reply, fgs, probe=None):
+        s = scenario()
+        s.dev.fault_reply = fault_reply
+        s.dev.foreground = lambda: (fgs.pop(0) if len(fgs) > 1 else fgs[0], '')
+        s.insp = None
+        s.pressed = []
+        s.press = lambda *k: s.pressed.extend(k)
+        s.priv_luna = lambda uri, payload='{}': s.dev.fault_reply
+        if probe is not None:
+            s.insp = object()
+            s.ui = lambda: {'row': 'a', 'rows': ['a', 'b']}
+            s.probe_keys = lambda rows, ui: probe
+        return s
+
+    def test_no_known_fault_sends_nothing(self):
+        s = self.make(KnownDvbCrash().reply(KnownDvbCrash.NOISE), ['app'])
+        self.assertIsNone(s.dismiss_known_popup('x'))
+        self.assertEqual(s.pressed, [])
+
+    def test_back_once_per_fault_and_focus_checked_by_foreground(self):
+        s = self.make(KnownDvbCrash().reply(KnownDvbCrash.FAULT), ['app'])
+        with mock_sleep():
+            self.assertTrue(s.dismiss_known_popup('x'))
+            self.assertIsNone(s.dismiss_known_popup('x'))  # the fault stays listed; no second BACK
+        self.assertEqual(s.pressed, ['BACK'])
+        self.assertEqual([ok for _, ok in s.rec.checks], [True])
+
+    def test_focus_not_back_fails(self):
+        s = self.make(KnownDvbCrash().reply(KnownDvbCrash.FAULT), ['app', 'other'])
+        with mock_sleep():
+            self.assertFalse(s.dismiss_known_popup('x'))
+        self.assertEqual([ok for _, ok in s.rec.checks], [False])
+        s = self.make(KnownDvbCrash().reply(KnownDvbCrash.FAULT), ['app'], probe=False)
+        with mock_sleep():
+            self.assertFalse(s.dismiss_known_popup('x'))
+        self.assertEqual([ok for _, ok in s.rec.checks], [False])
+
+    def test_page_probe_passes(self):
+        s = self.make(KnownDvbCrash().reply(KnownDvbCrash.FAULT), ['app'], probe=True)
+        with mock_sleep():
+            self.assertTrue(s.dismiss_known_popup('x'))
+
+    def test_other_crash_is_never_dismissed(self):
+        f = dict(KnownDvbCrash.FAULT, faultContent='RDXDErr3_legacy-broadcas__x (API_SI_Other+0x1)__legacy-broadcas.4892.a.gz')
+        s = self.make(KnownDvbCrash().reply(f), ['app'])
+        self.assertIsNone(s.dismiss_known_popup('x'))
+        self.assertEqual(s.pressed, [])
+
+
+@contextlib.contextmanager
+def mock_sleep():
+    import unittest.mock
+    with unittest.mock.patch.object(e2e.time, 'sleep', lambda *_: None):
+        yield
+
+
 class WaitForDevice(unittest.TestCase):
     """2026-10-24: three VMs whose previous boot was cut at ~9 s came up in HBC failsafe mode (telnetd,
     no Dropbear): developer mode answered, root SSH never did.  The wait names that state."""

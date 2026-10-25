@@ -1246,6 +1246,15 @@ class Scenario:
             time.sleep(every)
         return v
 
+    def probe_keys(self, rows, ui):
+        """One probe: a key and its inverse; True when the first moved the list focus (keys reach our page)."""
+        cur = rows.index(ui['row']) if ui.get('row') in rows else 0
+        k1, k2 = ('DOWN', 'UP') if cur + 1 < len(rows) else ('UP', 'DOWN')
+        self.press(k1)
+        moved = (self.ui() or {}).get('row')
+        self.press(k2)
+        return moved != ui.get('row')
+
     def ensure_key_focus(self, rows):
         """Remote keys must reach Home Chooser.  A system popup (seen on w22o-ponytail-us 10.3.1 right
         after every boot: the OLED "screen restoration" popup of com.webos.app.factorywin, buttons
@@ -1261,17 +1270,16 @@ class Scenario:
             ui = self.ui()
             if ui is None:
                 raise RuntimeError('our page is not readable; not pressing a probe key')
-            cur = rows.index(ui['row']) if ui.get('row') in rows else 0
-            k1, k2 = ('DOWN', 'UP') if cur + 1 < len(rows) else ('UP', 'DOWN')
-            self.press(k1)
-            moved = (self.ui() or {}).get('row')
-            self.press(k2)
-            if moved != ui.get('row'):
+            if self.probe_keys(rows, ui):
                 if not first:
                     r.say('key focus restored: the popup was dismissed')
                 return True
-            if first and self.dismiss_known_popup('keys blocked') is True:
-                continue
+            known = self.dismiss_known_popup('keys blocked', rows) if first else None
+            if known is True:
+                r.say('key focus restored: the known LG crash popup was dismissed')
+                return True
+            if known is False:
+                raise RuntimeError('keys still blocked after dismissing the known LG crash popup; no more keys')
             if first:
                 fg = self.dev.foreground()
                 epl = self.dev.luna('luna://com.webos.service.oledepl/isPixelRefresherCondition')
@@ -1504,24 +1512,36 @@ class Scenario:
             up = None
         return self.messages_mark(), up
 
-    def dismiss_known_popup(self, label):
+    def dismiss_known_popup(self, label, rows=None):
         """The "[crash] Fault Occured" popup of the known legacy-broadcast-dvb crash (YES and NO do the same
-        there) may be dismissed with BACK, once per fault.  Only a fault entry that is that known crash
-        qualifies.  Verified through getFaultDetectedStatus: the entry must be gone before any further key.
-        Returns None when no such fault is pending, else whether the popup was verified gone."""
+        there) may be dismissed with BACK, at most once per fault (keyed by pid and faultTime).  Only a fault
+        entry that is that known crash qualifies.  getFaultDetectedStatus lists every fault of the boot, so it
+        cannot show the popup is gone; the outcome checked is that key focus is back: with our page open
+        (`rows`, or a readable page) a probe key moves the list focus; without one, the foreground app is
+        still the one from before BACK.  Returns None when no unhandled known fault is pending, else
+        whether focus is back.  The caller sends no further key when it is False."""
         done = self.__dict__.setdefault('dismissed_known', set())
         uri = 'luna://com.webos.service.faultmanager/getFaultDetectedStatus'
-        pending = {p for p in known_fault_pids(self.priv_luna(uri)) if p not in done}
+        pending = {(p, str(f.get('faultTime'))) for p, f in known_fault_pids(self.priv_luna(uri)).items()}
+        pending -= done
         if not pending:
             return None
-        self.rec.note('%s: known LG crash popup (see %s); dismissing it with BACK' % (label, KNOWN_CRASH_DOC),
-                      'pids %s' % ', '.join(sorted(pending)))
+        self.rec.note('%s: known LG crash popup (see %s); dismissing it with BACK, once' % (label, KNOWN_CRASH_DOC),
+                      'pid/faultTime %s' % ', '.join('%s/%s' % p for p in sorted(pending)))
         done |= pending
+        fg0 = self.dev.foreground()[0]
         self.press('BACK')
-        gone = self.wait(lambda: not (pending & set(known_fault_pids(self.priv_luna(uri)))), 15, 3)
-        self.rec.check('%s: known LG crash popup gone from the fault status after BACK' % label, bool(gone),
-                       self.priv_luna(uri))
-        return bool(gone)
+        time.sleep(2)
+        ui = self.ui() if self.insp else None
+        if ui and ui.get('row') and (rows or ui.get('rows')):
+            ok = self.probe_keys(rows or ui['rows'], ui)
+            how = 'a probe key moved the list focus' if ok else 'a probe key did not move the list focus'
+        else:
+            fg = self.dev.foreground()[0]
+            ok = bool(fg0) and fg == fg0
+            how = 'foreground %s before BACK, %s after' % (fg0, fg)
+        self.rec.check('%s: key focus is back after dismissing the known LG crash popup' % label, ok, how)
+        return ok
 
     def foreign_popup(self, label, dismiss=False):
         """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
@@ -1551,7 +1571,7 @@ class Scenario:
                           'limitation, not a FAIL; see %s' % (label, KNOWN_CRASH_DOC),
                           ' | '.join([json.dumps(f) for f in kfaults] + known_lines))
             if kfaults and not ev and dismiss and self.dismiss_known_popup(label) is False:
-                ev.append('known LG crash popup still listed by the fault status after BACK')
+                ev.append('key focus not back after dismissing the known LG crash popup')
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
                           % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))

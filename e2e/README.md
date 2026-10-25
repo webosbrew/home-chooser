@@ -232,8 +232,10 @@ and Home key hook docs.
    and `docs/research/home-key-hook-early-mount-study.md`). That crash is recorded as a note, not a `FAIL`, in the
    end-of-step crash check and the popup check; any other crash, a WebAppMgr crash, or a legacy-broadcast crash at
    another location still fails. If its popup holds key focus (before a Home proof, or when the probe key is
-   blocked) the runner sends BACK once per fault (YES and NO do the same there) and continues only when
-   `getFaultDetectedStatus` no longer lists the fault. Reinstall: the
+   blocked) the runner sends BACK at most once per fault (pid and faultTime; YES and NO do the same there), then
+   checks that key focus is back: a probe key moves the list focus when our page is open, else the foreground app
+   is unchanged. (The fault status keeps every fault of the boot, so it cannot show the popup is gone.) If focus
+   is not back the step FAILs and no more keys are sent. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
 5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
