@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /* org.webosbrew.homechooser.service: the narrow root service behind the Home Chooser app.
  * See docs/service.md. All decisions live in policy.c; this file is luna-service2, pbnjson and
  * the system calls around them. */

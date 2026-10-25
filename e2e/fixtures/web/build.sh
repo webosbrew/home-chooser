@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: HC_FIXTURE_VERSION=1.0.1 build.sh <outdir> (default 1.0.0)
 # Packages both web fixture launchers with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 undo_mounts() {
     [ -f "$WORK/mounted" ] || return 0
     failed=0

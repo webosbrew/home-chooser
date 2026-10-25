@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Plain-language reading of a failed call to Homebrew Channel (elevateService) or to Home Chooser's
 // service, for the UI and the log.
 export const diagnoseExecFailure = (message) => {

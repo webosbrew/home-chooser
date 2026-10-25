@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: build.sh <outdir>
 # Builds both native fixture launchers and packages them with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.native.normal_1.0.0_arm.ipk

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Host-only manifest/permission tests. Optional shell argument, e.g. "busybox sh".
 set -eu
 SH=${1:-sh}

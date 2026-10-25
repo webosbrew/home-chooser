@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Tests for the init.d entry `homechooser` with stubbed systemd-run, systemctl and Home key hook worker.
 # usage: test-homechooser.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}

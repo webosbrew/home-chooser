@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Home-choice logic. Pure over injected {rootLuna, exec, writeFile, removeFile, version}; exec takes
 // a command name (see persistence.js), not shell text.
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.

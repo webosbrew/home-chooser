@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 close_stock_home() {
     [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || return 0
     # On 6 to 10 sam relaunches it at once as the last-input app (measured 8.3.0, 9.2.1, 10.3.1), for every

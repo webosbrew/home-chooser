@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run the Home Chooser E2E on several VMs: one queue and one worker per Beanjar machine, so the runs on
 a machine are serialised (at most one VM running on it) and machines run in parallel.  Each run is a
 subprocess of homechooser_e2e.py.  See e2e/README.md "Several machines".

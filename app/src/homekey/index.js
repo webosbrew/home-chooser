@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The Home key hook for webOS 6 to 9: status, install and remove. Pure over injected
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/home-key-hook.md.
 import {errorMessage} from '../platform/errors';

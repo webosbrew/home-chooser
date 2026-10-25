@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
 import {homeKeyHookApplies, createHomeKeyHook, parseStatus} from '..';
 import {BOOT_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';

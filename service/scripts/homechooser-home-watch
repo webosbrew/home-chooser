@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Watch the chosen Home app and restore stock policy on removal or uninstall.
 # The runner stages this script and its sourced helpers in /tmp/homechooser-runtime.
 

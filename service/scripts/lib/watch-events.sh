@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 handle() {
     flat=$(printf '%s' "$1" | flatten)
     case "$flat" in

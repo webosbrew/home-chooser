@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Pattern x firmware matrix for the minimal Home key hook (offline, read-only).
 
 usage: python3 -I matrix.py corpus.tsv > matrix.txt

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // One-line renderings of the step log for the UI.
 export const formatStep = (step) => {
 	let what;

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 app_state() {
     out=$(timed "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/getAppInfo" "{\"id\":\"$1\"}" 2>&1 | flatten)
     if ok_reply "$out"; then

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Home key hook cache, boot mounts, refresh, status and rollback for webOS 6-9.
 # HOMECHOOSER_* variables override paths and commands in offline tests.
 

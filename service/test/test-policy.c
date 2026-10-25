@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Host-side test of src/policy.c: make test */
 #include <stdio.h>
 #include <string.h>

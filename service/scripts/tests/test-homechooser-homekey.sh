@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Tests for homechooser-homekey against a fake root with stubbed mount, umount and systemctl.
 # usage: test-homechooser-homekey.sh [shell]     (shell defaults to sh, e.g. "busybox sh")
 SH=${1:-sh}

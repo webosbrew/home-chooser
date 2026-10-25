@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end test of Home Chooser on a Beanjar VM.  See e2e/README.md.
 
 Python 3 standard library only.  The device is reached with the ares-* tools only (by device

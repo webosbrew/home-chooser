@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Where Home Chooser keeps its choice and boot entry on the TV, and the shell commands that
 // manage them. See docs/settings-app.md ("Persistence").
 

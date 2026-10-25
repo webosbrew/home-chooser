@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Failures carry the service reply in `reply`; `message` is the text a user should see.
 
 export const replyText = (reply) => {

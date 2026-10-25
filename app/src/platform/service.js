@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Client for Home Chooser's native root service, org.webosbrew.homechooser.service (docs/service.md).
 // Every method answers {returnValue, ...}; a false returnValue becomes a ServiceError whose
 // `reply` is the service reply (errorCode: forbidden, notRoot, notAllowed, ...).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The session controller behind the screen: loads the environment, keeps the home list and the
 // Home key hook patch state, and runs the apply / restore flows one at a time. Every step of every
 // operation goes to console.log with an [HomeChooser] prefix, never to the screen.

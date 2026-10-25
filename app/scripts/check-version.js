@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The version has one source, app/package.json. appinfo.json (what ares-package and the TV read)
 // has to carry the same one; the service gets it from service/Makefile (-DHC_VERSION).
 //   node scripts/check-version.js           exit 1 when appinfo.json differs from package.json

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: check-abi.sh BINARY ROOTFS
 # Lists the SONAMEs the binary needs and the highest GLIBC / GLIBCXX / GLIB version it asks of
 # each, then checks that the rootfs (the oldest supported release) has the libraries and offers

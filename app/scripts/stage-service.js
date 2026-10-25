@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Stages the native service for ares-package: <out>/services.json and <out>/homechooser-service
 // (mode 755: elevation turns its Exec line into the bare binary path, so it has to run as is).
 // The binary is built by `make -C service` into build/service.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Round trip of the Home key hook against the REAL stock files of each release, with the
 # worker (homechooser-homekey) run for real and only mount, umount, systemctl and luna-send
 # stubbed. For each release it checks that status accepts structural anchors; that apply patches

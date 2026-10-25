@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // package.json is the one source of the version; appinfo.json must carry the same (scripts/check-version.js).
 import pkg from '../../../package.json';
 import appinfo from '../../../appinfo.json';

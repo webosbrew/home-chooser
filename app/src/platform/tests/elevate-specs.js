@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import {HBC_ELEVATE, ensureRoot, FatalError} from '../elevate';
 import {ServiceError} from '../errors';
 import {SERVICE_ID} from '../service';

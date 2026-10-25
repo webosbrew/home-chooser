@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // A marker left by earlier versions, for the one step that could take the window down: the first
 // choice on webOS 6 to 9 restarted the compositor so the patch loaded. Nothing writes it any more
 // (no step restarts the compositor while the TV runs); the startup still reads an old one, shows

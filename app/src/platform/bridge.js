@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The webOS service bridge. `call(uri, payload)` resolves with the parsed reply, whatever its
 // `returnValue`; it rejects only when the bridge is missing or the reply is not JSON.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 'use strict';
 // Behavioural comparison of handleHomeKeys: stock vs core-only vs complete hook.
 //   node harness.js <variant>=<systemUi.js path> ...   (variant: stock | core | min)

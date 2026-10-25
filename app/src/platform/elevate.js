@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Startup elevation: make sure Home Chooser's service runs as root.
 //   status -> if not root: Homebrew Channel elevateService -> quit -> status again.
 // Failures are FatalErrors whose `kind` the screen maps to a message:

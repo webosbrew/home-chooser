@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: build.sh <outdir>
 # Packages both QML fixture launchers with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.qml.normal_1.0.0_all.ipk

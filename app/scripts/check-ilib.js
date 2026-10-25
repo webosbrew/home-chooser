@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Loads the pruned iLib data in dist/ through iLib's real Loader (the same manifest check and
 // manifest-gated lookup Enact's loader performs in the browser), for the locales the app can meet on
 // a TV, and fails if iLib throws, asks for data that is not shipped, or gives a wrong answer.

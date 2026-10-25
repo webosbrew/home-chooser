@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: build.sh <outdir>
 # Packages the disposable app of the launcher-API check (homechooser_e2e.py --api-check) with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.disposable_1.0.0_all.ipk

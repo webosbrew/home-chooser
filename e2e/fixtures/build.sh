@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # usage: build.sh [outdir]   (default: <repo>/build/fixtures)
 # Builds the six launcher fixtures: {native,qml,web} x {normal,overlay}. Offline.
 set -eu

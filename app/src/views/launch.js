@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // PalmSystem supplies launchParams as JSON text. A relaunch may carry it in detail or update
 // PalmSystem.launchParams. A new object marks each launch, including repeated requests.
 import {useEffect, useState} from 'react';

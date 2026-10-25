@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 do_status() {
     [ -f "$REWRITER" ] || echo data=missing
     [ ! -f "$CACHE/generation" ] || echo "cache-generation=$(cat "$CACHE/generation")"

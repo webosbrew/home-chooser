@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Home Chooser E2E fixture: a minimal native launcher (appCategory ["home"]).
  *

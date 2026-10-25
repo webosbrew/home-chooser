@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 now() {
     if [ -n "$CLOCK" ]; then $CLOCK; else date +%s; fi
 }

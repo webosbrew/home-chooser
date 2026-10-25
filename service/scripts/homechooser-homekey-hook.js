@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
 'use strict';
 // The minimal structural Home key hook for webOS 6 to 9.
 //

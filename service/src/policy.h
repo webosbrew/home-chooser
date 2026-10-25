@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Pure policy of the Home Chooser service: who may call, which paths and calls are allowed, which
  * commands run with which argv. No luna-service2, no JSON, so it builds and tests on the host. */
 #ifndef HC_POLICY_H

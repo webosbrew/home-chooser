@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import sys
 rows = {}
 for line in open(sys.argv[1]):

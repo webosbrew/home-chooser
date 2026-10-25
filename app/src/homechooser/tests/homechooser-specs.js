@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
 import {
 	OVERRIDE_PATH, buildOverride, createHomeChooser, extractDefaultAppsProfile, releaseInfo

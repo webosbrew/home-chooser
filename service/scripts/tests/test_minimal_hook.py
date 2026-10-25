@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """No LG sources are stored here. Corpus roots are read-only; all outputs are temporary."""
 import json
 import os

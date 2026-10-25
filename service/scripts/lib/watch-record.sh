@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 merged_write() {
     reply=$(call "$SETTINGS/getSystemSettings" '{"category":"general","keys":["defaultApps"]}' | flatten)
     if ! rest=$(record_body "$reply"); then

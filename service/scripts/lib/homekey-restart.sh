@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 compositor_dependants() {
     if [ -n "${HOMECHOOSER_DEPENDANTS+set}" ]; then
         echo "$HOMECHOOSER_DEPENDANTS"

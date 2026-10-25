@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import {createBridgeCall} from '../bridge';
 import {ServiceError} from '../errors';
 import {SERVICE_URI, createServiceClient, withTimeout} from '../service';

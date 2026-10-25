@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Tests for homechooser-home-watch with a stub luna-send that plays a scripted subscription stream
 # and records the calls, a fake clock and a fake sleep.
 # usage: test-homechooser-home-watch.sh [shell]     (shell defaults to sh, e.g. "busybox sh")

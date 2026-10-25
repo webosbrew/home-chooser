@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // What the logic layer gets from the TV: one object, built on the service client.
 //   rootLuna(uri, payload)  an allow-listed luna call, made by the root service
 //   writeFile / removeFile  the files the service allows

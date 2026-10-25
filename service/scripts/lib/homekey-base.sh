@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # entries <manifest>: print staged target paths, one per line, in order.
 entries() {
     tr '{},' '\n\n\n' < "$1" |

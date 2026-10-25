@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Homebrew Channel init.d entry: apply the prepared hook and start the watcher.
 # The watcher unit uses its /tmp copy if the service is removed after a crash.
 

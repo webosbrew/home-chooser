@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Shared webOS service-script helpers. Callers set LOG, OSRELEASE, LUNA and TIMEOUT.
 HC_SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
 HC_STATE_DIR=/var/lib/webosbrew/homechooser

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 remember_title() {
     [ "$NOTIFY_ON" = 1 ] || return 0
     [ "$TITLE_ID" = "$1" ] && return 0

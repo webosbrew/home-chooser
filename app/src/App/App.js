@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import kind from '@enact/core/kind';
 import MoonstoneDecorator from '@enact/moonstone/MoonstoneDecorator';
 import Panels from '@enact/moonstone/Panels';

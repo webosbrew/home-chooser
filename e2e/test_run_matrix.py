@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Offline tests of the scheduler (fake hosts, a fake runner) and the ares device-file lock.
 
     python3 -I -m unittest discover -s e2e -p 'test_*.py' -v

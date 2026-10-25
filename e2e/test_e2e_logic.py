@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Offline tests of the runner's pure logic: what it expects per release after 144ef21/34a4ff9 (no
 compositor restart on a running TV, the stock id in the record on 6-9), the texts it asserts, the
 launcher-API reply checks of --api-check, and the restart/crash detection.  No device, no VM.

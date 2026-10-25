@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Connects the pieces for one session: makes sure Home Chooser's service runs as root (elevating
 // it through Homebrew Channel when it does not), reads the release, and builds the chooser and
 // (webOS 6 to 9) the Home key hook.
