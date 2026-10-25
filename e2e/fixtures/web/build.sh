@@ -1,5 +1,5 @@
 #!/bin/sh
-# usage: build.sh <outdir>
+# usage: HC_FIXTURE_VERSION=1.0.1 build.sh <outdir> (default 1.0.0)
 # Packages both web fixture launchers with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk
 #   <outdir>/org.webosbrew.hcfixture.web.overlay_1.0.0_all.ipk
@@ -9,6 +9,7 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$1"
 OUT=$(cd "$1" && pwd)
+VERSION=${HC_FIXTURE_VERSION:-1.0.0}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -45,7 +46,7 @@ for v in normal overlay; do
 	python3 -I - "$stage/appinfo.json" "$id" "$v" <<'PY'
 import json, os, sys
 dst, appid, v = sys.argv[1:4]
-d = {"id": appid, "version": "1.0.0", "vendor": "webOS Homebrew", "type": "web",
+d = {"id": appid, "version": os.environ.get("HC_FIXTURE_VERSION", "1.0.0"), "vendor": "webOS Homebrew", "type": "web",
      "main": "index.html", "title": "HC Fixture web " + v, "icon": "icon.png",
      "largeIcon": "oversize.png",
      "appCategory": ["home"], "visible": True}
@@ -57,5 +58,5 @@ if v == "overlay":
 json.dump(d, open(dst, 'w'), indent=2)
 PY
 	ares-package --outdir "$OUT" "$stage" >/dev/null
-	echo "built $OUT/${id}_1.0.0_all.ipk"
+	echo "built $OUT/${id}_${VERSION}_all.ipk"
 done

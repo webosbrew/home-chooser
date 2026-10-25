@@ -24,6 +24,7 @@ APPS_DIRS=${HOMECHOOSER_APPS_DIRS:-"/media/developer/apps/usr/palm/applications 
 INSTALL_DIRS=${HOMECHOOSER_INSTALL_DIRS:-"$APPS_DIRS /media/cryptofs/apps/usr/palm/applications"}
 KEYFLAG=${HOMECHOOSER_HOMEKEY_FLAG:-$HC_STATE_DIR/homekey}
 INITD=${HOMECHOOSER_INITD:-/var/lib/webosbrew/init.d/homechooser}
+BOOT_DIR=${HOMECHOOSER_BOOT_DIR:-/var/lib/webosbrew/homechooser/boot}
 RECHECK=${HOMECHOOSER_RECHECK:-300}
 TIMER_SLEEP=${HOMECHOOSER_TIMER_SLEEP:-sleep}
 CONFIRM_DELAY=${HOMECHOOSER_CONFIRM_DELAY:-15}
@@ -94,6 +95,13 @@ PRELOAD_STATE=
 TITLE_ID=
 TITLE_VAL=
 NOTIFY_OUT=
+
+# A boot entry kept outside the removed package can run this copy even when the old watcher
+# had exited without a choice or was stopped. Confirm absence before the no-choice early exit;
+# a package update can temporarily remove the app directory too.
+if [ ! -d "$APPDIR" ]; then
+    check_hc
+fi
 
 if ! want=$(read_choice); then
     log "no usable choice file, checking for a leftover home"

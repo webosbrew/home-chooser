@@ -3,6 +3,7 @@
 HC_SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
 HC_STATE_DIR=/var/lib/webosbrew/homechooser
 HC_RUNTIME_DIR=/tmp/homechooser-runtime
+HC_BOOT_DIR=$HC_STATE_DIR/boot
 HC_LUNA_IDENTITY=com.webos.applicationManager
 HC_STOCK_HOME=com.webos.app.home
 HC_STOCK_FULLHOME=com.webos.app.fullhome

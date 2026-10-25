@@ -72,6 +72,35 @@ An overlay launcher may use `defaultWindowType: "overlay"` for its window; Home 
 The fixtures have not run on a device yet; whether `type: "qml"` apps run on each release is recorded, with the
 firmware evidence, in `e2e/fixtures/qml/support.json`.
 
+## Building
+
+On Linux, this tree has been built with Node.js 24.20.0, npm 11.19.0 and GNU Make. Install the
+[webOS Homebrew native toolchain](https://github.com/webosbrew/native-toolchain) for the C service;
+the tested SDK reports Buildroot 2025.02.1 and GCC 14.2.0. Download its
+`arm-webos-linux-gnueabi_sdk-buildroot` archive for your host, extract it, and run the included
+`relocate-sdk.sh`. The [webOS Homebrew setup guide](https://www.webosbrew.org/develop/guides/env-setup/#setup-for-native-app-development)
+has the host-specific downloads. Install the [webOS CLI](https://webostv.developer.lge.com/develop/tools/sdk-installation)
+so `ares-package` is on `PATH`; it packages the app and service. The official webOS TV web SDK
+alone does not supply this native compiler.
+
+```sh
+cd app
+npm ci
+SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot npm run package
+```
+
+`service/Makefile` defaults `SDK` to `/opt/arm-webos-linux-gnueabi_sdk-buildroot` and gives a
+clear error if the compiler or sysroot is missing. Override `SDK`, or `SYSROOT` (default
+`$(SDK)/arm-webos-linux-gnueabi/sysroot`) and `CROSS` (default
+`$(SDK)/bin/arm-webos-linux-gnueabi-`) separately for another layout. `FIRMWARES` points to
+unpacked firmware images for `make -C service check-abi` only; its default is
+`$OPENHOUSE_FIRMWARES`, then `~/Projects/webos-firmwares`. Set `ROOTFS` directly to use one
+particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
+
+For offline checks, use `make -C service test`, `cd app && npm run lint && CI=true npm test`,
+the shell suites in `service/scripts/tests/`, and
+`python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
+
 ## Documents
 
 * [Writing a launcher, API version 1](docs/launcher-api.md): the developer guide for launcher authors:

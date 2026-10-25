@@ -21,6 +21,7 @@ setup() {
     cp "$HERE/lib/common.sh" "$T/service/scripts/lib/common.sh"
     printf '#!/bin/sh\necho "homekey $*" >> %s/cmds\n' "$T" > "$T/service/scripts/homechooser-homekey"
     printf '#!/bin/sh\n' > "$T/service/scripts/homechooser-home-watch"
+    printf '// hook fixture\n' > "$T/service/scripts/homechooser-homekey-hook.js"
     printf '#!/bin/sh\necho "access $*" >> %s/access\n' "$T" > "$T/service/scripts/homechooser-access"
     printf '#!/bin/sh\necho "systemd-run $*" >> %s/cmds\n' "$T" > "$T/bin/systemd-run"
     cat > "$T/bin/systemctl" <<STUB
@@ -33,7 +34,8 @@ STUB
     : > "$T/cmds"
     export HOMECHOOSER_CHOICE="$T/state/home" HOMECHOOSER_HOMEKEY_FLAG="$T/state/homekey" \
            HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" \
-           HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" HOMECHOOSER_LOG="$T/log"
+           HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" HOMECHOOSER_LOG="$T/log" \
+           HOMECHOOSER_SERVICE_SCRIPTS="$T/service/scripts" HOMECHOOSER_BOOT_DIR="$T/state/boot"
     unset HOMECHOOSER_DIR
 }
 run() { HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
@@ -50,6 +52,7 @@ check "boot applies access" has "access apply" "$T/access"
 check "no Home key hook on 5" hasnt homekey "$T/cmds"
 check "systemd-run with the watcher" has "$RUN_ARGS $T/service/scripts/homechooser-home-watch" "$T/cmds"
 check "checked the unit first" has 'systemctl is-active --quiet homechooser-home' "$T/cmds"
+check "boot restore copy staged" test -f "$T/state/boot/homechooser-home-watch" -a -f "$T/state/boot/lib/common.sh"
 cleanup
 
 echo "== no choice: nothing is started"
@@ -145,10 +148,21 @@ printf 'my.home\n' > "$T/state/home"
 touch "$T/state/homekey"
 mkdir -p "$T/stray"
 cp "$SCRIPT" "$T/stray/homechooser"
-$SH "$T/stray/homechooser" > "$T/out" 2>&1; echo $? > "$T/rc"
+HOMECHOOSER_SERVICE_SCRIPTS="$T/gone" $SH "$T/stray/homechooser" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "no output" test ! -s "$T/out"
 check "no commands" test ! -s "$T/cmds"
+cleanup
+
+echo "== staging and unstage remove the persistent restore copy"
+setup 9
+run stage
+check "stage exits 0" rc 0
+check "stage has executable boot entry" test -x "$T/state/boot/homechooser"
+check "stage includes the access and watcher scripts" test -f "$T/state/boot/homechooser-access" -a -f "$T/state/boot/homechooser-home-watch"
+run unstage
+check "unstage exits 0" rc 0
+check "unstage removes the boot copy" test ! -e "$T/state/boot"
 cleanup
 
 echo "== the unit's wrapper: service copy, else the runtime copy, else nothing"

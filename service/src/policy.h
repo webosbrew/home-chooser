@@ -19,6 +19,8 @@
 #define HC_INIT_DIR "/var/lib/webosbrew/init.d"
 #define HC_INIT_LINK HC_INIT_DIR "/homechooser"
 #define HC_ENTRY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser"
+#define HC_BOOT_DIR HC_STATE_DIR "/boot"
+#define HC_BOOT_SCRIPT HC_BOOT_DIR "/homechooser"
 #define HC_HOMEKEY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-homekey"
 #define HC_WATCH_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-home-watch"
 #define HC_ACCESS_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-access"

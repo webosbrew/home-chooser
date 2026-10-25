@@ -27,6 +27,8 @@ all: $(OUT)/homechooser-service
 
 $(OUT)/homechooser-service: src/main.c src/policy.c src/policy.h ../app/package.json
 	@test -n "$(VERSION)" || { echo 'no version: app/package.json has no "version" (or set VERSION=)' >&2; exit 1; }
+	@test -x "$(CROSS)gcc" || { echo 'webOS native SDK compiler not found: $(CROSS)gcc; download the webosbrew native-toolchain and set SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot (or CROSS=...)' >&2; exit 1; }
+	@test -d "$(SYSROOT)/usr/include" || { echo 'webOS native SDK sysroot not found: $(SYSROOT); set SYSROOT=/path/to/sysroot' >&2; exit 1; }
 	mkdir -p $(OUT)
 	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ src/main.c src/policy.c $(LIBS) -Wl,-O1,--as-needed
 	$(CROSS)strip $@
@@ -42,6 +44,7 @@ test/test-policy: test/test-policy.c src/policy.c src/policy.h
 	$(CC) -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isrc -o $@ test/test-policy.c src/policy.c
 
 check-abi: $(OUT)/homechooser-service
+	@test -d "$(ROOTFS)" || { echo 'webOS firmware rootfs not found: $(ROOTFS); set ROOTFS=/path/to/rootfs or FIRMWARES=/path/to/unpacked-firmwares' >&2; exit 1; }
 	CROSS=$(CROSS) sh test/check-abi.sh $(OUT)/homechooser-service $(ROOTFS)
 
 clean:

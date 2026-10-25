@@ -221,8 +221,14 @@ through `apiPermissionFiles` was removed the same way without a crash. `ls-contr
 after dropping the entry did not crash either. The same crash at uninstall was seen on 11.2.0
 (w22o-queue-us), which recovered after a reboot. The first version also wrote over the installer's
 own `api-permissions.d/org.webosbrew.homechooser.service.api.json`; that file is the installer's
-and is not touched now. Apply and remove both strip the old `groupsFiles` entry, delete the old
-groups file and rescan while the app is still installed.
+and is not touched now. A targeted 2026-10-25 update from development build `9581378` on
+w22h-ombre (`e2e/results/w22h-ombre-20261025-214258`) ended with 46 PASS and 18 FAIL:
+`ares-install` timed out, the selected Home was lost, and LG processes crashed. That run does
+not isolate the ls-hubd failure as the sole cause. The `groupsFiles` layout existed only in
+unreleased builds `1871941` through `9581378`; updating from those builds is unsupported.
+The access script manages only its current launcher API permission file; it does not try to
+clean up that unsupported development layout.
+
 The elevated service's broader public registration still requires the service's own caller gates.
 
 Apply is idempotent and repairs drift. Remove drops these manifest entries and files, including
@@ -319,9 +325,10 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
   file of at most 256 KiB.
-* **Boot entry**: `link` creates the directory `/var/lib/webosbrew/init.d`, sets mode 755 on the four executable scripts in the installed service's `scripts/`
-  directory, and makes `/var/lib/webosbrew/init.d/homechooser` a symlink to the service's
-  `scripts/homechooser` (replacing a link or a regular file). `unlink` removes the `homechooser` entry.
+* **Boot entry**: `link` creates `/var/lib/webosbrew/init.d`, sets mode 755 on the installed scripts,
+  stages the boot and restore scripts in `/var/lib/webosbrew/homechooser/boot`, then links
+  `/var/lib/webosbrew/init.d/homechooser` to that boot copy (replacing an earlier entry). `unlink`
+  removes the link and copy.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
 * **Commands** (`run`, by name, fixed argv, no shell, minimal environment, stdin from `/dev/null`,

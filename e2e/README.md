@@ -1,8 +1,38 @@
 # End-to-end test
 
-`homechooser_e2e.py` runs one scenario on one Beanjar VM and records every assertion with its raw
-evidence. Python 3 standard library only; the device is reached with the `ares-*` tools by device
-name (never raw ssh).
+`homechooser_e2e.py` records each assertion with its raw evidence. Python 3 standard library
+only; televisions and VMs are reached with `ares-*` by device name (never raw ssh).
+
+## Launcher author: your own TV
+
+Use a rooted webOS TV with Homebrew Channel and an ares root device configured. With Home
+Chooser installed and LG Home currently selected, run the API compatibility kit:
+
+```sh
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check
+python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check \
+  --launcher org.example.launcher --launcher-ipk path/to/launcher.ipk
+```
+
+The first command builds and installs the permission-declaring web fixture and a disposable
+control app. The second tests your launcher ipk, whose appinfo must declare both
+`appCategory:["home"]` and
+`requiredPermissions:["org.webosbrew.homechooser.applications"]`. Pass `--hc-ipk
+path/to/homechooser.ipk` if Home Chooser is not installed yet. The kit selects the launcher on
+the verified Home Chooser screen with ares keys, checks the v1 methods before and after
+selection, then restores LG Home and removes what it installed. It refuses to replace an
+already installed launcher or change an existing nonstock Home choice. It uses no Beanjar,
+QMP, screenshots, or reboot. On webOS 6–9 the Home key hook still needs a separate reboot test.
+The output is `e2e/results/<device>-<timestamp>/results.json` and `run.log`.
+
+`ares-package`, `ares-install`, `ares-launch`, `ares-do`, `ares-shell` and `ares-novacom` must be
+on `PATH`. The root ares name must support `ares-do exec` and the web inspector forward. See
+[Testing your launcher](../docs/launcher-api.md#testing-your-launcher) for manual calls.
+
+## Maintainer VM scenario
+
+This mode runs the full Home-key lifecycle on one Beanjar VM. It needs the maintainer's Beanjar
+host and VM setup in addition to ares:
 
 ```
 python3 -I e2e/homechooser_e2e.py --list
@@ -16,7 +46,9 @@ screenshots carry the launcher's name), `--update-check` and `--update-from <git
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
 Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
-`--dock-ipk <path>`; `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
+`--dock-ipk <path>` (required for Dock unless configured in `hosts.toml`);
+`--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
+`--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
 (webOS 6-9, how the restart the first choice asks for is done: `later`, the default, closes our alert and restarts the VM with
@@ -190,7 +222,7 @@ and Home key hook docs.
    forwarded with `ares-novacom -f`; rows carry `data-app-id`), moved to the launcher's row, OK,
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;
-   `init.d/homechooser` links into the installed service; on 6 to 9 the Home key hook targets are mounted
+   `init.d/homechooser` links to the persistent boot restore copy; on 6 to 9 the Home key hook targets are mounted
    (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
    On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
    toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
@@ -238,7 +270,7 @@ and Home key hook docs.
    is not back the step FAILs and no more keys are sent. Reinstall: the
    record and the override (10+) return, the id is baked in again (6 to 9), Home opens the
    launcher; on 6 to 9 this return is a switch with the patch mounted and must not restart the compositor.
-5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, flag and the
+5. `ares-install --remove` Home Chooser: override, choice file, `init.d` link, boot restore copy, flag and the
    watcher unit are gone; the record is stock as in step 4; on 6 to 9 the patch stays mounted until
    the next boot (its sources are in `/tmp/homechooser-homekey/stage`, not in the app), the baked id
    is not checked (the installed worker may have been removed with the package), the compositor was not restarted, and
@@ -250,7 +282,7 @@ and Home key hook docs.
    removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
    and the unit, and only then stops the VM: stopping it earlier kills the watcher and leaves the choice
-   file behind with a dangling `init.d` link, which the next run's baseline then sees. Stop the VM.
+   file behind until the next boot's restore copy runs. Stop the VM.
 
 ### webOS 6-9: no restart while the TV runs
 
@@ -450,7 +482,7 @@ Asserted after a 45 s settle:
 * the choice file and the record `home` still name the launcher;
 * exactly one watcher unit and one top-level watcher process, with the same `MainPID` and `NRestarts` as before (no duplicate, no restart);
 * the watcher log lines written during the update contain no `watching, home=` (no restart), no restore, revert, `isEnabled=true`, alert or toast; the optional `Home Chooser is back` line is noted either way, as is which build the running watcher is;
-* the `init.d` entry links into the installed service and the target exists;
+* the `init.d` entry links to the persistent boot restore copy and the target exists;
 * on 6 to 9 the Home key hook mounts are the same set, the flag file exists and the launcher id is still baked in; elsewhere none; on 10 and later the override exists;
 * the stock home preload policy is still disabled (6 and later; 5.x: not disabled);
 * Home opens the launcher (with the fixture proof above);

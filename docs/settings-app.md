@@ -179,14 +179,13 @@ Home Chooser keeps its own copy of the choice and enforces it.
   enforced. Every reader (the watcher, the boot entry, the Home key hook worker) trims spaces, tabs,
   CR and LF, treats an empty result as no choice, and accepts only letters, digits, `.`, `-` and
   `_`; anything else is logged and ignored, never put into a luna payload or into QML.
-* **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`, a symlink (never a copy) to
-  `scripts/homechooser` in the installed service, which the service creates (a regular file at that path is replaced). Homebrew
-  Channel's `run-parts` runs it as root once per boot. The package keeps the scripts executable
-  (`ares-package` keeps mode 755, checked in the ipk), and `apply` runs `chmod 755` on them
-  anyway. The script finds its files next to its real path (`readlink -f`, else `readlink`, else the
-  fixed service path) and exits 0 without output when the service scripts directory is gone (the service was
-  uninstalled and the link dangles; the link then does nothing and `apply` or an uninstall of the
-  link can clean it up; see [When apps are removed](#when-apps-are-removed)). It does two things: on webOS 6 to 9, when the flag file
+* **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`, a symlink to the executable
+  `/var/lib/webosbrew/homechooser/boot/homechooser`. `linkEntry` stages that script, the watcher,
+  the access worker and their helpers outside the package before publishing the link. Homebrew
+  Channel's `run-parts` runs it as root once per boot. While Home Chooser is installed, the entry
+  uses the installed scripts and refreshes the boot copy. If Home Chooser was uninstalled while
+  the watcher was stopped, the copy runs the watcher once to restore stock and remove the link
+  and cache. During a normal boot it does two things: on webOS 6 to 9, when the flag file
   `/var/lib/webosbrew/homechooser/homekey` exists, it runs `homechooser-homekey apply` (the
   [Home key hook](home-key-hook.md)); and if the choice file exists it starts the watcher.
   `homechooser watch` does only the second, and starts the watcher with or without a stored choice:
@@ -346,8 +345,9 @@ gone it does, in order:
 
 1. the platform revert of the table above (webOS 5 to 9: `home` = stock launcher; 10 and
    later: override removed, `home` null);
-2. removes the choice file (and its directory if empty) and the Home key hook flag file;
-3. removes the `init.d/homechooser` symlink, only if it is a symlink;
+2. removes the choice file, the Home key hook flag, the hook cache and stale marker;
+3. removes the `init.d/homechooser` symlink and the persistent boot copy, then the state
+   directory if empty;
 4. on webOS 6 to 9, nothing is unmounted and nothing restarts: the bind mounts stay until the next
    boot (their sources are under `/tmp/homechooser-homekey/stage`, not in the app directory, so they
    survive the uninstall), and at that boot nothing re-applies because the init.d link and the flag
@@ -381,40 +381,24 @@ revert above; the later removal of Home Chooser repeats it harmlessly and cleans
 A, and A followed by B, end at the same stock state, and a removal of the chosen app after Open
 House left the platform alone breaks nothing.
 
-### What is left when the watcher is not running
+### When the watcher is not running
 
-If either app is removed while the watcher is not running, nothing undoes the writes, because the
-init.d link of an uninstalled Home Chooser dangles (`run-parts` runs nothing) and the unit's wrapper
-has nothing to run. This happens when the watcher was stopped by hand or never started
-(`systemd-run` failed), when it died and has not been restarted yet (the 5 s `RestartSec`, and
-after a reboot until the boot entry has run), or when Home Chooser is removed during that window. The
-state it leaves:
-
-| Release | Left behind | Effect |
-| --- | --- | --- |
-| 5.x | record `home` names the missing app | the Home key hook launches it directly: the Home key launches nothing |
-| 6.x to 9.x | record `home` names the missing app; the Home key hook stays mounted until reboot | the stock Home key handler ignores the record, so after a reboot (the mounts go) the Home key is the stock one; until then the Home key hook falls back to the stock launcher when the launch fails. Other `launchDefaultApp` callers would fail. Repair: write `home` as the stock id |
-| 10.x and later | record `home` and the profile override name the missing app, both persistent | `launchDefaultApp` fails and does not fall back: the Home key launches nothing, across reboots |
-
-Repair: install Home Chooser again and open it once. Opening it starts the watcher: with the choice
-file still there (the chosen app was removed while the watcher was down) it sees the chosen app
-missing and reverts; without one (Home Chooser itself was removed and its restore could not write,
-e.g. the luna bus was down) it makes the [leftover Home](#a-leftover-home) check. The link in
-`init.d` of a Home Chooser removed without its watcher is valid again after the reinstall, so the
-next boot does the first case too. Or by hand on
-10.x and later, as root: remove `/var/webos-profile/override/org.webosbrew.homechooser.json`,
-`luna-send -n 1 luna://com.webos.service.systemprofile/debug/rescan '{}'`, and write the
-`general/defaultApps` record again with `"home": null` (`setSystemSettings`, keeping the other
-entries). On 5.x to 9.x write `home` as `com.webos.app.home`. With the Home key hook enabled but no
-choice stored the watcher is not started, so uninstalling Home Chooser then leaves the flag file, a
-dangling link and, until reboot, mounts that behave as stock.
+The installed service stages the boot restore copy before creating the init.d link. If Home
+Chooser is removed while its watcher is stopped or has already exited without a choice, the link
+still reaches that copy. At the next boot it starts a transient watcher, which confirms that Home
+Chooser is absent, restores the record to the stock id on 5.x–9.x or null on 10.x and later,
+removes the 10.x+ profile override, restores the preload policy and removes the link, flag,
+cache, access files and boot copy. On 6.x–9.x the hook mounts disappear with that boot. The
+transient unit retries if access cleanup or the Home record write fails, keeping the boot entry
+and state for another attempt. Reinstalling and opening Home Chooser before the boot also runs
+the existing [leftover Home](#a-leftover-home) repair.
 
 ### A leftover Home
 
-Home Chooser removed while its restore could not run or could not write (the watcher stopped, the
-luna bus down during `restore_all`, which still removes the choice file, the flag and the link)
-leaves the record's `home`, and on 10.x and later the override file, naming a launcher, and nothing
-of Home Chooser's to say so. Once that launcher is gone too the Home key is broken (the table above).
+An earlier installation or interrupted restore may leave the record's `home`, and on 10.x and
+later the override file, naming a launcher with no stored choice. The current boot copy keeps
+retrying an uninstall restore if the Luna write fails. A separate leftover can still arise if
+state was removed outside the normal flow; once the named launcher is gone, Home is broken.
 The rule, applied when the watcher starts without a usable stored choice (that is, when the app is
 opened after a reinstall, through `homechooser watch`):
 

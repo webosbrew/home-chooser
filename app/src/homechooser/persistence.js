@@ -4,7 +4,7 @@
 export const APP_DIR = '/media/developer/apps/usr/palm/applications/org.webosbrew.homechooser';
 export const SERVICE_DIR = '/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service';
 export const SCRIPTS_DIR = `${SERVICE_DIR}/scripts`;
-// The scripts beside the installed service. The init.d entry is a symlink to ENTRY_SCRIPT.
+// The scripts beside the installed service. The init.d entry links to a persistent boot copy.
 export const ENTRY_SCRIPT = `${SCRIPTS_DIR}/homechooser`;
 export const HOMEKEY_SCRIPT = `${SCRIPTS_DIR}/homechooser-homekey`;
 export const WATCH_SCRIPT = `${SCRIPTS_DIR}/homechooser-home-watch`;
@@ -12,6 +12,7 @@ export const WATCH_SCRIPT = `${SCRIPTS_DIR}/homechooser-home-watch`;
 export const INIT_DIR = '/var/lib/webosbrew/init.d';
 export const INIT_PATH = `${INIT_DIR}/homechooser`;
 export const STATE_DIR = '/var/lib/webosbrew/homechooser';
+export const BOOT_SCRIPT = `${STATE_DIR}/boot/homechooser`;
 // The stored choice: the app id alone, nothing else.
 export const HOME_FILE = `${STATE_DIR}/home`;
 // Exists while the Home key hook is enabled (webOS 6 to 9).
@@ -23,8 +24,7 @@ export const WATCH_LOG = '/tmp/homechooser-home.log';
 // The "commands" the logic layer hands to platform.exec. They are names, not shell text: the
 // service runs a fixed argv for each (service/src/policy.c) and nothing else.
 //
-// linkEntry: make init.d/homechooser a symlink to the service's script (replacing any existing entry). The scripts keep
-// their executable bit: run-parts follows the link but needs the target executable.
+// linkEntry: stage a persistent restore copy and link init.d/homechooser to its boot script.
 export const ensureEntryCommand = () => 'linkEntry';
 
 export const removeEntryCommand = () => 'unlinkEntry';
@@ -56,7 +56,7 @@ export const parsePersistenceStatus = (text) => {
 		let m = /^entry=(link|dangling):(.*)$/.exec(line);
 		if (m) {
 			out.entryTarget = m[2];
-			out.entry = m[1] === 'dangling' ? 'dangling' : (m[2] === ENTRY_SCRIPT ? 'ok' : 'other');
+			out.entry = m[1] === 'dangling' ? 'dangling' : (m[2] === BOOT_SCRIPT ? 'ok' : 'other');
 			return;
 		}
 		m = /^entry=(file|none)$/.exec(line);
