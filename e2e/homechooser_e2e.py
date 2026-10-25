@@ -3207,6 +3207,12 @@ exit "$rc"
             self.strat.prepare(d, r)
             self.strat.verify(d, r)
         self.open_app_check('3u-app')
+        if self.a.api_check:
+            info = self.api_conforms('getInfo', 'after the Home Chooser update')
+            r.check('after the update: launcher permission and selected-Home grant survive',
+                    info.get('root') is True and info.get('permitted') is True
+                    and info.get('isSelectedHome') is True, json.dumps(info))
+            self.api_conforms('listApps', 'after the Home Chooser update')
         r.note('messages since the install mentioning Home Chooser (sam/appinstalld)', d.sh(
             (messages_command() + " | awk '$1 >= \"%s\"' | grep -F %s | tail -n 12") % (t_install, APP_ID))[1])
 
