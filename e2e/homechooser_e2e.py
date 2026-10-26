@@ -417,12 +417,17 @@ def known_fault_pids(reply):
 
 
 def split_known_crashes(lines, reply):
-    """(known, other) crash lines: known are crashd lines of the known legacy-broadcast-dvb crash, confirmed by a
-    fault entry of the same pid in `reply` (getFaultDetectedStatus)."""
+    """(known, other) crash and fault-popup lines, confirmed by a fault entry with the same pid."""
     pids = known_fault_pids(reply)
     known, other = [], []
     for l in lines:
         m = KNOWN_CRASHD_RE.search(l)
+        if not m and 'faultmanager' in l and ('createNotiPopup' in l or 'sendCreateAlert' in l):
+            # On 9.2.4 the popup line has the same title as the fault entry. A crashd
+            # match alone misses this later line and incorrectly treats the known alert
+            # as a foreign popup when a Home-key proof is about to send a key.
+            title = l.partition('title :')[2].partition(', message :')[0].strip()
+            m = KNOWN_FAULT_RE.match(title)
         (known if m and m.group(1) in pids else other).append(l)
     return known, other
 

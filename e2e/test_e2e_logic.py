@@ -343,12 +343,17 @@ class Crashes(unittest.TestCase):
 
 
 class KnownDvbCrash(unittest.TestCase):
-    """Real lines of e2e/results/w24g-ombre-20261025-040724/run.log (9.2.4)."""
+    """Real 9.2.4 crash and popup shapes from the 2026-10-25 and 2026-10-26 runs."""
     CRASHD = '2026-10-24T19:14:39.699944Z [38.504729568] user.info crashd [] crashd CRASHED {"process":"legacy-broadcas.4892"} '
     FAULT = {"faultType": "crash", "faultContent": "RDXDErr3_legacy-broadcas__Linux Crash: legacy-broadcas crashes at location "
              "\u0002usr\u0002sbin\u0002legacy-broadcast-dvb (API_SI_GetLinkageUriInfo+0x197) [0xf9efdc]"
              "____legacy-broadcas.4892.YOpk2V.gz", "faultTime": "38.523512976"}
     NOISE = {"faultType": "general", "faultContent": "keyCheck2_4433_sysfaultdetector", "faultTime": "28.193528519"}
+    ALERT = ('2026-10-26T02:17:10.914382Z [346.705637182] user.info faultmanager [] '
+             'faultmanager FAULT_STATUS {} [sendCreateAlert:513] title : '
+             'RDXDErr3_legacy-broadcas__Linux Crash: legacy-broadcas crashes at location '
+             '^Busr^Bsbin^Blegacy-broadcast-dvb (API_SI_GetLinkageUriInfo+0x197) [0xcdefdc]'
+             '____legacy-broadcas.7453.Lw0EVv.gz, message : [crash] Fault Occured.')
 
     def reply(self, *faults):
         return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': len(faults), 'detectedFaults': list(faults)}})
@@ -358,6 +363,13 @@ class KnownDvbCrash(unittest.TestCase):
         known, other = e2e.split_known_crashes([self.CRASHD], self.reply(self.NOISE, self.FAULT))
         self.assertEqual((known, other), ([self.CRASHD], []))
         self.assertEqual(list(e2e.known_fault_pids(self.reply(self.NOISE, self.FAULT))), ['4892'])
+
+    def test_known_faultmanager_alert_is_not_foreign(self):
+        fault = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('4892', '7453'))
+        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(fault)), ([self.ALERT], []))
+        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(self.FAULT)), ([], [self.ALERT]))
+        other = self.ALERT.replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10')
+        self.assertEqual(e2e.split_known_crashes([other], self.reply(fault)), ([], [other]))
 
     def test_other_location_fails(self):
         f = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10'))
