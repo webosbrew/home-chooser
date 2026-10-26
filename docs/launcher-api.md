@@ -455,7 +455,10 @@ home is selected, Home Chooser keeps it from being preloaded, once per boot. Thi
 nothing is written, and a reboot starts with the stock policy until Home Chooser sets it again. 5.x
 is left alone.
 
-On 11.x and 12.x Home Chooser also force-closes it, and the close sticks. On 6.x to 10.x it does not,
+On 11.x and 12.x the watcher closes it once the chosen launcher is in front. For an overlay
+launcher it waits for a launch with a nonstock full-screen app beneath the overlay; closing LG
+Home beneath an overlay can dismiss the overlay and trigger an idle relaunch. Home Chooser itself
+never closes a stock home while you select a launcher. On 6.x to 10.x it does not close LG Home,
 for any launcher, overlay or not: the system relaunches the stock home at once as the last-input
 app, so a close frees nothing. The stock home can therefore stay resident until the next reboot, and
 `listRunning` will list `com.webos.app.home` (a `closeApp` of it by your launcher will not stick

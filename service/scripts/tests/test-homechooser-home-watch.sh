@@ -25,7 +25,7 @@ setup() {
     printf 'my.home\norg.webosbrew.homechooser\ncom.webos.app.home\n' > "$T/installed"
     : > "$T/mark"
     : > "$T/kfcalls"
-    mkfifo "$T/appsfeed"
+    mkfifo "$T/appsfeed" "$T/foregroundfeed" "$T/lifefeed"
     mkdir -p "$T/app" "$T/service/scripts" "$T/init.d"
     cp "$SCRIPT" "$T/service/scripts/homechooser-home-watch"
     cp -R "$HERE/lib" "$T/service/scripts/lib"
@@ -53,6 +53,8 @@ if [ "$1" = -i ]; then
     echo "$(cat $T/clock) SUB $2 $3" >> $T/calls
     case "$2" in
         */listApps) exec 5<> $T/appsfeed; exec cat <&5 ;;
+        */getForegroundAppInfo) exec 6<> $T/foregroundfeed; exec cat <&6 ;;
+        */getAppLifeEvents) exec 7<> $T/lifefeed; exec cat <&7 ;;
     esac
     while IFS= read -r l; do
         case "$l" in
@@ -63,6 +65,17 @@ if [ "$1" = -i ]; then
                 [ "$id" = org.webosbrew.homechooser ] && rm -rf $T/app ;;
             "INSTALL "*) echo "${l#INSTALL }" >> $T/installed ;;
             "CHOICE "*) echo "${l#CHOICE }" > $T/home ;;
+            "FG "*) echo "${l#FG }" > $T/foreground; printf '{"returnValue":true,"subscribed":true,"appId":"%s"}\n' "${l#FG }" > $T/foregroundfeed ;;
+            "LIFE "*) set=${l#LIFE }; printf '{"returnValue":true,"event":"%s","appId":"%s"}\n' "${set%% *}" "${set#* }" > $T/lifefeed ;;
+            "WAIT_CLOSE"|"WAIT_UNSAFE"|"WAIT_RELAUNCH")
+                case "$l" in
+                    WAIT_CLOSE) pattern=closeByAppId; file=$T/calls ;;
+                    WAIT_UNSAFE) pattern='no safe full-screen card beneath it'; file=$T/log ;;
+                    WAIT_RELAUNCH) pattern='sam relaunched com.webos.app.home'; file=$T/log ;;
+                esac
+                i=0
+                while ! grep -q "$pattern" "$file" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done ;;
+            READY) : > "$T/run/preload-ready"; echo B > "$T/run/events" ;;
             "FLAP "*) set=${l#FLAP }; echo "${set#* }" > "$T/flap-${set% *}" ;;
             APPS)
                 n=$(wc -l < $T/mark)
@@ -92,11 +105,13 @@ case "$3" in
         fi
         if grep -qxF "$id" $T/installed; then
             title=; [ -f $T/notitle ] || title=',"title":"Title of '$id'"'
-            echo '{"returnValue":true,"appInfo":{"id":"'$id'"'"$title"'}}'
+            window=; [ -f "$T/overlay-$id" ] && window=',"defaultWindowType":"overlay"'
+            printf '{"returnValue":true,"appInfo":{"id":"%s"%s%s}}\n' "$id" "$title" "$window"
         else
             echo '{"returnValue":false,"errorCode":-1,"errorText":"Invalid appId specified OR Unsupported Application Type"}'
         fi ;;
     */getSystemSettings) cat $T/record ;;
+    */getForegroundAppInfo) printf '{"returnValue":true,"appId":"%s"}\n' "$(cat "$T/foreground" 2>/dev/null)" ;;
     */setDefaultApp)
         cat $T/r-setdefault
         if [ -f $T/live ]; then
@@ -1366,7 +1381,7 @@ run
 check "after start the files do not hold back a removal" has '"home":"com.webos.app.home"' "$T/calls"
 cleanup
 
-echo "== the stock home is closed only on 11 and later: never on 5, never on 6 to 10, whatever the launcher"
+echo "== only 11 and later close stock Home after the chosen normal launcher is in front"
 for major in 5 6 8 9 10 11 12; do
     setup $major 'com.webos.app.home\n'
     live '{"home":"com.webos.app.home"}'
@@ -1374,6 +1389,13 @@ for major in 5 6 8 9 10 11 12; do
     echo APPS >> "$T/stream"
     echo 'CHOICE my.home' >> "$T/stream"
     echo APPS >> "$T/stream"
+    if [ "$major" -ge 11 ]; then
+        echo 'FG my.home' >> "$T/stream"
+        echo 'FG my.home' >> "$T/stream"
+        echo WAIT_CLOSE >> "$T/stream"
+        echo 'LIFE launch com.webos.app.home' >> "$T/stream"
+        echo WAIT_RELAUNCH >> "$T/stream"
+    fi
     run
     if [ "$major" -le 5 ]; then
         check "$major: no preload call" hasnt setPreloadPolicy "$T/calls"
@@ -1381,13 +1403,49 @@ for major in 5 6 8 9 10 11 12; do
         check "$major: policy turned off" has 'setPreloadPolicy {"application":{"id":"com.webos.app.home","isEnabled":false}}' "$T/calls"
     fi
     if [ "$major" -ge 11 ]; then
-        check "$major: stock home closed" has 'closeByAppId {"id":"com.webos.app.home","forceMode":true}' "$T/calls"
+        check "$major: stock home closed once" test "$(count 'closeByAppId' "$T/calls")" = 1
+        check "$major: relaunch logged, no retry" has 'sam relaunched com.webos.app.home after its close; not closing it again this boot' "$T/log"
     else
         check "$major: stock home not closed" hasnt closeByAppId "$T/calls"
     fi
     if [ "$major" -ge 6 ] && [ "$major" -le 10 ]; then
         check "$major: logged" has "webOS $major: stock home left running until the next reboot" "$T/log"
     fi
+    cleanup
+done
+
+echo "== a launch before the boot preload policy settles is remembered until it is ready"
+setup 11 'my.home\n'
+touch "$T/overlay-my.home"
+live '{"home":"my.home"}'
+reply '{"home":"my.home"}'
+echo 'FG org.webosbrew.hbchannel' >> "$T/stream"
+echo 'LIFE launch my.home' >> "$T/stream"
+echo READY >> "$T/stream"
+echo WAIT_CLOSE >> "$T/stream"
+run
+check "early overlay launch: one deferred close" test "$(count 'closeByAppId' "$T/calls")" = 1
+cleanup
+
+echo "== on 11 and 12 an overlay waits for a fresh launch over a nonstock full-screen card"
+for major in 11 12; do
+    setup $major 'com.webos.app.home\n'
+    touch "$T/overlay-my.home"
+    live '{"home":"com.webos.app.home"}'
+    reply '{"home":"com.webos.app.home"}'
+    echo APPS >> "$T/stream"
+    echo 'CHOICE my.home' >> "$T/stream"
+    echo APPS >> "$T/stream"
+    echo 'FG com.webos.app.home' >> "$T/stream"
+    echo 'LIFE launch my.home' >> "$T/stream"
+    echo WAIT_UNSAFE >> "$T/stream"
+    echo 'FG org.webosbrew.hbchannel' >> "$T/stream"
+    echo 'LIFE launch my.home' >> "$T/stream"
+    echo WAIT_CLOSE >> "$T/stream"
+    echo 'LIFE launch my.home' >> "$T/stream"
+    run
+    check "$major: unsafe overlay close skipped" has 'no safe full-screen card beneath it' "$T/log"
+    check "$major: safe overlay close once" test "$(count 'closeByAppId' "$T/calls")" = 1
     cleanup
 done
 

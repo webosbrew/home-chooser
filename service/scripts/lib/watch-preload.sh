@@ -1,16 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-close_stock_home() {
-    [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || return 0
-    # On 6 to 10 sam relaunches it at once as the last-input app (measured 8.3.0, 9.2.1, 10.3.1), for every
-    # launcher, so the close frees nothing and it is left running. A reboot ends it: the policy is off from boot.
-    # The close sticks on 11 and 12.
-    if [ "$MAJOR" -le 10 ]; then
+log_stock_left_running() {
+    [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 10 ] &&
         log "webOS $MAJOR: stock home left running until the next reboot (sam relaunches it as the last-input app)"
-        return 0
-    fi
-    out=$(timed_n 5 "$LUNA" -a "$HC_LUNA_IDENTITY" -n 1 "$SAM/closeByAppId" "{\"id\":\"$STOCK_HOME\",\"forceMode\":true}" 2>&1 | flatten)
-    log "closeByAppId $STOCK_HOME: ${out:-no reply}"
+    return 0
 }
 
 # preload_set <true|false>: one setPreloadPolicy call; logs the reply, succeeds on returnValue true.
@@ -23,7 +16,7 @@ preload_set() {
 # preload_boot_off: in the background, at a watcher start. The preload manager may not answer yet
 # this early in the boot (measured on 9.2.1: the first call timed out), so the call is retried every
 # PRELOAD_RETRY seconds, up to PRELOAD_TRIES times; then the boot is given PRELOAD_SETTLE seconds
-# and the stock home is closed (if the policy is still disabled by then).
+# before a foreground-dependent stock-home close is allowed.
 preload_boot_off() {
     trap 'kill "$CP" 2>/dev/null; exit 0' TERM INT HUP
     n=0
@@ -39,7 +32,10 @@ preload_boot_off() {
     $PRELOAD_SLEEP "$PRELOAD_SETTLE" &
     CP=$!
     wait "$CP"
-    close_stock_home
+    [ "$(cat "$TMP/preload" 2>/dev/null)" = off ] || exit 0
+    log_stock_left_running
+    : > "$TMP/preload-ready"
+    [ -p "$TMP/events" ] && echo B > "$TMP/events"
 }
 
 # preload_sync <on|off> [start]: bring the stock home's preload policy to the wanted state, once
@@ -58,6 +54,7 @@ preload_sync() {
     fi
     PRELOAD_STATE=$1
     echo "$1" > "$TMP/preload" 2>/dev/null
+    [ "$1" = on ] && rm -f "$TMP/preload-ready"
     if [ "$1" = off ] && [ "$2" = start ]; then
         [ -n "$CLOSE_PID" ] && kill "$CLOSE_PID" 2>/dev/null
         preload_boot_off > /dev/null 2>&1 &
@@ -65,7 +62,10 @@ preload_sync() {
         return 0
     fi
     preload_set "$flag" || return 0
-    [ "$1" = off ] && close_stock_home
+    if [ "$1" = off ]; then
+        log_stock_left_running
+        : > "$TMP/preload-ready"
+    fi
     return 0
 }
 

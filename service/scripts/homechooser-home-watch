@@ -52,6 +52,7 @@ NOTIF=luna://com.webos.notification
 . "$SCRIPT_DIR/lib/watch-base.sh"
 . "$SCRIPT_DIR/lib/watch-record.sh"
 . "$SCRIPT_DIR/lib/watch-preload.sh"
+. "$SCRIPT_DIR/lib/watch-close.sh"
 . "$SCRIPT_DIR/lib/watch-notify.sh"
 . "$SCRIPT_DIR/lib/watch-restore.sh"
 . "$SCRIPT_DIR/lib/watch-events.sh"
@@ -96,6 +97,11 @@ PRELOAD_STATE=
 TITLE_ID=
 TITLE_VAL=
 NOTIFY_OUT=
+CLOSE_CHOICE=
+CLOSE_DONE=
+CLOSE_WINDOW=
+CLOSE_LAUNCHED=
+STOCK_RELAUNCH_LOGGED=
 
 # A boot entry kept outside the removed package can run this copy even when the old watcher
 # had exited without a choice or was stopped. Confirm absence before the no-choice early exit;
@@ -126,6 +132,18 @@ feed A 1 < "$TMP/apps" > "$TMP/events" &
 FEED_PIDS="$FEED_PIDS $!"
 ticker > "$TMP/events" &
 FEED_PIDS="$FEED_PIDS $!"
+if [ "$MAJOR" -ge 11 ] && [ "$PRELOAD_ON" = 1 ]; then
+    mkfifo "$TMP/foreground" "$TMP/life" || finish "cannot create the foreground pipes in $TMP" 1
+    "$LUNA" -a "$HC_LUNA_IDENTITY" -i "$SAM/getForegroundAppInfo" '{"subscribe":true}' > "$TMP/foreground" 2>&1 &
+    LUNA_PID="$LUNA_PID $!"
+    "$LUNA" -a "$HC_LUNA_IDENTITY" -i "$SAM/getAppLifeEvents" '{"subscribe":true}' > "$TMP/life" 2>&1 &
+    LUNA_PID="$LUNA_PID $!"
+    feed F 0 < "$TMP/foreground" > "$TMP/events" &
+    FEED_PIDS="$FEED_PIDS $!"
+    feed L 0 < "$TMP/life" > "$TMP/events" &
+    FEED_PIDS="$FEED_PIDS $!"
+    close_if_foreground
+fi
 exec 3< "$TMP/events"
 
 while IFS= read -r ev <&3; do
@@ -133,8 +151,12 @@ while IFS= read -r ev <&3; do
         "S "*) handle "${ev#S }" ;;
         A) check_apps apps ;;
         T) check_apps timer ;;
+        B) close_if_foreground ;;
+        "F "*) handle_foreground "${ev#F }" ;;
+        "L "*) handle_life "${ev#L }" ;;
         "E S") finish "subscription ended" 1 ;;
         "E A") log "apps subscription ended, relying on the periodic check" ;;
+        "E F"|"E L") log "stock-home close subscription ended; leaving stock home running" ;;
     esac
 done
 

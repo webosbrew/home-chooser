@@ -225,7 +225,8 @@ and Home key hook docs.
    `init.d/homechooser` links to the persistent boot restore copy; on 6 to 9 the Home key hook targets are mounted
    (after the restart below) and the flag file exists, elsewhere not; on 10 and later the profile override exists.
    On 6 to 9 the first choice mounts nothing: see "webOS 6-9: no restart while the TV runs". The
-   toast is "Done. Press Home to try it." where no restart is asked. The installed build carries the
+   toast is "Done. Press Home to try it." where no restart is asked. On 11.x and 12.x the runner
+   also checks that the Home Chooser page is still visible immediately after confirmation. The installed build carries the
    current texts (`grep -F` on the device: the watcher in the service package and its running `/tmp` copy, the
    service binary, the app bundle) and none of the old restart wording.
    Also asserted: at the first open after a fresh install there is no error toast (WAM's
@@ -339,8 +340,9 @@ Preload checks (docs/settings-app.md "The stock home is not preloaded"), on 6.x 
 the watcher makes no preload call, so the checks only assert the policy is not disabled:
 
 * after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
-  `com.webos.app.home`, then after a 60 s settle `com.webos.app.home` is not in `applicationManager/running`
-  in any of the samples taken every 5 s over 60 s on 11.x and 12.x (a running one is a `FAIL`). On 6.x to 10.x, for
+  `com.webos.app.home`. On 11.x and 12.x LG Home may still be running because the chosen launcher
+  has not been brought in front yet. After step 3 opens it from an ordinary app, the runner
+  asserts that the watcher logged one deferred close and LG Home has no live process. On 6.x to 10.x, for
   every launcher (8791f6e), the stock home is not closed (sam would relaunch it at once as the last-input app, 75 to
   89 MB measured on 10.3.1, 9.2.1 and 8.3.0): the policy must still read `isEnabled:false`, the watcher log must have
   the `webOS N: stock home left running` line and no `closeByAppId com.webos.app.home` line, and whether the stock
@@ -351,13 +353,10 @@ the watcher makes no preload call, so the checks only assert the policy is not d
 * with `--reboot-check` (after step 3, launcher chosen): the VM is stopped and started with Beanjar;
   after the boot the watcher is active, the record still names the launcher, the watcher's log
   (in `/tmp`, so from this boot) shows `setPreloadPolicy ... isEnabled=false`, the policy reads false, and
-  after the 45 s boot close plus a 30 s settle the stock home is not running over 60 s (same
-  overlay rule: skip line, no close; the stock home running only on 6.x to 9.x, where `snapshot-boot-components`
-  launches it, while on 10.x nothing starts it at boot, so its state is only noted). On 5.x it asserts that there was no preload call.
-
-None of this has run yet: `getPreloadPolicy`'s reply shape (an `applications` array whose entries
-carry the app id and `isEnabled`) and root `luna-send` access to `preloadmanager` are inferred from
-the firmware.
+  for a normal launcher, after the boot policy settles the stock home has no live process over
+  60 s. For an overlay launcher the stock Home state is recorded: a close waits for a later
+  launch over a nonstock full-screen card. On 6.x to 10.x there is no close, and the running
+  state is recorded. On 5.x there is no preload call.
 
 A check that fails where the docs name a limitation is recorded `XFAIL` with the citation
 (`Recorder.check(..., expected=...)`); nothing uses it yet, since 11.x and 12.x run with
