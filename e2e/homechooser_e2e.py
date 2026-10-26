@@ -3956,14 +3956,16 @@ def main():
             scenario = Scenario(args, host, rec, row, launcher)
             try:
                 scenario.run()
-                if index + 1 < len(launchers) and scenario.uses_home_key_hook() and args.until >= 5:
-                    # Uninstall removes the cached hook, but its bind mounts survive until boot. The
-                    # next install must start from stock or it correctly asks for another reboot.
+                if index + 1 < len(launchers) and args.until >= 5:
+                    # Give every fixture a stock boot. On 6-9, uninstall removes the cached hook
+                    # but its bind mounts survive until boot. On 11, a later QML fixture can lose
+                    # the Home Chooser page immediately after confirmation in the same boot.
                     if not scenario.beanjar_reboot('between fixtures: stock boot after cleanup'):
                         raise SystemExit('the VM did not return for the next fixture')
-                    mounts = scenario.dev.mounts()
-                    rec.check('between fixtures: Home key hook mounts are gone',
-                              not mounts, repr(mounts))
+                    if scenario.uses_home_key_hook():
+                        mounts = scenario.dev.mounts()
+                        rec.check('between fixtures: Home key hook mounts are gone',
+                                  not mounts, repr(mounts))
             except Exception as e:  # with several launchers: keep going, the failure is recorded
                 if not args.multi:
                     raise
