@@ -185,11 +185,11 @@ describe('extractDefaultAppsProfile / buildOverride', () => {
 });
 
 describe('apply', () => {
-	test('5.6.1: carries other entries, closes the previous home, no sam restart', async () => {
+	test('5.6.1: carries other entries, leaves the previous stock home running, no sam restart', async () => {
 		const tv = fakeTV({record: {home: 'com.webos.app.fullhome', other: 'x'}});
 		const res = await chooser(tv, [5, 6, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'}), CLOSE('com.webos.app.fullhome')]);
+		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'})]);
 		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.needsHomeKeyHook).toBe(false);
@@ -256,6 +256,15 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
 	});
 
+	test.each([5, 6, 10, 11, 12])('webOS %d: choosing a launcher never closes a previous stock home', async (major) => {
+		for (const id of ['com.webos.app.home', 'com.webos.app.fullhome', 'com.webos.app.kidshome', 'com.webos.app.seniorhome']) {
+			const tv = fakeTV({record: {home: id}, profile: profileReply()});
+			const res = await chooser(tv, [major, 0, 0]).apply(MINE);
+			expect(res.ok).toBe(true);
+			expect(tv.luna.map((call) => call[0])).not.toContain('luna://com.webos.applicationManager/closeByAppId');
+		}
+	});
+
 	test('9.2.1: setDefaultApp, no profile, no restart', async () => {
 		const tv = fakeTV({record: {kidsApp: 'k'}});
 		const res = await chooser(tv, [9, 2, 1]).apply(MINE);
@@ -284,12 +293,12 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE)]);
 	});
 
-	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: record, override file, rescan, verify, close only on 11 and later', async (version) => {
+	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: record, override file, rescan, verify, leave stock home running', async (version) => {
 		const tv = fakeTV({record: {kidsApp: 'k'}, profile: profileReply()});
 		const res = await chooser(tv, version).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(res.needsHomeKeyHook).toBe(false);
-		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE, ...(version[0] >= 11 ? [CLOSE(STOCK)] : [])]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE]);
 		expect(tv.files).toHaveLength(2);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
 		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
@@ -298,8 +307,7 @@ describe('apply', () => {
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
 			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.homechooser.json',
-			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop(),
-			...(version[0] >= 11 ? ['luna:closeByAppId'] : [])
+			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop()
 		]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
@@ -308,7 +316,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {}, profile: profileReply()});
 		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(tv.luna.map((c) => c[0].split('/').pop())).toEqual(['getSystemSettings', 'getProfiles', 'setDefaultApp', 'rescan', 'getProfiles', 'closeByAppId']);
+		expect(tv.luna.map((c) => c[0].split('/').pop())).toEqual(['getSystemSettings', 'getProfiles', 'setDefaultApp', 'rescan', 'getProfiles']);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
 

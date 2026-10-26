@@ -92,9 +92,9 @@ KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 # whatever the launcher (measured on 9.2.1, 8.3.0 and 10.3.1, 75 to 89 MB), so since 8791f6e neither the
 # watcher nor the app closes it there: the expected result is the preload policy off, the skip line in
 # the watcher log, no closeByAppId for it, and the stock home possibly running until the next reboot.
-# On 11.x and 12.x the watcher closes it and it must stay closed.  On 5.x there is no preload call.
+# On 11.x and 12.x the watcher waits until the launcher has a safe foreground before closing it.
 SKIP_LINE = 'stock home left running'
-PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling (watcher closes at +45 s)
+PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 FULLHOME = 'com.webos.app.fullhome'
 
@@ -1798,8 +1798,8 @@ class Scenario:
         return out
 
     def check_preload_off(self, label, settle=PRELOAD_SETTLE):
-        """A third-party home is chosen: the watcher disabled the stock home's preload; on 11.x and 12.x the
-        stock home stays closed, on 6.x to 10.x it is left alone (check_stock_left_running).  5.x: the watcher leaves the policy alone (settings-app.md), so it must not
+        """A third-party home is chosen: the watcher disabled the stock home's preload. On 11.x and 12.x
+        a close waits for a safe launcher foreground. On 6.x to 10.x it is left alone (check_stock_left_running). 5.x: the watcher leaves the policy alone (settings-app.md), so it must not
         read false; the stock home is only observed (com.webos.app.home is not running on 5.x)."""
         r = self.rec
         enabled, raw = self.dev.preload_policy()
@@ -1813,6 +1813,10 @@ class Scenario:
         r.check(label + ': getPreloadPolicy shows isEnabled:false for ' + STOCK, enabled is False,
                 'isEnabled=%r; %s' % (enabled, raw))
         r.note(label + ': watcher log', self.preload_log())
+        if self.major >= 11 and (label == 'after the switch' or self.L.overlay):
+            r.note(label + ': stock Home may still run until the launcher has a safe foreground',
+                   'stock running=%s; foreground=%s' % (STOCK in self.running_ids(), self.dev.foreground()[0]))
+            return
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
         time.sleep(settle)
         samples = self.stock_running_samples()
@@ -2201,6 +2205,13 @@ class Scenario:
                 toasts.append(u['toast'])
             return self.state()['choice'] == self.launcher
         self.wait(chosen, 90, 2)
+        if self.major >= 11:
+            page = self.insp._page() if self.insp else None
+            state = self.page_state() or {}
+            r.check('Home Chooser page is still open right after confirming',
+                    bool(page and APP_ID in page.get('url', '') and
+                         state.get('visibility') == 'visible' and self.ui()),
+                    'page=%r; state=%r' % (page.get('url') if page else None, state))
         if expects_reboot_dialog(self.major, mounted_before):
             self.reboot_after_choice(comp0)
             toast = None
@@ -2524,6 +2535,16 @@ class Scenario:
                       'see screenshot 3-home-from-stock-home')
         self.home_press(self.launcher, '3-home')
         self.residency('after the Home press')
+        if self.major >= 11:
+            def deferred_close():
+                return 'closeByAppId %s after %s in front' % (STOCK, self.launcher) in self.dev.sh(
+                    'cat /tmp/homechooser-home.log 2>&1')[1]
+            closed = self.wait(deferred_close, 60, 3)
+            self.rec.check('watcher closed LG Home after the chosen launcher was in front', bool(closed),
+                           self.dev.sh('tail -n 12 /tmp/homechooser-home.log')[1])
+            self.wait(lambda: STOCK not in self.running_ids(), 30, 3)
+            self.rec.check('LG Home has no live process after the launcher was in front',
+                           STOCK not in self.running_ids(), repr(self.running_ids()))
         r, d = self.rec, self.dev
         rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
         r.note('processes mentioning the launcher id', out.strip())
@@ -2548,7 +2569,7 @@ class Scenario:
                 s['choice'] == self.launcher and s['record_home'] == self.launcher, s['record_raw'])
         if self.major >= 6:
             # the call comes at once, the close after the 45 s settle
-            self.wait(lambda: ('closeByAppId' in self.preload_log()) or (self.stock_left_running() and SKIP_LINE in self.preload_log()), 150, 5)
+            self.wait(lambda: 'isEnabled=false' in self.preload_log(), 150, 5)
             log = self.preload_log()
             r.check('after the boot the watcher called setPreloadPolicy isEnabled=false (log is from this boot: /tmp)',
                     'isEnabled=false' in log, log)

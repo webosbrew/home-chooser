@@ -179,6 +179,7 @@ check_apps() {
             ;;
     esac
     preload_follow "$want" "$why"
+    [ "$why" = timer ] || close_if_foreground
     [ -n "$CHECK_MARK" ] && echo "$why" >> "$CHECK_MARK"
     return 0
 }

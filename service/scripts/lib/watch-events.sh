@@ -15,6 +15,7 @@ handle() {
         BAKED=$want
     fi
     preload_follow "$want"
+    close_if_foreground
     sync_baked "$want"
     found=$(home_of "$flat")
     [ "$found" = "$want" ] && return 0

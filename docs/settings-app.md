@@ -90,10 +90,10 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 
 | Release | Settings record `general/defaultApps` | System profile | After |
 | --- | --- | --- | --- |
-| 5.x | `setSystemSettings` with the existing entries and `home` | - | close previous home |
-| 6.x to 8.x | same | - | close previous home; `systemctl restart sam` last if the record did not exist |
-| 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | close previous home |
-| 10.x, 11.x | `setDefaultApp` as on 9.x | override file, `debug/rescan`, read back | close previous home |
+| 5.x | `setSystemSettings` with the existing entries and `home` | - | close previous custom home |
+| 6.x to 8.x | same | - | close previous custom home; `systemctl restart sam` last if the record did not exist |
+| 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | close previous custom home |
+| 10.x to 12.x | `setDefaultApp` as on 9.x | override file, `debug/rescan`, read back | close previous custom home |
 
 * `setSystemSettings` replaces the whole `defaultApps` object, so the other entries (11.2.0 ships
   `kidsApp` in it) are read first and written back. `setDefaultApp` changes only `home`
@@ -106,11 +106,12 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   releases ([10.3.1 and 11.2.0](research/home-key-and-home-app.md#1031-and-1120-1)). After the
   rescan the app reads `getProfiles` again and reports an error if `categories.home` is not the
   chosen id.
-* The previous home is the record's `home`, else the profile's, else `com.webos.app.home`. It is
-  closed with `closeByAppId {"forceMode": true}`, as the 5.6.1 Home Style pane does, except that
-  `com.webos.app.home` is not closed on 6.x to 10.x (`sam` relaunches it at once; see
-  [The stock home is not preloaded](#the-stock-home-is-not-preloaded)). A failure
-  there is shown as a warning.
+* The previous home is the record's `home`, else the profile's, else `com.webos.app.home`. If it
+  is a custom launcher, the app closes it with `closeByAppId {"forceMode": true}` and reports a
+  failure as a warning. The app never closes a stock home (`home`, `fullhome`, `kidshome`,
+  `seniorhome`, and the other stock ids), on any release. On 11.x and 12.x the watcher can close
+  `com.webos.app.home` later, after the chosen launcher is in front; see
+  [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
 * On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
   ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
   `systemctl restart sam` is the last step; when the Home key hook still has to be installed, a TV
@@ -124,7 +125,7 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 Before these writes `apply` stores the choice, and after them it makes sure the boot entry and the
 watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
 `/var/lib/webosbrew/homechooser/home`, the platform writes, link the init.d entry and start the
-watcher, close the previous home, and `systemctl restart sam` last if it applies.
+watcher, close the previous custom home, and `systemctl restart sam` last if it applies.
 
 ### Why the sam restart is skipped on 6 to 9 when the patch is installed
 
@@ -445,10 +446,10 @@ home is chosen the watcher (webOS 6 and later) runs, as root:
 
 ```
 luna-send -n 1 luna://com.webos.service.preloadmanager/setPreloadPolicy '{"application":{"id":"com.webos.app.home","isEnabled":false}}'
-luna-send -n 1 luna://com.webos.applicationManager/closeByAppId '{"id":"com.webos.app.home","forceMode":true}'
 ```
 
-(the second only if the first answered `returnValue:true`, and not on 6.x to 10.x, for any launcher, see below), and back to `"isEnabled":true` when it
+The watcher closes the stock home separately on 11.x and 12.x, after a safe launcher foreground
+event and a successful preload-policy call. It sets the policy back to `"isEnabled":true` when it
 stops applying. Never `"permanent"`: the preload manager keeps the policy in memory, nothing is
 written, and after a reboot the stock policy is back until the watcher re-applies it. The memory
 manager is not touched.
@@ -462,16 +463,18 @@ manager is not touched.
   before the choice file is removed), and the Home Chooser uninstall path, which runs from the
   `/tmp` copy. A restart after a failure (exit 1) leaves the policy as it is; the new instance
   applies it again.
-* **The close at boot.** On 5.x to 9.x `snapshot-boot-components.service` launches the stock home
-  outside the preload manager, and Homebrew Channel's boot hook (`init.d`) runs at
-  `minimal-boot-done`, which may be before or after that launch. The preload manager does not answer
-  that early either: on 9.2.1, 7.x, 11.2.0 and 12.0.0 the first call at boot timed out. So at start
-  the policy call runs in the background, retried every `HOMECHOOSER_PRELOAD_RETRY` seconds (10) up
-  to `HOMECHOOSER_PRELOAD_TRIES` times (12) until it answers `returnValue:true`; then the boot is
-  given `HOMECHOOSER_PRELOAD_SETTLE` seconds (45) and the stock home is force-closed, only if the
-  policy is still off by then. Changes later on are made at once and close at once. The close of a
-  stock home that is not running is a harmless `returnValue:false`. On 6.x to 10.x there is no close
-  at all, at boot or later (next item).
+* **At boot.** The preload manager may not answer when the init.d entry starts. The policy call runs
+  in the background, retried every `HOMECHOOSER_PRELOAD_RETRY` seconds (10) up to
+  `HOMECHOOSER_PRELOAD_TRIES` times (12) until it answers `returnValue:true`. The existing
+  `HOMECHOOSER_PRELOAD_SETTLE` delay (45 seconds) then passes before a close is eligible. No
+  stock-home close is tied to that timer. On 6.x to 10.x there is no close at boot or later.
+* **11.x and 12.x: close after the launcher is in front.** The watcher subscribes to SAM's
+  `getForegroundAppInfo` and `getAppLifeEvents`. A normal launcher qualifies when SAM reports it
+  as foreground. An overlay qualifies only on its own launch event and only if SAM reports a
+  nonstock full-screen card beneath it. With LG Home or a blank foreground beneath an overlay,
+  the close is skipped. The watcher makes at most one close attempt per boot or choice change.
+  If SAM relaunches LG Home, it logs that event and does not close it again in that boot. The
+  selected launcher's page and completion toast can therefore remain visible during selection.
 * **Best effort.** Each call runs under `timeout 5` when the image has it (as the app checks do),
   its reply goes to `/tmp/homechooser-home.log`, and only the boot call is retried: a refusal
   (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied call) or a
@@ -494,13 +497,12 @@ manager is not touched.
   still read `isEnabled:false` for the stock home, so it is not the preload manager. The close frees
   nothing and only makes it restart, so on 6.x to 10.x the watcher never closes the stock home, at boot
   or on a change; it still sets the preload policy and logs `webOS <major>: stock home left running until
-  the next reboot (sam relaunches it as the last-input app)`. The same holds for the app: choosing a
-  launcher does not close `com.webos.app.home` there (the previous home is closed only when it is
-  not that one).
+  the next reboot (sam relaunches it as the last-input app)`. The app never closes any stock home
+  during selection on any release.
 
   So on 6.x to 10.x **the stock home can stay resident after a launcher is chosen, until the next
   reboot**. It is not a defect of the choice: the system puts it back at once whatever is done to it.
-  After a reboot it is gone, because the watcher turns the stock home's preload off at every boot
+  After a reboot it can be gone, because the watcher turns the stock home's preload off at every boot
   (in memory only, never `permanent`) and nothing closes and reopens it any more. On 6.x to 9.x the
   patch needs a reboot to be applied anyway, so the memory is freed by a step the user takes in any
   case. On 5.x nothing is done (below). On 11.x and 12.x the close does stick (11.2.0 and 12.0.0, with
@@ -511,8 +513,21 @@ manager is not touched.
   force-closed stock home (Homebrew Channel in front) stayed closed for 120 s and about 80 MB was
   freed; re-enabled, the preload manager launched it again about 8 s later; after a reboot the
   policy was back to enabled. End-to-end with `--reboot-check`: 11.2.0 (103 MB freed) and 12.0.0
-  (71 MB) keep the stock home closed after the switch and after a reboot; 7.x, 8.3.0, 9.2.1 and 10.3.1 pass
+  (71 MB) kept the stock home closed in those earlier runs; 7.x, 8.3.0, 9.2.1 and 10.3.1 pass
   with the stock home left running (for every launcher since 2026-10-24, as above); 5.6.1 makes no preload call.
+
+  The 2026-10-26 11.2.0 probe showed why the close must wait: with a normal fixture in the
+  foreground, LG Home closed and stayed down. Closing the fixture then produced SAM
+  `LAUNCH_LASTAPP ... on_foreground_null` and an `NL_APP_LAUNCH_BEGIN` for LG Home from
+  `last_input_handler` about one second later. With the web overlay over LG Home, closing LG Home
+  closed the overlay and caused the same fallback. With Homebrew Channel beneath that overlay,
+  the stock close stuck. On 12.0.0 SAM likewise recorded `on_foreground_null` and a
+  `last_input_handler` Home launch after the normal launcher closed; the old Home PID was gone
+  from `/proc` although SAM briefly kept it in `running`. Closing LG Home beneath the overlay
+  again produced the idle fallback and left an empty full-screen foreground. These observations
+  are why a running overlay alone is insufficient evidence for a close. In the 12.0.0 full fixture
+  matrix, the web overlay over Homebrew Channel stayed visible after the watcher closed LG Home;
+  no live stock-home process remained.
 
 ## Restoring the stock home
 

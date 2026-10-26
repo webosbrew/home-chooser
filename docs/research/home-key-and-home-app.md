@@ -505,8 +505,9 @@ the system profile on 10.3.1 and 11.2.0.
   `resetSystemSettings` answers `returnValue: true` and leaves it in place.
 * Going back to stock: on 6.6.0 to 9.2.1 the stock home lacks `appCategory`, so set no `home`
   entry rather than `com.webos.app.home`, and let the key filter fall back.
-* After the change, close the previous home with `closeByAppId {"forceMode": true}`, as the
-  5.6.1 Home Style pane does.
+* The 5.6.1 Home Style pane closes the outgoing home with `closeByAppId {"forceMode": true}`.
+  Home Chooser closes only an outgoing custom launcher during selection. Its watcher handles
+  `com.webos.app.home` later on 11.x and 12.x, after a safe foreground event.
 
 ### Permissions
 

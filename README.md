@@ -45,10 +45,11 @@ homebrew app with three parts:
   the watcher was not running at the time; opening a reinstalled Home Chooser repairs a Home that
   still names a removed app ([A leftover Home](docs/settings-app.md#a-leftover-home)).
 * While a third-party home is chosen (webOS 6 and later), the watcher keeps LG's stock home,
-  `com.webos.app.home`, from being preloaded, so that a force-close of it sticks and its 70 to 105 MB
-  stay free: `preloadmanager/setPreloadPolicy` with `isEnabled:false`, then a forced
-  `closeByAppId` (not on webOS 6 to 10, for any launcher: `sam` relaunches the stock home at once, so
-  it is left running there until the next reboot, after which its preload stays off). The call is made once per boot and once per change, never with `permanent` (the
+  `com.webos.app.home`, from being preloaded with `preloadmanager/setPreloadPolicy`
+  `isEnabled:false`. On 11.x and 12.x it closes LG Home after the chosen launcher has a safe
+  foreground; it skips a close when an overlay is over LG Home or a blank card. On 6.x to 10.x
+  `sam` relaunches LG Home after a close, so the watcher leaves it running until a reboot. The
+  policy call is made once per boot and once per change, never with `permanent` (the
   preload manager keeps it in memory only and a reboot starts stock), and it is set back to enabled
   when the choice is stock, the chosen app is uninstalled, or Home Chooser is uninstalled. The
   memory manager is not touched. This is an accepted exception to "does not change other
