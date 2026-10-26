@@ -368,7 +368,7 @@ describe('Home Chooser screen', () => {
 			test('apply: a note and a "Restart now" row; the row asks the service again (reason apply)', async () => {
 				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({mounted: false, enabled: true, patch: 'possible', rebootNeeded: true})});
 				mountApp(env);
-				expect(await screen.findByText('The Home button changes after a restart.')).toBeTruthy();
+				expect(await screen.findByText('The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it.')).toBeTruthy();
 				expect(env.rebootPrompt).not.toHaveBeenCalled();
 				fireEvent.click(screen.getByText('Restart now'));
 				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('apply'));

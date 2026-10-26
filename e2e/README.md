@@ -294,7 +294,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   (Reboot and Later; the app has no restart dialog of its own, because surface-manager closes an overlay
   after about 90 to 120 s without a key press, `userTimeout`, and the alert survives that) and toasts "Done.
   Restart the TV to finish."; while the restart is pending it also lists a "Restart now" row under the note
-  "The Home button changes after a restart.". The runner reads the service's `REBOOT_ASK` PmLog lines
+  "The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it.". The runner reads the service's `REBOOT_ASK` PmLog lines
   (since the confirmation was pressed), or the same notification call and reply from `ls-monitor` when a
   firmware drops the service's info logs. The monitor retains only token-free evidence. It checks a
   `createAlert` request with the apply message and the buttons Reboot and Later, and the notification

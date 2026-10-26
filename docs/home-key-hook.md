@@ -187,6 +187,8 @@ from the study's corpus. The original scratch study and its corpus are in `scrat
 
 * **Intermittent LG crash after the boot compositor restart (webOS 9.2.4).** On the W24G VM about 1 boot in 10 shows an LG `legacy-broadcast-dvb` crash at `API_SI_GetLinkageUriInfo+0x197` (`crashd CRASHED {"process":"legacy-broadcas.<pid>"}`, faultmanager entry `RDXDErr3_legacy-broadcas…`), with LG's "[crash] Fault Occured" popup. It shows only with the single boot-time compositor restart (stock boots: 0 of 10), and there is no restart-free option: the hook cannot load before the compositor's first QML load. See the [early-mount study](research/home-key-hook-early-mount-study.md). It is accepted as a known limitation pending a user acceptance test on a real TV. The E2E runner records it as a note, not a failure.
 
+* **Quick Start+ turns a power cycle into a resume.** With LG's Quick Start+ on (the default on the 9.2.1 VM), turning the TV off and on with the remote resumes it and `boot_id` stays unchanged (`scratch/quickstart/notes.md`), so the hook is not applied. Only Reboot / Restart now, or a restart from the TV's own menu, applies it. The panel note says so.
+
 ## Verified on a device
 
 The minimal hook's device results are recorded here after VM verification. Offline coverage alone

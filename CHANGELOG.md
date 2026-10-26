@@ -14,3 +14,4 @@ These changes are planned for 0.1.0.
 - Stop stock Home preloading while another Home is chosen, then restore the policy when LG Home returns.
 - Freeze launcher API v1 with permission `org.webosbrew.homechooser.applications`: `getInfo`, `listApps`, `listRunning`, `getAppInfo`, `getAppIcon`, `getForegroundApp`, `closeApp`, and `uninstallApp` with owner confirmation.
 - Provide launcher fixtures, an end-to-end runner, and offline service and app tests.
+- Tell users on webOS 6 through 9 that turning the TV off with the remote may not restart it (Quick Start+ resumes instead), so the pending-restart note points at Restart now.

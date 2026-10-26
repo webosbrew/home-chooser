@@ -157,7 +157,7 @@ user, while the alert belongs to the notification service and stays.
   spinner left). If `rebootPrompt` fails (nothing pending any more, or the notification service refuses
   both), the toast is "Restart the TV to finish."
 * While a restart is pending (`status` says `reboot=needed`, read at startup and after every run) the
-  list ends with a note, "The Home button changes after a restart." (`apply`: the flag file is set and
+  list ends with a note, "The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it." (`apply`: the flag file is set and
   nothing is mounted) or "LG Home is on the Home button now. A restart removes the patch." (`remove`:
   the patch is mounted and the flag file is gone), and a "Restart now" row. The row calls `rebootPrompt`
   again with the same reason and toasts "Check the restart prompt on the screen."; a refusal toasts
