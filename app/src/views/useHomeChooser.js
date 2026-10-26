@@ -20,7 +20,7 @@ const CACHE_PROMPT_KEY = 'homechooser.hookCachePrompt';
 // The line above the "Restart now" row while a restart is pending, by reason ('apply' or 'remove').
 export const RESTART_NOTE = {
 	apply: 'The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it.',
-	remove: 'LG Home is on the Home button now. A restart removes the patch.'
+	remove: 'LG Home is on the Home button now. A restart removes the hook.'
 };
 
 // Ask the service for the restart prompt, a system alert (docs/service.md "Restarting the TV"): the

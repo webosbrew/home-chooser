@@ -107,7 +107,7 @@ DONE_TEXT = 'Done. Press Home to try it.'
 # while a restart is pending, shows RESTART_NOTE and a "Restart now" row (app/src/views/useHomeChooser.js).
 REBOOT_ASKED_TEXT = 'Done. Restart the TV to finish.'
 RESTART_NOTE = {'apply': 'The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it.',
-                'remove': 'LG Home is on the Home button now. A restart removes the patch.'}
+                'remove': 'LG Home is on the Home button now. A restart removes the hook.'}
 RESTART_NOW = 'Restart now'
 REBOOT_BUTTONS = ('Reboot', 'Later')
 # the service's system alert (or the toast when the alert is refused; service/src/policy.c hc_reboot_message)

@@ -378,7 +378,7 @@ describe('Home Chooser screen', () => {
 			test('remove: the patch mounted without the flag is a remove', async () => {
 				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({mounted: true, enabled: false, release: '8.3.0', rebootNeeded: true})});
 				mountApp(env);
-				expect(await screen.findByText('LG Home is on the Home button now. A restart removes the patch.')).toBeTruthy();
+				expect(await screen.findByText('LG Home is on the Home button now. A restart removes the hook.')).toBeTruthy();
 				fireEvent.click(screen.getByText('Restart now'));
 				await waitFor(() => expect(env.rebootPrompt).toHaveBeenCalledWith('remove'));
 			});

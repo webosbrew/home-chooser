@@ -154,7 +154,7 @@ class Texts(unittest.TestCase):
 
     def test_the_new_texts(self):
         self.assertEqual(e2e.UNINSTALL_TOAST, 'Home Chooser was removed. The Home button opens LG Home again.')
-        self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the patch.')
+        self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the hook.')
         self.assertEqual(e2e.REBOOT_PROMPT, {'apply': 'Restart the TV to finish setting up the Home button.',
                                              'remove': 'Restart the TV to finish removing the Home button patch.'})
         self.assertNotIn('restart', (e2e.REMOVAL_ALERT % 'Dock').lower())
