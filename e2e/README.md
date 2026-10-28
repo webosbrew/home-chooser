@@ -405,6 +405,9 @@ declare it and are refused. The run also installs a disposable non-home app,
   our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
   (the token is only in the system alert's button). Then a `request` while the launcher is Home must give
   the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
+  With `--uninstall-via alert`, the runner leaves the second system alert up for 240 seconds while a
+  person verifies its text and button focus from a screenshot and presses Uninstall. It then checks
+  that the disposable fixture disappeared; on timeout it closes that alert.
 * With `--reboot-check`, after the boot: `getInfo` (root, permitted, isSelectedHome), `listApps` and `listRunning`
   still succeed: the grants and the elevation survive a boot.
 * After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in

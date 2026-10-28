@@ -9,6 +9,7 @@
 
 #define HC_APP_ID "org.webosbrew.homechooser"
 #define HC_SERVICE_ID "org.webosbrew.homechooser.service"
+#define HC_ALERT_SERVICE_ID "com.webos.homechooser.alert"
 #define HC_SERVICE_DIR "/media/developer/apps/usr/palm/services/" HC_SERVICE_ID
 #ifndef HC_APP_DIR
 #define HC_APP_DIR "/media/developer/apps/usr/palm/applications/" HC_APP_ID
@@ -44,6 +45,8 @@
 /* Sender: the Home Chooser app, as luna-service2 reports its application id. The id may carry an
  * instance suffix after a space ("org.webosbrew.homechooser 1234"). NULL and every other id: no. */
 bool hc_sender_ok(const char *app_id);
+/* Alert callbacks are sent by Surface Manager using our createAlert caller identity. */
+bool hc_alert_sender_ok(const char *app_id);
 
 /* Exact-match allow-list for readFile / writeFile / removeFile. */
 bool hc_file_allowed(const char *path);

@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 APP_ID = 'org.webosbrew.homechooser'
 SVC_ID = APP_ID + '.service'
+ALERT_SVC_ID = 'com.webos.homechooser.alert'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/homekey'
@@ -49,7 +50,9 @@ def uninstall_remnant_paths():
     """Files owned by Home Chooser that must disappear after watcher restoration."""
     paths = [HOOK_CACHE, HOOK_STALE, BOOT_DIR]
     for root in ('/var/luna-service2-dev', '/var/luna-service2'):
-        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',):
+        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
+                       'api-permissions.d/org.webosbrew.homechooser.alert.api.json',
+                       'services.d/com.webos.homechooser.alert.service'):
             paths.append(root + '/' + suffix)
     return paths
 
@@ -130,6 +133,12 @@ TEXT_SOURCES = [
     ('$name' + REMOVAL_ALERT[2:], 'service/scripts/lib/watch-notify.sh'),
     (UNINSTALL_TOAST, 'service/scripts/lib/watch-restore.sh'),
 ]
+
+
+def device_text_forms(text):
+    """A minified JS bundle can spell Unicode as JSON escapes while source files use UTF-8."""
+    escaped = json.dumps(text, ensure_ascii=True)[1:-1]
+    return (text,) if escaped == text else (text, escaped)
 
 
 def uses_home_key_hook(major):
@@ -1502,9 +1511,11 @@ class Scenario:
 
     def wait_reboot(self, boot0, timeout=240):
         """Wait for the TV to restart by itself (tvpower): 'rebooted' when a new boot id is read, 'off' when
-        Beanjar shows the VM off (QEMU may power off on a guest reboot), '' when nothing happened."""
+        Beanjar shows the VM off (QEMU may power off on a guest reboot),
+        'unreachable' when the guest stops responding, or '' when nothing happened."""
         end = time.time() + timeout
         gone = False
+        last_boot = boot0
         while time.time() < end:
             time.sleep(10)
             try:
@@ -1513,6 +1524,7 @@ class Scenario:
             except RuntimeError:
                 pass
             b = self.dev.boot_id()
+            last_boot = b
             if not b:
                 gone = True
                 continue
@@ -1523,7 +1535,7 @@ class Scenario:
                     ensure_devices(self.host, self.vm, self.rec)
                 except SystemExit:
                     pass
-        return ''
+        return 'unreachable' if not last_boot else ''
 
     def stock_record_ok(self, home):
         return stock_record_ok(self.major, home, self.stock_id)
@@ -2465,8 +2477,12 @@ class Scenario:
                 else:
                     up = self.await_boot('2 reboot (Reboot on the alert)', boot0)
             else:
-                r.manual('Reboot on the alert restarted the TV', 'no new boot id within 240 s: nobody pressed Reboot')
-                self.close_reboot_alert('2 reboot', info)
+                r.manual('Reboot on the alert restarted the TV',
+                         'no new boot id within 240 s; the alert may have been pressed but the VM did not return')
+                if how == 'unreachable':
+                    r.note('closeAlert skipped: the guest is unreachable after the restart attempt', info.get('alert_id'))
+                else:
+                    self.close_reboot_alert('2 reboot', info)
                 up = self.beanjar_reboot('2 reboot (alert left alone, beanjar stop/start)')
         else:
             self.close_reboot_alert('2 reboot (Later)', info)
@@ -2508,8 +2524,11 @@ class Scenario:
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
         def has(text, paths):
-            rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(text), ' '.join(paths)))
-            return [l for l in out.split() if l.startswith('/')]
+            found = set()
+            for form in device_text_forms(text):
+                rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(form), ' '.join(paths)))
+                found.update(l for l in out.split() if l.startswith('/'))
+            return sorted(found)
         for text, sources in ((REMOVAL_ALERT[2:], notify), (UNINSTALL_TOAST, restore)):
             got = has(text, sources)
             r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
@@ -3055,11 +3074,25 @@ exit "$rc"
         r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
 
     def api_uninstall_confirm(self):
-        """The confirm path, only where the runner presses a key on its own screen: the screen route. On the
-        alert route confirming means pressing Uninstall on a system popup: MANUAL."""
+        """Wait for a human to press a visually verified system alert when requested."""
         r, d = self.rec, self.dev
         how = self.uninstall_ask('confirmation')
         if how == 'alert':
+            if self.a.uninstall_via == 'alert':
+                self.shot('3a-uninstall-alert-confirm')
+                aid, ev = self.uninstall_alert_id()
+                r.note('uninstall alert awaiting a visually verified Uninstall press',
+                       'alertId %s; %s' % (aid, ev))
+                gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)
+                if gone:
+                    r.check('alert Uninstall press removed only %s' % DISPOSABLE_ID, True, DISPOSABLE_ID)
+                else:
+                    self.dismiss_alert('3a-uninstall-alert-timeout')
+                    r.manual('uninstall alert confirmation timed out',
+                             'no verified button press or disposable removal in 240 seconds')
+                d.close(APP_ID)
+                self.close_insp()
+                return
             self.dismiss_alert('3a-uninstall-alert-2')
             r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> uninstallConfirmed '
                      '-> removal)', 'the runner never presses OK on a system popup and the token is only in the alert; '
@@ -3901,6 +3934,9 @@ def main():
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
                          'The launcher must declare org.webosbrew.homechooser.applications: the default is the web fixture built with it; '
                          '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
+    ap.add_argument('--uninstall-via', choices=['later', 'alert'], default='later',
+                    help='with --api-check, wait 240 seconds for a human to press Uninstall on the verified system '
+                         'alert and for the disposable fixture to disappear; default closes the alert')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()

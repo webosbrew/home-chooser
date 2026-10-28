@@ -108,8 +108,8 @@ permissions, with an installed `appinfo.json` fallback. `closeApp` and `uninstal
 caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
 root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
 
-`uninstallConfirmed` accepts Home Chooser or a sender without an application id (the notification
-route), always with a live random one-shot token. Four slots expire after 120 seconds; confirmation
+`uninstallConfirmed` accepts Home Chooser, the alert's `com.webos.applicationManager` source, or a
+sender without an application id, always with a live random one-shot token. Four slots expire after 120 seconds; confirmation
 consumes the token and rechecks that the requester is still Home. Targets cannot be Home Chooser,
 Homebrew Channel, the requester, non-removable apps or apps outside developer/store app directories.
 The service raises an `Uninstall <title>?` alert, with Uninstall/Cancel; only Uninstall calls the
@@ -140,7 +140,7 @@ stay for manual and debugging use only.
 3. A random 128-bit token is minted (32 hex digits from `/dev/urandom`, own table of four slots,
    one shot, 10 minute lifetime). It is never sent to the app.
 4. The service raises a `createAlert` (as `com.webos.applicationManager`, source Home Chooser) with
-   the message and the buttons `Reboot` (onclick `luna://org.webosbrew.homechooser.service/rebootConfirmed`,
+   the message and the buttons `Reboot` (onclick `luna://com.webos.homechooser.alert/rebootConfirmed`,
    params `{token}`) and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`.
    There is no on-screen variant: the app is an overlay that surface-manager closes after a stretch
    without a key press, and the alert is not. If the alert is refused the token is killed and a
@@ -152,8 +152,8 @@ The PmLog id `REBOOT_ASK` records the request (`createAlert request: message: <t
 each call (`... createAlert accepted (exit 0): {...,"alertId":"..."}` or `refused`, then the
 `createToast` line when it falls back). The E2E runner reads these lines.
 
-`rebootConfirmed {token}` accepts Home Chooser or a sender without an application id (the
-notification service runs the alert's onclick); any other application id gets `forbidden`, the same
+`rebootConfirmed {token}` accepts Home Chooser, the alert's `com.webos.applicationManager` source,
+or a sender without an application id; any other application id gets `forbidden`, the same
 rule as `uninstallConfirmed`. The app does not call it. Root is required. The token must be live and
 unexpired and is consumed (`badToken` otherwise). The pending check runs again (`notPending` when the
 state has changed, for example the user restored in the meantime). Then
@@ -162,9 +162,8 @@ state has changed, for example the user restored in the meantime). Then
 `rebootFailed` and the reply text goes to the log.
 
 Abuse: only the Home Chooser app can mint a token, and only while the worker reports
-`reboot=needed`, so the service cannot be used to reboot a TV in a normal state. A caller without an
-application id (the notification service path) needs the 128-bit token, which only appears in the
-alert it raised for Home Chooser. The reboot is checked again at
+`reboot=needed`, so the service cannot be used to reboot a TV in a normal state. The alert callback
+needs the 128-bit token, which only appears in the alert raised for Home Chooser. The reboot is checked again at
 confirm time, so an old alert cannot reboot the TV after the state has settled.
 
 There is no fallback to `systemctl reboot` or `reboot`. That skips tvpowerd's power-off sequence
@@ -200,9 +199,9 @@ UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the
 This identity has been exercised on Beanjar VMs for some releases. Prior service-identity
 denials do not establish its groups on every release.
 
-## Launcher access files
+## Luna access files
 
-`service/scripts/homechooser-access apply|remove|status` manages only Home Chooser's API file under
+`service/scripts/homechooser-access apply|remove|status` manages Home Chooser's access files under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
 `api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: eight
@@ -210,6 +209,15 @@ launcher methods) and adds its absolute path to `apiPermissionFiles`, creating t
 missing. On major 11+ the same eight methods are also under `ares.webos.cli`. Neither includes
 `uninstallConfirmed`, `rebootPrompt` or `rebootConfirmed`. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
+
+On webOS 9.2.1, Surface Manager turns `onclick` plus `params` into an alert action but its role
+allows outbound calls to `com.lge.*`, `com.palm.*`, and `com.webos.*`, among others, while a direct call to the
+`org.webosbrew.*` service is denied before any handler runs. Apply therefore adds the internal
+`com.webos.homechooser.alert` name to Home Chooser's own installer-generated role, installs a
+dynamic service entry for the same executable, and grants only `uninstallConfirmed` and
+`rebootConfirmed` on that name. The role's inbound rule names `com.webos.surfacemanager`; both
+methods still enforce the one-shot token and sender policy. The vendor role is untouched. Remove
+undoes the role extension and deletes the callback service and API files.
 
 No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
 `groups.d/homechooser.groups.json` through `groupsFiles`. On webOS 9.2.1 (w22h-ombre) ls-hubd then
@@ -226,7 +234,7 @@ w22h-ombre (`e2e/results/w22h-ombre-20261025-214258`) ended with 46 PASS and 18 
 `ares-install` timed out, the selected Home was lost, and LG processes crashed. That run does
 not isolate the ls-hubd failure as the sole cause. The `groupsFiles` layout existed only in
 unreleased builds `1871941` through `9581378`; updating from those builds is unsupported.
-The access script manages only its current launcher API permission file; it does not try to
+The access script manages only its current access files; it does not try to
 clean up that unsupported development layout.
 
 The elevated service's broader public registration still requires the service's own caller gates.
@@ -236,7 +244,7 @@ files whose package manifest has disappeared. `ls-control scan-services` runs on
 status prints file presence. The app best-effort applies after elevation, the boot entry applies
 without needing a Home choice, and the watcher applies at start. The watcher stages the access
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
-Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`.
+Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`, `HOMECHOOSER_NODE`.
 
 The group format, manifest keys, app-id naming, permission metadata in `getAppInfo` and
 `listRunning` availability have been exercised on Beanjar VMs for some releases. The

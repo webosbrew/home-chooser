@@ -22,6 +22,13 @@ static void test_sender(void)
 	CHECK(!hc_sender_ok("org.webosbrew.homechooser-evil"));
 	CHECK(!hc_sender_ok("com.webos.app.home"));
 	CHECK(!hc_sender_ok("org.webosbrew.hbchannel"));
+	CHECK(hc_alert_sender_ok("org.webosbrew.homechooser"));
+	CHECK(hc_alert_sender_ok("com.webos.applicationManager"));
+	CHECK(hc_alert_sender_ok("com.webos.applicationManager 42"));
+	CHECK(!hc_alert_sender_ok(NULL));
+	CHECK(!hc_alert_sender_ok("com.webos.applicationManager.evil"));
+	CHECK(!hc_alert_sender_ok("com.webos.surfacemanager"));
+	CHECK(!hc_alert_sender_ok("org.webosbrew.hbchannel"));
 }
 
 static void test_files(void)

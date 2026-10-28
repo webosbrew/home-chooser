@@ -1,11 +1,12 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Maintain the launcher API group in installer-owned manifests.
+# Maintain launcher API and alert callback access in Home Chooser's installer-owned manifest.
 
 set -eu
 . "$(dirname "$0")/lib/common.sh"
 ROOTS=${HOMECHOOSER_LUNA_ROOTS:-'/var/luna-service2-dev /var/luna-service2'}
 CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
+NODE=${HOMECHOOSER_NODE:-node}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 changed=0
 major=$(major_version)
@@ -61,10 +62,15 @@ case "$action" in apply|remove|status) ;; *) echo "usage: $0 apply|remove|status
 for root in $ROOTS; do
     manifest=$root/manifests.d/org.webosbrew.homechooser.json
     api=$root/api-permissions.d/org.webosbrew.homechooser.launcher.api.json
+    alert_api=$root/api-permissions.d/org.webosbrew.homechooser.alert.api.json
+    role=$root/roles.d/org.webosbrew.homechooser.service.service.json
+    source_service=$root/services.d/org.webosbrew.homechooser.service.service
+    alert_service=$root/services.d/com.webos.homechooser.alert.service
     if [ "$action" = status ]; then
-        printf '%s manifest=%s api=%s\n' "$root" \
+        printf '%s manifest=%s api=%s alert=%s\n' "$root" \
             "$(test -f "$manifest" && echo yes || echo no)" \
-            "$(test -f "$api" && echo yes || echo no)"
+            "$(test -f "$api" && echo yes || echo no)" \
+            "$(test -f "$alert_service" && echo yes || echo no)"
         continue
     fi
     if [ -f "$manifest" ]; then
@@ -77,12 +83,24 @@ for root in $ROOTS; do
             [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods"
             write_changed "$api" "$permissions}"
             add_entry apiPermissionFiles "$api"
+            write_changed "$alert_api" '{"all":["com.webos.homechooser.alert/uninstallConfirmed","com.webos.homechooser.alert/rebootConfirmed"]}'
+            add_entry apiPermissionFiles "$alert_api"
+            add_entry serviceFiles "$alert_service"
+            result=$($NODE "$(dirname "$0")/lib/alert-access.js" apply "$role" "$source_service" "$alert_service")
+            [ "$result" = changed ] && changed=1
         else
             drop_entry apiPermissionFiles "$api"
+            drop_entry apiPermissionFiles "$alert_api"
+            drop_entry serviceFiles "$alert_service"
         fi
         # Compare compact JSON to avoid rewriting an unchanged pretty-printed manifest.
         if [ "$(compact "$manifest")" != "$json" ]; then write_changed "$manifest" "$json"; fi
     fi
     if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
+    if [ "$action" = remove ]; then
+        if [ -f "$alert_api" ]; then rm -f "$alert_api"; changed=1; fi
+        result=$($NODE "$(dirname "$0")/lib/alert-access.js" remove "$role" "$source_service" "$alert_service")
+        [ "$result" = changed ] && changed=1
+    fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi

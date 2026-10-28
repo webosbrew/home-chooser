@@ -83,6 +83,10 @@ class StockRecord(unittest.TestCase):
             '/var/lib/webosbrew/homechooser/boot',
             '/var/luna-service2-dev/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
             '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
+            '/var/luna-service2-dev/api-permissions.d/org.webosbrew.homechooser.alert.api.json',
+            '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.alert.api.json',
+            '/var/luna-service2-dev/services.d/com.webos.homechooser.alert.service',
+            '/var/luna-service2/services.d/com.webos.homechooser.alert.service',
         })
 
     def test_5x_is_unchanged_a_stock_launcher(self):
@@ -152,6 +156,15 @@ class Texts(unittest.TestCase):
         for text, rel in e2e.TEXT_SOURCES:
             self.assertIn(text, self.read(rel), '%r not in %s' % (text, rel))
 
+    def test_device_text_forms_match_utf8_and_minified_unicode_escape(self):
+        note = e2e.RESTART_NOTE['apply']
+        literal, escaped = e2e.device_text_forms(note)
+        self.assertIn(' — ', literal)
+        self.assertIn(' \\u2014 ', escaped)
+        self.assertEqual(escaped.replace('\\u2014', '—'), literal)
+        self.assertEqual(e2e.device_text_forms(e2e.RESTART_NOTE['remove']),
+                         (e2e.RESTART_NOTE['remove'],))
+
     def test_the_new_texts(self):
         self.assertEqual(e2e.UNINSTALL_TOAST, 'Home Chooser was removed. The Home button opens LG Home again.')
         self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the hook.')
@@ -216,7 +229,7 @@ class RebootAsk(unittest.TestCase):
             'senderUniqueName': 'client-100',
             'destination': 'com.webos.notification', 'method': 'createAlert', 'token': 7,
             'payload': {'sourceId': e2e.APP_ID, 'title': 'Home Chooser', 'message': self.APPLY,
-                        'buttons': [{'label': 'Reboot', 'onclick': 'luna://' + e2e.SVC_ID + '/rebootConfirmed',
+                        'buttons': [{'label': 'Reboot', 'onclick': 'luna://' + e2e.ALERT_SVC_ID + '/rebootConfirmed',
                                      'params': {'token': 'private-token'}},
                                     {'label': 'Later', 'focus': True}]}})
         monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
@@ -245,7 +258,7 @@ class RebootAsk(unittest.TestCase):
             payload = {'sourceId': e2e.APP_ID, 'message': self.APPLY}
             if method == 'createAlert':
                 payload.update(title='Home Chooser', message=self.APPLY, buttons=[
-                    {'label': 'Reboot', 'onclick': 'luna://' + e2e.SVC_ID + '/rebootConfirmed',
+                    {'label': 'Reboot', 'onclick': 'luna://' + e2e.ALERT_SVC_ID + '/rebootConfirmed',
                      'params': {'token': 'secret'}}, {'label': 'Later', 'focus': True}])
             monitor._observe({'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
                               'destination': 'com.webos.notification', 'method': method,

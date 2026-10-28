@@ -36,7 +36,9 @@
 
 static GMainLoop *g_loop;
 static LSHandle *g_handle;
+static LSHandle *g_alert_handle;
 static PmLogContext hc_log;
+static bool register_alert(void);
 
 #define LOGI(id, ...) PmLogInfo(hc_log, id, 0, __VA_ARGS__)
 #define LOGE(id, ...) PmLogError(hc_log, id, 0, __VA_ARGS__)
@@ -73,7 +75,7 @@ static void send_reply(LSMessage *msg, jvalue_ref obj)
 {
 	LSError e;
 	LSErrorInit(&e);
-	if (!LSMessageReply(g_handle, msg, jvalue_stringify(obj), &e)) {
+	if (!LSMessageRespond(msg, jvalue_stringify(obj), &e)) {
 		LOGE("REPLY_FAILED", "%s", e.message ? e.message : "?");
 		LSErrorFree(&e);
 	}
@@ -698,6 +700,7 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 			put_str(o, "stderrString", err->str);
 			send_reply(msg, o);
 		}
+		if (strcmp(cmd->name, "accessApply") == 0 && code == 0) register_alert();
 		g_string_free(out, TRUE);
 		g_string_free(err, TRUE);
 	}
@@ -1437,7 +1440,7 @@ static void uninstall_ask(LOp *op)
 	jvalue_ref buttons = jarray_create(NULL);
 	jvalue_ref yes = jobject_create();
 	put_str(yes, "label", "Uninstall");
-	put_str(yes, "onclick", "luna://" HC_SERVICE_ID "/uninstallConfirmed");
+	put_str(yes, "onclick", "luna://" HC_ALERT_SERVICE_ID "/uninstallConfirmed");
 	jvalue_ref yes_params = jobject_create();
 	put_str(yes_params, "token", t->token);
 	jobject_set(yes, key_buf("params"), yes_params);
@@ -1541,14 +1544,14 @@ static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	const char *app = LSMessageGetApplicationID(msg);
-	/* The alert's button comes from the notification service (no application id); the screen
-	 * from the Home Chooser app. Any other app is refused, and the token is the capability. */
-	if (app && app[0] && !hc_sender_ok(app)) {
+	/* The alert action carries the createAlert caller's application id; the screen uses our app id. */
+	if (app && app[0] && !hc_alert_sender_ok(app)) {
 		LOGE("REFUSED", "uninstallConfirmed from application id '%s'", app);
 		send_error(msg, "forbidden", "Only the confirmation may call this method");
 		return true;
 	}
 	if (geteuid() != 0) {
+		LOGE("REFUSED", "uninstallConfirmed while service uid is %d", (int)geteuid());
 		send_error(msg, "notRoot", "The service is not running as root");
 		return true;
 	}
@@ -1571,9 +1574,11 @@ static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 	bool still = hc_is_selected_home(t->requester, choice);
 	g_free(choice);
 	if (!still) {
+		LOGE("REFUSED", "uninstallConfirmed after the requesting launcher stopped being Home");
 		send_error(msg, "notHome", "The app that asked is no longer the selected Home");
 		return true;
 	}
+	LOGI("UNINSTALL", "uninstallConfirmed accepted token for %s", t->id);
 	char id[130], folder[512];
 	g_strlcpy(id, t->id, sizeof id);
 	g_strlcpy(folder, t->folder, sizeof folder);
@@ -1596,14 +1601,17 @@ static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 		}
 	}
 	if (route) {
+		LOGI("UNINSTALL", "uninstallConfirmed removed %s through %s", id, route);
 		jvalue_ref o = jobject_create();
 		put_bool(o, "returnValue", true);
 		put_str(o, "id", id);
 		put_str(o, "route", route);
 		send_reply(msg, o);
 	} else if (refused) {
+		LOGE("REFUSED", "uninstallConfirmed: platform says %s is not removable", id);
 		send_error_for(msg, "uninstallConfirmed", "notRemovable", "The platform says this app is not removable");
 	} else {
+		LOGE("REFUSED", "uninstallConfirmed: platform removal failed for %s", id);
 		send_error_for(msg, "uninstallConfirmed", "removeFailed", failure);
 	}
 	return true;
@@ -1686,7 +1694,7 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	jvalue_ref buttons = jarray_create(NULL);
 	jvalue_ref yes = jobject_create();
 	put_str(yes, "label", "Reboot");
-	put_str(yes, "onclick", "luna://" HC_SERVICE_ID "/rebootConfirmed");
+	put_str(yes, "onclick", "luna://" HC_ALERT_SERVICE_ID "/rebootConfirmed");
 	jvalue_ref yes_params = jobject_create();
 	put_str(yes_params, "token", t->token);
 	jobject_set(yes, key_buf("params"), yes_params);
@@ -1728,13 +1736,14 @@ static bool on_reboot_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	const char *app = LSMessageGetApplicationID(msg);
-	/* Same rule as uninstallConfirmed: the notification service has no application id. */
-	if (app && app[0] && !hc_sender_ok(app)) {
+	/* Same sender rule as uninstallConfirmed. The token remains one shot. */
+	if (app && app[0] && !hc_alert_sender_ok(app)) {
 		LOGE("REFUSED", "rebootConfirmed from application id '%s'", app);
 		send_error(msg, "forbidden", "Only the confirmation may call this method");
 		return true;
 	}
 	if (geteuid() != 0) {
+		LOGE("REFUSED", "rebootConfirmed while service uid is %d", (int)geteuid());
 		send_error(msg, "notRoot", "The service is not running as root");
 		return true;
 	}
@@ -1754,16 +1763,21 @@ static bool on_reboot_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 	}
 	t->live = false; /* one shot */
 	if (!reboot_pending()) {
+		LOGE("REFUSED", "rebootConfirmed with no restart pending");
 		send_error_for(msg, "rebootConfirmed", "notPending", "No restart is pending any more");
 		return true;
 	}
+	LOGI("REBOOT", "rebootConfirmed accepted token; calling tvpower/power/reboot");
 	GString *out = g_string_new(NULL);
 	int code = luna_run(REBOOT_URI, "{\"reason\":\"remoteKey\"}", 1, 30, never_stop, out);
 	bool ok = code == 0 && hc_remove_reply_class(out->str) == 1;
-	LOGI("REBOOT", "%s (exit %d): %s", ok ? "accepted" : "refused", code, out->str);
+	LOGI("REBOOT", "rebootConfirmed %s (exit %d): %s", ok ? "accepted" : "refused", code, out->str);
 	g_string_free(out, TRUE);
 	if (ok) send_ok(msg);
-	else send_error_for(msg, "rebootConfirmed", "rebootFailed", "The TV did not accept the restart");
+	else {
+		LOGE("REFUSED", "rebootConfirmed: tvpower refused restart");
+		send_error_for(msg, "rebootConfirmed", "rebootFailed", "The TV did not accept the restart");
+	}
 	return true;
 }
 
@@ -1796,6 +1810,33 @@ static LSMethod methods[] = {
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
 };
 
+/* Surface Manager's alert action is limited to com.webos.* outbound destinations. Keep only
+ * confirmation methods on that name; the launcher API remains on HC_SERVICE_ID. */
+static LSMethod alert_methods[] = {
+	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
+	{"rebootConfirmed", on_reboot_confirmed, LUNA_METHOD_FLAGS_NONE},
+	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
+};
+
+static bool register_alert(void)
+{
+	if (g_alert_handle) return true;
+	LSError e;
+	LSErrorInit(&e);
+	if (!LSRegister(HC_ALERT_SERVICE_ID, &g_alert_handle, &e)
+		|| !LSRegisterCategory(g_alert_handle, "/", alert_methods, NULL, NULL, &e)
+		|| !LSGmainAttach(g_alert_handle, g_loop, &e)) {
+		LOGE("ALERT_REGISTER", "%s", e.message ? e.message : "?");
+		if (g_alert_handle) LSUnregister(g_alert_handle, &e);
+		g_alert_handle = NULL;
+		LSErrorFree(&e);
+		return false;
+	}
+	LSErrorFree(&e);
+	LOGI("ALERT_REGISTER", "registered %s", HC_ALERT_SERVICE_ID);
+	return true;
+}
+
 int main(void)
 {
 	signal(SIGPIPE, SIG_IGN);
@@ -1812,7 +1853,9 @@ int main(void)
 		LSErrorFree(&e);
 		return 1;
 	}
+	register_alert();
 	g_main_loop_run(g_loop);
+	if (g_alert_handle) LSUnregister(g_alert_handle, &e);
 	LSUnregister(g_handle, &e);
 	LSErrorFree(&e);
 	g_main_loop_unref(g_loop);
