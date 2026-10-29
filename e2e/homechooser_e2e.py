@@ -63,6 +63,21 @@ def messages_command(path='/var/log/messages'):
             "zcat \"$log\" 2>/dev/null; done; cat %s; }" % (quoted, quoted))
 
 
+def service_log_command(mark, message_id):
+    """Read our PmLog records from syslog and the current boot's journal.
+
+    Journal output uses MESSAGE only: --since enforces the UTC request boundary
+    before timestamps are removed. Never read an unbounded journal on a missing mark.
+    """
+    if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?', mark):
+        return 'true'
+    since = shlex.quote(mark.rstrip('Z').replace('T', ' ') + ' UTC')
+    pattern = shlex.quote('HomeChooser ' + message_id + ' ')
+    return ("{ " + messages_command() + " | awk '$1 >= \"%s\"'; " % mark
+            + "journalctl -b --since %s --no-pager -o cat 2>/dev/null; }" % since
+            + " | grep -F " + pattern)
+
+
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
 #   verified  = booted and os-release read by a run of this runner
@@ -233,7 +248,7 @@ def alert_focus(frame, message, target, safe):
     if any(not isinstance(r, dict) for r in rows):
         raise ValueError('malformed element')
     texts = [r.get('text') for r in rows if r.get('kind') == 'text']
-    # This firmware renders no title header in either alert. Ownership also requires
+    # Some firmware renders no title header. Ownership also requires
     # the matching service request/reply; the app title behind the alert is not proof.
     if texts.count(message) != 1:
         raise ValueError('expected message not uniquely visible')
@@ -248,25 +263,35 @@ def alert_focus(frame, message, target, safe):
                 or not isinstance(b.get('style'), dict)
                 or type(b['style'].get('disabled')) is not bool):
             raise ValueError('missing button geometry or contrast flag')
-    focused = [b for b in buttons if b['style']['disabled'] is False]
-    if len(focused) != 1:
-        raise ValueError('focus is ambiguous (need one undimmed button)')
     first, second = sorted(buttons, key=lambda b: b['box'][1])
     if (first['box'][3] < second['box'][1]
             and max(first['box'][0], second['box'][0]) < min(first['box'][2], second['box'][2])):
+        horizontal = False
+        focused = [b for b in buttons if b['style']['disabled'] is False]
         direction = 'UP' if first['text'] == target else 'DOWN'
     else:
         first, second = sorted(buttons, key=lambda b: b['box'][0])
         if (first['box'][2] >= second['box'][0]
                 or max(first['box'][1], second['box'][1]) >= min(first['box'][3], second['box'][3])):
             raise ValueError('buttons are not a disjoint aligned pair')
+        horizontal = True
+        focused = [b for b in buttons if b['style'].get('highlighted') is True]
         direction = 'LEFT' if first['text'] == target else 'RIGHT'
+    if len(focused) != 1:
+        raise ValueError('focus is ambiguous')
     # The alert shares the screen with controls behind it. Its message and button band
     # must contain exactly our pair; controls elsewhere (the app beneath) are irrelevant.
     top = min(b['box'][1] for b in buttons)
     bottom = max(b['box'][3] for b in buttons)
     messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') == message]
-    if not top <= sum(messages[0]['box'][1::2]) / 2 <= bottom:
+    msg = messages[0]
+    if horizontal:
+        # 5.x puts the prompt immediately above a highlighted horizontal pair.
+        if (not 0 <= top - msg['box'][3] <= bottom - top
+                or msg.get('group') is None
+                or any(b.get('group') != msg['group'] for b in buttons)):
+            raise ValueError('message is outside the alert group')
+    elif not top <= sum(msg['box'][1::2]) / 2 <= bottom:
         raise ValueError('message is outside the alert button band')
     band = [r for r in rows if r.get('kind') == 'button'
             and r.get('box') and r['box'][1] < bottom and r['box'][3] > top]
@@ -2469,9 +2494,9 @@ class Scenario:
             self.dev.foreground()[0])
 
     def reboot_ask_log(self):
-        """The REBOOT_ASK lines of the service since the choice was confirmed (PmLog -> /var/log/messages)."""
-        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8")
-                              % getattr(self, 'ask_mark', ''))
+        """The REBOOT_ASK lines of the service since the choice was confirmed (syslog and journal)."""
+        rc, out = self.dev.sh(service_log_command(getattr(self, 'ask_mark', ''),
+                                                   'REBOOT_ASK') + " | tail -n 8")
         return out
 
     def reboot_ask_evidence(self):
@@ -3127,8 +3152,8 @@ exit "$rc"
 
     def uninstall_alert_id(self):
         """The alertId of the service's createAlert, from its UNINSTALL_ASK log line (PmLog), if logged."""
-        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3")
-                              % self.uninstall_mark)
+        rc, out = self.dev.sh(service_log_command(self.uninstall_mark, 'UNINSTALL_ASK')
+                              + " | tail -n 3")
         m = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', out)
         return (m[-1] if m else None), out.strip()
 

@@ -117,17 +117,20 @@ class AlertFocus(unittest.TestCase):
                                  'Reboot', 'Later', 'test', lambda: ('accepted service log', True)), success)
             self.assertEqual(sent, keys)
 
-    def test_horizontal_order_and_invalid_boxes(self):
-        frame = self.frame()
+    def test_recorded_horizontal_5x(self):
+        frame = self.frame('uninstall-alert-5x')
+        parse = lambda: e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+        self.assertEqual(parse(), ('Cancel', 'LEFT'))
         buttons = {r['text']: r for r in frame['elements'] if r['kind'] == 'button'}
-        buttons['Reboot']['box'] = [800,500,900,570]
-        buttons['Later']['box'] = [950,500,1050,570]
-        self.assertEqual(self.parse(frame), ('Later', 'LEFT'))
-        buttons['Reboot']['box'], buttons['Later']['box'] = buttons['Later']['box'], buttons['Reboot']['box']
-        self.assertEqual(self.parse(frame), ('Later', 'RIGHT'))
-        buttons['Reboot']['box'] = buttons['Later']['box']
+        buttons['Uninstall']['box'], buttons['Cancel']['box'] = buttons['Cancel']['box'], buttons['Uninstall']['box']
+        self.assertEqual(parse(), ('Cancel', 'RIGHT'))
+        buttons['Uninstall']['style']['highlighted'] = True
         with self.assertRaises(ValueError):
-            self.parse(frame)
+            parse()
+        buttons['Uninstall']['style']['highlighted'] = False
+        buttons['Uninstall']['box'] = buttons['Cancel']['box']
+        with self.assertRaises(ValueError):
+            parse()
 
 
 class LogMark(unittest.TestCase):
@@ -164,6 +167,23 @@ class LogMark(unittest.TestCase):
                                     capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout, 'only current\n')
             self.assertEqual(result.stderr, '')
+
+    def test_service_log_journal_boundary_and_ownership(self):
+        from unittest.mock import patch
+        mark = '2026-10-29T06:28:00'
+        with tempfile.TemporaryDirectory() as root:
+            journal = os.path.join(root, 'journalctl')
+            with open(journal, 'w') as f:
+                f.write('#!/bin/sh\n[ "$*" = "-b --since 2026-10-29 06:28:00 UTC --no-pager -o cat" ] || exit 1\n'
+                        "echo 'HomeChooser UNINSTALL_ASK {} current'\n"
+                        "echo 'Other UNINSTALL_ASK {} foreign'\n")
+            os.chmod(journal, 0o755)
+            with patch.object(e2e, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 HomeChooser UNINSTALL_ASK {} stale'"):
+                command = e2e.service_log_command(mark, 'UNINSTALL_ASK')
+            result = subprocess.run(['sh', '-c', command], capture_output=True, text=True,
+                                    env=dict(os.environ, PATH=root + os.pathsep + os.environ['PATH']), check=True)
+            self.assertEqual(result.stdout, 'HomeChooser UNINSTALL_ASK {} current\n')
+        self.assertEqual(e2e.service_log_command('', 'UNINSTALL_ASK'), 'true')
 
     def test_only_lines_after_the_mark(self):
         log = ['a closeByAppId x', 'b', 'c']
