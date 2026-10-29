@@ -1029,19 +1029,22 @@ except Exception as exc:
 
 
 class BeanjarHost:
-    """Every operation on the machine that runs Beanjar goes through here.
+    """VM host operations and local Beanjar display routing go through here.
 
     local mode: beanjar and friends run as local commands.  remote mode: each command line is
     run with `ssh <host>` (an ssh alias or user@host; BatchMode, so it never prompts) and files come
     back with scp.  The rest of the runner never quotes for the remote.  The mode comes from the
     host's entry in hosts.toml, never from `beanjar` being on PATH: this PC has Beanjar's own
     multi-host CLI, which is not the machine the VMs and their QMP sockets are on.
+    Display operations use that local CLI with HOST/NAME instead of our ssh plumbing.
     """
 
     def __init__(self, mode='remote', device='raspberrypi', name='pi'):
         self.mode, self.device, self.name = mode, device, name
         self._dirs = {}
         self.slowdown = 1.0
+        self.input_rec = None
+        self._remote_keys = {}
 
     @classmethod
     def from_config(cls, cfg, name, mode=None, device=None):
@@ -1118,10 +1121,66 @@ class BeanjarHost:
         running = self.running_vms()
         if running:
             raise RuntimeError('refusing boot while VMs are running: %s' % running)
-        return self.beanjar('start', vm, timeout=600)
+        result = self.beanjar('start', vm, timeout=600)
+        if result[0] == 0:
+            self.vnc_start(vm)
+        return result
 
     def stop(self, vm):
+        self.vnc_stop(vm)
         return self.beanjar('stop', vm, timeout=300)
+
+    def remote_target(self, vm):
+        """The local multi-host CLI owns routing for display input."""
+        return vm if self.mode == 'local' else self.name + '/' + vm
+
+    def display_beanjar(self, *args, timeout=60):
+        try:
+            return run(['beanjar', *args], timeout)
+        except OSError as e:
+            return 127, str(e)
+
+    def vnc_start(self, vm):
+        if self.input_rec is None:
+            return
+        target = self.remote_target(vm)
+        rc, out = self.display_beanjar('vnc', 'start', target, '--port', '0')
+        # Beanjar rejects a duplicate start before opening another front end.
+        already = 'beanjar-vnc is already serving %s (pid ' % vm in out
+        self.input_rec.say('beanjar vnc start %s: %s' % (target, out.strip()))
+        if rc and not already:
+            error = 'beanjar vnc start %s failed (rc=%s): %s' % (target, rc, out.strip())
+            self.input_rec.check('input front end', False, error)
+            raise KeySendError(error)
+
+    def vnc_stop(self, vm):
+        if self.input_rec is None:
+            return
+        target = self.remote_target(vm)
+        rc, out = self.display_beanjar('vnc', 'stop', target)
+        self.input_rec.say('beanjar vnc stop %s: %s' % (target, out.strip()))
+        if rc:
+            self.input_rec.check('input front end cleanup', False,
+                                 '%s (rc=%s): %s' % (target, rc, out.strip()))
+
+    def remote_press(self, vm, key):
+        target = self.remote_target(vm)
+        if vm not in self._remote_keys:
+            rc, out = self.display_beanjar('remote', 'layout', target, '--json')
+            try:
+                layout = json.loads(out) if rc == 0 else None
+                keys = {k['name'].upper() for k in layout['keys'] if k['code'] is not None}
+            except (ValueError, TypeError, KeyError, AttributeError):
+                return 1, 'remote layout %s failed (rc=%s): %s' % (target, rc, out.strip())
+            required = {'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT'}
+            missing = required - keys
+            if missing:
+                return 1, 'remote layout %s missing keys: %s' % (target, ', '.join(sorted(missing)))
+            self._remote_keys[vm] = keys
+        if key not in self._remote_keys[vm]:
+            return 1, 'remote layout %s missing key: %s' % (target, key)
+        return self.display_beanjar('remote', 'press', target, key,
+                                    '--hold', str(round(seconds(100))))
 
     # -- input and capture
     def sendkey(self, vm, key):
@@ -1583,19 +1642,26 @@ class Scenario:
     def press(self, *keys):
         result = None
         for k in keys:
-            if self.a.input == 'qmp':
-                qk = {'DOWN': 'down', 'UP': 'up', 'LEFT': 'left', 'RIGHT': 'right', 'OK': 'ret', 'HOME': 'meta_l',
-                      'BACK': 'esc'}[k]
-                result = self.host.sendkey(self.vm, qk)
+            key = str(k).upper()
+            key = 'ENTER' if key == 'OK' else key
+            if self.a.input == 'beanjar':
+                sent = key
+                location = self.host.remote_target(self.vm)
+                result = self.host.remote_press(self.vm, sent)
+            elif self.a.input == 'qmp':
+                sent = {'DOWN': 'down', 'UP': 'up', 'LEFT': 'left', 'RIGHT': 'right',
+                        'ENTER': 'ret', 'HOME': 'meta_l', 'BACK': 'esc',
+                        **{str(n): str(n) for n in range(10)}}[key]
+                location = self.host.name
+                result = self.host.sendkey(self.vm, sent)
             else:
-                ak = {'DOWN': 'DOWN', 'UP': 'UP', 'LEFT': 'LEFT', 'RIGHT': 'RIGHT', 'OK': 'ENTER', 'HOME': 'LEFTMETA',
-                      'BACK': 'ESC'}[k]
-                result = self.dev.key(ak)
+                sent = {'HOME': 'LEFTMETA', 'BACK': 'ESC'}.get(key, key)
+                location = self.dev.root
+                result = self.dev.key(sent)
             rc, out = result
             if rc:
-                location = self.host.name if self.a.input == 'qmp' else self.dev.root
                 error = 'key %s (%s) on %s failed (rc=%s): %s' % (
-                    k, qk if self.a.input == 'qmp' else ak, location, rc, out.strip())
+                    k, sent, location, rc, out.strip())
                 self.rec.check('input delivery', False, error)
                 raise KeySendError(error)
             sleep(0.8)
@@ -1774,6 +1840,7 @@ class Scenario:
         up = state == READY
         r.check(label + ': the VM is back with Homebrew Channel', up, '%s (%s)' % (state, WAIT_STATES[state]))
         if up:
+            host.vnc_start(self.vm)
             b = self.dev.boot_id()
             r.check(label + ': it is a new boot (boot_id changed)', bool(b) and b != boot0, '%s -> %s' % (boot0, b))
         return up
@@ -4218,8 +4285,8 @@ def main():
     ap.add_argument('--outdir', default=None, help='the result directory (default e2e/results/<vm>-<timestamp>); must not exist')
     ap.add_argument('--elevation', choices=sorted(ELEVATIONS), default=None,
                     help="override the matrix's elevation strategy")
-    ap.add_argument('--input', choices=['qmp', 'ares'], default='qmp',
-                    help='remote-key path: QEMU sendkey on the host (default) or ares-do key')
+    ap.add_argument('--input', choices=['beanjar', 'qmp', 'ares'], default='beanjar',
+                    help='remote-key path: Beanjar IR remote (default), QEMU keyboard, or ares-do key')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
     ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
     ap.add_argument('--wait-popup', type=int, default=0,
@@ -4275,6 +4342,7 @@ def main():
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
+    host.input_rec = rec if args.input == 'beanjar' else None
     rec.say('artefacts: ' + outdir)
     rec.say('host timing slowdown: %g' % host.slowdown)
     rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
@@ -4354,9 +4422,12 @@ def main():
     finally:
         if scenario and scenario.insp:
             scenario.insp.close()
+        if started:
+            host.vnc_stop(vm)
         if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
             if scenario and scenario.viewer_opened:
                 host.viewer_close(vm)
+            host.input_rec = None  # VNC cleanup above also covers --no-stop
             rc, out = host.stop(vm)
             rec.say('beanjar stop: %s' % out.strip()[-200:])
         elif started and vm in KEEP_LAUNCHER_VMS:

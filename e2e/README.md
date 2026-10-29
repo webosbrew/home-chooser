@@ -49,7 +49,7 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--dock-ipk <path>` (required for Dock unless configured in `hosts.toml`);
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
-`--elevation luna|root-shell`; `--input qmp|ares`; `--until N` (stop after step N, no cleanup, for debugging);
+`--elevation luna|root-shell`; `--input beanjar|qmp|ares` (default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
 (webOS 6-9, how the restart the first choice asks for is done: `later`, the default, closes our alert and restarts the VM with
 beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart while the TV runs");
@@ -123,6 +123,20 @@ the VM directory `beanjar info` reports. No remote quoting exists outside that c
 `beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; desktop capture has no standard-library fallback.
 
 ## Several machines
+
+The default input runs `beanjar remote press HOST/NAME KEY` on this PC, using the configured
+Beanjar host name (a local VM uses `NAME`). Install Beanjar here and register remote hosts with
+the same names as `hosts.toml`. This input needs no helper or extra installation on the VM host.
+It sends the LG remote's IR codes through the display front end, keeping keys ordered with future
+pointer commands. `OK`/`ENTER` map to `ENTER`; HOME, BACK, arrows and digits keep their names.
+The runner reads `remote layout --json` once per run and rejects missing or inactive keys.
+
+For this input the runner starts beanjar-vnc after each Beanjar start and again after a tvpower
+reboot returns, before further keys. An already running beanjar-vnc is accepted. It uses `--port 0`
+to choose a free host port; the VM's LAN listener remains on 5900. Starts and stops are logged.
+VNC stops before each Beanjar stop and at exit, including failures, Ctrl-C and `--no-stop`.
+`--input qmp` keeps the Python 3 QMP keyboard path; `--input ares` uses `ares-do key`.
+These alternatives do not start VNC.
 
 Host helper code must use `python3` with the standard library only (or baseline POSIX shell/coreutils), without extra tools such as socat, nc, jq or grim; Beanjar itself is required.
 
@@ -241,8 +255,8 @@ and Home key hook docs.
 
 0. Baseline: release matches the row; no Home Chooser, Homebrew Channel present; state recorded.
 1. Install Home Chooser and the launcher; elevate (strategy above).
-2. Open Home Chooser, drive it with remote keys (QMP `sendkey`, or `ares-do key` with
-   `--input ares`): the focus is read from the app's DOM through the web inspector (port 9998,
+2. Open Home Chooser, drive it with remote keys (`beanjar remote press` by default; QMP `sendkey` with
+   `--input qmp`, or `ares-do key` with `--input ares`): the focus is read from the app's DOM through the web inspector (port 9998,
    forwarded with `ares-novacom -f`; rows carry `data-app-id`), moved to the launcher's row, OK,
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
    choice file holds the id; `general/defaultApps` `home` is the id; `homechooser-home` active;

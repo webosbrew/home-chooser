@@ -989,6 +989,138 @@ class HostInput(unittest.TestCase):
                 self.assertEqual(sender.call_count, 1)
                 self.assertFalse(scenario.rec.check.call_args.args[1])
 
+    def beanjar_host(self):
+        from unittest.mock import Mock
+        host = e2e.BeanjarHost(mode='remote', name='rk1')
+        host.input_rec = Mock()
+        keys = ['ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT'] + list('0123456789')
+        layout = json.dumps({'keys': [{'name': k, 'code': i} for i, k in enumerate(keys)]})
+        host.display_beanjar = Mock(side_effect=lambda *a, **kw:
+                                    (0, layout if a[:2] == ('remote', 'layout') else 'ok'))
+        return host
+
+    def test_beanjar_mapping_layout_once_and_scaled_hold(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        host = self.beanjar_host()
+        s = object.__new__(e2e.Scenario)
+        s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
+        with patch.object(e2e, 'SLOWDOWN', 1.5), patch.object(e2e, 'sleep'):
+            s.press('OK', 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', *'0123456789')
+        calls = [c.args for c in host.display_beanjar.call_args_list]
+        self.assertEqual(calls[0], ('remote', 'layout', 'rk1/vm', '--json'))
+        self.assertEqual(sum(c[:2] == ('remote', 'layout') for c in calls), 1)
+        self.assertEqual([c[3] for c in calls[1:]],
+                         ['ENTER', 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', *'0123456789'])
+        self.assertTrue(all(c[-2:] == ('--hold', '150') for c in calls[1:]))
+        host.mode = 'local'
+        self.assertEqual(host.remote_target('vm'), 'vm')
+
+    def test_beanjar_missing_and_dimmed_keys_fail_before_press(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for rows, key in [([{'name': 'HOME', 'code': 1}], 'OK'),
+                          ([{'name': k, 'code': None if k == 'ENTER' else 1}
+                            for k in ['ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT']], 'OK')]:
+            host = self.beanjar_host()
+            host.display_beanjar.return_value = (0, json.dumps({'keys': rows}))
+            host.display_beanjar.side_effect = None
+            s = object.__new__(e2e.Scenario)
+            s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
+            with self.assertRaisesRegex(e2e.KeySendError, 'rk1/vm.*missing keys.*ENTER'):
+                s.press(key)
+            self.assertEqual(host.display_beanjar.call_count, 1)
+            self.assertFalse(s.rec.check.call_args.args[1])
+
+    def test_beanjar_press_failure_stops_sequence(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        host = self.beanjar_host()
+        host.remote_press('vm', 'HOME')  # cache the real-shaped layout
+        host.display_beanjar.reset_mock()
+        host.display_beanjar.side_effect = None
+        host.display_beanjar.return_value = (1, 'display refused')
+        s = object.__new__(e2e.Scenario)
+        s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
+        with self.assertRaisesRegex(e2e.KeySendError, 'key OK.*ENTER.*rk1/vm.*display refused'):
+            s.press('OK', 'DOWN')
+        self.assertEqual(host.display_beanjar.call_count, 1)
+        self.assertFalse(s.rec.check.call_args.args[1])
+
+    def test_vnc_boot_stop_order_and_duplicate_start(self):
+        from unittest.mock import Mock
+        host = self.beanjar_host()
+        events = []
+        host.running_vms = lambda: []
+        host.beanjar = lambda *a, **kw: (events.append(a) or (0, 'ok'))
+        host.display_beanjar = Mock(side_effect=lambda *a, **kw: (events.append(a) or (0, 'ok')))
+        host.start('vm')
+        host.stop('vm')
+        host.start('vm')
+        host.vnc_stop('vm')  # final cleanup, including when the VM is left running
+        self.assertEqual([e[:2] for e in events], [
+            ('start', 'vm'), ('vnc', 'start'), ('vnc', 'stop'), ('stop', 'vm'),
+            ('start', 'vm'), ('vnc', 'start'), ('vnc', 'stop')])
+        host.display_beanjar.side_effect = None
+        host.display_beanjar.return_value = (1, 'beanjar-vnc is already serving vm (pid 123)')
+        host.vnc_start('vm')
+        host.input_rec.check.assert_not_called()
+        host.display_beanjar.return_value = (1, 'cannot bind')
+        with self.assertRaisesRegex(e2e.KeySendError, 'cannot bind'):
+            host.vnc_start('vm')
+        host.stop('vm')  # even failed VNC cleanup must still stop the VM
+        self.assertEqual(events[-1], ('stop', 'vm'))
+
+    def test_await_boot_restarts_vnc_before_returning_to_keys(self):
+        from unittest.mock import Mock, patch
+        s = object.__new__(e2e.Scenario)
+        s.vm, s.host, s.rec = 'vm', self.beanjar_host(), Mock()
+        s.host.info = Mock(return_value={'lan_address': 'example'})
+        s.dev = Mock()
+        s.dev.boot_id.return_value = 'new'
+        with patch.object(e2e, 'ensure_devices'), patch.object(e2e, 'wait_for_device', return_value=e2e.READY):
+            self.assertTrue(s.await_boot('tvpower reboot', 'old'))
+        s.host.display_beanjar.assert_called_once_with('vnc', 'start', 'rk1/vm', '--port', '0')
+
+    def test_main_cleans_vnc_on_failure_interrupt_and_no_stop(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        for failure, no_stop in [(RuntimeError('scenario failed'), False),
+                                 (KeyboardInterrupt(), False), (None, True)]:
+            with self.subTest(failure=type(failure).__name__, no_stop=no_stop):
+                host = self.beanjar_host()
+                events = []
+                host.running_vms = lambda: []
+                host.info = Mock(return_value={'lan_address': 'example'})
+                host.beanjar = lambda *a, **kw: (events.append(a) or (0, 'ok'))
+                host.display_beanjar = Mock(side_effect=lambda *a, **kw: (events.append(a) or (0, 'ok')))
+                rec = Mock()
+                rec.finish.return_value = {}
+                scenario = Mock(insp=None, viewer_opened=False)
+                scenario.run.side_effect = failure
+                argv = ['runner', '--vm', '9.x', '--outdir', 'unused'] + (['--no-stop'] if no_stop else [])
+                with contextlib.ExitStack() as stack:
+                    stack.enter_context(patch.object(sys, 'argv', argv))
+                    for name in ['prepare_vm', 'ensure_devices']:
+                        stack.enter_context(patch.object(e2e, name))
+                    stack.enter_context(patch.object(e2e, 'wait_for_device', return_value=e2e.READY))
+                    stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1', 'paths': {}}))
+                    stack.enter_context(patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(spec='test', id='test')))
+                    stack.enter_context(patch.object(e2e.BeanjarHost, 'from_config', return_value=host))
+                    stack.enter_context(patch.object(e2e, 'Recorder', return_value=rec))
+                    stack.enter_context(patch.object(e2e, 'Scenario', return_value=scenario))
+                    stack.enter_context(patch.object(e2e.os, 'makedirs'))
+                    stack.enter_context(patch.object(e2e.shutil, 'which', return_value='/fake/ares-do'))
+                    stack.enter_context(patch.object(e2e.signal, 'signal'))
+                    if isinstance(failure, KeyboardInterrupt):
+                        with self.assertRaises(KeyboardInterrupt):
+                            e2e.main()
+                    else:
+                        e2e.main()
+                self.assertEqual([e[:2] for e in events], [('start', 'w24g-ombre'),
+                                 ('vnc', 'start'), ('vnc', 'stop')] +
+                                 ([] if no_stop else [('stop', 'w24g-ombre')]))
+
     def test_qmp_protocol_and_errors(self):
         import socket
         import threading
