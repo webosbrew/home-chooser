@@ -44,6 +44,7 @@
 /* Sender: the Home Chooser app, as luna-service2 reports its application id. The id may carry an
  * instance suffix after a space ("org.webosbrew.homechooser 1234"). NULL and every other id: no. */
 bool hc_sender_ok(const char *app_id);
+/* Alert callbacks are sent by Surface Manager using our createAlert caller identity. */
 
 /* Exact-match allow-list for readFile / writeFile / removeFile. */
 bool hc_file_allowed(const char *path);

@@ -261,7 +261,8 @@ static void test_remove(void)
 		&& strcmp(rc.payload, "{\"launchPointId\":\"org.x.app_default\"}") == 0 && !rc.progress);
 	CHECK(hc_remove_step(1, "org.x.app", dev, &rc) && strcmp(rc.uri, "luna://com.webos.appInstallService/dev/remove") == 0
 		&& strcmp(rc.payload, "{\"id\":\"org.x.app\",\"subscribe\":true}") == 0 && rc.progress);
-	CHECK(hc_remove_step(1, "org.y.app", store, &rc) && strcmp(rc.uri, "luna://com.webos.appInstallService/remove") == 0);
+	CHECK(hc_remove_step(1, "org.y.app", store, &rc) && strcmp(rc.uri, "luna://com.webos.appInstallService/remove") == 0
+		&& strcmp(rc.payload, "{\"id\":\"org.y.app\",\"subscribe\":true}") == 0 && rc.progress);
 	CHECK(!hc_remove_step(1, "org.x.app", "/usr/palm/applications/x", &rc));
 	CHECK(!hc_remove_step(2, "org.x.app", dev, &rc));
 	CHECK(!hc_remove_step(0, "bad id", dev, &rc));

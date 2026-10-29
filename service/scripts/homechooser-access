@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Maintain the launcher API group in installer-owned manifests.
+# Maintain the launcher API group in Home Chooser's installer-owned manifest.
 
 set -eu
 . "$(dirname "$0")/lib/common.sh"

@@ -10,7 +10,10 @@ export HOMECHOOSER_LUNA_ROOTS="$T/dev $T/system $T/absent"
 export HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_LS_CONTROL="$T/control"
 printf '#!/bin/sh\necho "$*" >> "%s/scans"\n' "$T" > "$T/control"
 chmod +x "$T/control"
-for root in "$T/dev" "$T/system"; do mkdir -p "$root/manifests.d" "$root/api-permissions.d"; done
+for root in "$T/dev" "$T/system"; do
+    mkdir -p "$root/manifests.d" "$root/api-permissions.d" "$root/services.d"
+    printf '[D-BUS Service]\nName=org.webosbrew.homechooser.service\nExec=/homechooser-service\nType=dynamic\n' > "$root/services.d/org.webosbrew.homechooser.service.service"
+done
 # Pretty JSON, a space in a string, absent arrays and existing entries must all survive.
 printf '%s\n' '{ "id": "keep spaces", "rolesFiles": ["/other/role"] }' > "$T/dev/manifests.d/org.webosbrew.homechooser.json"
 printf '%s\n' '{"groupsFiles":["/other/group"],"apiPermissionFiles":["/other/api"]}' > "$T/system/manifests.d/org.webosbrew.homechooser.json"

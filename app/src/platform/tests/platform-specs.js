@@ -95,7 +95,7 @@ describe('service client', () => {
 		expect(got).toMatchObject({confirm: 'alert'});
 		expect(got.token).toBeUndefined();
 		await expect(s.rebootPrompt('remove')).rejects.toMatchObject({reply: {errorCode: 'notPending'}});
-		expect(s.rebootConfirmed).toBeUndefined(); // only the alert's button calls it
+		expect(s.rebootConfirmed).toBeUndefined(); // the alert's button calls LG's tvpower directly
 		expect(calls).toEqual([
 			[SERVICE_URI + '/rebootPrompt', {reason: 'apply'}],
 			[SERVICE_URI + '/rebootPrompt', {reason: 'remove'}]

@@ -151,7 +151,8 @@ user, while the alert belongs to the notification service and stays.
 
 * The app calls `rebootPrompt {"reason"}` ([service](service.md)). The service raises the alert (title
   "Home Chooser", the message for the reason, buttons "Reboot" and "Later"); the Reboot button calls
-  `rebootConfirmed` with a one-shot token that only the alert holds. If the alert is refused the service
+  LG's `com.webos.service.tvpower/power/reboot` directly with `reason:"remoteKey"`. The service checks
+  `reboot=needed` before showing the alert. A stale alert can still request a reboot. If the alert is refused the service
   shows a toast with the message instead.
 * The screen shows only its normal result toast, "Done. Restart the TV to finish." (no focus change, no
   spinner left). If `rebootPrompt` fails (nothing pending any more, or the notification service refuses

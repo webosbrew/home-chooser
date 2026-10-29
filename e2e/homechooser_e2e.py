@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 APP_ID = 'org.webosbrew.homechooser'
 SVC_ID = APP_ID + '.service'
+TVPOWER_REBOOT_URI = 'luna://com.webos.service.tvpower/power/reboot'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/homekey'
@@ -49,8 +50,7 @@ def uninstall_remnant_paths():
     """Files owned by Home Chooser that must disappear after watcher restoration."""
     paths = [HOOK_CACHE, HOOK_STALE, BOOT_DIR]
     for root in ('/var/luna-service2-dev', '/var/luna-service2'):
-        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',):
-            paths.append(root + '/' + suffix)
+        paths.append(root + '/api-permissions.d/org.webosbrew.homechooser.launcher.api.json')
     return paths
 
 
@@ -132,6 +132,12 @@ TEXT_SOURCES = [
 ]
 
 
+def device_text_forms(text):
+    """A minified JS bundle can spell Unicode as JSON escapes while source files use UTF-8."""
+    escaped = json.dumps(text, ensure_ascii=True)[1:-1]
+    return (text,) if escaped == text else (text, escaped)
+
+
 def uses_home_key_hook(major):
     return 6 <= major <= 9
 
@@ -173,7 +179,7 @@ def parse_reboot_ask(text):
     """The service's REBOOT_ASK PmLog lines (service/src/main.c on_reboot_prompt) -> what was asked and how
     the notification service answered:
     {'message', 'buttons' (list), 'alert' ('accepted'|'refused'|None), 'alert_id', 'toast' ('accepted'|'refused'|None)}.
-    The request line carries no token; the replies are the createAlert / createToast lines with their JSON."""
+    The request line carries no private parameters; replies are the createAlert / createToast lines with their JSON."""
     out = {'message': None, 'buttons': [], 'alert': None, 'alert_id': None, 'toast': None}
     for line in (text or '').splitlines():
         if 'REBOOT_ASK' not in line:
@@ -197,7 +203,7 @@ def parse_reboot_ask(text):
 class RebootAlertMonitor:
     """Observe the service's notification call when a firmware drops its PmLog info lines.
 
-    ls-monitor carries the confirmation token in the request. Keep raw events only in memory;
+    ls-monitor carries each button's action and parameters in the request. Keep raw events only in memory;
     the recorded evidence contains the message, button labels and notification reply only.
     """
     def __init__(self, dev):
@@ -1502,9 +1508,11 @@ class Scenario:
 
     def wait_reboot(self, boot0, timeout=240):
         """Wait for the TV to restart by itself (tvpower): 'rebooted' when a new boot id is read, 'off' when
-        Beanjar shows the VM off (QEMU may power off on a guest reboot), '' when nothing happened."""
+        Beanjar shows the VM off (QEMU may power off on a guest reboot),
+        'unreachable' when the guest stops responding, or '' when nothing happened."""
         end = time.time() + timeout
         gone = False
+        last_boot = boot0
         while time.time() < end:
             time.sleep(10)
             try:
@@ -1513,6 +1521,7 @@ class Scenario:
             except RuntimeError:
                 pass
             b = self.dev.boot_id()
+            last_boot = b
             if not b:
                 gone = True
                 continue
@@ -1523,7 +1532,7 @@ class Scenario:
                     ensure_devices(self.host, self.vm, self.rec)
                 except SystemExit:
                     pass
-        return ''
+        return 'unreachable' if not last_boot else ''
 
     def stock_record_ok(self, home):
         return stock_record_ok(self.major, home, self.stock_id)
@@ -2457,7 +2466,7 @@ class Scenario:
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
             how = self.wait_reboot(boot0)
             if how in ('rebooted', 'off'):
-                r.check('Reboot restarted the TV (rebootConfirmed -> tvpower/power/reboot; a VM that powers off counts)', True, how)
+                r.check('Reboot restarted the TV (alert -> tvpower/power/reboot; a VM that powers off counts)', True, how)
                 if how == 'off':
                     r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
                     self.host.start(self.vm)
@@ -2465,8 +2474,12 @@ class Scenario:
                 else:
                     up = self.await_boot('2 reboot (Reboot on the alert)', boot0)
             else:
-                r.manual('Reboot on the alert restarted the TV', 'no new boot id within 240 s: nobody pressed Reboot')
-                self.close_reboot_alert('2 reboot', info)
+                r.manual('Reboot on the alert restarted the TV',
+                         'no new boot id within 240 s; the alert may have been pressed but the VM did not return')
+                if how == 'unreachable':
+                    r.note('closeAlert skipped: the guest is unreachable after the restart attempt', info.get('alert_id'))
+                else:
+                    self.close_reboot_alert('2 reboot', info)
                 up = self.beanjar_reboot('2 reboot (alert left alone, beanjar stop/start)')
         else:
             self.close_reboot_alert('2 reboot (Later)', info)
@@ -2508,8 +2521,11 @@ class Scenario:
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
         def has(text, paths):
-            rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(text), ' '.join(paths)))
-            return [l for l in out.split() if l.startswith('/')]
+            found = set()
+            for form in device_text_forms(text):
+                rc, out = d.sh('grep -rlF %s %s 2>/dev/null' % (shlex.quote(form), ' '.join(paths)))
+                found.update(l for l in out.split() if l.startswith('/'))
+            return sorted(found)
         for text, sources in ((REMOVAL_ALERT[2:], notify), (UNINSTALL_TOAST, restore)):
             got = has(text, sources)
             r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
@@ -2857,7 +2873,7 @@ exit "$rc"
             r.check('%s as %s while it is not the selected Home: refused with notHome' % (m, self.launcher),
                     api_refused(rep) and rep.get('errorCode') == 'notHome', raw[:400])
         rep, raw = self.api('uninstallConfirmed', {'token': '0' * 32})
-        r.check('uninstallConfirmed as the launcher is refused (only Home Chooser or the notification service)',
+        r.check('screen-only uninstallConfirmed as the launcher is refused',
                 api_refused(rep), raw[:400])
         self.api_request(selected=False)
 
@@ -3055,14 +3071,28 @@ exit "$rc"
         r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
 
     def api_uninstall_confirm(self):
-        """The confirm path, only where the runner presses a key on its own screen: the screen route. On the
-        alert route confirming means pressing Uninstall on a system popup: MANUAL."""
+        """Wait for a human to press a visually verified system alert when requested."""
         r, d = self.rec, self.dev
         how = self.uninstall_ask('confirmation')
         if how == 'alert':
+            if self.a.uninstall_via == 'alert':
+                self.shot('3a-uninstall-alert-confirm')
+                aid, ev = self.uninstall_alert_id()
+                r.note('uninstall alert awaiting a visually verified Uninstall press',
+                       'alertId %s; %s' % (aid, ev))
+                gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)
+                if gone:
+                    r.check('alert Uninstall press removed only %s' % DISPOSABLE_ID, True, DISPOSABLE_ID)
+                else:
+                    self.dismiss_alert('3a-uninstall-alert-timeout')
+                    r.manual('uninstall alert confirmation timed out',
+                             'no verified button press or disposable removal in 240 seconds')
+                d.close(APP_ID)
+                self.close_insp()
+                return
             self.dismiss_alert('3a-uninstall-alert-2')
-            r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> uninstallConfirmed '
-                     '-> removal)', 'the runner never presses OK on a system popup and the token is only in the alert; '
+            r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> LG remove)',
+                     'the runner never presses OK on a system popup; '
                      'by hand: call uninstall as the launcher, press Uninstall, then check getAppInfo %s fails' % DISPOSABLE_ID)
             return
         if how != 'screen':
@@ -3901,6 +3931,9 @@ def main():
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
                          'The launcher must declare org.webosbrew.homechooser.applications: the default is the web fixture built with it; '
                          '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
+    ap.add_argument('--uninstall-via', choices=['later', 'alert'], default='later',
+                    help='with --api-check, wait 240 seconds for a human to press Uninstall on the verified system '
+                         'alert and for the disposable fixture to disappear; default closes the alert')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()

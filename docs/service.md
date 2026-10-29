@@ -63,9 +63,8 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
 | `closeApp` | `{id, force?}` | `{returnValue, apiVersion, id}`; selected Home only |
 | `uninstallApp` | `{id}` | `{returnValue, apiVersion, pending:true, id, confirmation}` (`alert` or `screen`); selected Home only |
-| `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; internal confirmation only |
+| `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; screen fallback only |
 | `rebootPrompt` | `{reason}` | `{returnValue, pending:true, confirm}` (`alert`, or `toast` when the alert is refused); Home Chooser only |
-| `rebootConfirmed` | `{token}` | `{returnValue}`; internal confirmation only |
 
 Every method except `status`, `quit` and `getInfo` is privileged: when the service is not root it answers
 `errorCode: "notRoot"` and does nothing.
@@ -90,8 +89,7 @@ settings and confirmation methods are internal; their additional codes have thes
 | `notHome` | The uninstall requester is no longer the selected Home at confirmation time |
 | `notRemovable` | `removeLaunchPoint` explicitly says the target is not removable |
 | `removeFailed` | Both uninstall removal routes fail or time out |
-| `notPending` | A reboot prompt or confirmation has no pending restart |
-| `rebootFailed` | The reboot call is refused |
+| `notPending` | A reboot prompt has no pending restart |
 | `confirmFailed` | Neither confirmation route can ask the owner |
 | `internal` | A confirmation token cannot be generated |
 
@@ -108,15 +106,15 @@ permissions, with an installed `appinfo.json` fallback. `closeApp` and `uninstal
 caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
 root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
 
-`uninstallConfirmed` accepts Home Chooser or a sender without an application id (the notification
-route), always with a live random one-shot token. Four slots expire after 120 seconds; confirmation
-consumes the token and rechecks that the requester is still Home. Targets cannot be Home Chooser,
+`uninstallApp` checks the target and caller before showing an `Uninstall <title>?` alert. The
+Uninstall button calls LG's `appInstallService/dev/remove` for a developer install or
+`appInstallService/remove` for a store install, using the verified `folderPath`. A stale alert can
+still remove its target after the Home selection changes. Targets cannot be Home Chooser,
 Homebrew Channel, the requester, non-removable apps or apps outside developer/store app directories.
-The service raises an `Uninstall <title>?` alert, with Uninstall/Cancel; only Uninstall calls the
-token method. If alerts are refused, it launches Home Chooser's own confirmation screen.
-Removal first uses `removeLaunchPoint` (`<id>_default`), then the appropriate `appInstallService`
-route unless LG explicitly says “is not removable”. Stream status 31 means success and 25 failure
-in the implementation. The settings app allows 120 seconds for confirmation.
+If alerts are refused, the service launches Home Chooser's confirmation screen. Only that screen
+uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that the requester is
+still Home, and first tries `removeLaunchPoint` before the appropriate `appInstallService` route.
+The settings app allows 120 seconds for screen confirmation.
 
 See [Launcher API version 1](launcher-api.md) for the contract, fields, errors, caller rules,
 selection requests and absence detection. Plain shell callers have no application id and are
@@ -137,41 +135,29 @@ stay for manual and debugging use only.
    line such as `xreboot=needed` does not count). Otherwise the error is `notPending`.
 2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
    `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish removing the Home button patch.`
-3. A random 128-bit token is minted (32 hex digits from `/dev/urandom`, own table of four slots,
-   one shot, 10 minute lifetime). It is never sent to the app.
-4. The service raises a `createAlert` (as `com.webos.applicationManager`, source Home Chooser) with
-   the message and the buttons `Reboot` (onclick `luna://org.webosbrew.homechooser.service/rebootConfirmed`,
-   params `{token}`) and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`.
+3. The service raises a `createAlert` (as `com.webos.applicationManager`, source Home Chooser) with
+   the message and the buttons `Reboot` (onclick `luna://com.webos.service.tvpower/power/reboot`,
+   params `{"reason":"remoteKey"}`) and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`.
    There is no on-screen variant: the app is an overlay that surface-manager closes after a stretch
-   without a key press, and the alert is not. If the alert is refused the token is killed and a
+   without a key press, and the alert is not. If the alert is refused a
    `createToast` (`noaction`) shows the message: `confirm: "toast"`. If the toast is refused too:
    `confirmFailed`.
 
 The PmLog id `REBOOT_ASK` records the request (`createAlert request: message: <text>; buttons: Reboot
-(rebootConfirmed), Later (focused)`, without the token) and the notification service's reply to
+(tvpower/power/reboot), Later (focused)`) and the notification service's reply to
 each call (`... createAlert accepted (exit 0): {...,"alertId":"..."}` or `refused`, then the
 `createToast` line when it falls back). The E2E runner reads these lines.
 
-`rebootConfirmed {token}` accepts Home Chooser or a sender without an application id (the
-notification service runs the alert's onclick); any other application id gets `forbidden`, the same
-rule as `uninstallConfirmed`. The app does not call it. Root is required. The token must be live and
-unexpired and is consumed (`badToken` otherwise). The pending check runs again (`notPending` when the
-state has changed, for example the user restored in the meantime). Then
-`luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.tvpower/power/reboot
-'{"reason":"remoteKey"}'`. A true `returnValue` answers `{returnValue: true}`; anything else is
-`rebootFailed` and the reply text goes to the log.
-
-Abuse: only the Home Chooser app can mint a token, and only while the worker reports
-`reboot=needed`, so the service cannot be used to reboot a TV in a normal state. A caller without an
-application id (the notification service path) needs the 128-bit token, which only appears in the
-alert it raised for Home Chooser. The reboot is checked again at
-confirm time, so an old alert cannot reboot the TV after the state has settled.
+Surface Manager executes the Reboot action as the alert's source, and tvpowerd handles its normal
+prepare and reboot sequence. The service checks `reboot=needed` before the alert is created. An
+already shown alert can still request a reboot if that state later changes; there is no second
+service-side pending check at the button press.
 
 There is no fallback to `systemctl reboot` or `reboot`. That skips tvpowerd's power-off sequence
 and its busy check (for example during a software update). If tvpowerd refuses, the user restarts
 the TV.
 
-The reboot method, from files only (not run on a device): tvpowerd (`usr/sbin/tvpowerd`) registers
+The reboot method: tvpowerd (`usr/sbin/tvpowerd`) registers
 `com.webos.service.tvpower` `/power/reboot` on 5.6.x to 12.0.0 (and `/power2/reboot` from 7.x). The
 handler requires `reason` to be in `powerOffReasons` (`etc/tvpowerd/tvpowerd.json` up to 9.x;
 `etc/configd/layers/base/com.webos.service.tvpower.json` on 10.x and later). `remoteKey` is listed
@@ -200,16 +186,21 @@ UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the
 This identity has been exercised on Beanjar VMs for some releases. Prior service-identity
 denials do not establish its groups on every release.
 
-## Launcher access files
+## Luna access files
 
-`service/scripts/homechooser-access apply|remove|status` manages only Home Chooser's API file under
+`service/scripts/homechooser-access apply|remove|status` manages Home Chooser's access files under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
 `api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: eight
 launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
 missing. On major 11+ the same eight methods are also under `ares.webos.cli`. Neither includes
-`uninstallConfirmed`, `rebootPrompt` or `rebootConfirmed`. The group is declared only by that API file, the way the installer declares
+`uninstallConfirmed` or `rebootPrompt`. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
+
+On webOS 9.2.1, Surface Manager turns `onclick` plus `params` into an alert action. Its role
+allows calls to LG's `com.webos.*` services but denies `org.webosbrew.*` before our handler runs.
+The buttons therefore call LG's tvpower and appInstallService directly. Neither Home Chooser's
+role nor the vendor role grants an extra callback service.
 
 No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
 `groups.d/homechooser.groups.json` through `groupsFiles`. On webOS 9.2.1 (w22h-ombre) ls-hubd then
@@ -226,7 +217,7 @@ w22h-ombre (`e2e/results/w22h-ombre-20261025-214258`) ended with 46 PASS and 18 
 `ares-install` timed out, the selected Home was lost, and LG processes crashed. That run does
 not isolate the ls-hubd failure as the sole cause. The `groupsFiles` layout existed only in
 unreleased builds `1871941` through `9581378`; updating from those builds is unsupported.
-The access script manages only its current launcher API permission file; it does not try to
+The access script manages only its current access files; it does not try to
 clean up that unsupported development layout.
 
 The elevated service's broader public registration still requires the service's own caller gates.
@@ -236,7 +227,7 @@ files whose package manifest has disappeared. `ls-control scan-services` runs on
 status prints file presence. The app best-effort applies after elevation, the boot entry applies
 without needing a Home choice, and the watcher applies at start. The watcher stages the access
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
-Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`.
+Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`, `HOMECHOOSER_NODE`.
 
 The group format, manifest keys, app-id naming, permission metadata in `getAppInfo` and
 `listRunning` availability have been exercised on Beanjar VMs for some releases. The
@@ -249,27 +240,36 @@ are internal and are not part of the frozen launcher API.
 ## Launcher API: confirmation and removal
 
 The launcher-facing contract (parameters, replies, errors) is in [Launcher API](launcher-api.md).
-This is what the service does behind `uninstallApp` and `uninstallConfirmed`.
+This is what the service does behind `uninstallApp` and its screen fallback.
 
-* **Token.** The service stores at most four random, one-shot tokens, valid for 120 seconds; a newer
-  request can replace an older slot. Tokens stay inside Home Chooser's confirmation flow: the alert
-  button parameters and the screen launch parameters
-  (`{confirmUninstall:"<id>", token:"<token>"}`). The confirmation screen obtains the title from
-  `getAppInfo` and asks the same question as the alert.
-* **Asking.** The service fetches the target's title, then raises the alert (8 s bound); if
-  `createAlert` is refused it launches Home Chooser's settings app with the screen parameters (15 s
-  bound). Both failing is `confirmFailed`.
-* **Confirming.** `uninstallConfirmed {token}` rechecks that the requester is still the selected
-  Home, then calls `applicationManager/removeLaunchPoint` with `<id>_default`. A platform refusal
-  saying the app “is not removable” stops the operation (`notRemovable`). Other failures fall back
-  to `appInstallService/dev/remove` for a developer app or `appInstallService/remove` for a store
-  app, with `{id,subscribe:true}`, reading progress until status 31 (success) or 25 (failure), with
-  a 90 second bound. The launch-point route reports acceptance, not an independently observed end
-  of uninstall.
+* **Asking.** The service fetches the target's title, `removable` flag and `folderPath`, then
+  applies the protected-app checks. For a developer app the alert button calls
+  `appInstallService/dev/remove`; for a store app it calls `appInstallService/remove`. Both use
+  `{id,subscribe:true}`. If `createAlert` is refused, the service launches Home Chooser's settings
+  app with screen parameters (15 s bound). Both failing is `confirmFailed`.
+* **Screen token.** The fallback screen receives `{confirmUninstall:"<id>", token:"<token>"}`.
+  The service stores at most four random, one-shot tokens, valid for 120 seconds. The screen
+  obtains the title from `getAppInfo` and asks the same question as the alert. Alert buttons carry
+  no Home Chooser token.
+* **Screen confirming.** `uninstallConfirmed {token}` rechecks that the requester is still the
+  selected Home, then calls `applicationManager/removeLaunchPoint` with `<id>_default`. A platform
+  refusal saying the app “is not removable” stops the operation (`notRemovable`). Other failures
+  fall back to the appropriate `appInstallService` remove route, reading progress until status 31
+  (success) or 25 (failure), with a 90 second bound. The launch-point route reports acceptance,
+  not an independently observed end of uninstall.
 * **Reply and errors.** `{returnValue:true,id,route:"launchPoint"}` or
   `route:"appInstallService"`. Errors: `forbidden`, `notRoot`, `badToken`, `notHome`,
   `notRemovable`, `removeFailed`. Any root caller without an application id that holds a live token
-  can complete the removal; the token is the capability.
+  can complete the screen removal; the token is the capability. A stale system alert can still
+  remove the target after the selected Home changes, because LG receives its button action directly.
+
+On webOS 9.2.1, the firmware's `com.webos.appinstalld.service` registers
+`com.webos.appInstallService`. Its API permissions list `dev/remove` under `ares.webos.cli` and
+`remove` under `appinstalld.internal`; Surface Manager's client permissions grant `all`. Live
+alerts reached both methods as `com.webos.applicationManager`: `dev/remove` removed a disposable
+developer fixture, while `remove` returned `FAILED_REMOVE` for a nonexistent ID. The fixture's
+`getAppInfo.folderPath` was `/media/developer/apps/usr/palm/applications/...`, so the service chose
+the developer endpoint. No store app was removed in this probe.
 * **Caller identity and launcher gates.** The caller is `LSMessageGetApplicationID` (dropping an
   instance suffix after a space). The service independently reads the caller's installed
   `requiredPermissions`; `closeApp` and `uninstallApp` also compare the id with the stored choice in
