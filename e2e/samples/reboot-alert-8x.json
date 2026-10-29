@@ -1,0 +1,1734 @@
+{
+  "width": 1280,
+  "height": 720,
+  "elements": [
+    {
+      "id": 0,
+      "key": "icon@24,14",
+      "kind": "icon",
+      "group": 0,
+      "x0": 24,
+      "y0": 14,
+      "x1": 75,
+      "y1": 62,
+      "score": 0.16087958,
+      "style": {
+        "background": "#000000",
+        "foreground": "#dcdcdc",
+        "contrast": 15.31,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        24,
+        14,
+        75,
+        62
+      ],
+      "centre": [
+        49.5,
+        38.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 1,
+      "key": "button:8",
+      "kind": "button",
+      "group": 0,
+      "x0": 38,
+      "y0": 24,
+      "x1": 62,
+      "y1": 49,
+      "score": 0.11955141,
+      "text": "8",
+      "style": {
+        "background": "#000000",
+        "foreground": "#dcdcdc",
+        "contrast": 15.31,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        38,
+        24,
+        62,
+        49
+      ],
+      "centre": [
+        50.0,
+        36.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 2,
+      "key": "text:Home Chooser",
+      "kind": "text",
+      "group": 1,
+      "x0": 766,
+      "y0": 29,
+      "x1": 1052,
+      "y1": 63,
+      "score": 0.98810226,
+      "text": "Home Chooser",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        766,
+        29,
+        1052,
+        63
+      ],
+      "centre": [
+        909.0,
+        46.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 3,
+      "key": "icon@21,63",
+      "kind": "icon",
+      "group": 0,
+      "x0": 21,
+      "y0": 63,
+      "x1": 75,
+      "y1": 125,
+      "score": 0.27978832,
+      "style": {
+        "background": "#000000",
+        "foreground": "#e2dede",
+        "contrast": 15.74,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        21,
+        63,
+        75,
+        125
+      ],
+      "centre": [
+        48.0,
+        94.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 4,
+      "key": "text:0",
+      "kind": "text",
+      "group": 0,
+      "x0": 50,
+      "y0": 76,
+      "x1": 65,
+      "y1": 91,
+      "score": 0.9461154,
+      "text": "0",
+      "style": {
+        "background": "#fe5454",
+        "foreground": "#010000",
+        "contrast": 6.6,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        50,
+        76,
+        65,
+        91
+      ],
+      "centre": [
+        57.5,
+        83.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 5,
+      "key": "text:Choose the app your Home button opens.",
+      "kind": "text",
+      "group": 1,
+      "x0": 763,
+      "y0": 84,
+      "x1": 1081,
+      "y1": 101,
+      "score": 0.99972844,
+      "text": "Choose the app your Home button opens.",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#999999",
+        "contrast": 5.98,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        763,
+        84,
+        1081,
+        101
+      ],
+      "centre": [
+        922.0,
+        92.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 6,
+      "key": "text:Enjoypopular and personalized contents",
+      "kind": "text",
+      "group": 2,
+      "x0": 278,
+      "y0": 105,
+      "x1": 746,
+      "y1": 133,
+      "score": 0.998137,
+      "text": "Enjoypopular and personalized contents",
+      "style": {
+        "background": "#000000",
+        "foreground": "#d1cce4",
+        "contrast": 13.47,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        278,
+        105,
+        746,
+        133
+      ],
+      "centre": [
+        512.0,
+        119.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 7,
+      "key": "icon@20,126",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 126,
+      "x1": 76,
+      "y1": 181,
+      "score": 0.52109253,
+      "style": {
+        "background": "#000000",
+        "foreground": "#dbdbdb",
+        "contrast": 15.17,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        126,
+        76,
+        181
+      ],
+      "centre": [
+        48.0,
+        153.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 8,
+      "key": "icon@772,164",
+      "kind": "icon",
+      "group": 3,
+      "x0": 772,
+      "y0": 164,
+      "x1": 794,
+      "y1": 187,
+      "score": 0.12022602,
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cbcbcb",
+        "contrast": 10.5,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        772,
+        164,
+        794,
+        187
+      ],
+      "centre": [
+        783.0,
+        175.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 9,
+      "key": "button:LG Home (stock)",
+      "kind": "button",
+      "group": 3,
+      "x0": 817,
+      "y0": 167,
+      "x1": 977,
+      "y1": 193,
+      "score": 0.10814493,
+      "text": "LG Home (stock)",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c6c6c6",
+        "contrast": 9.98,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        817,
+        167,
+        977,
+        193
+      ],
+      "centre": [
+        897.0,
+        180.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 10,
+      "key": "icon@20,182",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 182,
+      "x1": 78,
+      "y1": 241,
+      "score": 0.49687603,
+      "style": {
+        "background": "#000000",
+        "foreground": "#e4e4e4",
+        "contrast": 16.52,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        182,
+        78,
+        241
+      ],
+      "centre": [
+        49.0,
+        211.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 11,
+      "key": "button:Q",
+      "kind": "button",
+      "group": 0,
+      "x0": 38,
+      "y0": 199,
+      "x1": 62,
+      "y1": 225,
+      "score": 0.17310835,
+      "text": "Q",
+      "style": {
+        "background": "#000000",
+        "foreground": "#e4e4e4",
+        "contrast": 16.52,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        38,
+        199,
+        62,
+        225
+      ],
+      "centre": [
+        50.0,
+        212.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 12,
+      "key": "icon@20,242",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 242,
+      "x1": 77,
+      "y1": 293,
+      "score": 0.14170158,
+      "style": {
+        "background": "#000000",
+        "foreground": "#e4e4e4",
+        "contrast": 16.52,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        242,
+        77,
+        293
+      ],
+      "centre": [
+        48.5,
+        267.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 13,
+      "key": "icon@38,259",
+      "kind": "icon",
+      "group": 0,
+      "x0": 38,
+      "y0": 259,
+      "x1": 62,
+      "y1": 280,
+      "score": 0.34593523,
+      "style": {
+        "background": "#010101",
+        "foreground": "#e4e4e4",
+        "contrast": 16.42,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        38,
+        259,
+        62,
+        280
+      ],
+      "centre": [
+        50.0,
+        269.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 14,
+      "key": "button:HC Fixture web normal",
+      "kind": "button",
+      "group": 3,
+      "x0": 762,
+      "y0": 236,
+      "x1": 1257,
+      "y1": 271,
+      "score": 0.40806112,
+      "text": "HC Fixture web normal",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c2c3c2",
+        "contrast": 9.64,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        762,
+        236,
+        1257,
+        271
+      ],
+      "centre": [
+        1009.5,
+        253.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 15,
+      "key": "icon@1239,245",
+      "kind": "icon",
+      "group": 3,
+      "x0": 1239,
+      "y0": 245,
+      "x1": 1265,
+      "y1": 268,
+      "score": 0.10582378,
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1239,
+        245,
+        1265,
+        268
+      ],
+      "centre": [
+        1252.0,
+        256.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 16,
+      "key": "icon@1245,250",
+      "kind": "icon",
+      "group": 3,
+      "x0": 1245,
+      "y0": 250,
+      "x1": 1259,
+      "y1": 264,
+      "score": 0.15837999,
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1245,
+        250,
+        1259,
+        264
+      ],
+      "centre": [
+        1252.0,
+        257.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 17,
+      "key": "text:The Home button changes after a restart. Use Restart now",
+      "kind": "text",
+      "group": 3,
+      "x0": 763,
+      "y0": 313,
+      "x1": 1251,
+      "y1": 332,
+      "score": 0.98556423,
+      "text": "The Home button changes after a restart. Use Restart now",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#8c8c8c",
+        "contrast": 5.07,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        763,
+        313,
+        1251,
+        332
+      ],
+      "centre": [
+        1007.0,
+        322.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 18,
+      "key": "text:turning the TV off with the remote may not restart it.",
+      "kind": "text",
+      "group": 3,
+      "x0": 785,
+      "y0": 337,
+      "x1": 1226,
+      "y1": 356,
+      "score": 0.98485935,
+      "text": "turning the TV off with the remote may not restart it.",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#8c8c8c",
+        "contrast": 5.07,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        785,
+        337,
+        1226,
+        356
+      ],
+      "centre": [
+        1005.5,
+        346.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 19,
+      "key": "button:Sports",
+      "kind": "button",
+      "group": 0,
+      "x0": 16,
+      "y0": 343,
+      "x1": 258,
+      "y1": 403,
+      "score": 0.7095957,
+      "text": "Sports",
+      "style": {
+        "background": "#677b2e",
+        "foreground": "#fcfdfb",
+        "contrast": 4.63,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        16,
+        343,
+        258,
+        403
+      ],
+      "centre": [
+        137.0,
+        373.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 20,
+      "key": "icon@274,343",
+      "kind": "icon",
+      "group": 0,
+      "x0": 274,
+      "y0": 343,
+      "x1": 516,
+      "y1": 403,
+      "score": 0.867377,
+      "style": {
+        "background": "#9a4a96",
+        "foreground": "#fdfcfd",
+        "contrast": 5.41,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        274,
+        343,
+        516,
+        403
+      ],
+      "centre": [
+        395.0,
+        373.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 21,
+      "key": "text:Music",
+      "kind": "text",
+      "group": 4,
+      "x0": 370,
+      "y0": 365,
+      "x1": 420,
+      "y1": 380,
+      "score": 0.9997796,
+      "text": "Music",
+      "style": {
+        "background": "#9a4a96",
+        "foreground": "#fdfcfd",
+        "contrast": 5.41,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        370,
+        365,
+        420,
+        380
+      ],
+      "centre": [
+        395.0,
+        372.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 22,
+      "key": "icon:turning the TV off with the remote may not restart it.",
+      "kind": "icon",
+      "group": 0,
+      "x0": 532,
+      "y0": 343,
+      "x1": 748,
+      "y1": 403,
+      "score": 0.6936205,
+      "text": "turning the TV off with the remote may not restart it.",
+      "style": {
+        "background": "#3d80a6",
+        "foreground": "#fafcfd",
+        "contrast": 4.22,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        532,
+        343,
+        748,
+        403
+      ],
+      "centre": [
+        640.0,
+        373.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 23,
+      "key": "text:Home Hub",
+      "kind": "text",
+      "group": 5,
+      "x0": 608,
+      "y0": 365,
+      "x1": 698,
+      "y1": 380,
+      "score": 0.99994636,
+      "text": "Home Hub",
+      "style": {
+        "background": "#3d80a6",
+        "foreground": "#fafcfd",
+        "contrast": 4.22,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        608,
+        365,
+        698,
+        380
+      ],
+      "centre": [
+        653.0,
+        372.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 24,
+      "key": "text:Restart now",
+      "kind": "text",
+      "group": 3,
+      "x0": 764,
+      "y0": 404,
+      "x1": 876,
+      "y1": 420,
+      "score": 0.9999654,
+      "text": "Restart now",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c8c8c8",
+        "contrast": 10.19,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        764,
+        404,
+        876,
+        420
+      ],
+      "centre": [
+        820.0,
+        412.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 25,
+      "key": "icon:Rakuten TV",
+      "kind": "icon",
+      "group": 0,
+      "x0": 17,
+      "y0": 433,
+      "x1": 85,
+      "y1": 502,
+      "score": 0.65638965,
+      "text": "Rakuten TV",
+      "style": {
+        "background": "#4ea96d",
+        "foreground": "#f2f2f2",
+        "contrast": 2.6,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        17,
+        433,
+        85,
+        502
+      ],
+      "centre": [
+        51.0,
+        467.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 26,
+      "key": "icon:prime",
+      "kind": "icon",
+      "group": 0,
+      "x0": 103,
+      "y0": 433,
+      "x1": 171,
+      "y1": 502,
+      "score": 0.6043768,
+      "text": "prime",
+      "style": {
+        "background": "#be0000",
+        "foreground": "#f8e4e4",
+        "contrast": 5.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        103,
+        433,
+        171,
+        502
+      ],
+      "centre": [
+        137.0,
+        467.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 27,
+      "key": "text:prime",
+      "kind": "text",
+      "group": 7,
+      "x0": 203,
+      "y0": 448,
+      "x1": 243,
+      "y1": 466,
+      "score": 0.9968917,
+      "text": "prime",
+      "style": {
+        "background": "#0578ff",
+        "foreground": "#f7faff",
+        "contrast": 3.91,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        203,
+        448,
+        243,
+        466
+      ],
+      "centre": [
+        223.0,
+        457.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 28,
+      "key": "text:APPS",
+      "kind": "text",
+      "group": 10,
+      "x0": 40,
+      "y0": 480,
+      "x1": 64,
+      "y1": 487,
+      "score": 0.9999428,
+      "text": "APPS",
+      "style": {
+        "background": "#4faa6e",
+        "foreground": "#ebf5ef",
+        "contrast": 2.58,
+        "disabled": true,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        40,
+        480,
+        64,
+        487
+      ],
+      "centre": [
+        52.0,
+        483.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 29,
+      "key": "text:Rakuten TV",
+      "kind": "text",
+      "group": 9,
+      "x0": 112,
+      "y0": 462,
+      "x1": 164,
+      "y1": 474,
+      "score": 0.95933515,
+      "text": "Rakuten TV",
+      "style": {
+        "background": "#be0000",
+        "foreground": "#f8e4e4",
+        "contrast": 5.4,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        112,
+        462,
+        164,
+        474
+      ],
+      "centre": [
+        138.0,
+        468.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 30,
+      "key": "icon:YouTube",
+      "kind": "icon",
+      "group": 0,
+      "x0": 189,
+      "y0": 433,
+      "x1": 257,
+      "y1": 502,
+      "score": 0.6671553,
+      "text": "YouTube",
+      "style": {
+        "background": "#0577fe",
+        "foreground": "#f8fbff",
+        "contrast": 3.99,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        189,
+        433,
+        257,
+        502
+      ],
+      "centre": [
+        223.0,
+        467.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 31,
+      "key": "text:video",
+      "kind": "text",
+      "group": 7,
+      "x0": 203,
+      "y0": 461,
+      "x1": 242,
+      "y1": 480,
+      "score": 0.99971616,
+      "text": "video",
+      "style": {
+        "background": "#0578ff",
+        "foreground": "#f9fcff",
+        "contrast": 3.97,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        203,
+        461,
+        242,
+        480
+      ],
+      "centre": [
+        222.5,
+        470.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 32,
+      "key": "icon@274,433",
+      "kind": "icon",
+      "group": 0,
+      "x0": 274,
+      "y0": 433,
+      "x1": 343,
+      "y1": 502,
+      "score": 0.6584488,
+      "style": {
+        "background": "#cacbcc",
+        "foreground": "#eddcdc",
+        "contrast": 1.23,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        274,
+        433,
+        343,
+        502
+      ],
+      "centre": [
+        308.5,
+        467.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 33,
+      "key": "text:YouTube",
+      "kind": "text",
+      "group": 8,
+      "x0": 276,
+      "y0": 461,
+      "x1": 343,
+      "y1": 476,
+      "score": 0.92257977,
+      "text": "YouTube",
+      "style": {
+        "background": "#cbcacb",
+        "foreground": "#ae1212",
+        "contrast": 4.44,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        276,
+        461,
+        343,
+        476
+      ],
+      "centre": [
+        309.5,
+        468.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 34,
+      "key": "icon@360,433",
+      "kind": "icon",
+      "group": 0,
+      "x0": 360,
+      "y0": 433,
+      "x1": 430,
+      "y1": 503,
+      "score": 0.5088368,
+      "style": {
+        "background": "#c2c3c5",
+        "foreground": "#181818",
+        "contrast": 10.07,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        360,
+        433,
+        430,
+        503
+      ],
+      "centre": [
+        395.0,
+        468.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 35,
+      "key": "icon@447,433",
+      "kind": "icon",
+      "group": 0,
+      "x0": 447,
+      "y0": 433,
+      "x1": 515,
+      "y1": 501,
+      "score": 0.7043933,
+      "style": {
+        "background": "#fecb00",
+        "foreground": "#2a2102",
+        "contrast": 10.45,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        447,
+        433,
+        515,
+        501
+      ],
+      "centre": [
+        481.0,
+        467.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 36,
+      "key": "icon@533,433",
+      "kind": "icon",
+      "group": 0,
+      "x0": 533,
+      "y0": 433,
+      "x1": 601,
+      "y1": 502,
+      "score": 0.5873527,
+      "style": {
+        "background": "#fefefe",
+        "foreground": "#c5c5c6",
+        "contrast": 1.71,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        533,
+        433,
+        601,
+        502
+      ],
+      "centre": [
+        567.0,
+        467.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 37,
+      "key": "icon@619,433",
+      "kind": "icon",
+      "group": 0,
+      "x0": 619,
+      "y0": 433,
+      "x1": 688,
+      "y1": 502,
+      "score": 0.52829885,
+      "style": {
+        "background": "#645db9",
+        "foreground": "#c7c8cd",
+        "contrast": 3.3,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        619,
+        433,
+        688,
+        502
+      ],
+      "centre": [
+        653.5,
+        467.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 38,
+      "key": "icon@705,433",
+      "kind": "icon",
+      "group": 6,
+      "x0": 705,
+      "y0": 433,
+      "x1": 749,
+      "y1": 501,
+      "score": 0.2540827,
+      "style": {
+        "background": "#c4c6ca",
+        "foreground": "#3b4b78",
+        "contrast": 4.98,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        705,
+        433,
+        749,
+        501
+      ],
+      "centre": [
+        727.0,
+        467.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 39,
+      "key": "button:Reboot",
+      "kind": "button",
+      "group": 11,
+      "x0": 841,
+      "y0": 495,
+      "x1": 991,
+      "y1": 531,
+      "score": 0.805116,
+      "text": "Reboot",
+      "style": {
+        "background": "#7d848c",
+        "foreground": "#e2e2e2",
+        "contrast": 2.92,
+        "disabled": true,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        841,
+        495,
+        991,
+        531
+      ],
+      "centre": [
+        916.0,
+        513.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 40,
+      "key": "text:Recent Input",
+      "kind": "text",
+      "group": 0,
+      "x0": 17,
+      "y0": 526,
+      "x1": 117,
+      "y1": 542,
+      "score": 0.9999464,
+      "text": "Recent Input",
+      "style": {
+        "background": "#000000",
+        "foreground": "#dddddd",
+        "contrast": 15.46,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        17,
+        526,
+        117,
+        542
+      ],
+      "centre": [
+        67.0,
+        534.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 41,
+      "key": "text:Restart the TV to finish setting up the Home button.",
+      "kind": "text",
+      "group": 6,
+      "x0": 289,
+      "y0": 528,
+      "x1": 737,
+      "y1": 546,
+      "score": 0.9976235,
+      "text": "Restart the TV to finish setting up the Home button.",
+      "style": {
+        "background": "#c0c1c2",
+        "foreground": "#33373e",
+        "contrast": 6.63,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        289,
+        528,
+        737,
+        546
+      ],
+      "centre": [
+        513.0,
+        537.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 42,
+      "key": "text:LIVE",
+      "kind": "text",
+      "group": 12,
+      "x0": 24,
+      "y0": 560,
+      "x1": 67,
+      "y1": 582,
+      "score": 0.99981666,
+      "text": "LIVE",
+      "style": {
+        "background": "#c9202d",
+        "foreground": "#fefafa",
+        "contrast": 5.44,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        24,
+        560,
+        67,
+        582
+      ],
+      "centre": [
+        45.5,
+        571.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 43,
+      "key": "button:Later",
+      "kind": "button",
+      "group": 11,
+      "x0": 837,
+      "y0": 542,
+      "x1": 995,
+      "y1": 579,
+      "score": 0.7849477,
+      "text": "Later",
+      "style": {
+        "background": "#e5e5e5",
+        "foreground": "#53565f",
+        "contrast": 5.82,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        837,
+        542,
+        995,
+        579
+      ],
+      "centre": [
+        916.0,
+        560.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 44,
+      "key": "icon:Edit the list of apps on",
+      "kind": "icon",
+      "group": 0,
+      "x0": 16,
+      "y0": 555,
+      "x1": 258,
+      "y1": 691,
+      "score": 0.37351155,
+      "text": "Edit the list of apps on",
+      "style": {
+        "background": "#4565b7",
+        "foreground": "#efeaec",
+        "contrast": 4.65,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        16,
+        555,
+        258,
+        691
+      ],
+      "centre": [
+        137.0,
+        623.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 45,
+      "key": "icon:Check the broadcast",
+      "kind": "icon",
+      "group": 0,
+      "x0": 274,
+      "y0": 553,
+      "x1": 509,
+      "y1": 690,
+      "score": 0.37624168,
+      "text": "Check the broadcast",
+      "style": {
+        "background": "#c1c3c5",
+        "foreground": "#1b1e28",
+        "contrast": 9.41,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        274,
+        553,
+        509,
+        690
+      ],
+      "centre": [
+        391.5,
+        621.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 46,
+      "key": "text:Edit the list of apps on",
+      "kind": "text",
+      "group": 14,
+      "x0": 285,
+      "y0": 606,
+      "x1": 472,
+      "y1": 627,
+      "score": 0.9999364,
+      "text": "Edit the list of apps on",
+      "style": {
+        "background": "#232634",
+        "foreground": "#d9d9da",
+        "contrast": 10.65,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        285,
+        606,
+        472,
+        627
+      ],
+      "centre": [
+        378.5,
+        616.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 47,
+      "key": "text:Check the broadcast",
+      "kind": "text",
+      "group": 13,
+      "x0": 538,
+      "y0": 605,
+      "x1": 702,
+      "y1": 626,
+      "score": 0.9814764,
+      "text": "Check the broadcast",
+      "style": {
+        "background": "#37393c",
+        "foreground": "#d9d9d9",
+        "contrast": 8.21,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        538,
+        605,
+        702,
+        626
+      ],
+      "centre": [
+        620.0,
+        615.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 48,
+      "key": "text:the Home to include your",
+      "kind": "text",
+      "group": 14,
+      "x0": 284,
+      "y0": 626,
+      "x1": 492,
+      "y1": 650,
+      "score": 0.9994769,
+      "text": "the Home to include your",
+      "style": {
+        "background": "#212532",
+        "foreground": "#e3e3e4",
+        "contrast": 11.91,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        284,
+        626,
+        492,
+        650
+      ],
+      "centre": [
+        388.0,
+        638.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 49,
+      "key": "icon:Home key hook: not active",
+      "kind": "icon",
+      "group": 6,
+      "x0": 527,
+      "y0": 554,
+      "x1": 749,
+      "y1": 694,
+      "score": 0.36245337,
+      "text": "Home key hook: not active",
+      "style": {
+        "background": "#c3c4c5",
+        "foreground": "#171413",
+        "contrast": 10.49,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        527,
+        554,
+        749,
+        694
+      ],
+      "centre": [
+        638.0,
+        624.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 50,
+      "key": "text:schedule and information.",
+      "kind": "text",
+      "group": 15,
+      "x0": 541,
+      "y0": 627,
+      "x1": 746,
+      "y1": 648,
+      "score": 0.99990565,
+      "text": "schedule and information.",
+      "style": {
+        "background": "#343539",
+        "foreground": "#e4e4e4",
+        "contrast": 9.63,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        541,
+        627,
+        746,
+        648
+      ],
+      "centre": [
+        643.5,
+        637.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 51,
+      "key": "text:Live TV",
+      "kind": "text",
+      "group": 16,
+      "x0": 25,
+      "y0": 666,
+      "x1": 78,
+      "y1": 681,
+      "score": 0.98939174,
+      "text": "Live TV",
+      "style": {
+        "background": "#885db3",
+        "foreground": "#e3e2e4",
+        "contrast": 3.81,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        25,
+        666,
+        78,
+        681
+      ],
+      "centre": [
+        51.5,
+        673.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 52,
+      "key": "text:preferences.",
+      "kind": "text",
+      "group": 14,
+      "x0": 289,
+      "y0": 652,
+      "x1": 384,
+      "y1": 669,
+      "score": 0.99996966,
+      "text": "preferences.",
+      "style": {
+        "background": "#1e202b",
+        "foreground": "#e3e3e3",
+        "contrast": 12.62,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        289,
+        652,
+        384,
+        669
+      ],
+      "centre": [
+        336.5,
+        660.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 53,
+      "key": "text:Home key hook: not active",
+      "kind": "text",
+      "group": 17,
+      "x0": 774,
+      "y0": 677,
+      "x1": 952,
+      "y1": 692,
+      "score": 0.9989197,
+      "text": "Home key hook: not active",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#878787",
+        "contrast": 4.74,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        774,
+        677,
+        952,
+        692
+      ],
+      "centre": [
+        863.0,
+        684.5
+      ],
+      "value": null,
+      "unit": ""
+    }
+  ]
+}

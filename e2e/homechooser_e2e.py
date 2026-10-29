@@ -63,6 +63,21 @@ def messages_command(path='/var/log/messages'):
             "zcat \"$log\" 2>/dev/null; done; cat %s; }" % (quoted, quoted))
 
 
+def service_log_command(mark, message_id):
+    """Read our PmLog records from syslog and the current boot's journal.
+
+    Journal output uses MESSAGE only: --since enforces the UTC request boundary
+    before timestamps are removed. Never read an unbounded journal on a missing mark.
+    """
+    if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?', mark):
+        return 'true'
+    since = shlex.quote(mark.rstrip('Z').replace('T', ' ') + ' UTC')
+    pattern = shlex.quote('HomeChooser ' + message_id + ' ')
+    return ("{ " + messages_command() + " | awk '$1 >= \"%s\"'; " % mark
+            + "journalctl -b --since %s --no-pager -o cat 2>/dev/null; }" % since
+            + " | grep -F " + pattern)
+
+
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
 #   verified  = booted and os-release read by a run of this runner
@@ -200,8 +215,39 @@ def parse_reboot_ask(text):
     return out
 
 
-def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=None):
-    """Only scoped service log lines from the current request can authorize screen input."""
+def home_input_command(mark):
+    if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?', mark):
+        return 'true'
+    since = mark.rstrip('Z').replace('T', ' ') + ' UTC'
+    return ("{ " + messages_command() + " | awk '$1 >= \"%s\"'; " % mark
+            + "journalctl -b --since %s --no-pager -o short-iso 2>/dev/null; }" % shlex.quote(since)
+            + " | grep -Ei 'surface|compositor|input|key|home' | tail -n 160")
+
+
+def alert_ls2_proof(info, message, target, safe, uninstall_id=None):
+    if not info or info.get('message') != message or info.get('buttons') != [target, safe]:
+        return False
+    actions = info.get('actions', [])
+    if (not isinstance(actions, list) or len(actions) != 2
+            or not all(isinstance(b, dict) for b in actions)
+            or info.get('alert') != 'accepted' or not info.get('alert_id')):
+        return False
+    yes, no = actions
+    if uninstall_id is None:
+        good = (yes.get('onclick') == TVPOWER_REBOOT_URI
+                and yes.get('params') == {'reason': 'remoteKey'})
+    else:
+        good = (yes.get('onclick') in ('luna://com.webos.appInstallService/remove',
+                                       'luna://com.webos.appInstallService/dev/remove')
+                and yes.get('params') == {'id': uninstall_id, 'subscribe': True})
+    return bool(good and yes.get('label') == target and no.get('label') == safe
+                and not no.get('onclick') and not no.get('params') and no.get('focus') is True)
+
+
+def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=None, observed=None):
+    """Authorize from this request's service log OR matched LS2 call and accepted reply."""
+    if alert_ls2_proof(observed, message, target, safe, uninstall_id):
+        return True
     if uninstall_id is None:
         info = parse_reboot_ask(raw)
         return (info['message'] == message and info['buttons'] == [target, safe]
@@ -233,7 +279,7 @@ def alert_focus(frame, message, target, safe):
     if any(not isinstance(r, dict) for r in rows):
         raise ValueError('malformed element')
     texts = [r.get('text') for r in rows if r.get('kind') == 'text']
-    # This firmware renders no title header in either alert. Ownership also requires
+    # Some firmware renders no title header. Ownership also requires
     # the matching service request/reply; the app title behind the alert is not proof.
     if texts.count(message) != 1:
         raise ValueError('expected message not uniquely visible')
@@ -248,26 +294,46 @@ def alert_focus(frame, message, target, safe):
                 or not isinstance(b.get('style'), dict)
                 or type(b['style'].get('disabled')) is not bool):
             raise ValueError('missing button geometry or contrast flag')
-    focused = [b for b in buttons if b['style']['disabled'] is False]
-    if len(focused) != 1:
-        raise ValueError('focus is ambiguous (need one undimmed button)')
     first, second = sorted(buttons, key=lambda b: b['box'][1])
     if (first['box'][3] < second['box'][1]
             and max(first['box'][0], second['box'][0]) < min(first['box'][2], second['box'][2])):
+        horizontal = False
+        focused = [b for b in buttons if b['style']['disabled'] is False]
         direction = 'UP' if first['text'] == target else 'DOWN'
     else:
         first, second = sorted(buttons, key=lambda b: b['box'][0])
         if (first['box'][2] >= second['box'][0]
                 or max(first['box'][1], second['box'][1]) >= min(first['box'][3], second['box'][3])):
             raise ValueError('buttons are not a disjoint aligned pair')
+        horizontal = True
+        focused = [b for b in buttons if b['style'].get('highlighted') is True]
         direction = 'LEFT' if first['text'] == target else 'RIGHT'
+    if all(b['style']['disabled'] for b in buttons):
+        raise ValueError('both buttons are dimmed')
+    if len(focused) != 1:
+        # Provisional only: ENTER also requires a reciprocal appearance swap.
+        contrasts = [b['style'].get('contrast', 0) for b in buttons]
+        if max(contrasts) - min(contrasts) < 2:
+            raise ValueError('focus is ambiguous')
+        focused = [buttons[contrasts.index(max(contrasts))]]
     # The alert shares the screen with controls behind it. Its message and button band
     # must contain exactly our pair; controls elsewhere (the app beneath) are irrelevant.
     top = min(b['box'][1] for b in buttons)
     bottom = max(b['box'][3] for b in buttons)
     messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') == message]
-    if not top <= sum(messages[0]['box'][1::2]) / 2 <= bottom:
-        raise ValueError('message is outside the alert button band')
+    msg = messages[0]
+    if horizontal:
+        # 5.x puts the prompt immediately above a highlighted horizontal pair.
+        if (not 0 <= top - msg['box'][3] <= bottom - top
+                or msg.get('group') is None
+                or any(b.get('group') != msg['group'] for b in buttons)):
+            raise ValueError('message is outside the alert group')
+    elif not top <= sum(msg['box'][1::2]) / 2 <= bottom:
+        if not (0 <= top - msg['box'][3] <= bottom - top
+                and max(msg['box'][0], min(b['box'][0] for b in buttons))
+                    < min(msg['box'][2], max(b['box'][2] for b in buttons))):
+            raise ValueError('message is outside the alert dialog')
+        top = msg['box'][1]
     band = [r for r in rows if r.get('kind') == 'button'
             and r.get('box') and r['box'][1] < bottom and r['box'][3] > top]
     if len(band) != 2:
@@ -275,11 +341,38 @@ def alert_focus(frame, message, target, safe):
     return focused[0]['text'], direction
 
 
+def alert_style_swap(before, after, target, safe):
+    """Match reciprocal appearances with a small tolerance for OCR colour jitter."""
+    def pair(frame):
+        return {r['text']: r for r in frame['elements']
+                if r.get('kind') == 'button' and r.get('text') in (target, safe)}
+    a, b = pair(before), pair(after)
+    for field in ('highlighted', 'disabled'):
+        x, y = a[safe]['style'].get(field), a[target]['style'].get(field)
+        if type(x) is bool and type(y) is bool and x != y:
+            if b[target]['style'].get(field) == x and b[safe]['style'].get(field) == y:
+                return field
+            raise ValueError('focus appearance did not swap: ' + field)
+    def rgb(row, field):
+        value = row['style'].get(field, '')
+        if not re.fullmatch(r'#[0-9a-fA-F]{6}', value):
+            raise ValueError('missing appearance colours')
+        return tuple(int(value[i:i+2], 16) for i in (1, 3, 5))
+    def distance(x, y):
+        return max(abs(i-j) for i, j in zip(x, y))
+    for field in ('background', 'foreground'):
+        x, y = rgb(a[safe], field), rgb(a[target], field)
+        if distance(x, y) >= 40:
+            if distance(rgb(b[target], field), x) <= 24 and distance(rgb(b[safe], field), y) <= 24:
+                return field + ' colour'
+    raise ValueError('no reciprocal focus appearance swap')
+
+
 class RebootAlertMonitor:
     """Observe the service's notification call when a firmware drops its PmLog info lines.
 
     ls-monitor carries each button's action and parameters in the request. Keep raw events only in memory;
-    the recorded evidence contains the message, button labels and notification reply only.
+    the recorded evidence contains the message, button actions and notification reply.
     """
     def __init__(self, dev):
         self.dev = dev
@@ -350,21 +443,25 @@ class RebootAlertMonitor:
             if method == 'createAlert':
                 if payload.get('title') != 'Home Chooser':
                     return
-                self.info['message'] = payload.get('message')
+                self.info = {'message': payload.get('message'), 'buttons': [], 'alert': None,
+                             'alert_id': None, 'toast': None, 'actions': buttons}
                 self.info['buttons'] = [b.get('label') for b in buttons if isinstance(b, dict)] \
                     if isinstance(buttons, list) else []
             elif self.info['message'] and payload.get('message') != self.info['message']:
                 return
             sender = event.get('senderUniqueName') or event.get('sender')
-            self.calls[(sender, event.get('token'))] = method
+            self.calls[(sender, event.get('token'))] = (method, self.info.copy())
         elif (event.get('type') == 'return' and event.get('transport') == 'TX'
               and event.get('sender') == 'com.webos.notification'):
             destination = event.get('destinationUniqueName') or event.get('destination')
-            method = self.calls.pop((destination, event.get('replyToken')), None)
-            if method:
+            call = self.calls.pop((destination, event.get('replyToken')), None)
+            if call:
+                method, request_info = call
                 payload = event.get('payload') or {}
                 if not isinstance(payload, dict):
                     return
+                if method == 'createAlert':
+                    self.info = request_info
                 accepted = payload.get('returnValue') is True
                 key = 'alert' if method == 'createAlert' else 'toast'
                 self.info[key] = 'accepted' if accepted else 'refused'
@@ -1399,34 +1496,40 @@ class Scenario:
             self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
             if rc:
                 raise ValueError('elements command failed')
-            focus, direction = alert_focus(json.loads(raw), message, target, safe)
-            return focus, direction, path
+            frame = json.loads(raw)
+            focus, direction = alert_focus(frame, message, target, safe)
+            return focus, direction, path, frame
         try:
-            focus, direction, _ = read()
+            focus, direction, _, before = read()
             if focus != safe:
                 raise ValueError('initial focus is %s, expected safe default %s' % (focus, safe))
             self.press(direction)
-            focus, _, path = read()
+            focus, _, path, after = read()
             if focus != target:
                 raise ValueError('focus did not move to %s (now %s)' % (target, focus))
+            signal_used = alert_style_swap(before, after, target, safe)
+            self.rec.note(label + ': focus appearance swapped', signal_used)
         except (ValueError, TypeError, KeyError, IndexError, RuntimeError, OSError) as exc:
-            self.rec.note(label + ': automatic press declined; MANUAL fallback', str(exc))
+            self.alert_decline_reason = str(exc)
+            self.rec.note(label + ': automatic press declined: ' + str(exc), 'MANUAL fallback')
             return False
         self.press('OK')
         self.rec.note(label + ': automatic ENTER sent on verified ' + target, path)
         return True
 
     def press(self, *keys):
+        result = None
         for k in keys:
             if self.a.input == 'qmp':
                 qk = {'DOWN': 'down', 'UP': 'up', 'LEFT': 'left', 'RIGHT': 'right', 'OK': 'ret', 'HOME': 'meta_l',
                       'BACK': 'esc'}[k]
-                self.host.sendkey(self.vm, qk)
+                result = self.host.sendkey(self.vm, qk)
             else:
                 ak = {'DOWN': 'DOWN', 'UP': 'UP', 'LEFT': 'LEFT', 'RIGHT': 'RIGHT', 'OK': 'ENTER', 'HOME': 'LEFTMETA',
                       'BACK': 'ESC'}[k]
-                self.dev.key(ak)
+                result = self.dev.key(ak)
             time.sleep(0.8)
+        return result
 
     def ui(self):
         v = self.insp.evaluate(FOCUS_JS) if self.insp else None
@@ -2014,7 +2117,8 @@ class Scenario:
                 r.check('%s: no foreign LG fault popup before the Home-key proof' % label, False, popup)
                 raise RuntimeError('foreign LG fault popup detected; not sending keys')
         mark = self.messages_mark()
-        self.press('HOME')
+        key_result = self.press('HOME')
+        r.say('%s: Home key-send result: %r; log mark %s' % (label, key_result, mark))
         time.sleep(6)
         sam = []
 
@@ -2030,15 +2134,11 @@ class Scenario:
                     return fg
             return None
         fg = self.wait(seen, 20, 3)
-        if not fg and expect == STOCK and not self.sam_home_lines(mark):
-            r.note(label + ': no sam record of the Home key after the first press; evidence, then one more press',
-                   'messages since %s mentioning key/home:\n%s' % (mark, '\n'.join(
-                       self.sam_home_lines(mark, 'homeKey|launchDefaultApp|homekey|com.webos.app.home'))))
+        if not fg:
+            rc, evidence = self.dev.sh(home_input_command(mark))
+            r.note(label + ': first Home attempt produced no action; no retry',
+                   'key-send %r; messages/journal since %s (rc=%s):\n%s' % (key_result, mark, rc, evidence))
             self.shot(label + '-first-press')
-            mark = self.messages_mark()
-            self.press('HOME')
-            time.sleep(6)
-            fg = self.wait(seen, 20, 3)
         ok = bool(fg)
         fg = fg or self.dev.foreground()
         shot_path = self.shot(label)
@@ -2469,9 +2569,9 @@ class Scenario:
             self.dev.foreground()[0])
 
     def reboot_ask_log(self):
-        """The REBOOT_ASK lines of the service since the choice was confirmed (PmLog -> /var/log/messages)."""
-        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep REBOOT_ASK | tail -n 8")
-                              % getattr(self, 'ask_mark', ''))
+        """The REBOOT_ASK lines of the service since the choice was confirmed (syslog and journal)."""
+        rc, out = self.dev.sh(service_log_command(getattr(self, 'ask_mark', ''),
+                                                   'REBOOT_ASK') + " | tail -n 8")
         return out
 
     def reboot_ask_evidence(self):
@@ -2559,16 +2659,17 @@ class Scenario:
         self.check_no_compositor_restart('choosing the launcher', comp0)
         boot0 = d.boot_id()
         self.close_insp()
+        observed = self.ask_monitor.snapshot() if getattr(self, 'ask_monitor', None) else None
         if getattr(self, 'ask_monitor', None):
             self.ask_monitor.close()
             self.ask_monitor = None
         if self.a.reboot_via == 'alert':
             def service_proof():
                 raw = self.reboot_ask_log()
-                return raw, alert_service_proof(raw, REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+                return raw + '\nLS2: ' + json.dumps(observed), alert_service_proof(raw, REBOOT_PROMPT['apply'], 'Reboot', 'Later', observed=observed)
             automatic = self.press_alert(REBOOT_PROMPT['apply'], 'Reboot', 'Later', '2-reboot-alert', service_proof)
             if not automatic:
-                r.manual('press Reboot on the restart alert', 'automatic screen proof failed (see evidence above). Press Reboot by hand within '
+                r.manual('press Reboot on the restart alert', ('automatic press declined: ' + self.alert_decline_reason + '. Press Reboot by hand within ') +
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
             how = self.wait_reboot(boot0)
             if how in ('rebooted', 'off'):
@@ -2581,8 +2682,9 @@ class Scenario:
                 else:
                     up = self.await_boot('2 reboot (Reboot on the alert)', boot0)
             else:
-                r.manual('Reboot on the alert restarted the TV',
-                         'no new boot id within 240 s; the alert may have been pressed but the VM did not return')
+                r.manual('restart alert wait timed out',
+                         ('automatic press declined: ' + self.alert_decline_reason + '; ' if not automatic else '')
+                         + 'no new boot id within 240 s')
                 if how == 'unreachable':
                     r.note('closeAlert skipped: the guest is unreachable after the restart attempt', info.get('alert_id'))
                 else:
@@ -3117,6 +3219,13 @@ exit "$rc"
     def uninstall_ask(self, label):
         """uninstall {id: disposable} as the Home: (confirm route 'alert'|'screen'|None, reply)."""
         r = self.rec
+        if getattr(self, 'uninstall_monitor', None):
+            self.uninstall_monitor.close()
+        self.uninstall_monitor = RebootAlertMonitor(self.dev)
+        if not self.uninstall_monitor.start():
+            r.note('uninstall notification monitor unavailable; service log proof still required', '')
+            self.uninstall_monitor.close()
+            self.uninstall_monitor = None
         self.uninstall_mark = self.messages_mark()
         rep, raw = self.api('uninstallApp', {'id': DISPOSABLE_ID})
         how = (rep or {}).get('confirmation')
@@ -3127,10 +3236,11 @@ exit "$rc"
 
     def uninstall_alert_id(self):
         """The alertId of the service's createAlert, from its UNINSTALL_ASK log line (PmLog), if logged."""
-        rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep UNINSTALL_ASK | tail -n 3")
-                              % self.uninstall_mark)
+        rc, out = self.dev.sh(service_log_command(self.uninstall_mark, 'UNINSTALL_ASK')
+                              + " | tail -n 3")
         m = re.findall(r'\\?"alertId\\?"\s*:\s*\\?"([^"\\]+)', out)
-        return (m[-1] if m else None), out.strip()
+        observed = self.uninstall_monitor.snapshot() if getattr(self, 'uninstall_monitor', None) else None
+        return (m[-1] if m else (observed or {}).get('alert_id')), out.strip()
 
     def screen_dialog(self):
         if not self.insp:
@@ -3190,12 +3300,13 @@ exit "$rc"
                 installed_before = set(d.installed())
                 def service_proof():
                     _, raw = self.uninstall_alert_id()
-                    return raw, alert_service_proof(raw, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
-                                                    DISPOSABLE_ID, self.launcher)
+                    observed = self.uninstall_monitor.snapshot() if getattr(self, 'uninstall_monitor', None) else None
+                    return raw + '\nLS2: ' + json.dumps(observed), alert_service_proof(raw, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                                    DISPOSABLE_ID, self.launcher, observed=observed)
                 automatic = self.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
                                              '3a-uninstall-alert', service_proof)
                 if not automatic:
-                    r.manual('press Uninstall on our alert', 'automatic proof failed; waiting up to 240 seconds')
+                    r.manual('press Uninstall on our alert', 'automatic press declined: ' + self.alert_decline_reason + '; waiting up to 240 seconds')
                 gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)
                 if gone:
                     installed_after = set(d.installed())
@@ -3208,7 +3319,8 @@ exit "$rc"
                 else:
                     self.dismiss_alert('3a-uninstall-alert-timeout')
                     r.manual('uninstall alert confirmation timed out',
-                             'no verified button press or disposable removal in 240 seconds')
+                             ('automatic press declined: ' + self.alert_decline_reason + '; ' if not automatic else '')
+                             + 'no disposable removal in 240 seconds')
                 d.close(APP_ID)
                 self.close_insp()
                 return
@@ -3994,6 +4106,8 @@ def run_device_api(args, ap):
     finally:
         if scenario:
             scenario.close_insp()
+            if getattr(scenario, 'uninstall_monitor', None):
+                scenario.uninstall_monitor.close()
             if getattr(scenario, 'ask_monitor', None):
                 scenario.ask_monitor.close()
         counts = rec.finish()

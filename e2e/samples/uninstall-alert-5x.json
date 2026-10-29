@@ -1,0 +1,262 @@
+{
+  "width": 1280,
+  "height": 720,
+  "elements": [
+    {
+      "id": 0,
+      "key": "icon@0,0",
+      "kind": "icon",
+      "group": 0,
+      "x0": 0,
+      "y0": 0,
+      "x1": 623,
+      "y1": 264,
+      "score": 0.13814674,
+      "style": {
+        "background": "#000000",
+        "foreground": "#000000",
+        "contrast": 1,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        0,
+        0,
+        623,
+        264
+      ],
+      "centre": [
+        311.5,
+        132.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 1,
+      "key": "icon@342,0",
+      "kind": "icon",
+      "group": 0,
+      "x0": 342,
+      "y0": 0,
+      "x1": 930,
+      "y1": 272,
+      "score": 0.30570623,
+      "style": {
+        "background": "#000000",
+        "foreground": "#000000",
+        "contrast": 1,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        342,
+        0,
+        930,
+        272
+      ],
+      "centre": [
+        636.0,
+        136.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 2,
+      "key": "text:(E202):The signal cannot be received.",
+      "kind": "text",
+      "group": 0,
+      "x0": 357,
+      "y0": 321,
+      "x1": 698,
+      "y1": 344,
+      "score": 0.9978105,
+      "text": "(E202):The signal cannot be received.",
+      "style": {
+        "background": "#000000",
+        "foreground": "#f3f3f3",
+        "contrast": 18.93,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        357,
+        321,
+        698,
+        344
+      ],
+      "centre": [
+        527.5,
+        332.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 3,
+      "key": "text:Please confirm the antenna and the reception status.",
+      "kind": "text",
+      "group": 0,
+      "x0": 358,
+      "y0": 372,
+      "x1": 839,
+      "y1": 393,
+      "score": 0.99714476,
+      "text": "Please confirm the antenna and the reception status.",
+      "style": {
+        "background": "#000000",
+        "foreground": "#f7f7f7",
+        "contrast": 19.6,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        358,
+        372,
+        839,
+        393
+      ],
+      "centre": [
+        598.5,
+        382.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 4,
+      "key": "text:Home Chooser",
+      "kind": "text",
+      "group": 1,
+      "x0": 503,
+      "y0": 441,
+      "x1": 660,
+      "y1": 459,
+      "score": 0.9999366,
+      "text": "Home Chooser",
+      "style": {
+        "background": "#e0e0e0",
+        "foreground": "#4d4d4d",
+        "contrast": 6.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        503,
+        441,
+        660,
+        459
+      ],
+      "centre": [
+        581.5,
+        450.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 5,
+      "key": "text:Uninstall HC Fixture disposable?",
+      "kind": "text",
+      "group": 1,
+      "x0": 503,
+      "y0": 496,
+      "x1": 778,
+      "y1": 514,
+      "score": 0.9985007,
+      "text": "Uninstall HC Fixture disposable?",
+      "style": {
+        "background": "#e0e0e0",
+        "foreground": "#545454",
+        "contrast": 5.74,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        503,
+        496,
+        778,
+        514
+      ],
+      "centre": [
+        640.5,
+        505.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 6,
+      "key": "button:Uninstall",
+      "kind": "button",
+      "group": 1,
+      "x0": 514,
+      "y0": 533,
+      "x1": 634,
+      "y1": 573,
+      "score": 0.65953493,
+      "text": "Uninstall",
+      "style": {
+        "background": "#686868",
+        "foreground": "#fcfcfc",
+        "contrast": 5.43,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        514,
+        533,
+        634,
+        573
+      ],
+      "centre": [
+        574.0,
+        553.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 7,
+      "key": "button:Cancel",
+      "kind": "button",
+      "group": 1,
+      "x0": 646,
+      "y0": 533,
+      "x1": 766,
+      "y1": 573,
+      "score": 0.73529154,
+      "text": "Cancel",
+      "style": {
+        "background": "#cf0652",
+        "foreground": "#fefcfc",
+        "contrast": 5.4,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        646,
+        533,
+        766,
+        573
+      ],
+      "centre": [
+        706.0,
+        553.0
+      ],
+      "value": null,
+      "unit": ""
+    }
+  ]
+}
