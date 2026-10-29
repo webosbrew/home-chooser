@@ -28,6 +28,203 @@ REPO = os.path.dirname(HERE)
 FULL, HOME = e2e.FULLHOME, e2e.STOCK
 
 
+class ClickInput(unittest.TestCase):
+    def frame(self):
+        return {'width': 1280, 'height': 720, 'elements': [
+            {'text': 'Use as Home', 'kind': 'button', 'box': [10, 20, 110, 60], 'centre': [60, 40]}]}
+
+    def test_exact_role_region_and_centre(self):
+        f = self.frame()
+        self.assertEqual(e2e.match_element(f, 'Use as Home', 'button', [0, 0, 120, 80])['centre'], [60, 40])
+        self.assertEqual(e2e.match_element(f, role='button')['text'], 'Use as Home')
+
+    def test_missing_ambiguous_and_nonexact(self):
+        f = self.frame()
+        for text in ('Use', 'use as home', 'Cancel'):
+            with self.assertRaises(ValueError):
+                e2e.match_element(f, text)
+        f['elements'] *= 2
+        with self.assertRaises(ValueError):
+            e2e.match_element(f, 'Use as Home')
+        with self.assertRaises(ValueError):
+            e2e.match_element(self.frame(), role='text')
+        with self.assertRaises(ValueError):
+            e2e.match_element(self.frame(), role='button', region=[200, 200, 300, 300])
+
+    def test_launcher_icon_and_label_require_role(self):
+        f = self.frame()
+        f['elements'].append(dict(f['elements'][0], kind='icon'))
+        with self.assertRaises(ValueError):
+            e2e.match_element(f, 'Use as Home')
+        self.assertEqual(e2e.match_element(f, 'Use as Home', ('text', 'button'))['kind'], 'button')
+
+    def test_click_command_local_and_host(self):
+        from unittest.mock import Mock
+        for mode, target in [('local', 'vm'), ('remote', 'pi/vm')]:
+            h = e2e.BeanjarHost(mode=mode, name='pi')
+            h.display_beanjar = Mock(return_value=(0, 'ok'))
+            h.remote_click('vm', [60, 40], self.frame())
+            h.display_beanjar.assert_called_once_with('remote', 'click', target, '60', '40',
+                                                      '--frame', '1280x720', '--json')
+
+    def test_unavailable_click_logs_and_caches_fallback(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        h = e2e.BeanjarHost()
+        h.beanjar, h.input_rec = Mock(return_value=(2, 'unknown command click')), Mock()
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.a, s.host = SimpleNamespace(input_mode='click'), h
+        self.assertFalse(s.use_click())
+        self.assertFalse(s.use_click())
+        h.beanjar.assert_called_once()
+        h.input_rec.note.assert_called_once()
+        s.a.input_mode = 'keys'
+        self.assertFalse(s.use_click())
+
+    def test_coordinate_mapping_logged_once_across_scenarios(self):
+        from unittest.mock import Mock
+        host = e2e.BeanjarHost()
+        host.display_beanjar = Mock(return_value=(0, json.dumps(self.frame())))
+        rec = Mock()
+        for _ in range(2):
+            s = e2e.Scenario.__new__(e2e.Scenario)
+            s.host, s.vm, s.rec = host, 'vm', rec
+            s.elements('test')
+        rec.note.assert_called_once()
+
+    def test_click_effect_and_fresh_read(self):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.host, s.rec, s.vm = Mock(), Mock(), 'vm'
+        s.host.remote_click.return_value = (0, 'ok')
+        s.elements = Mock(return_value=self.frame())
+        s.wait = lambda fn, *a: fn()
+        s.click_element('Use as Home', effect=lambda: True)
+        self.assertEqual(s.elements.call_count, 2)
+        with self.assertRaises(RuntimeError):
+            s.click_element('Use as Home', effect=lambda: False)
+
+    def retry(self, outcomes, closed=True):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.rec, s.host = Mock(), Mock()
+        s.press_alert, s.use_click = Mock(return_value=True), lambda: True
+        verify, request = Mock(side_effect=outcomes), Mock()
+        args = ('prompt', 'Reboot', 'Later', 'test', Mock(), verify, lambda: closed, request)
+        return s, args, request
+
+    def test_alert_click_uses_owned_button_without_focus_keys(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        with open(os.path.join(HERE, 'samples', 'reboot-alert.json')) as f:
+            frame = json.load(f)
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        host = SimpleNamespace(click_available=lambda: True, remote_click=Mock(return_value=(0, 'clicked')))
+        s.a, s.host, s.vm, s.rec = SimpleNamespace(input_mode='click'), host, 'vm', Mock()
+        s.elements, s.press = Mock(return_value=frame), Mock()
+        self.assertTrue(s.press_alert(e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later', 'test',
+                                     lambda: ('matching accepted service request', True)))
+        host.remote_click.assert_called_once_with('vm', [916.0, 513.0], frame)
+        s.press.assert_not_called()
+        s.elements.assert_called_once()
+
+    def test_alert_success_never_retries(self):
+        s, args, request = self.retry(['new boot id'])
+        self.assertEqual(s.alert_action(*args), 'new boot id')
+        request.assert_not_called()
+
+    def test_alert_dismissal_retries_once_with_note(self):
+        s, args, request = self.retry([False, True])
+        self.assertTrue(s.alert_action(*args))
+        request.assert_called_once()
+        s.rec.note.assert_called_once()
+        self.assertEqual(s.press_alert.call_count, 2)
+
+    def test_alert_second_failure_fails(self):
+        s, args, request = self.retry([False, False])
+        with self.assertRaisesRegex(RuntimeError, 'second alert click failed'):
+            s.alert_action(*args)
+        request.assert_called_once()
+        self.assertEqual(s.press_alert.call_count, 2)
+
+    def test_alert_still_open_does_not_retry(self):
+        s, args, request = self.retry([False], closed=False)
+        with self.assertRaises(RuntimeError):
+            s.alert_action(*args)
+        request.assert_not_called()
+
+
+class LauncherPreflight(unittest.TestCase):
+    def test_candidate_rule_and_ours(self):
+        for category in (['home'], ['kidsApp', 'home'], 'home'):
+            self.assertTrue(e2e.foreign_launcher({'id': 'example.launcher', 'appCategory': category}))
+        for ident in (e2e.APP_ID, 'org.webosbrew.hbchannel', 'org.webosbrew.hcfixture.web.normal'):
+            self.assertFalse(e2e.foreign_launcher({'id': ident, 'appCategory': ['home']}))
+        for category in (None, [], ['browser'], 'homebrew'):
+            self.assertFalse(e2e.foreign_launcher({'id': 'example.app', 'appCategory': category}))
+
+    def test_known_takeover_without_home_category(self):
+        self.assertEqual(e2e.launcher_removal_reason({'id': 'com.homebrew.homeback', 'appCategory': []}),
+                         'known HOME takeover app id')
+        self.assertIsNone(e2e.launcher_removal_reason({'id': 'example.app', 'title': 'HomeBack manual'}))
+
+    def test_owned_startup_entries_only(self):
+        root = '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service'
+        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'homeback', root + '/startup.sh', ''))
+        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'com.homebrew.homeback', '', 'exec ' + root + '/startup.sh'))
+        for name, target, content in [('shared', '', 'exec ' + root + '/startup.sh'),
+                                      ('com.homebrew.homeback', '', '# ' + root + '/startup.sh'),
+                                      ('homeback', root + '.other/startup.sh', '')]:
+            self.assertFalse(e2e.startup_entry_owned('com.homebrew.homeback', name, target, content))
+
+    def test_startup_cleanup_uses_installed_layout(self):
+        from unittest.mock import Mock
+        d, r = Mock(), Mock()
+        path = '/var/lib/webosbrew/init.d/homeback'
+        d.sh.side_effect = [(0, 'run-parts /var/lib/webosbrew/init.d 200>&-'), (0, path),
+                            (0, '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service/startup.sh'),
+                            (1, 'missing target'), (0, '')]
+        e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+        self.assertEqual(d.sh.call_args.args[0], 'rm -- ' + path)
+        self.assertTrue(r.check.call_args.args[1])
+
+    def test_removal_reboots_before_proceeding(self):
+        from unittest.mock import Mock
+        s = Mock()
+        e2e.restart_after_launcher_cleanup(s, [])
+        s.beanjar_reboot.assert_not_called()
+        e2e.restart_after_launcher_cleanup(s, ['com.homebrew.homeback'])
+        s.beanjar_reboot.assert_called_once()
+        s.beanjar_reboot.return_value = False
+        with self.assertRaises(RuntimeError):
+            e2e.restart_after_launcher_cleanup(s, ['example.launcher'])
+
+    def test_removal_and_retention_notes(self):
+        from unittest.mock import Mock
+        d, r = Mock(), Mock()
+        d.installed.side_effect = [['example.launcher', 'example.browser'], ['example.browser']]
+        d.sh.side_effect = [(0, json.dumps({'id': 'example.launcher', 'version': '1', 'appCategory': ['home']})),
+                            (0, json.dumps({'id': 'example.browser', 'version': '2'}))]
+        d.remove.return_value = (0, 'removed')
+        from unittest.mock import patch
+        with patch.object(e2e, 'clean_startup_entries') as cleanup:
+            self.assertEqual(e2e.clean_launchers(d, r), ['example.launcher'])
+        cleanup.assert_called_once_with(d, r, 'example.launcher')
+        d.remove.assert_called_once_with('example.launcher')
+        self.assertTrue(r.check.call_args.args[1])
+        self.assertIn('example.browser', r.note.call_args.args[1])
+
+    def test_removal_failure_fails(self):
+        from unittest.mock import Mock
+        d, r = Mock(), Mock()
+        d.installed.return_value = ['example.launcher']
+        d.sh.return_value = (0, json.dumps({'id': 'example.launcher', 'appCategory': ['home']}))
+        d.remove.return_value = (1, 'refused')
+        with self.assertRaises(RuntimeError):
+            e2e.clean_launchers(d, r)
+        self.assertFalse(r.check.call_args.args[1])
+
+
 class AlertFocus(unittest.TestCase):
     def frame(self, name='reboot-alert'):
         with open(os.path.join(HERE, 'samples', name + '.json')) as f:
@@ -1101,7 +1298,7 @@ class HostInput(unittest.TestCase):
                 argv = ['runner', '--vm', '9.x', '--outdir', 'unused'] + (['--no-stop'] if no_stop else [])
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(patch.object(sys, 'argv', argv))
-                    for name in ['prepare_vm', 'ensure_devices']:
+                    for name in ['prepare_vm', 'ensure_devices', 'clean_launchers', 'restart_after_launcher_cleanup']:
                         stack.enter_context(patch.object(e2e, name))
                     stack.enter_context(patch.object(e2e, 'wait_for_device', return_value=e2e.READY))
                     stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1', 'paths': {}}))
