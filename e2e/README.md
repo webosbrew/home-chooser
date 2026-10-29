@@ -308,18 +308,21 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   * `--reboot-via later` (the default): our alert is closed with `notification/closeAlert` (the `alertId`
     from the accepted `createAlert` reply in the `REBOOT_ASK` line, `luna-send -a com.webos.applicationManager`,
     as the removal alert is closed) and the VM is restarted with `beanjar stop` and `start`. No key is pressed.
-  * `--reboot-via alert`: pressing Reboot is `MANUAL`. The runner presses no key at the alert because it
-    cannot prove, without reading the picture, that the alert in front is ours and that focus is on Reboot:
-    notificationmgr has no list-alerts method, `createAlert` answers only an `alertId`, the alert's default
-    focus is Later, and the inspector page that proved ownership of the old in-app dialog is not in front of a
-    system alert (nor does a foreign popup, such as the LG fault popup, announce itself). A person presses
-    Reboot; the runner waits 240 s for a new `boot_id` and, on one, checks that the TV restarted through
-    the direct `tvpower/power/reboot` action (a VM that Beanjar shows off is started again). With no new
-    boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
+  * `--reboot-via alert`: capture the TV with Beanjar and run local `beanjar elements --image PNG --json`.
+    Require the exact restart message, exactly Reboot/Later in the alert's
+    message/button band, and Later as the sole undimmed button (`style.disabled == false`). Derive
+    UP/DOWN/LEFT/RIGHT from their boxes, move once through the selected QMP/ares input path, then
+    capture and prove ownership and Reboot focus again before ENTER. Both frames and their elements
+    are saved in the run evidence. Each proof also requires this request's matching accepted
+    `REBOOT_ASK` service log lines (message, buttons and alert id); bus-only evidence falls back
+    to MANUAL. Titles are optional: webOS 9 renders no alert title, and an app title behind the
+    alert does not prove ownership. The Pi needs no OCR installation. A new `boot_id` yields
+    PASS (automatic press); an Off VM is started again and its new boot checked.
+    Any failed proof stops key input and falls back to the existing 240 s MANUAL wait; if no reboot
+    follows, close our alert with `closeAlert` and restart with Beanjar.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
   least 9 mounts), and the Home key hook log of that boot (its firmware-order compositor restart is the only
-  one allowed) is noted; the minimal-hook status checks come here. The direct tvpower path (the
-  alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
+  one allowed) is noted; the minimal-hook status checks come here.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
 * No compositor restart: `surface-manager-daemon` keeps its `MainPID` and `NRestarts`, and no new
@@ -405,9 +408,12 @@ declare it and are refused. The run also installs a disposable non-home app,
   our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
   (the button calls LG's remove endpoint directly). Then a `request` while the launcher is Home must give
   the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
-  With `--uninstall-via alert`, the runner leaves the second system alert up for 240 seconds while a
-  person verifies its text and button focus from a screenshot and presses Uninstall. It then checks
-  that the disposable fixture disappeared; on timeout it closes that alert.
+  With `--uninstall-via alert`, use the same two-frame proof as Reboot with the exact question
+  `Uninstall HC Fixture disposable?`, buttons Uninstall/Cancel, and Cancel initially undimmed.
+  Require a matching `UNINSTALL_ASK` alert-shown line since this request's log mark, naming
+  the disposable target and requesting launcher, successful remove route, and accepted alert id.
+  After automatic ENTER, verify the installed app set lost only the disposable fixture, yielding
+  PASS (automatic press). A failed proof falls back to the 240 s MANUAL wait; timeout closes our alert.
 * With `--reboot-check`, after the boot: `getInfo` (root, permitted, isSelectedHome), `listApps` and `listRunning`
   still succeed: the grants and the elevation survive a boot.
 * After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in

@@ -200,6 +200,81 @@ def parse_reboot_ask(text):
     return out
 
 
+def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=None):
+    """Only scoped service log lines from the current request can authorize screen input."""
+    if uninstall_id is None:
+        info = parse_reboot_ask(raw)
+        return (info['message'] == message and info['buttons'] == [target, safe]
+                and info['alert'] == 'accepted' and bool(info['alert_id'])
+                and any('REBOOT_ASK' in line and 'notification/createAlert accepted (exit 0):' in line
+                        and re.search(r'"returnValue"\s*:\s*true', line)
+                        and info['alert_id'] in line for line in raw.splitlines()))
+    prefix = '%s by %s: alert shown for luna://com.webos.appInstallService/' % (uninstall_id, caller)
+    for line in raw.splitlines():
+        if not re.search(r'UNINSTALL_ASK\s+\{\}\s+' + re.escape(prefix), line):
+            continue
+        reply = line.split(prefix, 1)[1]
+        if not re.match(r'(dev/)?remove \(exit 0\): ', reply):
+            continue
+        try:
+            data = json.loads(reply.split(': ', 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if data.get('returnValue') is True and data.get('alertId'):
+            return True
+    return False
+
+
+def alert_focus(frame, message, target, safe):
+    """Fail closed on incomplete OCR, extra controls, or ambiguous contrast/geometry."""
+    if not isinstance(frame, dict) or not isinstance(frame.get('elements'), list):
+        raise ValueError('missing elements array')
+    rows = frame['elements']
+    if any(not isinstance(r, dict) for r in rows):
+        raise ValueError('malformed element')
+    texts = [r.get('text') for r in rows if r.get('kind') == 'text']
+    # This firmware renders no title header in either alert. Ownership also requires
+    # the matching service request/reply; the app title behind the alert is not proof.
+    if texts.count(message) != 1:
+        raise ValueError('expected message not uniquely visible')
+    buttons = [r for r in rows if r.get('kind') == 'button' and r.get('text') in (target, safe)]
+    if len(buttons) != 2 or sorted(r.get('text', '') for r in buttons) != sorted((target, safe)):
+        raise ValueError('expected exactly the two alert buttons')
+    for b in buttons:
+        box = b.get('box')
+        if (not isinstance(box, list) or len(box) != 4
+                or any(type(v) not in (int, float) for v in box)
+                or not box[0] < box[2] or not box[1] < box[3]
+                or not isinstance(b.get('style'), dict)
+                or type(b['style'].get('disabled')) is not bool):
+            raise ValueError('missing button geometry or contrast flag')
+    focused = [b for b in buttons if b['style']['disabled'] is False]
+    if len(focused) != 1:
+        raise ValueError('focus is ambiguous (need one undimmed button)')
+    first, second = sorted(buttons, key=lambda b: b['box'][1])
+    if (first['box'][3] < second['box'][1]
+            and max(first['box'][0], second['box'][0]) < min(first['box'][2], second['box'][2])):
+        direction = 'UP' if first['text'] == target else 'DOWN'
+    else:
+        first, second = sorted(buttons, key=lambda b: b['box'][0])
+        if (first['box'][2] >= second['box'][0]
+                or max(first['box'][1], second['box'][1]) >= min(first['box'][3], second['box'][3])):
+            raise ValueError('buttons are not a disjoint aligned pair')
+        direction = 'LEFT' if first['text'] == target else 'RIGHT'
+    # The alert shares the screen with controls behind it. Its message and button band
+    # must contain exactly our pair; controls elsewhere (the app beneath) are irrelevant.
+    top = min(b['box'][1] for b in buttons)
+    bottom = max(b['box'][3] for b in buttons)
+    messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') == message]
+    if not top <= sum(messages[0]['box'][1::2]) / 2 <= bottom:
+        raise ValueError('message is outside the alert button band')
+    band = [r for r in rows if r.get('kind') == 'button'
+            and r.get('box') and r['box'][1] < bottom and r['box'][3] > top]
+    if len(band) != 2:
+        raise ValueError('extra controls in the alert band')
+    return focused[0]['text'], direction
+
+
 class RebootAlertMonitor:
     """Observe the service's notification call when a firmware drops its PmLog info lines.
 
@@ -1309,6 +1384,38 @@ class Scenario:
         self.rec.say('FALLBACK screenshot %s (grim, whole Pi desktop): %s' % (vname, 'ok' if ok else out.strip()))
         return path
 
+    def press_alert(self, message, target, safe, label, service_proof):
+        """Two independent screen proofs, with no ENTER after any failed proof."""
+        def read():
+            raw_service, proven = service_proof()
+            self.rec.say('%s service ownership proof:\n%s' % (label, raw_service))
+            if not proven:
+                raise ValueError('no matching accepted service alert from this request')
+            # OCR runs on this PC: the remote Beanjar host need not have go-textshot.
+            path = self.shot(label + '-focus-proof')
+            if not os.path.isfile(path):
+                raise ValueError('screen proof screenshot missing')
+            rc, raw = run(['beanjar', 'elements', '--image', path, '--json'], timeout=60)
+            self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
+            if rc:
+                raise ValueError('elements command failed')
+            focus, direction = alert_focus(json.loads(raw), message, target, safe)
+            return focus, direction, path
+        try:
+            focus, direction, _ = read()
+            if focus != safe:
+                raise ValueError('initial focus is %s, expected safe default %s' % (focus, safe))
+            self.press(direction)
+            focus, _, path = read()
+            if focus != target:
+                raise ValueError('focus did not move to %s (now %s)' % (target, focus))
+        except (ValueError, TypeError, KeyError, IndexError, RuntimeError, OSError) as exc:
+            self.rec.note(label + ': automatic press declined; MANUAL fallback', str(exc))
+            return False
+        self.press('OK')
+        self.rec.note(label + ': automatic ENTER sent on verified ' + target, path)
+        return True
+
     def press(self, *keys):
         for k in keys:
             if self.a.input == 'qmp':
@@ -2400,13 +2507,8 @@ class Scenario:
 
         --reboot-via later (default): our alert is closed with closeAlert and the VM is restarted with
         beanjar stop/start.  No key is pressed.
-        --reboot-via alert: pressing Reboot on the alert is MANUAL.  The runner cannot prove, without
-        reading the picture, that the alert in front is ours and that focus is on Reboot: no luna method
-        lists or reports the focused alert (notificationmgr has no list-alerts; the createAlert reply is only
-        an alertId), the alert's own default focus is Later, and the inspector page of Home Chooser, which
-        proved ownership of the old in-app dialog, is not in front of a system alert.  So it presses nothing;
-        a person presses Reboot (the runner waits for the new boot id), else the alert is closed and the VM is
-        restarted with beanjar, like the default."""
+        --reboot-via alert: prove ownership and safe focus from Beanjar elements, move to Reboot,
+        prove focus again, then press ENTER. On a failed proof, keep the 240 s human fallback."""
         r, d = self.rec, self.dev
         toasts = []
 
@@ -2461,12 +2563,17 @@ class Scenario:
             self.ask_monitor.close()
             self.ask_monitor = None
         if self.a.reboot_via == 'alert':
-            r.manual('press Reboot on the restart alert', 'the runner cannot prove that the alert in front is ours with focus on '
-                     'Reboot without reading the picture (see 2-reboot-alert), so it presses no key. Press Reboot by hand within '
+            def service_proof():
+                raw = self.reboot_ask_log()
+                return raw, alert_service_proof(raw, REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+            automatic = self.press_alert(REBOOT_PROMPT['apply'], 'Reboot', 'Later', '2-reboot-alert', service_proof)
+            if not automatic:
+                r.manual('press Reboot on the restart alert', 'automatic screen proof failed (see evidence above). Press Reboot by hand within '
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
             how = self.wait_reboot(boot0)
             if how in ('rebooted', 'off'):
-                r.check('Reboot restarted the TV (alert -> tvpower/power/reboot; a VM that powers off counts)', True, how)
+                r.check('Reboot restarted the TV%s (alert -> tvpower/power/reboot; a VM that powers off counts)'
+                        % (' (automatic press)' if automatic else ''), True, how)
                 if how == 'off':
                     r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
                     self.host.start(self.vm)
@@ -3071,7 +3178,7 @@ exit "$rc"
         r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
 
     def api_uninstall_confirm(self):
-        """Wait for a human to press a visually verified system alert when requested."""
+        """Confirm our alert with two screen proofs, falling back to the human wait."""
         r, d = self.rec, self.dev
         how = self.uninstall_ask('confirmation')
         if how == 'alert':
@@ -3080,9 +3187,24 @@ exit "$rc"
                 aid, ev = self.uninstall_alert_id()
                 r.note('uninstall alert awaiting a visually verified Uninstall press',
                        'alertId %s; %s' % (aid, ev))
+                installed_before = set(d.installed())
+                def service_proof():
+                    _, raw = self.uninstall_alert_id()
+                    return raw, alert_service_proof(raw, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                                    DISPOSABLE_ID, self.launcher)
+                automatic = self.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                             '3a-uninstall-alert', service_proof)
+                if not automatic:
+                    r.manual('press Uninstall on our alert', 'automatic proof failed; waiting up to 240 seconds')
                 gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)
                 if gone:
-                    r.check('alert Uninstall press removed only %s' % DISPOSABLE_ID, True, DISPOSABLE_ID)
+                    installed_after = set(d.installed())
+                    r.check('alert Uninstall press%s removed only %s'
+                            % (' (automatic press)' if automatic else '', DISPOSABLE_ID),
+                            DISPOSABLE_ID in installed_before
+                            and {APP_ID, self.launcher} <= installed_after
+                            and installed_after == installed_before - {DISPOSABLE_ID},
+                            'before %s; after %s' % (sorted(installed_before), sorted(installed_after)))
                 else:
                     self.dismiss_alert('3a-uninstall-alert-timeout')
                     r.manual('uninstall alert confirmation timed out',
@@ -3924,16 +4046,16 @@ def main():
     ap.add_argument('--reboot-via', choices=['later', 'alert'], default='later',
                     help="webOS 6-9, the restart the first choice asks for (the service's system alert): close our alert "
                          "with closeAlert and restart the VM with beanjar stop/start (default; no key is pressed), or "
-                         "'alert': Reboot is pressed by a person (a MANUAL check; the runner presses no key at an alert "
-                         "it cannot prove is ours with focus on Reboot) and the runner waits for the new boot")
+                         "'alert': automatically press Reboot after verifying the alert and focus from the screen; "
+                         "fall back to a 240 s MANUAL wait if proof fails")
     ap.add_argument('--api-check', action='store_true',
                     help='the launcher-API contract (docs/launcher-api.md): calls as the launcher before and after it is '
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
                          'The launcher must declare org.webosbrew.homechooser.applications: the default is the web fixture built with it; '
                          '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
     ap.add_argument('--uninstall-via', choices=['later', 'alert'], default='later',
-                    help='with --api-check, wait 240 seconds for a human to press Uninstall on the verified system '
-                         'alert and for the disposable fixture to disappear; default closes the alert')
+                    help='with --api-check, automatically press Uninstall after proving our alert and focus; '
+                         'fall back to a 240 s MANUAL wait if proof fails; default closes the alert')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
     args = ap.parse_args()

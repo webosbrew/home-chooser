@@ -1,0 +1,1734 @@
+{
+  "width": 1280,
+  "height": 720,
+  "elements": [
+    {
+      "id": 0,
+      "key": "icon@21,12",
+      "kind": "icon",
+      "group": 0,
+      "x0": 21,
+      "y0": 12,
+      "x1": 77,
+      "y1": 65,
+      "score": 0.3012426,
+      "style": {
+        "background": "#000000",
+        "foreground": "#dcdcdc",
+        "contrast": 15.31,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        21,
+        12,
+        77,
+        65
+      ],
+      "centre": [
+        49.0,
+        38.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 1,
+      "key": "button:8",
+      "kind": "button",
+      "group": 0,
+      "x0": 38,
+      "y0": 24,
+      "x1": 62,
+      "y1": 50,
+      "score": 0.13112313,
+      "text": "8",
+      "style": {
+        "background": "#000000",
+        "foreground": "#dcdcdc",
+        "contrast": 15.31,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        38,
+        24,
+        62,
+        50
+      ],
+      "centre": [
+        50.0,
+        37.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 2,
+      "key": "icon@20,66",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 66,
+      "x1": 77,
+      "y1": 125,
+      "score": 0.49346817,
+      "style": {
+        "background": "#000000",
+        "foreground": "#e3e3e3",
+        "contrast": 16.36,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        66,
+        77,
+        125
+      ],
+      "centre": [
+        48.5,
+        95.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 3,
+      "key": "text:Enjoy popular and personalized contents by",
+      "kind": "text",
+      "group": 1,
+      "x0": 695,
+      "y0": 102,
+      "x1": 1202,
+      "y1": 137,
+      "score": 0.99306214,
+      "text": "Enjoy popular and personalized contents by",
+      "style": {
+        "background": "#010407",
+        "foreground": "#e5e6e8",
+        "contrast": 16.46,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        695,
+        102,
+        1202,
+        137
+      ],
+      "centre": [
+        948.5,
+        119.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 4,
+      "key": "icon@20,126",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 126,
+      "x1": 77,
+      "y1": 181,
+      "score": 0.5428273,
+      "style": {
+        "background": "#000000",
+        "foreground": "#dbdbdb",
+        "contrast": 15.17,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        126,
+        77,
+        181
+      ],
+      "centre": [
+        48.5,
+        153.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 5,
+      "key": "text:agreeing to the terms and conditions.",
+      "kind": "text",
+      "group": 1,
+      "x0": 763,
+      "y0": 137,
+      "x1": 1201,
+      "y1": 169,
+      "score": 0.98344505,
+      "text": "agreeing to the terms and conditions.",
+      "style": {
+        "background": "#000407",
+        "foreground": "#edeeee",
+        "contrast": 17.7,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        763,
+        137,
+        1201,
+        169
+      ],
+      "centre": [
+        982.0,
+        153.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 6,
+      "key": "icon@20,183",
+      "kind": "icon",
+      "group": 0,
+      "x0": 20,
+      "y0": 183,
+      "x1": 78,
+      "y1": 237,
+      "score": 0.24641982,
+      "style": {
+        "background": "#000000",
+        "foreground": "#e4e4e4",
+        "contrast": 16.52,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        20,
+        183,
+        78,
+        237
+      ],
+      "centre": [
+        49.0,
+        210.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 7,
+      "key": "button:Q",
+      "kind": "button",
+      "group": 0,
+      "x0": 38,
+      "y0": 199,
+      "x1": 62,
+      "y1": 224,
+      "score": 0.21390404,
+      "text": "Q",
+      "style": {
+        "background": "#000000",
+        "foreground": "#e4e4e4",
+        "contrast": 16.52,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        38,
+        199,
+        62,
+        224
+      ],
+      "centre": [
+        50.0,
+        211.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 8,
+      "key": "button:User Agreements",
+      "kind": "button",
+      "group": 1,
+      "x0": 1020,
+      "y0": 196,
+      "x1": 1200,
+      "y1": 232,
+      "score": 0.8850377,
+      "text": "User Agreements",
+      "style": {
+        "background": "#33363a",
+        "foreground": "#e4e4e4",
+        "contrast": 9.55,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1020,
+        196,
+        1200,
+        232
+      ],
+      "centre": [
+        1110.0,
+        214.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 9,
+      "key": "icon@16,345",
+      "kind": "icon",
+      "group": 2,
+      "x0": 16,
+      "y0": 345,
+      "x1": 288,
+      "y1": 404,
+      "score": 0.5589452,
+      "style": {
+        "background": "#327f81",
+        "foreground": "#fafcfc",
+        "contrast": 4.54,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        16,
+        345,
+        288,
+        404
+      ],
+      "centre": [
+        152.0,
+        374.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 10,
+      "key": "text:Home Office",
+      "kind": "text",
+      "group": 3,
+      "x0": 98,
+      "y0": 368,
+      "x1": 206,
+      "y1": 383,
+      "score": 0.9999394,
+      "text": "Home Office",
+      "style": {
+        "background": "#327f81",
+        "foreground": "#fafcfc",
+        "contrast": 4.54,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        98,
+        368,
+        206,
+        383
+      ],
+      "centre": [
+        152.0,
+        375.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 11,
+      "key": "icon@298,345",
+      "kind": "icon",
+      "group": 2,
+      "x0": 298,
+      "y0": 345,
+      "x1": 570,
+      "y1": 404,
+      "score": 0.86204946,
+      "style": {
+        "background": "#655aa8",
+        "foreground": "#fbfbfd",
+        "contrast": 5.67,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        298,
+        345,
+        570,
+        404
+      ],
+      "centre": [
+        434.0,
+        374.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 12,
+      "key": "text:Games",
+      "kind": "text",
+      "group": 4,
+      "x0": 405,
+      "y0": 368,
+      "x1": 463,
+      "y1": 382,
+      "score": 0.99974585,
+      "text": "Games",
+      "style": {
+        "background": "#655aa8",
+        "foreground": "#fbfbfd",
+        "contrast": 5.67,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        405,
+        368,
+        463,
+        382
+      ],
+      "centre": [
+        434.0,
+        375.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 13,
+      "key": "icon@580,345",
+      "kind": "icon",
+      "group": 2,
+      "x0": 580,
+      "y0": 345,
+      "x1": 852,
+      "y1": 404,
+      "score": 0.8962212,
+      "style": {
+        "background": "#9a4a96",
+        "foreground": "#fdfcfd",
+        "contrast": 5.41,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        580,
+        345,
+        852,
+        404
+      ],
+      "centre": [
+        716.0,
+        374.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 14,
+      "key": "text:Music",
+      "kind": "text",
+      "group": 5,
+      "x0": 691,
+      "y0": 368,
+      "x1": 741,
+      "y1": 382,
+      "score": 0.9998385,
+      "text": "Music",
+      "style": {
+        "background": "#9a4a96",
+        "foreground": "#fdfcfd",
+        "contrast": 5.41,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        691,
+        368,
+        741,
+        382
+      ],
+      "centre": [
+        716.0,
+        375.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 15,
+      "key": "icon@862,345",
+      "kind": "icon",
+      "group": 2,
+      "x0": 862,
+      "y0": 345,
+      "x1": 1133,
+      "y1": 404,
+      "score": 0.8689881,
+      "style": {
+        "background": "#3d80a6",
+        "foreground": "#fcfdfd",
+        "contrast": 4.26,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        862,
+        345,
+        1133,
+        404
+      ],
+      "centre": [
+        997.5,
+        374.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 16,
+      "key": "text:Home Hub",
+      "kind": "text",
+      "group": 6,
+      "x0": 953,
+      "y0": 368,
+      "x1": 1043,
+      "y1": 383,
+      "score": 0.9999567,
+      "text": "Home Hub",
+      "style": {
+        "background": "#3d80a6",
+        "foreground": "#fcfdfd",
+        "contrast": 4.26,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        953,
+        368,
+        1043,
+        383
+      ],
+      "centre": [
+        998.0,
+        375.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 17,
+      "key": "button:Spo",
+      "kind": "button",
+      "group": 2,
+      "x0": 1144,
+      "y0": 345,
+      "x1": 1280,
+      "y1": 404,
+      "score": 0.4073631,
+      "text": "Spo",
+      "style": {
+        "background": "#677b2e",
+        "foreground": "#fcfdfb",
+        "contrast": 4.63,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        1144,
+        345,
+        1280,
+        404
+      ],
+      "centre": [
+        1212.0,
+        374.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 18,
+      "key": "icon@16,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 16,
+      "y0": 432,
+      "x1": 100,
+      "y1": 516,
+      "score": 0.5641597,
+      "style": {
+        "background": "#4ea96d",
+        "foreground": "#eceded",
+        "contrast": 2.48,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        16,
+        432,
+        100,
+        516
+      ],
+      "centre": [
+        58.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 19,
+      "key": "text:APPS",
+      "kind": "text",
+      "group": 8,
+      "x0": 43,
+      "y0": 487,
+      "x1": 72,
+      "y1": 496,
+      "score": 0.99994874,
+      "text": "APPS",
+      "style": {
+        "background": "#4faa6e",
+        "foreground": "#eaf4ed",
+        "contrast": 2.55,
+        "disabled": true,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        43,
+        487,
+        72,
+        496
+      ],
+      "centre": [
+        57.5,
+        491.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 20,
+      "key": "icon@110,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 110,
+      "y0": 432,
+      "x1": 194,
+      "y1": 516,
+      "score": 0.6708844,
+      "style": {
+        "background": "#fefefe",
+        "foreground": "#dd5d0f",
+        "contrast": 3.69,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        110,
+        432,
+        194,
+        516
+      ],
+      "centre": [
+        152.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 21,
+      "key": "icon@204,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 204,
+      "y0": 432,
+      "x1": 288,
+      "y1": 516,
+      "score": 0.6539628,
+      "style": {
+        "background": "#8aa934",
+        "foreground": "#efefee",
+        "contrast": 2.34,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        204,
+        432,
+        288,
+        516
+      ],
+      "centre": [
+        246.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 22,
+      "key": "icon@298,432",
+      "kind": "icon",
+      "group": 7,
+      "x0": 298,
+      "y0": 432,
+      "x1": 382,
+      "y1": 515,
+      "score": 0.718416,
+      "style": {
+        "background": "#c4c6ca",
+        "foreground": "#5c79cb",
+        "contrast": 2.43,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        298,
+        432,
+        382,
+        515
+      ],
+      "centre": [
+        340.0,
+        473.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 23,
+      "key": "icon@392,432",
+      "kind": "icon",
+      "group": 7,
+      "x0": 392,
+      "y0": 432,
+      "x1": 476,
+      "y1": 515,
+      "score": 0.7561234,
+      "style": {
+        "background": "#c3c7c9",
+        "foreground": "#487ea5",
+        "contrast": 2.57,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        392,
+        432,
+        476,
+        515
+      ],
+      "centre": [
+        434.0,
+        473.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 24,
+      "key": "icon@486,432",
+      "kind": "icon",
+      "group": 7,
+      "x0": 486,
+      "y0": 432,
+      "x1": 570,
+      "y1": 516,
+      "score": 0.80853933,
+      "style": {
+        "background": "#c4c6c9",
+        "foreground": "#5b74b6",
+        "contrast": 2.66,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        486,
+        432,
+        570,
+        516
+      ],
+      "centre": [
+        528.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 25,
+      "key": "icon@580,432",
+      "kind": "icon",
+      "group": 7,
+      "x0": 580,
+      "y0": 432,
+      "x1": 664,
+      "y1": 516,
+      "score": 0.82761914,
+      "style": {
+        "background": "#c6c5c9",
+        "foreground": "#7c55af",
+        "contrast": 3.24,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        580,
+        432,
+        664,
+        516
+      ],
+      "centre": [
+        622.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 26,
+      "key": "icon@674,432",
+      "kind": "icon",
+      "group": 7,
+      "x0": 674,
+      "y0": 432,
+      "x1": 758,
+      "y1": 515,
+      "score": 0.79144746,
+      "style": {
+        "background": "#c6c5c9",
+        "foreground": "#7c54af",
+        "contrast": 3.27,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        674,
+        432,
+        758,
+        515
+      ],
+      "centre": [
+        716.0,
+        473.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 27,
+      "key": "icon@768,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 768,
+      "y0": 432,
+      "x1": 852,
+      "y1": 516,
+      "score": 0.71028143,
+      "style": {
+        "background": "#c9c2c6",
+        "foreground": "#cd0551",
+        "contrast": 3.22,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        768,
+        432,
+        852,
+        516
+      ],
+      "centre": [
+        810.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 28,
+      "key": "icon@862,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 862,
+      "y0": 432,
+      "x1": 947,
+      "y1": 505,
+      "score": 0.18894139,
+      "style": {
+        "background": "#1e2a49",
+        "foreground": "#d0cdc7",
+        "contrast": 8.93,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        862,
+        432,
+        947,
+        505
+      ],
+      "centre": [
+        904.5,
+        468.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 29,
+      "key": "icon@956,433",
+      "kind": "icon",
+      "group": 2,
+      "x0": 956,
+      "y0": 433,
+      "x1": 1040,
+      "y1": 514,
+      "score": 0.47708282,
+      "style": {
+        "background": "#c5c6c7",
+        "foreground": "#231a26",
+        "contrast": 9.84,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        956,
+        433,
+        1040,
+        514
+      ],
+      "centre": [
+        998.0,
+        473.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 30,
+      "key": "icon@1051,433",
+      "kind": "icon",
+      "group": 2,
+      "x0": 1051,
+      "y0": 433,
+      "x1": 1133,
+      "y1": 515,
+      "score": 0.4823584,
+      "style": {
+        "background": "#773c14",
+        "foreground": "#000000",
+        "contrast": 2.44,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1051,
+        433,
+        1133,
+        515
+      ],
+      "centre": [
+        1092.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 31,
+      "key": "icon@1150,432",
+      "kind": "icon",
+      "group": 2,
+      "x0": 1150,
+      "y0": 432,
+      "x1": 1234,
+      "y1": 516,
+      "score": 0.68867946,
+      "style": {
+        "background": "#7b6868",
+        "foreground": "#fbfbfb",
+        "contrast": 5.05,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1150,
+        432,
+        1234,
+        516
+      ],
+      "centre": [
+        1192.0,
+        474.0
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 32,
+      "key": "text:Uninstall HC Fixture disposable?",
+      "kind": "text",
+      "group": 7,
+      "x0": 289,
+      "y0": 528,
+      "x1": 563,
+      "y1": 546,
+      "score": 0.99934846,
+      "text": "Uninstall HC Fixture disposable?",
+      "style": {
+        "background": "#c0c1c2",
+        "foreground": "#31353c",
+        "contrast": 6.83,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        289,
+        528,
+        563,
+        546
+      ],
+      "centre": [
+        426.0,
+        537.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 33,
+      "key": "button:Uninstall",
+      "kind": "button",
+      "group": 7,
+      "x0": 840,
+      "y0": 495,
+      "x1": 991,
+      "y1": 531,
+      "score": 0.5641822,
+      "text": "Uninstall",
+      "style": {
+        "background": "#7d848c",
+        "foreground": "#e1e2e2",
+        "contrast": 2.91,
+        "disabled": true,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        840,
+        495,
+        991,
+        531
+      ],
+      "centre": [
+        915.5,
+        513.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 34,
+      "key": "text:Recent Input",
+      "kind": "text",
+      "group": 2,
+      "x0": 17,
+      "y0": 534,
+      "x1": 117,
+      "y1": 550,
+      "score": 0.99994516,
+      "text": "Recent Input",
+      "style": {
+        "background": "#000000",
+        "foreground": "#dedede",
+        "contrast": 15.61,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        17,
+        534,
+        117,
+        550
+      ],
+      "centre": [
+        67.0,
+        542.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 35,
+      "key": "text:LIVE",
+      "kind": "text",
+      "group": 9,
+      "x0": 23,
+      "y0": 568,
+      "x1": 67,
+      "y1": 590,
+      "score": 0.9997223,
+      "text": "LIVE",
+      "style": {
+        "background": "#c9202d",
+        "foreground": "#fefafa",
+        "contrast": 5.44,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        23,
+        568,
+        67,
+        590
+      ],
+      "centre": [
+        45.0,
+        579.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 36,
+      "key": "button:Cancel",
+      "kind": "button",
+      "group": 7,
+      "x0": 838,
+      "y0": 542,
+      "x1": 995,
+      "y1": 579,
+      "score": 0.46026307,
+      "text": "Cancel",
+      "style": {
+        "background": "#e5e5e5",
+        "foreground": "#52565f",
+        "contrast": 5.84,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        838,
+        542,
+        995,
+        579
+      ],
+      "centre": [
+        916.5,
+        560.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 37,
+      "key": "text:Home Hub#2",
+      "kind": "text",
+      "group": 10,
+      "x0": 1041,
+      "y0": 576,
+      "x1": 1148,
+      "y1": 601,
+      "score": 0.99997115,
+      "text": "Home Hub",
+      "style": {
+        "background": "#694726",
+        "foreground": "#e5e5e4",
+        "contrast": 6.58,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        1041,
+        576,
+        1148,
+        601
+      ],
+      "centre": [
+        1094.5,
+        588.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 38,
+      "key": "icon:Edit the list of apps on",
+      "kind": "icon",
+      "group": 2,
+      "x0": 16,
+      "y0": 562,
+      "x1": 259,
+      "y1": 699,
+      "score": 0.40066394,
+      "text": "Edit the list of apps on",
+      "style": {
+        "background": "#4565b7",
+        "foreground": "#ece3e7",
+        "contrast": 4.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        16,
+        562,
+        259,
+        699
+      ],
+      "centre": [
+        137.5,
+        630.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 39,
+      "key": "icon:Check the broadcast",
+      "kind": "icon",
+      "group": 2,
+      "x0": 274,
+      "y0": 562,
+      "x1": 509,
+      "y1": 698,
+      "score": 0.40074295,
+      "text": "Check the broadcast",
+      "style": {
+        "background": "#c2c3c5",
+        "foreground": "#1b1e28",
+        "contrast": 9.43,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        274,
+        562,
+        509,
+        698
+      ],
+      "centre": [
+        391.5,
+        630.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 40,
+      "key": "text:Edit the list of apps on",
+      "kind": "text",
+      "group": 11,
+      "x0": 284,
+      "y0": 612,
+      "x1": 470,
+      "y1": 636,
+      "score": 0.9994891,
+      "text": "Edit the list of apps on",
+      "style": {
+        "background": "#222634",
+        "foreground": "#e2e2e2",
+        "contrast": 11.62,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        284,
+        612,
+        470,
+        636
+      ],
+      "centre": [
+        377.0,
+        624.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 41,
+      "key": "text:the Home to include your",
+      "kind": "text",
+      "group": 11,
+      "x0": 284,
+      "y0": 634,
+      "x1": 489,
+      "y1": 658,
+      "score": 0.99945205,
+      "text": "the Home to include your",
+      "style": {
+        "background": "#212532",
+        "foreground": "#e3e3e4",
+        "contrast": 11.91,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        284,
+        634,
+        489,
+        658
+      ],
+      "centre": [
+        386.5,
+        646.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 42,
+      "key": "icon:Check how to use the",
+      "kind": "icon",
+      "group": 2,
+      "x0": 527,
+      "y0": 562,
+      "x1": 761,
+      "y1": 699,
+      "score": 0.54818225,
+      "text": "Check how to use the",
+      "style": {
+        "background": "#c4c4c5",
+        "foreground": "#211f1e",
+        "contrast": 9.42,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        527,
+        562,
+        761,
+        699
+      ],
+      "centre": [
+        644.0,
+        630.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 43,
+      "key": "text:Check the broadcast",
+      "kind": "text",
+      "group": 14,
+      "x0": 539,
+      "y0": 615,
+      "x1": 702,
+      "y1": 633,
+      "score": 0.999976,
+      "text": "Check the broadcast",
+      "style": {
+        "background": "#666563",
+        "foreground": "#dedede",
+        "contrast": 4.33,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        539,
+        615,
+        702,
+        633
+      ],
+      "centre": [
+        620.5,
+        624.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 44,
+      "key": "text:schedule and information.",
+      "kind": "text",
+      "group": 11,
+      "x0": 541,
+      "y0": 637,
+      "x1": 745,
+      "y1": 655,
+      "score": 0.9999836,
+      "text": "schedule and information.",
+      "style": {
+        "background": "#333538",
+        "foreground": "#e4e4e3",
+        "contrast": 9.67,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        541,
+        637,
+        745,
+        655
+      ],
+      "centre": [
+        643.0,
+        646.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 45,
+      "key": "icon:Home Hub",
+      "kind": "icon",
+      "group": 2,
+      "x0": 779,
+      "y0": 560,
+      "x1": 1015,
+      "y1": 698,
+      "score": 0.18897063,
+      "text": "Home Hub",
+      "style": {
+        "background": "#c4c4c3",
+        "foreground": "#3a2f1e",
+        "contrast": 7.49,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        779,
+        560,
+        1015,
+        698
+      ],
+      "centre": [
+        897.0,
+        629.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 46,
+      "key": "text:device's features.",
+      "kind": "text",
+      "group": 15,
+      "x0": 792,
+      "y0": 635,
+      "x1": 932,
+      "y1": 656,
+      "score": 0.9999448,
+      "text": "device's features.",
+      "style": {
+        "background": "#5b5954",
+        "foreground": "#e4e3e3",
+        "contrast": 5.46,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        792,
+        635,
+        932,
+        656
+      ],
+      "centre": [
+        862.0,
+        645.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 47,
+      "key": "text:Check how to use the",
+      "kind": "text",
+      "group": 12,
+      "x0": 793,
+      "y0": 612,
+      "x1": 967,
+      "y1": 636,
+      "score": 0.9999836,
+      "text": "Check how to use the",
+      "style": {
+        "background": "#6c591d",
+        "foreground": "#e3e3e3",
+        "contrast": 5.31,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        793,
+        612,
+        967,
+        636
+      ],
+      "centre": [
+        880.0,
+        624.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 48,
+      "key": "icon@1030,562",
+      "kind": "icon",
+      "group": 2,
+      "x0": 1030,
+      "y0": 562,
+      "x1": 1266,
+      "y1": 699,
+      "score": 0.4820505,
+      "style": {
+        "background": "#241c15",
+        "foreground": "#dcdbda",
+        "contrast": 12.13,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1030,
+        562,
+        1266,
+        699
+      ],
+      "centre": [
+        1148.0,
+        630.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 49,
+      "key": "text:Conveniently control",
+      "kind": "text",
+      "group": 13,
+      "x0": 1044,
+      "y0": 614,
+      "x1": 1207,
+      "y1": 635,
+      "score": 0.999821,
+      "text": "Conveniently control",
+      "style": {
+        "background": "#1a1918",
+        "foreground": "#e1e0e0",
+        "contrast": 13.33,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1044,
+        614,
+        1207,
+        635
+      ],
+      "centre": [
+        1125.5,
+        624.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 50,
+      "key": "text:preferences.",
+      "kind": "text",
+      "group": 11,
+      "x0": 289,
+      "y0": 660,
+      "x1": 384,
+      "y1": 677,
+      "score": 0.99995846,
+      "text": "preferences.",
+      "style": {
+        "background": "#1e202b",
+        "foreground": "#dfdfdf",
+        "contrast": 12.15,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        289,
+        660,
+        384,
+        677
+      ],
+      "centre": [
+        336.5,
+        668.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 51,
+      "key": "text:device.",
+      "kind": "text",
+      "group": 16,
+      "x0": 1043,
+      "y0": 660,
+      "x1": 1097,
+      "y1": 677,
+      "score": 0.99996245,
+      "text": "device.",
+      "style": {
+        "background": "#3a3229",
+        "foreground": "#dfdfdf",
+        "contrast": 9.45,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1043,
+        660,
+        1097,
+        677
+      ],
+      "centre": [
+        1070.0,
+        668.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 52,
+      "key": "text:home appliances on your",
+      "kind": "text",
+      "group": 13,
+      "x0": 1045,
+      "y0": 634,
+      "x1": 1238,
+      "y1": 656,
+      "score": 0.9999851,
+      "text": "home appliances on your",
+      "style": {
+        "background": "#171615",
+        "foreground": "#e3e3e3",
+        "contrast": 14.08,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1045,
+        634,
+        1238,
+        656
+      ],
+      "centre": [
+        1141.5,
+        645.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 53,
+      "key": "text:Live TV",
+      "kind": "text",
+      "group": 17,
+      "x0": 25,
+      "y0": 674,
+      "x1": 77,
+      "y1": 689,
+      "score": 0.9999056,
+      "text": "Live TV",
+      "style": {
+        "background": "#885db3",
+        "foreground": "#e3e2e4",
+        "contrast": 3.81,
+        "disabled": false,
+        "highlighted": true,
+        "focused": false
+      },
+      "box": [
+        25,
+        674,
+        77,
+        689
+      ],
+      "centre": [
+        51.0,
+        681.5
+      ],
+      "value": null,
+      "unit": ""
+    }
+  ]
+}
