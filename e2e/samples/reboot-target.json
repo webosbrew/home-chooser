@@ -1,0 +1,422 @@
+{
+  "width": 1280,
+  "height": 720,
+  "elements": [
+    {
+      "id": 0,
+      "key": "text:Home Chooser",
+      "kind": "text",
+      "group": 0,
+      "x0": 766,
+      "y0": 29,
+      "x1": 1052,
+      "y1": 63,
+      "score": 0.9999396,
+      "text": "Home Chooser",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        766,
+        29,
+        1052,
+        63
+      ],
+      "centre": [
+        909.0,
+        46.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 1,
+      "key": "text:Choose the app your Home button opens.",
+      "kind": "text",
+      "group": 0,
+      "x0": 763,
+      "y0": 83,
+      "x1": 1081,
+      "y1": 100,
+      "score": 0.99843264,
+      "text": "Choose the app your Home button opens.",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#999999",
+        "contrast": 5.98,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        763,
+        83,
+        1081,
+        100
+      ],
+      "centre": [
+        922.0,
+        91.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 2,
+      "key": "text:LG Home (stock)",
+      "kind": "text",
+      "group": 1,
+      "x0": 820,
+      "y0": 169,
+      "x1": 976,
+      "y1": 191,
+      "score": 0.9936654,
+      "text": "LG Home (stock)",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c6c6c6",
+        "contrast": 9.98,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        820,
+        169,
+        976,
+        191
+      ],
+      "centre": [
+        898.0,
+        180.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 3,
+      "key": "button:HC Fixture web normal",
+      "kind": "button",
+      "group": 2,
+      "x0": 761,
+      "y0": 236,
+      "x1": 1257,
+      "y1": 271,
+      "score": 0.4064556,
+      "text": "HC Fixture web normal",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c2c3c2",
+        "contrast": 9.64,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        761,
+        236,
+        1257,
+        271
+      ],
+      "centre": [
+        1009.0,
+        253.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 4,
+      "key": "icon@1239,245",
+      "kind": "icon",
+      "group": 2,
+      "x0": 1239,
+      "y0": 245,
+      "x1": 1265,
+      "y1": 268,
+      "score": 0.10608088,
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1239,
+        245,
+        1265,
+        268
+      ],
+      "centre": [
+        1252.0,
+        256.5
+      ],
+      "text": "",
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 5,
+      "key": "button:V",
+      "kind": "button",
+      "group": 2,
+      "x0": 1245,
+      "y0": 250,
+      "x1": 1259,
+      "y1": 264,
+      "score": 0.1580134,
+      "text": "V",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#cacaca",
+        "contrast": 10.4,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        1245,
+        250,
+        1259,
+        264
+      ],
+      "centre": [
+        1252.0,
+        257.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 6,
+      "key": "text:The Home button changes after a restart. Use Restart now",
+      "kind": "text",
+      "group": 3,
+      "x0": 763,
+      "y0": 313,
+      "x1": 1251,
+      "y1": 332,
+      "score": 0.9875909,
+      "text": "The Home button changes after a restart. Use Restart now",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#8c8c8c",
+        "contrast": 5.07,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        763,
+        313,
+        1251,
+        332
+      ],
+      "centre": [
+        1007.0,
+        322.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 7,
+      "key": "text:\u2014 turning the TV off with the remote may not restart it.",
+      "kind": "text",
+      "group": 3,
+      "x0": 765,
+      "y0": 337,
+      "x1": 1226,
+      "y1": 356,
+      "score": 0.99489224,
+      "text": "\u2014 turning the TV off with the remote may not restart it.",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#8c8c8c",
+        "contrast": 5.07,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        765,
+        337,
+        1226,
+        356
+      ],
+      "centre": [
+        995.5,
+        346.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 8,
+      "key": "text:Restart now",
+      "kind": "text",
+      "group": 4,
+      "x0": 764,
+      "y0": 404,
+      "x1": 876,
+      "y1": 420,
+      "score": 0.9999653,
+      "text": "Restart now",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#c8c8c8",
+        "contrast": 10.19,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        764,
+        404,
+        876,
+        420
+      ],
+      "centre": [
+        820.0,
+        412.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 9,
+      "key": "button:Reboot",
+      "kind": "button",
+      "group": 5,
+      "x0": 837,
+      "y0": 494,
+      "x1": 995,
+      "y1": 531,
+      "score": 0.7509744,
+      "text": "Reboot",
+      "style": {
+        "background": "#e5e5e5",
+        "foreground": "#545860",
+        "contrast": 5.67,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        837,
+        494,
+        995,
+        531
+      ],
+      "centre": [
+        916.0,
+        512.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 10,
+      "key": "text:Restart the TV to finish setting up the Home button.",
+      "kind": "text",
+      "group": 6,
+      "x0": 289,
+      "y0": 528,
+      "x1": 738,
+      "y1": 547,
+      "score": 0.9926196,
+      "text": "Restart the TV to finish setting up the Home button.",
+      "style": {
+        "background": "#c0c3c3",
+        "foreground": "#34383e",
+        "contrast": 6.64,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        289,
+        528,
+        738,
+        547
+      ],
+      "centre": [
+        513.5,
+        537.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 11,
+      "key": "button:Later",
+      "kind": "button",
+      "group": 5,
+      "x0": 841,
+      "y0": 543,
+      "x1": 991,
+      "y1": 579,
+      "score": 0.8151023,
+      "text": "Later",
+      "style": {
+        "background": "#7c838b",
+        "foreground": "#e2e2e3",
+        "contrast": 2.96,
+        "disabled": true,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        841,
+        543,
+        991,
+        579
+      ],
+      "centre": [
+        916.0,
+        561.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 12,
+      "key": "text:Home key hook: not active",
+      "kind": "text",
+      "group": 7,
+      "x0": 774,
+      "y0": 677,
+      "x1": 952,
+      "y1": 692,
+      "score": 0.99891824,
+      "text": "Home key hook: not active",
+      "style": {
+        "background": "#1c1c1c",
+        "foreground": "#878787",
+        "contrast": 4.74,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        774,
+        677,
+        952,
+        692
+      ],
+      "centre": [
+        863.0,
+        684.5
+      ],
+      "value": null,
+      "unit": ""
+    }
+  ]
+}

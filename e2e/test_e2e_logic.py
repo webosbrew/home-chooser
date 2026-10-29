@@ -28,6 +28,108 @@ REPO = os.path.dirname(HERE)
 FULL, HOME = e2e.FULLHOME, e2e.STOCK
 
 
+class AlertFocus(unittest.TestCase):
+    def frame(self, name='reboot-alert'):
+        with open(os.path.join(HERE, 'samples', name + '.json')) as f:
+            return json.load(f)
+
+    def parse(self, frame):
+        return e2e.alert_focus(frame, e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+
+    def test_recorded_restart_default(self):
+        self.assertEqual(self.parse(self.frame()), ('Later', 'UP'))
+
+    def test_app_title_behind_alert_is_optional(self):
+        frame = self.frame()
+        frame['elements'] = [r for r in frame['elements'] if r.get('text') != 'Home Chooser']
+        self.assertEqual(self.parse(frame), ('Later', 'UP'))
+
+    def test_recorded_target_focus(self):
+        self.assertEqual(self.parse(self.frame('reboot-target')), ('Reboot', 'UP'))
+
+    def test_recorded_uninstall(self):
+        self.assertEqual(e2e.alert_focus(self.frame('uninstall-alert'),
+                         'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
+
+    def test_bad_ownership_or_focus_fails_closed(self):
+        import copy
+        base = self.frame()
+        for text in (e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later'):
+            frame = copy.deepcopy(base)
+            frame['elements'] = [r for r in frame['elements'] if r.get('text') != text]
+            with self.subTest(missing=text), self.assertRaises(ValueError):
+                self.parse(frame)
+        for disabled in (True, False, None):
+            frame = copy.deepcopy(base)
+            for row in frame['elements']:
+                if row['kind'] == 'button' and row['text'] in ('Reboot', 'Later'):
+                    row['style']['disabled'] = disabled
+            with self.subTest(disabled=disabled), self.assertRaises(ValueError):
+                self.parse(frame)
+
+    def test_missing_service_proof_sends_no_key(self):
+        from types import SimpleNamespace
+        scenario = e2e.Scenario.__new__(e2e.Scenario)
+        scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
+        scenario.press = lambda *a: self.fail('unproven service must send no key')
+        scenario.shot = lambda *a: self.fail('service proof must precede screen capture')
+        self.assertFalse(scenario.press_alert(e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later',
+                                             'test', lambda: ('refused', False)))
+
+    def test_recorded_service_evidence(self):
+        with open(os.path.join(HERE, 'samples', 'alert-service.log')) as f:
+            raw = f.read()
+        reboot = lambda text: e2e.alert_service_proof(text, e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+        uninstall = lambda text: e2e.alert_service_proof(text, 'Uninstall HC Fixture disposable?',
+                            'Uninstall', 'Cancel', e2e.DISPOSABLE_ID, 'org.webosbrew.hcfixture.web.normal')
+        self.assertTrue(reboot(raw))
+        self.assertTrue(uninstall(raw))
+        self.assertFalse(reboot(raw.replace('accepted', 'refused')))
+        self.assertFalse(reboot(raw.replace('(exit 0)', '(exit 1)')))
+        self.assertFalse(reboot(raw.replace('"returnValue":true', '"returnValue":false')))
+        self.assertFalse(reboot(raw.replace(e2e.REBOOT_PROMPT['apply'], 'different prompt')))
+        self.assertFalse(uninstall(raw.replace(e2e.DISPOSABLE_ID, 'other.app')))
+        self.assertFalse(uninstall(raw.replace('org.webosbrew.hcfixture.web.normal', 'other.caller')))
+        self.assertFalse(uninstall(raw.replace('alert shown', 'alert refused')))
+        self.assertFalse(uninstall(raw.replace('"returnValue":true', '"returnValue":false')))
+
+    def test_extra_alert_control_fails_closed(self):
+        frame = self.frame()
+        frame['elements'].append(dict(kind='button', text='LG action', box=[100,500,200,530]))
+        with self.assertRaises(ValueError):
+            self.parse(frame)
+
+    def test_press_never_enters_after_failed_proof(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        default, target = self.frame(), self.frame('reboot-target')
+        for frames, keys, success in (([target], [], False),
+                                      ([default, default], ['UP'], False),
+                                      ([default, {}], ['UP'], False),
+                                      ([default, target], ['UP', 'OK'], True)):
+            scenario = e2e.Scenario.__new__(e2e.Scenario)
+            sent = []
+            scenario.press = lambda *k: sent.extend(k)
+            scenario.shot = lambda label: __file__
+            scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
+            with patch.object(e2e, 'run', side_effect=[(0, json.dumps(f)) for f in frames]):
+                self.assertEqual(scenario.press_alert(e2e.REBOOT_PROMPT['apply'],
+                                 'Reboot', 'Later', 'test', lambda: ('accepted service log', True)), success)
+            self.assertEqual(sent, keys)
+
+    def test_horizontal_order_and_invalid_boxes(self):
+        frame = self.frame()
+        buttons = {r['text']: r for r in frame['elements'] if r['kind'] == 'button'}
+        buttons['Reboot']['box'] = [800,500,900,570]
+        buttons['Later']['box'] = [950,500,1050,570]
+        self.assertEqual(self.parse(frame), ('Later', 'LEFT'))
+        buttons['Reboot']['box'], buttons['Later']['box'] = buttons['Later']['box'], buttons['Reboot']['box']
+        self.assertEqual(self.parse(frame), ('Later', 'RIGHT'))
+        buttons['Reboot']['box'] = buttons['Later']['box']
+        with self.assertRaises(ValueError):
+            self.parse(frame)
+
+
 class LogMark(unittest.TestCase):
     def test_rotated_messages_preserve_alert_and_crash_evidence(self):
         with tempfile.TemporaryDirectory() as root:
