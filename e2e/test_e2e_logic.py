@@ -63,7 +63,7 @@ class AlertFocus(unittest.TestCase):
             frame = copy.deepcopy(base)
             for row in frame['elements']:
                 if row['kind'] == 'button' and row['text'] in ('Reboot', 'Later'):
-                    row['style']['disabled'] = disabled
+                    row['style'] = dict(disabled=disabled, contrast=3, highlighted=False)
             with self.subTest(disabled=disabled), self.assertRaises(ValueError):
                 self.parse(frame)
 
@@ -131,6 +131,147 @@ class AlertFocus(unittest.TestCase):
         buttons['Uninstall']['box'] = buttons['Cancel']['box']
         with self.assertRaises(ValueError):
             parse()
+
+
+class AlertEvidenceAcrossReleases(unittest.TestCase):
+    frame = AlertFocus.frame
+    parse = AlertFocus.parse
+    def test_saved_8x_and_11x_defaults(self):
+        self.assertEqual(self.parse(self.frame('reboot-alert-8x')), ('Later', 'UP'))
+        self.assertEqual(e2e.alert_focus(self.frame('uninstall-alert-11x'),
+                         'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
+
+    def test_swap_across_releases(self):
+        import copy
+        for name, target, safe in [('uninstall-alert-11x', 'Uninstall', 'Cancel'),
+                                   ('reboot-alert-8x', 'Reboot', 'Later'),
+                                   ('uninstall-alert-5x', 'Uninstall', 'Cancel')]:
+            before = self.frame(name)
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    e2e.alert_style_swap(before, before, target, safe)
+                after = copy.deepcopy(before)
+                buttons = {r['text']: r for r in after['elements'] if r.get('text') in (target, safe)}
+                buttons[target]['style'], buttons[safe]['style'] = buttons[safe]['style'], buttons[target]['style']
+                self.assertTrue(e2e.alert_style_swap(before, after, target, safe))
+                # Only one side changing is not a swap.
+                buttons[safe]['style'] = buttons[target]['style']
+                with self.assertRaises(ValueError):
+                    e2e.alert_style_swap(before, after, target, safe)
+
+    def test_centered_extra_control_rejected(self):
+        frame = self.frame('uninstall-alert-11x')
+        frame['elements'].append(dict(kind='button', text='Other', box=[510,320,600,340]))
+        with self.assertRaises(ValueError):
+            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+
+    def test_ls2_owned_request_and_rejections(self):
+        import copy
+        for target, safe, message, app, uri, params in [
+                ('Reboot', 'Later', e2e.REBOOT_PROMPT['apply'], None,
+                 e2e.TVPOWER_REBOOT_URI, {'reason': 'remoteKey'}),
+                ('Uninstall', 'Cancel', 'Uninstall HC Fixture disposable?', e2e.DISPOSABLE_ID,
+                 'luna://com.webos.appInstallService/dev/remove', {'id': e2e.DISPOSABLE_ID, 'subscribe': True})]:
+            info = dict(message=message, buttons=[target, safe], alert='accepted', alert_id='owned', actions=[
+                dict(label=target, onclick=uri, params=params), dict(label=safe, focus=True)])
+            proof = lambda observed: e2e.alert_service_proof('', message, target, safe, app, observed=observed)
+            self.assertTrue(proof(info))
+            for field, value in [('message', 'foreign'), ('buttons', [safe, target]),
+                                 ('alert', None), ('alert', 'refused'), ('alert_id', None), ('actions', [])]:
+                with self.subTest(target=target, field=field, value=value):
+                    bad = copy.deepcopy(info)
+                    bad[field] = value
+                    self.assertFalse(proof(bad))
+            for field, value in [('onclick', 'luna://foreign/remove'), ('params', {'id': 'foreign'})]:
+                bad = copy.deepcopy(info)
+                bad['actions'][0][field] = value
+                self.assertFalse(proof(bad))
+
+    def test_press_rejects_contrast_without_swap(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        before = self.frame('uninstall-alert-11x')
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        keys = []
+        s.press = lambda key: keys.append(key)
+        s.shot = lambda label: __file__
+        s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
+        with patch.object(e2e, 'run', return_value=(0, json.dumps(before))):
+            self.assertFalse(s.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                          'test', lambda: ('owned', True)))
+        self.assertEqual(keys, ['UP'])
+
+    def test_centered_swap_permits_enter(self):
+        import copy
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        before = self.frame('uninstall-alert-11x')
+        after = copy.deepcopy(before)
+        buttons = {r['text']: r for r in after['elements'] if r.get('kind') == 'button'}
+        buttons['Uninstall']['style'], buttons['Cancel']['style'] = buttons['Cancel']['style'], buttons['Uninstall']['style']
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        keys, notes = [], []
+        s.press = lambda key: keys.append(key)
+        s.shot = lambda label: __file__
+        s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: notes.append(a))
+        with patch.object(e2e, 'run', side_effect=[(0, json.dumps(f)) for f in (before, after)]):
+            self.assertTrue(s.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                         'test', lambda: ('owned', True)))
+        self.assertEqual(keys, ['UP', 'OK'])
+        self.assertTrue(any('background colour' in note for note in notes))
+
+    def test_monitor_binds_actions_to_reply(self):
+        monitor = e2e.RebootAlertMonitor(None)
+        def call(token, message):
+            monitor._observe(dict(type='call', transport='TX', sender='client', token=token,
+                                  destination='com.webos.notification', method='createAlert', payload=dict(
+                                      sourceId=e2e.APP_ID, title='Home Chooser', message=message, buttons=[
+                                          dict(label='Reboot', onclick=e2e.TVPOWER_REBOOT_URI, params={'reason': 'remoteKey'}),
+                                          dict(label='Later', focus=True)])))
+        call(1, e2e.REBOOT_PROMPT['apply'])
+        call(2, 'foreign prompt')
+        monitor._observe(dict(type='return', transport='TX', sender='com.webos.notification',
+                              destination='client', replyToken=1, payload=dict(returnValue=True, alertId='first')))
+        self.assertTrue(e2e.alert_ls2_proof(monitor.snapshot(), e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later'))
+
+    def test_input_diagnostics_include_other_processes(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as root:
+            journal = os.path.join(root, 'journalctl')
+            with open(journal, 'w') as f:
+                f.write("#!/bin/sh\necho 'surface-manager input Home received'\n")
+            os.chmod(journal, 0o755)
+            with patch.object(e2e, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 input stale' '2026-10-29T06:29:00 input current'"):
+                command = e2e.home_input_command('2026-10-29T06:28:00Z')
+            result = subprocess.run(['sh', '-c', command], capture_output=True, text=True, check=True,
+                                    env=dict(os.environ, PATH=root + os.pathsep + os.environ['PATH']))
+            self.assertNotIn('stale', result.stdout)
+            self.assertIn('input current', result.stdout)
+            self.assertIn('surface-manager input Home received', result.stdout)
+            self.assertIn('2026-10-29 06:28:00 UTC', command)
+        self.assertEqual(e2e.home_input_command(''), 'true')
+
+    def test_failed_home_attempt_stays_failed_without_retry(self):
+        from types import SimpleNamespace
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        keys, commands, checks, notes = [], [], [], []
+        s.launcher, s.major, s.stock_id = 'fixture.launcher', 11, e2e.STOCK
+        s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: notes.append(a),
+                                check=lambda name, ok, evidence: checks.append(ok))
+        s.dev = SimpleNamespace(foreground=lambda: ('other', 'other'),
+                                sh=lambda cmd: (commands.append(cmd) or (0, 'input diagnostic')))
+        s.messages_mark = lambda: '2026-10-29T06:28:00'
+        s.press = lambda key: (keys.append(key) or (0, 'sent'))
+        s.uses_home_key_hook = lambda: False
+        s.wait = lambda *a: None
+        s.running_ids = lambda: []
+        s.shot = lambda *a: 'saved.png'
+        with mock_sleep():
+            self.assertFalse(s.home_press(e2e.STOCK, 'test', from_app=False))
+        self.assertEqual(keys, ['HOME'])
+        self.assertEqual(checks, [False])
+        self.assertTrue(commands)
+        self.assertIn('input diagnostic', notes[0][1])
 
 
 class LogMark(unittest.TestCase):

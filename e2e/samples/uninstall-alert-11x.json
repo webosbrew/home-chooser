@@ -1,0 +1,102 @@
+{
+  "width": 1280,
+  "height": 720,
+  "elements": [
+    {
+      "id": 0,
+      "key": "text:Uninstall HC Fixture disposable?",
+      "kind": "text",
+      "group": 0,
+      "x0": 496,
+      "y0": 299,
+      "x1": 784,
+      "y1": 318,
+      "score": 0.9882636,
+      "text": "Uninstall HC Fixture disposable?",
+      "style": {
+        "background": "#e0e0e0",
+        "foreground": "#272727",
+        "contrast": 11.32,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        496,
+        299,
+        784,
+        318
+      ],
+      "centre": [
+        640.0,
+        308.5
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 1,
+      "key": "button:Uninstall",
+      "kind": "button",
+      "group": 0,
+      "x0": 520,
+      "y0": 345,
+      "x1": 760,
+      "y1": 381,
+      "score": 0.8700334,
+      "text": "Uninstall",
+      "style": {
+        "background": "#8d909e",
+        "foreground": "#fafafb",
+        "contrast": 3.04,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        520,
+        345,
+        760,
+        381
+      ],
+      "centre": [
+        640.0,
+        363.0
+      ],
+      "value": null,
+      "unit": ""
+    },
+    {
+      "id": 2,
+      "key": "button:Cancel",
+      "kind": "button",
+      "group": 0,
+      "x0": 508,
+      "y0": 393,
+      "x1": 773,
+      "y1": 433,
+      "score": 0.8775759,
+      "text": "Cancel",
+      "style": {
+        "background": "#fefefe",
+        "foreground": "#303030",
+        "contrast": 13.09,
+        "disabled": false,
+        "highlighted": false,
+        "focused": false
+      },
+      "box": [
+        508,
+        393,
+        773,
+        433
+      ],
+      "centre": [
+        640.5,
+        413.0
+      ],
+      "value": null,
+      "unit": ""
+    }
+  ]
+}
