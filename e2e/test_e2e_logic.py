@@ -958,5 +958,95 @@ class ApiLaunchers(unittest.TestCase):
             self.assertIn('--reboot-via later', out.getvalue())
 
 
+class HostInput(unittest.TestCase):
+    def test_command_quotes_arguments(self):
+        from unittest.mock import Mock
+        host = e2e.BeanjarHost()
+        directory = "/tmp/vm ' $(false); space"
+        key = "ret' ; $(false)"
+        host._dirs['vm'] = directory
+        host.sh = Mock(return_value=(0, 'ok'))
+        self.assertEqual(host.sendkey('vm', key), (0, 'ok'))
+        command, timeout = host.sh.call_args.args
+        self.assertEqual(shlex.split(command),
+                         ['python3', '-c', e2e.QMP_SENDKEY, directory + '/run/qmp.sock', key])
+        self.assertEqual(timeout, 30)
+
+    def test_failed_press_stops_sequence_for_both_inputs(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for mode in ('qmp', 'ares'):
+            with self.subTest(mode=mode):
+                scenario = object.__new__(e2e.Scenario)
+                scenario.a = SimpleNamespace(input=mode)
+                scenario.vm = 'vm'
+                scenario.host = SimpleNamespace(name='rk1', sendkey=Mock(return_value=(1, 'socket refused')))
+                scenario.dev = SimpleNamespace(root='vm-root', key=Mock(return_value=(1, 'socket refused')))
+                scenario.rec = Mock()
+                with self.assertRaisesRegex(e2e.KeySendError, 'key OK.*socket refused'):
+                    scenario.press('OK', 'DOWN')
+                sender = scenario.host.sendkey if mode == 'qmp' else scenario.dev.key
+                self.assertEqual(sender.call_count, 1)
+                self.assertFalse(scenario.rec.check.call_args.args[1])
+
+    def test_qmp_protocol_and_errors(self):
+        import socket
+        import threading
+        for failure in (None, 'capabilities', 'key', 'monitor', 'disconnect'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                path = os.path.join(directory, 'qmp.sock')
+                errors = []
+                requests = []
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    server.bind(path)
+                    server.listen(1)
+                    server.settimeout(5)
+                    def serve():
+                        try:
+                            with server.accept()[0] as client:
+                                client.settimeout(5)
+                                with client.makefile('rb') as stream:
+                                    client.sendall(b'{"QMP": {}}\n')
+                                    for ident in ('capabilities', 'key'):
+                                        request = json.loads(stream.readline())
+                                        requests.append(request)
+                                        if failure == 'disconnect':
+                                            return
+                                        response = {'id': ident, 'return': { } if ident == 'capabilities' else ''}
+                                        if failure == ident:
+                                            response = {'id': ident, 'error': {'desc': 'denied'}}
+                                        if failure == 'monitor' and ident == 'key':
+                                            response['return'] = 'unknown key'
+                                        client.sendall(b'{"event":"TEST"}\n' + (json.dumps(response) + '\n').encode())
+                                        if failure == ident:
+                                            return
+                        except Exception as exc:
+                            errors.append(exc)
+                    thread = threading.Thread(target=serve)
+                    thread.start()
+                    host = e2e.BeanjarHost(mode='local')
+                    host._dirs['vm'] = directory
+                    os.mkdir(os.path.join(directory, 'run'))
+                    os.rename(path, os.path.join(directory, 'run', 'qmp.sock'))
+                    try:
+                        rc, output = host.sendkey('vm', 'meta_l')
+                    finally:
+                        thread.join(6)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(errors, [])
+                    self.assertEqual(rc == 0, failure is None, output)
+                    self.assertEqual(requests[0]['execute'], 'qmp_capabilities')
+                    if failure in (None, 'key', 'monitor'):
+                        self.assertEqual(requests[1]['arguments'], {'command-line': 'sendkey meta_l'})
+
+    def test_unreachable_socket(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = e2e.BeanjarHost(mode='local')
+            host._dirs['vm'] = directory
+            rc, output = host.sendkey('vm', 'ret')
+            self.assertNotEqual(rc, 0)
+            self.assertIn('QMP sendkey failed', output)
+
+
 if __name__ == '__main__':
     unittest.main()

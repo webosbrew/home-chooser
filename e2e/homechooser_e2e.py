@@ -974,6 +974,60 @@ def run(argv, timeout=120, input=None, env=None):
         return 124, (e.stdout or b'').decode('utf-8', 'replace') + '\n[timeout]'
 
 
+class KeySendError(RuntimeError):
+    """Input transport failed; callers must not continue a UI step."""
+
+
+# Executed by python3 on the Beanjar host; argv stays separate from Python source.
+QMP_SENDKEY = r"""
+import json
+import os
+import socket
+import sys
+import time
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(5)
+        sock.connect(os.path.expandvars(sys.argv[1]))
+        with sock.makefile('rb') as replies:
+            def receive():
+                line = replies.readline()
+                if not line:
+                    raise RuntimeError('QMP closed the connection')
+                return json.loads(line)
+            if 'QMP' not in receive():
+                raise RuntimeError('missing QMP greeting')
+            def execute(command, arguments, request_id):
+                sock.sendall((json.dumps(dict(execute=command, arguments=arguments,
+                                              id=request_id)) + '\n').encode())
+                deadline = time.monotonic() + 5
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError('QMP reply timed out')
+                    sock.settimeout(remaining)
+                    reply = receive()
+                    if 'event' in reply:
+                        continue
+                    if reply.get('id') != request_id:
+                        raise RuntimeError('unexpected QMP reply: ' + repr(reply))
+                    if 'error' in reply:
+                        raise RuntimeError('QMP error: ' + json.dumps(reply['error']))
+                    if 'return' not in reply:
+                        raise RuntimeError('invalid QMP reply: ' + repr(reply))
+                    return reply['return']
+            execute('qmp_capabilities', {}, 'capabilities')
+            result = execute('human-monitor-command',
+                             {'command-line': 'sendkey ' + sys.argv[2]}, 'key')
+            if result:
+                raise RuntimeError('sendkey monitor error: ' + str(result))
+            print('QMP sendkey acknowledged')
+except Exception as exc:
+    print('QMP sendkey failed: ' + str(exc), file=sys.stderr)
+    sys.exit(1)
+"""
+
+
 class BeanjarHost:
     """Every operation on the machine that runs Beanjar goes through here.
 
@@ -1072,10 +1126,7 @@ class BeanjarHost:
     # -- input and capture
     def sendkey(self, vm, key):
         sock = self.vm_dir(vm) + '/run/qmp.sock'
-        cmd = ('(echo \'{"execute":"qmp_capabilities"}\'; echo \'{"execute":"human-monitor-command",'
-               '"arguments":{"command-line":"sendkey %s"}}\'; sleep 0.5) | socat - UNIX-CONNECT:%s | tail -1'
-               % (key, sock))
-        return self.sh(cmd, 30)
+        return self.sh(self._q('python3', '-c', QMP_SENDKEY, sock, key), 30)
 
     def viewer_open(self, vm):
         return self.beanjar('viewer', 'open', vm, timeout=60)
@@ -1089,17 +1140,12 @@ class BeanjarHost:
         tmp = '/tmp/e2e-tv-%s-%d.png' % (vm, os.getpid())
         rc, out = self.beanjar('screenshot', vm, tmp, '--json', timeout=60)
         ok = rc == 0 and self.fetch(tmp, local_path)
-        self.sh('rm -f ' + tmp)
+        self.sh('rm -f ' + shlex.quote(tmp))
         return ok, out.strip()
 
     def screenshot(self, local_path):
-        """The Pi desktop (whole Wayland output; no crop geometry, so the viewer window may sit anywhere on it)."""
-        tmp = '/tmp/e2e-shot-%d.png' % os.getpid()
-        rc, out = self.sh('export XDG_RUNTIME_DIR=/run/user/$(id -u) WAYLAND_DISPLAY=wayland-0; '
-                          'grim %s' % tmp, 30)
-        ok = rc == 0 and self.fetch(tmp, local_path)
-        self.sh('rm -f ' + tmp)
-        return ok, out
+        """No portable desktop capture exists in the host Python standard library."""
+        return False, 'desktop capture unavailable: use beanjar screenshot or guest capture'
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1476,8 +1522,7 @@ class Scenario:
     def shot(self, label):
         """The TV picture from `beanjar screenshot` (about 2 s, headless, no viewer needed).  Only if
         that fails: the guest capture (ares-do screenshot; com.webos.service.capture fails on webOS 5
-        and 10.x to 12.x, and after the first failure it is not tried again), then the Pi desktop with
-        the viewer window (grim, `*-viewer.png`; the viewer is opened for it on first use).  Each
+        and 10.x to 12.x, and after the first failure it is not tried again). Each
         fallback used is logged."""
         self.shot_n += 1
         name = '%02d-%s%s.png' % (self.shot_n, (self.L.tag + '-') if self.a.multi else '', label)
@@ -1494,14 +1539,7 @@ class Scenario:
                 self.capture_broken = True
             else:
                 return path
-        if not self.viewer_opened:
-            rc, out = self.host.viewer_open(self.vm)
-            self.viewer_opened = True
-            self.rec.say('FALLBACK: beanjar viewer open: rc=%s %s' % (rc, out.strip()[-120:]))
-            sleep(3)
-        vname = name.replace('.png', '-viewer.png')
-        ok, out = self.host.screenshot(os.path.join(self.rec.outdir, vname))
-        self.rec.say('FALLBACK screenshot %s (grim, whole Pi desktop): %s' % (vname, 'ok' if ok else out.strip()))
+        self.rec.say('FALLBACK: no host desktop capture; screenshots unavailable')
         return path
 
     def press_alert(self, message, target, safe, label, service_proof):
@@ -1532,6 +1570,8 @@ class Scenario:
                 raise ValueError('focus did not move to %s (now %s)' % (target, focus))
             signal_used = alert_style_swap(before, after, target, safe)
             self.rec.note(label + ': focus appearance swapped', signal_used)
+        except KeySendError:
+            raise
         except (ValueError, TypeError, KeyError, IndexError, RuntimeError, OSError) as exc:
             self.alert_decline_reason = str(exc)
             self.rec.note(label + ': automatic press declined: ' + str(exc), 'MANUAL fallback')
@@ -1551,6 +1591,13 @@ class Scenario:
                 ak = {'DOWN': 'DOWN', 'UP': 'UP', 'LEFT': 'LEFT', 'RIGHT': 'RIGHT', 'OK': 'ENTER', 'HOME': 'LEFTMETA',
                       'BACK': 'ESC'}[k]
                 result = self.dev.key(ak)
+            rc, out = result
+            if rc:
+                location = self.host.name if self.a.input == 'qmp' else self.dev.root
+                error = 'key %s (%s) on %s failed (rc=%s): %s' % (
+                    k, qk if self.a.input == 'qmp' else ak, location, rc, out.strip())
+                self.rec.check('input delivery', False, error)
+                raise KeySendError(error)
             sleep(0.8)
         return result
 

@@ -111,19 +111,20 @@ the next reboot. LG firmware files are never edited.
 ## Beanjar host abstraction
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
-through `socat`, the TV screenshot through `beanjar screenshot`, the fallback viewer capture through `grim`, fetching a key) goes through the
+through Python 3, the TV screenshot through `beanjar screenshot`, fetching a key) goes through the
 `BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
 `ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
 runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
-on PATH, but the QMP sockets, `grim` and the VM files are on the machine the VM runs on.
+on PATH, but the QMP sockets and the VM files are on the machine the VM runs on.
 `--host-device` names another ssh config alias and `--host-mode` forces a mode for one run. The Pi is
 a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions and VMs only.
 VMs are listed with `beanjar list --local --json` (that machine's own VMs only); the QMP socket is under
 the VM directory `beanjar info` reports. No remote quoting exists outside that class. The screenshots the steps look at come from
-`beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; the
-`grim` fallback is the whole Wayland output.
+`beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; desktop capture has no standard-library fallback.
 
 ## Several machines
+
+Host helper code must use `python3` with the standard library only (or baseline POSIX shell/coreutils), without extra tools such as socat, nc, jq or grim; Beanjar itself is required.
 
 The Beanjar machines are listed in `e2e/hosts.toml`; `e2e/hosts.local.toml` (git-ignored) is read over
 it, for this PC's own machines and `[paths]`. Without either file the one machine is today's: `pi`,
@@ -536,7 +537,7 @@ Then steps 4 and 5 run on the updated install.
   the existing restart path triggers the LG fault. The runner keeps this as a `FAIL` and never confirms
   the LG crash popup.
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
-* Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then `grim` of the whole Pi desktop (`*-viewer.png`), for which the viewer is opened on first use and closed before the stop. Each fallback is logged with the word FALLBACK.
+* Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then a logged capture-unavailable result if both fail. Each fallback is logged with the word FALLBACK.
 * On 5.x Home starts `com.webos.app.fullhome` as an overlay over the app in front (foreground stays the app), so step 3/4/5's "Home opens stock" looks for it running.
 * Readiness: before step 1 (and after every reboot) the runner waits up to 5 minutes until root SSH (`<vm>-root`, Homebrew Channel's Dropbear on guest port 22, host 6622) answers and `ares-install -l` lists `org.webosbrew.hbchannel`; each change of state is logged (`ready`, `no-root-ssh`, `no-hbchannel`, `down`). `no-root-ssh` (developer mode answers, root SSH never does) is Homebrew Channel's failsafe mode: its `startup.sh` sets `/var/luna/preferences/webosbrew_failsafe` at the start of a boot and clears it about 12 s after its boot work, so a boot stopped within seconds of starting leaves the flag, and the next boot runs only telnetd (no Dropbear) and clears the flag after 15 s. Seen 2026-10-24 on `w20l-jhericurl`, `w22p-mullet` and `w22o-number1` after a 9 s boot each (saved logs `20261024T0031..0038Z-stop`: `boot-done` false, dmesg ends at 8.7-9.7 s; the next boot's `ps.txt` has telnetd and no `bin/dropbear -R`); `w24g-ombre`'s short boot ran 22 s and it was unaffected. On `no-root-ssh` at setup the runner restarts the VM once and waits again.
 * Home Chooser is an overlay window (appinfo `defaultWindowType`), and surface-manager closes an overlay after a stretch without key input: measured on 6.5.2 (2026-10-24), about 90 s after the launch with no key and about 120 s after the last key; a close and relaunch alone does not reset it; sam logs `getAppLifeStatus ... "reason":"userTimeout"` and WAM `killApp reason : userTimeout`. On 9.2.1 the same close was seen about 90 s after the last key. The runner presses a key only while it can read our page; before the list keys of step 2 it opens Home Chooser again (and notes the close and its reason) if the page is gone, and anywhere else it stops rather than press a key at whatever is beneath.
