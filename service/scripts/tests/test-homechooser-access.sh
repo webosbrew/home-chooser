@@ -11,15 +11,12 @@ export HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_LS_CONTROL="$T/control"
 printf '#!/bin/sh\necho "$*" >> "%s/scans"\n' "$T" > "$T/control"
 chmod +x "$T/control"
 for root in "$T/dev" "$T/system"; do
-    mkdir -p "$root/manifests.d" "$root/api-permissions.d" "$root/roles.d" "$root/services.d"
-    printf '%s\n' '{"exeName":"/homechooser-service","allowedNames":["org.webosbrew.homechooser.service","com.webos.homechooser.alert"],"permissions":[{"service":"org.webosbrew.homechooser.service","outbound":["*"]},{"service":"com.webos.homechooser.alert","inbound":["com.webos.surfacemanager"],"outbound":[]}]}' > "$root/roles.d/org.webosbrew.homechooser.service.service.json"
+    mkdir -p "$root/manifests.d" "$root/api-permissions.d" "$root/services.d"
     printf '[D-BUS Service]\nName=org.webosbrew.homechooser.service\nExec=/homechooser-service\nType=dynamic\n' > "$root/services.d/org.webosbrew.homechooser.service.service"
-    printf '# Home Chooser alert callback\n[D-BUS Service]\nName=com.webos.homechooser.alert\n' > "$root/services.d/com.webos.homechooser.alert.service"
-    printf '%s\n' '{"all":["com.webos.homechooser.alert/uninstallConfirmed","com.webos.homechooser.alert/rebootConfirmed"]}' > "$root/api-permissions.d/org.webosbrew.homechooser.alert.api.json"
 done
 # Pretty JSON, a space in a string, absent arrays and existing entries must all survive.
-printf '{ "id": "keep spaces", "rolesFiles": ["/other/role"], "apiPermissionFiles": ["%s"], "serviceFiles": ["%s"] }\n' "$T/dev/api-permissions.d/org.webosbrew.homechooser.alert.api.json" "$T/dev/services.d/com.webos.homechooser.alert.service" > "$T/dev/manifests.d/org.webosbrew.homechooser.json"
-printf '{"groupsFiles":["/other/group"],"apiPermissionFiles":["/other/api","%s"],"serviceFiles":["%s"]}\n' "$T/system/api-permissions.d/org.webosbrew.homechooser.alert.api.json" "$T/system/services.d/com.webos.homechooser.alert.service" > "$T/system/manifests.d/org.webosbrew.homechooser.json"
+printf '%s\n' '{ "id": "keep spaces", "rolesFiles": ["/other/role"] }' > "$T/dev/manifests.d/org.webosbrew.homechooser.json"
+printf '%s\n' '{"groupsFiles":["/other/group"],"apiPermissionFiles":["/other/api"]}' > "$T/system/manifests.d/org.webosbrew.homechooser.json"
 # The installer's own api file for the service: never written, moved or removed by us.
 INSTALLER_API='{"org.webosbrew.homechooser.service.group":["org.webosbrew.homechooser.service/*"]}'
 for root in "$T/dev" "$T/system"; do
@@ -41,20 +38,8 @@ for name in ['dev','system']:
     assert not (r/'groups.d/homechooser.groups.json').exists()
     assert (r/'api-permissions.d/org.webosbrew.homechooser.service.api.json').read_text().strip()==installer
     path=r/'api-permissions.d/org.webosbrew.homechooser.launcher.api.json'
-    alert_api=r/'api-permissions.d/org.webosbrew.homechooser.alert.api.json'
-    alert_service=r/'services.d/com.webos.homechooser.alert.service'
-    role=json.loads((r/'roles.d/org.webosbrew.homechooser.service.service.json').read_text())
     assert m.get('apiPermissionFiles',[]).count(str(path))==(0 if mode=='removed' else 1)
-    assert m.get('apiPermissionFiles',[]).count(str(alert_api))==0
-    assert m.get('serviceFiles',[]).count(str(alert_service))==0
     assert path.exists()==(mode!='removed')
-    assert not alert_api.exists()
-    assert not alert_service.exists()
-    assert role['allowedNames'].count('com.webos.homechooser.alert')==0
-    assert role['allowedNames'][0]=='org.webosbrew.homechooser.service'
-    assert role['permissions'][0]=={'service':'org.webosbrew.homechooser.service','outbound':['*']}
-    alias=[entry for entry in role['permissions'] if entry['service']=='com.webos.homechooser.alert']
-    assert not alias
     if mode=='removed': continue
     api=json.loads(path.read_text())
     expected=['org.webosbrew.homechooser.service/'+s for s in ['listApps','listRunning','closeApp','uninstallApp','getInfo','getForegroundApp','getAppInfo','getAppIcon']]
@@ -95,7 +80,6 @@ mv "$T/dev/manifests.d/org.webosbrew.homechooser.json" "$T/dev-manifest"
 run remove
 [ ! -f "$T/dev/api-permissions.d/org.webosbrew.homechooser.launcher.api.json" ]
 [ -f "$T/dev/api-permissions.d/org.webosbrew.homechooser.service.api.json" ]
-[ ! -f "$T/dev/services.d/com.webos.homechooser.alert.service" ]
 mv "$T/dev-manifest" "$T/dev/manifests.d/org.webosbrew.homechooser.json"
 run remove
 verify removed

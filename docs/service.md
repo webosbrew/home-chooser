@@ -200,8 +200,7 @@ missing. On major 11+ the same eight methods are also under `ares.webos.cli`. Ne
 On webOS 9.2.1, Surface Manager turns `onclick` plus `params` into an alert action. Its role
 allows calls to LG's `com.webos.*` services but denies `org.webosbrew.*` before our handler runs.
 The buttons therefore call LG's tvpower and appInstallService directly. Neither Home Chooser's
-role nor the vendor role grants an extra callback service. Apply and remove clean any callback
-alias files and role entry left by the experimental `com.webos.homechooser.alert` design.
+role nor the vendor role grants an extra callback service.
 
 No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
 `groups.d/homechooser.groups.json` through `groupsFiles`. On webOS 9.2.1 (w22h-ombre) ls-hubd then

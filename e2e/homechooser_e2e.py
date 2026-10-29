@@ -50,10 +50,7 @@ def uninstall_remnant_paths():
     """Files owned by Home Chooser that must disappear after watcher restoration."""
     paths = [HOOK_CACHE, HOOK_STALE, BOOT_DIR]
     for root in ('/var/luna-service2-dev', '/var/luna-service2'):
-        for suffix in ('api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
-                       'api-permissions.d/org.webosbrew.homechooser.alert.api.json',
-                       'services.d/com.webos.homechooser.alert.service'):
-            paths.append(root + '/' + suffix)
+        paths.append(root + '/api-permissions.d/org.webosbrew.homechooser.launcher.api.json')
     return paths
 
 

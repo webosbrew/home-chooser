@@ -6,7 +6,6 @@ set -eu
 . "$(dirname "$0")/lib/common.sh"
 ROOTS=${HOMECHOOSER_LUNA_ROOTS:-'/var/luna-service2-dev /var/luna-service2'}
 CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
-NODE=${HOMECHOOSER_NODE:-node}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 changed=0
 major=$(major_version)
@@ -62,9 +61,6 @@ case "$action" in apply|remove|status) ;; *) echo "usage: $0 apply|remove|status
 for root in $ROOTS; do
     manifest=$root/manifests.d/org.webosbrew.homechooser.json
     api=$root/api-permissions.d/org.webosbrew.homechooser.launcher.api.json
-    alert_api=$root/api-permissions.d/org.webosbrew.homechooser.alert.api.json
-    role=$root/roles.d/org.webosbrew.homechooser.service.service.json
-    alert_service=$root/services.d/com.webos.homechooser.alert.service
     if [ "$action" = status ]; then
         printf '%s manifest=%s api=%s\n' "$root" \
             "$(test -f "$manifest" && echo yes || echo no)" \
@@ -74,9 +70,6 @@ for root in $ROOTS; do
     if [ -f "$manifest" ]; then
         json=$(compact "$manifest")
         case "$json" in \{*\}) ;; *) echo "Invalid manifest: $manifest" >&2; exit 1 ;; esac
-        # Drop the old alias entries before adding the current API path, keeping apply idempotent.
-        drop_entry apiPermissionFiles "$alert_api"
-        drop_entry serviceFiles "$alert_service"
         if [ "$action" = apply ]; then
             mkdir -p "$root/api-permissions.d"
             methods='["org.webosbrew.homechooser.service/listApps","org.webosbrew.homechooser.service/listRunning","org.webosbrew.homechooser.service/closeApp","org.webosbrew.homechooser.service/uninstallApp","org.webosbrew.homechooser.service/getInfo","org.webosbrew.homechooser.service/getForegroundApp","org.webosbrew.homechooser.service/getAppInfo","org.webosbrew.homechooser.service/getAppIcon"]'
@@ -87,19 +80,9 @@ for root in $ROOTS; do
         else
             drop_entry apiPermissionFiles "$api"
         fi
-        # The alias files are also removed below when the installer has already removed the manifest.
         # Compare compact JSON to avoid rewriting an unchanged pretty-printed manifest.
         if [ "$(compact "$manifest")" != "$json" ]; then write_changed "$manifest" "$json"; fi
     fi
     if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
-    if [ -f "$alert_api" ]; then rm -f "$alert_api"; changed=1; fi
-    if [ -f "$alert_service" ] && grep -q '^# Home Chooser alert callback$' "$alert_service"; then
-        rm -f "$alert_service"
-        changed=1
-    fi
-    if [ -f "$role" ]; then
-        result=$($NODE "$(dirname "$0")/lib/legacy-alert-cleanup.js" "$role")
-        [ "$result" = changed ] && changed=1
-    fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi

@@ -83,10 +83,6 @@ class StockRecord(unittest.TestCase):
             '/var/lib/webosbrew/homechooser/boot',
             '/var/luna-service2-dev/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
             '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
-            '/var/luna-service2-dev/api-permissions.d/org.webosbrew.homechooser.alert.api.json',
-            '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.alert.api.json',
-            '/var/luna-service2-dev/services.d/com.webos.homechooser.alert.service',
-            '/var/luna-service2/services.d/com.webos.homechooser.alert.service',
         })
 
     def test_5x_is_unchanged_a_stock_launcher(self):
