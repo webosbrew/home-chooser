@@ -36,9 +36,7 @@
 
 static GMainLoop *g_loop;
 static LSHandle *g_handle;
-static LSHandle *g_alert_handle;
 static PmLogContext hc_log;
-static bool register_alert(void);
 
 #define LOGI(id, ...) PmLogInfo(hc_log, id, 0, __VA_ARGS__)
 #define LOGE(id, ...) PmLogError(hc_log, id, 0, __VA_ARGS__)
@@ -700,7 +698,6 @@ static bool on_run(LSHandle *sh, LSMessage *msg, void *ctx)
 			put_str(o, "stderrString", err->str);
 			send_reply(msg, o);
 		}
-		if (strcmp(cmd->name, "accessApply") == 0 && code == 0) register_alert();
 		g_string_free(out, TRUE);
 		g_string_free(err, TRUE);
 	}
@@ -1418,20 +1415,15 @@ static int never_stop(const char *text) { (void)text; return 0; }
 
 static void uninstall_ask(LOp *op)
 {
-	UninstallToken *t = &g_tokens[g_token_next++ % TOKEN_SLOTS];
-	memset(t, 0, sizeof *t);
-	new_token(t->token);
-	if (!hc_token_ok(t->token)) {
-		send_error_for(op->msg, op->method, "internal", "Could not make a confirmation token");
+	hc_remove_call remove;
+	if (!hc_remove_step(1, op->target, op->target_folder, &remove)) {
+		LOGE("REFUSED", "uninstallApp %s: no direct removal endpoint for %s", op->target,
+			op->target_folder ? op->target_folder : "");
+		send_error_for(op->msg, op->method, "protected", "No supported removal endpoint for this app");
 		return;
 	}
-	g_strlcpy(t->id, op->target, sizeof t->id);
-	g_strlcpy(t->requester, op->caller, sizeof t->requester);
-	g_strlcpy(t->folder, op->target_folder ? op->target_folder : "", sizeof t->folder);
-	t->expires = g_get_monotonic_time() + TOKEN_TTL_US;
-	t->live = true;
 
-	/* The alert: only Uninstall calls the service, with the token. */
+	/* The alert action goes to LG's endpoint chosen from the verified install folder. */
 	char *question = g_strdup_printf("Uninstall %s?", op->target_title ? op->target_title : op->target);
 	jvalue_ref a = jobject_create();
 	put_str(a, "sourceId", HC_APP_ID);
@@ -1440,9 +1432,8 @@ static void uninstall_ask(LOp *op)
 	jvalue_ref buttons = jarray_create(NULL);
 	jvalue_ref yes = jobject_create();
 	put_str(yes, "label", "Uninstall");
-	put_str(yes, "onclick", "luna://" HC_ALERT_SERVICE_ID "/uninstallConfirmed");
-	jvalue_ref yes_params = jobject_create();
-	put_str(yes_params, "token", t->token);
+	put_str(yes, "onclick", remove.uri);
+	jvalue_ref yes_params = parse_object(remove.payload);
 	jobject_set(yes, key_buf("params"), yes_params);
 	jarray_append(buttons, yes);
 	jvalue_ref no = jobject_create();
@@ -1453,7 +1444,8 @@ static void uninstall_ask(LOp *op)
 	GString *out = g_string_new(NULL);
 	int code = luna_run("luna://com.webos.notification/createAlert", jvalue_stringify(a), 1, 8, never_stop, out);
 	bool alert = code == 0 && hc_remove_reply_class(out->str) == 1;
-	LOGI("UNINSTALL_ASK", "%s by %s: alert %s (exit %d): %s", op->target, op->caller, alert ? "shown" : "refused", code, out->str);
+	LOGI("UNINSTALL_ASK", "%s by %s: alert %s for %s (exit %d): %s", op->target, op->caller,
+		alert ? "shown" : "refused", remove.uri, code, out->str);
 	g_string_free(out, TRUE);
 	j_release(&a);
 	g_free(question);
@@ -1461,6 +1453,19 @@ static void uninstall_ask(LOp *op)
 	const char *how = "alert";
 	if (!alert) {
 		/* Alerts are refused to root on some releases: Home Chooser's own screen asks instead. */
+		UninstallToken *t = &g_tokens[g_token_next++ % TOKEN_SLOTS];
+		memset(t, 0, sizeof *t);
+		new_token(t->token);
+		if (!hc_token_ok(t->token)) {
+			LOGE("REFUSED", "uninstallApp %s: could not make a confirmation token", op->target);
+			send_error_for(op->msg, op->method, "internal", "Could not make a confirmation token");
+			return;
+		}
+		g_strlcpy(t->id, op->target, sizeof t->id);
+		g_strlcpy(t->requester, op->caller, sizeof t->requester);
+		g_strlcpy(t->folder, op->target_folder ? op->target_folder : "", sizeof t->folder);
+		t->expires = g_get_monotonic_time() + TOKEN_TTL_US;
+		t->live = true;
 		jvalue_ref l = jobject_create();
 		put_str(l, "id", HC_APP_ID);
 		jvalue_ref params = jobject_create();
@@ -1537,15 +1542,14 @@ static bool on_launcher_uninstall(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
-/* uninstallConfirmed {token}: the user said yes (the alert's button, or Home Chooser's screen). */
+/* uninstallConfirmed {token}: fallback confirmation on Home Chooser's own screen. */
 static int stop_progress(const char *text) { return hc_progress_state(text) != 0; }
 
 static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	const char *app = LSMessageGetApplicationID(msg);
-	/* The alert action carries the createAlert caller's application id; the screen uses our app id. */
-	if (app && app[0] && !hc_alert_sender_ok(app)) {
+	if (app && app[0] && !hc_sender_ok(app)) {
 		LOGE("REFUSED", "uninstallConfirmed from application id '%s'", app);
 		send_error(msg, "forbidden", "Only the confirmation may call this method");
 		return true;
@@ -1617,23 +1621,12 @@ static bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
-/* ---- rebootPrompt / rebootConfirmed ----
+/* ---- rebootPrompt ----
  * The patch needs a restart of the TV and nothing else restarts anything while the TV runs. Only
- * Home Chooser can ask (rebootPrompt) and only while the worker reports reboot=needed; the reboot
- * itself goes through tvpowerd (no systemctl fallback: it would skip the power-off sequence and its
- * busy check). The one-shot token is the capability of the alert's button. */
+ * Home Chooser can ask and only while the worker reports reboot=needed. The button calls tvpowerd
+ * directly (no systemctl fallback: it would skip the power-off sequence and its busy check). */
 
-#define REBOOT_TTL_US (600 * G_USEC_PER_SEC)
 #define REBOOT_URI "luna://com.webos.service.tvpower/power/reboot"
-
-typedef struct {
-	char token[HC_TOKEN_LEN + 1];
-	gint64 expires;
-	bool live;
-} RebootToken;
-
-static RebootToken g_reboot_tokens[TOKEN_SLOTS];
-static int g_reboot_next;
 
 /* True when the worker's status says reboot=needed right now. */
 static bool reboot_pending(void)
@@ -1659,7 +1652,7 @@ static bool reboot_notify(const char *tag, const char *uri, jvalue_ref payload, 
 	return ok;
 }
 
-/* rebootPrompt {reason: "apply"|"remove"}: always a system alert (a toast when it is refused); the token never leaves the service */
+/* rebootPrompt {reason: "apply"|"remove"}: always a system alert (a toast when it is refused). */
 static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
@@ -1677,16 +1670,6 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 		send_error_for(msg, "rebootPrompt", "badRequest", "reason must be apply or remove");
 		return true;
 	}
-	RebootToken *t = &g_reboot_tokens[g_reboot_next++ % TOKEN_SLOTS];
-	memset(t, 0, sizeof *t);
-	new_token(t->token);
-	if (!hc_token_ok(t->token)) {
-		send_error_for(msg, "rebootPrompt", "internal", "Could not make a confirmation token");
-		return true;
-	}
-	t->expires = g_get_monotonic_time() + REBOOT_TTL_US;
-	t->live = true;
-
 	jvalue_ref a = jobject_create();
 	put_str(a, "sourceId", HC_APP_ID);
 	put_str(a, "title", "Home Chooser");
@@ -1694,9 +1677,9 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	jvalue_ref buttons = jarray_create(NULL);
 	jvalue_ref yes = jobject_create();
 	put_str(yes, "label", "Reboot");
-	put_str(yes, "onclick", "luna://" HC_ALERT_SERVICE_ID "/rebootConfirmed");
+	put_str(yes, "onclick", REBOOT_URI);
 	jvalue_ref yes_params = jobject_create();
-	put_str(yes_params, "token", t->token);
+	put_str(yes_params, "reason", "remoteKey");
 	jobject_set(yes, key_buf("params"), yes_params);
 	jarray_append(buttons, yes);
 	jvalue_ref no = jobject_create();
@@ -1704,13 +1687,11 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	put_bool(no, "focus", true);
 	jarray_append(buttons, no);
 	jobject_set(a, key_buf("buttons"), buttons);
-	/* The payload holds the token, so it is not logged; this line says what was asked (the e2e runner reads it). */
-	LOGI("REBOOT_ASK", "createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)", message);
+	LOGI("REBOOT_ASK", "createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)", message);
 	bool alert = reboot_notify("REBOOT_ASK", "luna://com.webos.notification/createAlert", a, 8);
 	j_release(&a);
 	const char *how = "alert";
 	if (!alert) {
-		t->live = false; /* nobody holds the token */
 		jvalue_ref toast = jobject_create();
 		put_str(toast, "sourceId", HC_APP_ID);
 		put_bool(toast, "noaction", true);
@@ -1728,56 +1709,6 @@ static bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx)
 	put_bool(o, "pending", true);
 	put_str(o, "confirm", how);
 	send_reply(msg, o);
-	return true;
-}
-
-/* rebootConfirmed {token}: the user chose Reboot on the alert. */
-static bool on_reboot_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	const char *app = LSMessageGetApplicationID(msg);
-	/* Same sender rule as uninstallConfirmed. The token remains one shot. */
-	if (app && app[0] && !hc_alert_sender_ok(app)) {
-		LOGE("REFUSED", "rebootConfirmed from application id '%s'", app);
-		send_error(msg, "forbidden", "Only the confirmation may call this method");
-		return true;
-	}
-	if (geteuid() != 0) {
-		LOGE("REFUSED", "rebootConfirmed while service uid is %d", (int)geteuid());
-		send_error(msg, "notRoot", "The service is not running as root");
-		return true;
-	}
-	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
-	char *token = req ? get_string(req, "token") : NULL;
-	j_release(&req);
-	RebootToken *t = NULL;
-	for (int i = 0; hc_token_ok(token) && i < TOKEN_SLOTS; i++) {
-		if (g_reboot_tokens[i].live && strcmp(g_reboot_tokens[i].token, token) == 0) t = &g_reboot_tokens[i];
-	}
-	g_free(token);
-	if (!t || g_get_monotonic_time() > t->expires) {
-		if (t) t->live = false;
-		LOGE("REFUSED", "rebootConfirmed with an unknown or expired token");
-		send_error(msg, "badToken", "The confirmation is unknown, used or expired");
-		return true;
-	}
-	t->live = false; /* one shot */
-	if (!reboot_pending()) {
-		LOGE("REFUSED", "rebootConfirmed with no restart pending");
-		send_error_for(msg, "rebootConfirmed", "notPending", "No restart is pending any more");
-		return true;
-	}
-	LOGI("REBOOT", "rebootConfirmed accepted token; calling tvpower/power/reboot");
-	GString *out = g_string_new(NULL);
-	int code = luna_run(REBOOT_URI, "{\"reason\":\"remoteKey\"}", 1, 30, never_stop, out);
-	bool ok = code == 0 && hc_remove_reply_class(out->str) == 1;
-	LOGI("REBOOT", "rebootConfirmed %s (exit %d): %s", ok ? "accepted" : "refused", code, out->str);
-	g_string_free(out, TRUE);
-	if (ok) send_ok(msg);
-	else {
-		LOGE("REFUSED", "rebootConfirmed: tvpower refused restart");
-		send_error_for(msg, "rebootConfirmed", "rebootFailed", "The TV did not accept the restart");
-	}
 	return true;
 }
 
@@ -1806,36 +1737,8 @@ static LSMethod methods[] = {
 	{"getAppIcon", on_launcher_get_app_icon, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{"rebootPrompt", on_reboot_prompt, LUNA_METHOD_FLAGS_NONE},
-	{"rebootConfirmed", on_reboot_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
 };
-
-/* Surface Manager's alert action is limited to com.webos.* outbound destinations. Keep only
- * confirmation methods on that name; the launcher API remains on HC_SERVICE_ID. */
-static LSMethod alert_methods[] = {
-	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
-	{"rebootConfirmed", on_reboot_confirmed, LUNA_METHOD_FLAGS_NONE},
-	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
-};
-
-static bool register_alert(void)
-{
-	if (g_alert_handle) return true;
-	LSError e;
-	LSErrorInit(&e);
-	if (!LSRegister(HC_ALERT_SERVICE_ID, &g_alert_handle, &e)
-		|| !LSRegisterCategory(g_alert_handle, "/", alert_methods, NULL, NULL, &e)
-		|| !LSGmainAttach(g_alert_handle, g_loop, &e)) {
-		LOGE("ALERT_REGISTER", "%s", e.message ? e.message : "?");
-		if (g_alert_handle) LSUnregister(g_alert_handle, &e);
-		g_alert_handle = NULL;
-		LSErrorFree(&e);
-		return false;
-	}
-	LSErrorFree(&e);
-	LOGI("ALERT_REGISTER", "registered %s", HC_ALERT_SERVICE_ID);
-	return true;
-}
 
 int main(void)
 {
@@ -1853,9 +1756,7 @@ int main(void)
 		LSErrorFree(&e);
 		return 1;
 	}
-	register_alert();
 	g_main_loop_run(g_loop);
-	if (g_alert_handle) LSUnregister(g_alert_handle, &e);
 	LSUnregister(g_handle, &e);
 	LSErrorFree(&e);
 	g_main_loop_unref(g_loop);

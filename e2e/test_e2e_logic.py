@@ -190,13 +190,13 @@ class Texts(unittest.TestCase):
         self.assertNotIn('rebootAsk', self.read('app/src/views/useHomeChooser.js'))
         self.assertNotIn('Restart the TV?', self.read('app/src/views/MainPanel.js'))
         main = self.read('service/src/main.c')
-        self.assertIn('createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)', main)
+        self.assertIn('createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)', main)
 
 
 class RebootAsk(unittest.TestCase):
     APPLY = e2e.REBOOT_PROMPT['apply']
     REQUEST = ('2026-10-24T05:48:12 user.info org.webosbrew.homechooser.service [] REBOOT_ASK {} '
-               'createAlert request: message: %s; buttons: Reboot (rebootConfirmed), Later (focused)' % APPLY)
+               'createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)' % APPLY)
 
     def test_accepted_alert(self):
         text = self.REQUEST + '\n' + ('2026-10-24T05:48:12 user.info svc [] REBOOT_ASK {} luna://com.webos.notification/'
@@ -229,8 +229,8 @@ class RebootAsk(unittest.TestCase):
             'senderUniqueName': 'client-100',
             'destination': 'com.webos.notification', 'method': 'createAlert', 'token': 7,
             'payload': {'sourceId': e2e.APP_ID, 'title': 'Home Chooser', 'message': self.APPLY,
-                        'buttons': [{'label': 'Reboot', 'onclick': 'luna://' + e2e.ALERT_SVC_ID + '/rebootConfirmed',
-                                     'params': {'token': 'private-token'}},
+                        'buttons': [{'label': 'Reboot', 'onclick': e2e.TVPOWER_REBOOT_URI,
+                                     'params': {'reason': 'remoteKey'}},
                                     {'label': 'Later', 'focus': True}]}})
         monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
                           'destination': 'com.webos.lunasend-100', 'destinationUniqueName': 'client-100',
@@ -258,8 +258,8 @@ class RebootAsk(unittest.TestCase):
             payload = {'sourceId': e2e.APP_ID, 'message': self.APPLY}
             if method == 'createAlert':
                 payload.update(title='Home Chooser', message=self.APPLY, buttons=[
-                    {'label': 'Reboot', 'onclick': 'luna://' + e2e.ALERT_SVC_ID + '/rebootConfirmed',
-                     'params': {'token': 'secret'}}, {'label': 'Later', 'focus': True}])
+                    {'label': 'Reboot', 'onclick': e2e.TVPOWER_REBOOT_URI,
+                     'params': {'reason': 'remoteKey'}}, {'label': 'Later', 'focus': True}])
             monitor._observe({'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
                               'destination': 'com.webos.notification', 'method': method,
                               'token': token, 'payload': payload})

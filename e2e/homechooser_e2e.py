@@ -31,7 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 APP_ID = 'org.webosbrew.homechooser'
 SVC_ID = APP_ID + '.service'
-ALERT_SVC_ID = 'com.webos.homechooser.alert'
+TVPOWER_REBOOT_URI = 'luna://com.webos.service.tvpower/power/reboot'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/homekey'
@@ -182,7 +182,7 @@ def parse_reboot_ask(text):
     """The service's REBOOT_ASK PmLog lines (service/src/main.c on_reboot_prompt) -> what was asked and how
     the notification service answered:
     {'message', 'buttons' (list), 'alert' ('accepted'|'refused'|None), 'alert_id', 'toast' ('accepted'|'refused'|None)}.
-    The request line carries no token; the replies are the createAlert / createToast lines with their JSON."""
+    The request line carries no private parameters; replies are the createAlert / createToast lines with their JSON."""
     out = {'message': None, 'buttons': [], 'alert': None, 'alert_id': None, 'toast': None}
     for line in (text or '').splitlines():
         if 'REBOOT_ASK' not in line:
@@ -206,7 +206,7 @@ def parse_reboot_ask(text):
 class RebootAlertMonitor:
     """Observe the service's notification call when a firmware drops its PmLog info lines.
 
-    ls-monitor carries the confirmation token in the request. Keep raw events only in memory;
+    ls-monitor carries each button's action and parameters in the request. Keep raw events only in memory;
     the recorded evidence contains the message, button labels and notification reply only.
     """
     def __init__(self, dev):
@@ -2469,7 +2469,7 @@ class Scenario:
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
             how = self.wait_reboot(boot0)
             if how in ('rebooted', 'off'):
-                r.check('Reboot restarted the TV (rebootConfirmed -> tvpower/power/reboot; a VM that powers off counts)', True, how)
+                r.check('Reboot restarted the TV (alert -> tvpower/power/reboot; a VM that powers off counts)', True, how)
                 if how == 'off':
                     r.note('the VM powered off instead of rebooting (QEMU -no-reboot?); starting it with beanjar', '')
                     self.host.start(self.vm)
@@ -2876,7 +2876,7 @@ exit "$rc"
             r.check('%s as %s while it is not the selected Home: refused with notHome' % (m, self.launcher),
                     api_refused(rep) and rep.get('errorCode') == 'notHome', raw[:400])
         rep, raw = self.api('uninstallConfirmed', {'token': '0' * 32})
-        r.check('uninstallConfirmed as the launcher is refused (only Home Chooser or the notification service)',
+        r.check('screen-only uninstallConfirmed as the launcher is refused',
                 api_refused(rep), raw[:400])
         self.api_request(selected=False)
 
@@ -3094,8 +3094,8 @@ exit "$rc"
                 self.close_insp()
                 return
             self.dismiss_alert('3a-uninstall-alert-2')
-            r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> uninstallConfirmed '
-                     '-> removal)', 'the runner never presses OK on a system popup and the token is only in the alert; '
+            r.manual('uninstall confirm path on the alert route (Uninstall on the system alert -> LG remove)',
+                     'the runner never presses OK on a system popup; '
                      'by hand: call uninstall as the launcher, press Uninstall, then check getAppInfo %s fails' % DISPOSABLE_ID)
             return
         if how != 'screen':

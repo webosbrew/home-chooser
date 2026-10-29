@@ -46,8 +46,8 @@ export const createServiceClient = (call, {timeoutMs = CALL_TIMEOUT_MS, runTimeo
 		readIcon: (appId) => invoke('readIcon', {appId}).then(ok).then((r) => ({mime: r.mime, data: r.data})),
 		uninstallConfirmed: (token) => invoke('uninstallConfirmed', {token}, runTimeoutMs).then(ok),
 		// The restart prompt (docs/service.md): the service raises a system alert (confirm 'alert', or
-		// 'toast' when the alert is refused). The alert's Reboot button calls rebootConfirmed with a token
-		// the app never sees, so the app has no such method.
+		// 'toast' when the alert is refused). The alert's Reboot button calls LG's tvpower directly,
+		// so the app has no confirmation method.
 		rebootPrompt: (reason) => invoke('rebootPrompt', {reason}).then(ok),
 		link: () => invoke('link').then(ok),
 		unlink: () => invoke('unlink').then(ok),

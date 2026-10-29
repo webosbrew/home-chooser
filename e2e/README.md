@@ -314,11 +314,11 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
     focus is Later, and the inspector page that proved ownership of the old in-app dialog is not in front of a
     system alert (nor does a foreign popup, such as the LG fault popup, announce itself). A person presses
     Reboot; the runner waits 240 s for a new `boot_id` and, on one, checks that the TV restarted through
-    `rebootConfirmed` and `tvpower/power/reboot` (a VM that Beanjar shows off is started again). With no new
+    the direct `tvpower/power/reboot` action (a VM that Beanjar shows off is started again). With no new
     boot it records a second `MANUAL`, closes the alert with `closeAlert` and restarts the VM with beanjar.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
   least 9 mounts), and the Home key hook log of that boot (its firmware-order compositor restart is the only
-  one allowed) is noted; the minimal-hook status checks come here. The `rebootConfirmed` path (the
+  one allowed) is noted; the minimal-hook status checks come here. The direct tvpower path (the
   alert's Reboot button) is therefore exercised only by a person, with `--reboot-via alert`.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,
   `reboot=no`, the watcher bakes the new id into the mounted copy, no compositor restart.
@@ -403,7 +403,7 @@ declare it and are refused. The run also installs a disposable non-home app,
   opened with `confirmUninstall`) by Back on our own "Uninstall HC Fixture disposable?" dialog. The app must
   still be installed afterwards. The confirm path follows: on the screen route the runner presses Uninstall on
   our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
-  (the token is only in the system alert's button). Then a `request` while the launcher is Home must give
+  (the button calls LG's remove endpoint directly). Then a `request` while the launcher is Home must give
   the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
   With `--uninstall-via alert`, the runner leaves the second system alert up for 240 seconds while a
   person verifies its text and button focus from a screenshot and presses Uninstall. It then checks
