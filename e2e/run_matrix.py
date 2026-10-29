@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Run the Home Chooser E2E on several VMs: one queue and one worker per Beanjar machine, so the runs on
+"""Run the Home Chooser E2E on several VMs: one worker per Beanjar machine, so the runs on
 a machine are serialised (at most one VM running on it) and machines run in parallel.  Each run is a
 subprocess of homechooser_e2e.py.  See e2e/README.md "Several machines".
 
@@ -32,14 +32,49 @@ REFUSED_FLAGS = ('--vm', '--host', '--host-mode', '--host-device', '--outdir', '
 # Planning
 # ---------------------------------------------------------------------------------------------
 def wanted_vms(names):
-    """[(release, vm)] in order, each VM once; a release means its first matrix row."""
+    """Release selects its first slot; an explicit VM restricts the slot to that VM."""
+    if not names:
+        return [(m[0], m[1]) for m in e2e.MATRIX]
     out, seen = [], set()
-    for n in names or [m[1] for m in e2e.MATRIX]:
-        row = e2e.entry(n)
-        if row[1] not in seen:
-            seen.add(row[1])
-            out.append((row[0], row[1]))
+    for name in names:
+        row = next((m for m in e2e.MATRIX if name == m[0] or name in e2e.candidates(m[1])), None)
+        if row is None:
+            e2e.entry(name)
+        key = e2e.candidates(row[1])
+        if key not in seen:
+            seen.add(key)
+            out.append((row[0], row[1] if name == row[0] else name))
     return out
+
+
+def select_hosts(cfg, names):
+    selected = names.split(',') if names else list(cfg['hosts'])
+    unknown = set(selected) - cfg['hosts'].keys()
+    if unknown:
+        raise SystemExit('unknown hosts: ' + ', '.join(sorted(unknown)))
+    return dict(cfg, hosts={h: cfg['hosts'][h] for h in selected})
+
+
+class WorkPool(dict):
+    """Preview queues and the shared slots claimed at runtime."""
+    def __init__(self, slots):
+        super().__init__()
+        self.slots = slots
+
+    def pick(self, host, pending):
+        available = [(i, s) for i, s in enumerate(pending) if host in s['choices']]
+        if not available:
+            return None
+        exclusive = {h: sum(list(s['choices']) == [h] for s in pending)
+                     for s in pending for h in s['choices']}
+        def opportunity(slot):
+            others = set(slot['choices']) - {host}
+            return exclusive.get(host, 0) - min(exclusive.get(h, 0) for h in others) if others else 0
+        i, slot = min(available, key=lambda pair: (
+            all(v in e2e.KEEP_LAUNCHER_VMS for v in pair[1]['choices'][host]),
+            opportunity(pair[1]), -len(pair[1]['choices']), pair[0]))
+        pending.pop(i)
+        return {'host': host, 'release': slot['release'], 'vm': slot['choices'][host][0]}
 
 
 def discover(cfg, lister):
@@ -54,35 +89,39 @@ def discover(cfg, lister):
 
 
 def plan(wanted, cfg, found, errors=None):
-    """({host: [run]}, [problem]).  A VM goes to the host that pins it (`vms` in hosts.toml), else to the
-    one host discovery found it on.  Ambiguous or unplaced VMs are problems and are not run.  VMs the
-    runner leaves running (KEEP_LAUNCHER_VMS) go last on their host, since they hold it afterwards."""
+    """Resolve candidates and simulate equal-cost runs weighted by host slowdown."""
     errors = errors or {}
-    pinned, problems = {}, []
+    pinned, problems, slots = {}, [], []
     for host, h in cfg['hosts'].items():
         for vm in h.get('vms', []):
             if vm in pinned:
                 problems.append('%s is pinned to both %s and %s' % (vm, pinned[vm], host))
             pinned[vm] = host
-    queues = {h: [] for h in cfg['hosts']}
-    for release, vm in wanted:
-        if vm in pinned:
-            host = pinned[vm]
-        else:
+    for release, alternatives in wanted:
+        choices = {}
+        for vm in e2e.candidates(alternatives):
             where = [h for h in cfg['hosts'] if vm in found.get(h, ())]
-            if len(where) != 1:
-                if where:
-                    problems.append('%s is on several machines (%s): pin it with vms = [...] in hosts.toml'
-                                    % (vm, ', '.join(where)))
-                else:
-                    problems.append('%s is on no machine%s' % (vm, ' that answered (no answer: %s)' % ', '.join(sorted(errors))
-                                                               if errors else ''))
+            if vm in pinned:
+                where = [pinned[vm]]
+            if len(where) > 1:
+                problems.append('%s is on several machines (%s): pin it with vms = [...] in hosts.toml'
+                                % (vm, ', '.join(where)))
                 continue
-            host = where[0]
-        queues[host].append({'host': host, 'release': release, 'vm': vm})
-    for host in queues:
-        queues[host].sort(key=lambda r: r['vm'] in e2e.KEEP_LAUNCHER_VMS)
-    return {h: q for h, q in queues.items() if q}, problems
+            if where:
+                choices.setdefault(where[0], []).append(vm)
+        if choices:
+            slots.append({'release': release, 'choices': choices})
+        elif not any('is on several machines' in p and any(v in p for v in e2e.candidates(alternatives)) for p in problems):
+            problems.append('%s is on no machine%s' % (' | '.join(e2e.candidates(alternatives)),
+                ' that answered (no answer: %s)' % ', '.join(sorted(errors)) if errors else ''))
+    pool = WorkPool(slots)
+    pending, clocks = list(slots), {h: 0 for h in cfg['hosts']}
+    while pending:
+        eligible = [h for h in clocks if any(h in s['choices'] for s in pending)]
+        host = min(eligible, key=lambda h: clocks[h])
+        pool.setdefault(host, []).append(pool.pick(host, pending))
+        clocks[host] += cfg['hosts'][host].get('slowdown', 1.0)
+    return pool, problems
 
 
 # ---------------------------------------------------------------------------------------------
@@ -111,6 +150,9 @@ class Matrix:
         self.procs = {}  # run vm -> Popen
         self.lock = threading.Lock()
         self._say = say
+        self.pending = list(queues.slots) if isinstance(queues, WorkPool) else None
+        self.hosts = list(dict.fromkeys(h for s in queues.slots for h in s['choices'])) if isinstance(queues, WorkPool) else list(queues)
+        self.completed = {h: [] for h in self.hosts}
 
     def say(self, text):
         with self.lock:
@@ -163,15 +205,39 @@ class Matrix:
 
     def worker(self, host):
         wait = self.wait_idle
-        for run in self.queues[host]:
+        queue = iter(self.queues.get(host, []))
+        while True:
+            if self.pending is None:
+                run = next(queue, None)
+            else:
+                with self.lock:
+                    run = None if self.stopping.is_set() else self.queues.pick(host, self.pending)
+                    if run:
+                        self.completed[host].append(run)
+            if run is None:
+                break
             self.run_one(run, wait)
             if run['status'] == 'refused':
-                wait = 0  # one wait per host, not one per queued run
+                wait = 0
             if run['status'] != 'not run':
                 self.say(line(run, self.outroot))
 
+    def results(self):
+        if self.pending is None:
+            return self.queues
+        result = {h: list(q) for h, q in self.completed.items()}
+        pending = list(self.pending)
+        for h in self.hosts:
+            while True:
+                run = self.queues.pick(h, pending)
+                if run is None:
+                    break
+                run['status'] = 'not run'
+                result[h].append(run)
+        return result
+
     def start(self):
-        self.threads = [threading.Thread(target=self.worker, args=(h,), daemon=True) for h in self.queues]
+        self.threads = [threading.Thread(target=self.worker, args=(h,), daemon=True) for h in self.hosts]
         for t in self.threads:
             t.start()
 
@@ -288,6 +354,7 @@ def main(argv=None, lister=None, busy=None):
     ap = argparse.ArgumentParser(description='Home Chooser E2E on several VMs, one at a time per Beanjar machine',
                                  epilog='Other options go to every run of homechooser_e2e.py.', allow_abbrev=False)
     ap.add_argument('--vms', default='', help="comma list of VM names or releases (default: the runner's matrix)")
+    ap.add_argument('--hosts', default='', help='comma list of host names (default: all configured hosts)')
     ap.add_argument('--dry-run', action='store_true', help='print the plan and the commands, run nothing')
     ap.add_argument('--hosts-file', default=None, help='a hosts file instead of e2e/hosts.toml + e2e/hosts.local.toml')
     ap.add_argument('--wait-idle', type=int, default=180,
@@ -308,7 +375,7 @@ def main(argv=None, lister=None, busy=None):
     if bad:
         ap.error('the scheduler sets these per run or cannot allow them (a VM left running holds its machine): %s'
                  % ' '.join(bad))
-    cfg = e2e.load_hosts(args.hosts_file)
+    cfg = select_hosts(e2e.load_hosts(args.hosts_file), args.hosts)
     found, errors = discover(cfg, lister or host_lister(cfg))
     queues, problems = plan(wanted_vms([v for v in args.vms.split(',') if v]), cfg, found, errors)
     for h, e in sorted(errors.items()):
@@ -319,7 +386,7 @@ def main(argv=None, lister=None, busy=None):
     outroot = os.path.join(args.results, 'matrix-' + stamp)
     command = runner_command(args, rest)
     if args.dry_run:
-        print('plan (one VM at a time per machine; machines in parallel); results would go to %s' % outroot)
+        print('plan estimate (actual workers claim slots as they finish; one VM at a time per machine; machines in parallel); results would go to %s' % outroot)
         for host, q in queues.items():
             h = cfg['hosts'][host]
             print('%s (%s): %d run(s)' % (host, 'local' if h.get('local') else 'ssh ' + h['ssh'], len(q)))
@@ -349,7 +416,8 @@ def main(argv=None, lister=None, busy=None):
             left = m.stop(signal.SIGKILL)
             m.join(10)
             print('killed; these VMs may still be running: %s' % ', '.join(
-                '%s/%s' % (r['host'], r['vm']) for q in queues.values() for r in q if r['vm'] in left))
+                '%s/%s' % (r['host'], r['vm']) for q in m.results().values() for r in q if r['vm'] in left))
+    queues = m.results()
     write_summary(outroot, queues, problems, {
         'hc_ipk': args.hc_ipk, 'old_ipk': args.old_ipk, 'runner flags': ' '.join(command({'vm': '<vm>', 'host': '<host>',
                                                                                     'outdir': '<dir>'})[len(RUNNER):])})

@@ -147,14 +147,35 @@ names must be unique across the machines: the ares device entries (`<vm>`, `<vm>
 `~/.ssh` (`beanjar-<vm>-root`, `beanjar-<vm>_devmode`) are named after the VM only. A VM that exists on
 two machines (a copied image) is not run until `vms = [...]` pins it to one of them.
 
-To add a machine: install Beanjar on it, give it an ssh config alias with key login from this PC
-(`ssh <alias> beanjar list` must work without a prompt), add it with `beanjar host add <name>
+To add a machine: install Beanjar on it, give it key login from this PC
+(`ssh <alias-or-user@host> beanjar list --local --json` must work without a prompt), add it with `beanjar host add <name>
 ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<name>] ssh =
 "<alias>"` to `e2e/hosts.local.toml` (or `hosts.toml` when it is shared) under the same name. The VMs
 run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
 
-`run_matrix.py` runs several VMs: one queue and one worker per machine, each run a subprocess of
-`homechooser_e2e.py`, so runs are serialised on a machine and parallel across machines.
+`MATRIX` in `homechooser_e2e.py` contains release slots. The VM field accepts a name or an ordered
+ tuple of alternatives, for example `('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna',
+ 'verified', '...')`. Each row runs exactly once, using a candidate reported by host discovery.
+ The three 9.x rows remain separate slots; `--vms 9.x` selects the first, as before. A single-run
+ `homechooser_e2e.py --vm 6.x` retains the original Pi VM; explicit RK names work too.
+
+`run_matrix.py` has one worker per eligible machine and a shared pool of slots. A free worker claims
+ a compatible slot under a lock. It favours shared work on machines with less exclusive work, leaving
+ host-only slots for machines that need to run them; ties favour more alternative hosts, then matrix
+ order. Candidates on the same host follow their order in the slot. Runs that keep a launcher go last.
+ Actual assignments follow completion times. `--dry-run` simulates equal-cost runs weighted by the
+ configured slowdown; its printed plan is an estimate, not a reservation.
+
+The committed hosts are `pi` (`raspberrypi`), `rockpi4a-1` and `rockpi4a-2`
+ (`mariotaku@rockpi4a-N.lan`, accepted directly by ssh and scp). Each host can set `slowdown = 1.5`;
+ the default is `1.0`, values must be finite and at least `1.0`. The boards use a provisional 1.5;
+ this is a guess to measure, not a measured speed ratio. Pi timing is unchanged.
+ In the per-run process the factor scales Python settling sleeps and polling intervals, boot/LAN and
+ device readiness deadlines, inspector readiness, scenario/notification/alert waits, popup/manual
+ waits, reboot and sam relaunch deadlines, preload settling and observation sleeps, and command
+ timeouts through `run()` (including Beanjar/ares). Embedded guest shell sleeps, socket/HTTP probe
+ timeouts, monitor thread joins, build subprocesses, and matrix `--wait-idle` are unchanged.
+ Preload observation duration and polling interval both scale.
 
 ```
 python3 -I e2e/run_matrix.py --dry-run                            # the plan for the whole matrix
@@ -162,7 +183,9 @@ python3 -I e2e/run_matrix.py --build --reboot-check               # the whole ma
 python3 -I e2e/run_matrix.py --vms 5.x,9.x,11.x --launchers all-fixtures
 ```
 
-* `--vms` takes VM names or releases (default: the matrix). Options it does not know (`--reboot-check`,
+* `--hosts pi,rockpi4a-1` limits discovery and execution to those configured hosts.
+* `--vms` takes explicit VM names (restricting a slot to that candidate) or releases (retaining its
+  alternatives); default is all matrix slots. Options it does not know (`--reboot-check`,
   `--wait-popup N`, `--elevation`, ...) go to every run; `--no-stop`, `--vm`, `--host` and `--outdir` are
   refused, since the scheduler sets them or a VM left running would hold its machine.
 * It builds once before the fan-out: Home Chooser (`--build`, else the newest `build/ipk/*.ipk`), the old

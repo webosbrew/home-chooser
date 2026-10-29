@@ -89,15 +89,15 @@ def service_log_command(mark, message_id):
 # ---------------------------------------------------------------------------------------------
 MATRIX = [
     # release, vm, elevation, sure, note
-    ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
-    ('6.x', 'w21a-kisscurl', 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to the Dock project and is not in the matrix)'),
+    ('5.x', ('w20l-jhericurl-rk1', 'w20l-jhericurl'), 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
+    ('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to the Dock project and is not in the matrix)'),
     ('9.x', 'w24g-ombre', 'luna', 'verified', 'W24G 33.20.23.01 = 9.2.4; os-release read 2026-10-23'),
     ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per firmware metadata; os-release to be read'),
-    ('7.x', 'w22p-mullet', 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
-    ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
+    ('7.x', ('w22p-mullet-rk1', 'w22p-mullet'), 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
+    ('8.x', ('w22o-number1-rk2', 'w22o-number1'), 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
     ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
-    ('10.x', 'w22o-ponytail-us', 'luna', 'verified', 'W22O 33.31.61.01 = 10.3.1; os-release read 2026-10-22'),
-    ('11.x', 'w22o-queue-us', 'root-shell', 'verified', 'W22O 43.21.89.01 = 11.2.0; os-release read 2026-10-22; w22o-queue and w22o-queue-jp run the same firmware'),
+    ('10.x', ('w22o-ponytail-us-rk2', 'w22o-ponytail-us'), 'luna', 'verified', 'W22O 33.31.61.01 = 10.3.1; os-release read 2026-10-22'),
+    ('11.x', ('w22o-queue-us-rk2', 'w22o-queue-us'), 'root-shell', 'verified', 'W22O 43.21.89.01 = 11.2.0; os-release read 2026-10-22; w22o-queue and w22o-queue-jp run the same firmware'),
     ('12.x', 'w24g-spacebuns', 'root-shell', 'verified', 'W24G 02.68.80.01 = 12.0.0; os-release read 2026-10-22'),
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
@@ -396,7 +396,7 @@ class RebootAlertMonitor:
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
         self.ready.wait(timeout=5)
-        time.sleep(1)  # let the hub attach before the confirmation key is sent
+        sleep(1)  # let the hub attach before the confirmation key is sent
         return self.ready.is_set() and self.proc.poll() is None
 
     def _read(self):
@@ -903,10 +903,16 @@ def current_home_chooser_ipk(rec, build=False):
     return ipks[-1]
 
 
+def candidates(vm):
+    """A slot accepts a VM name or an ordered tuple of alternative VM names."""
+    return (vm,) if isinstance(vm, str) else tuple(vm)
+
+
 def entry(release_or_vm):
     for m in MATRIX:
-        if release_or_vm in (m[0], m[1]):
-            return m
+        if release_or_vm == m[0] or release_or_vm in candidates(m[1]):
+            vm = release_or_vm if release_or_vm != m[0] else candidates(m[1])[-1]
+            return (m[0], vm, *m[2:])
     raise SystemExit('unknown VM/release %r; see the matrix in e2e/README.md' % release_or_vm)
 
 
@@ -935,6 +941,9 @@ def load_hosts(path=None):
             cfg['hosts'].setdefault(name, {}).update(h)
         cfg['paths'].update(d.get('paths', {}))
     for name, h in cfg['hosts'].items():
+        import math
+        if not math.isfinite(float(h.get('slowdown', 1.0))) or float(h.get('slowdown', 1.0)) < 1:
+            raise SystemExit('host %s slowdown must be finite and >= 1.0' % name)
         if not h.get('local') and not h.get('ssh'):
             raise SystemExit('host %s in %s has neither ssh = "<alias>" nor local = true' % (name, ', '.join(files)))
     cfg['default'] = cfg['default'] or next(iter(cfg['hosts']), None)
@@ -944,10 +953,21 @@ def load_hosts(path=None):
 # ---------------------------------------------------------------------------------------------
 # Running things
 # ---------------------------------------------------------------------------------------------
+SLOWDOWN = 1.0
+
+
+def seconds(value):
+    return value * SLOWDOWN
+
+
+def sleep(value):
+    time.sleep(seconds(value))
+
+
 def run(argv, timeout=120, input=None, env=None):
     """(rc, stdout+stderr) of a local process."""
     try:
-        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout,
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=seconds(timeout),
                            input=input, env=env)
         return p.returncode, p.stdout.decode('utf-8', 'replace')
     except subprocess.TimeoutExpired as e:
@@ -958,7 +978,7 @@ class BeanjarHost:
     """Every operation on the machine that runs Beanjar goes through here.
 
     local mode: beanjar and friends run as local commands.  remote mode: each command line is
-    run with `ssh <host>` (an ssh config alias; BatchMode, so it never prompts) and files come
+    run with `ssh <host>` (an ssh alias or user@host; BatchMode, so it never prompts) and files come
     back with scp.  The rest of the runner never quotes for the remote.  The mode comes from the
     host's entry in hosts.toml, never from `beanjar` being on PATH: this PC has Beanjar's own
     multi-host CLI, which is not the machine the VMs and their QMP sockets are on.
@@ -967,13 +987,16 @@ class BeanjarHost:
     def __init__(self, mode='remote', device='raspberrypi', name='pi'):
         self.mode, self.device, self.name = mode, device, name
         self._dirs = {}
+        self.slowdown = 1.0
 
     @classmethod
     def from_config(cls, cfg, name, mode=None, device=None):
         h = cfg['hosts'].get(name)
         if h is None:
             raise SystemExit('unknown Beanjar host %r; hosts: %s (e2e/hosts.toml)' % (name, ', '.join(cfg['hosts'])))
-        return cls(mode or ('local' if h.get('local') else 'remote'), device or h.get('ssh') or 'localhost', name)
+        host = cls(mode or ('local' if h.get('local') else 'remote'), device or h.get('ssh') or 'localhost', name)
+        host.slowdown = float(h.get('slowdown', 1.0))
+        return host
 
     # -- plumbing
     def sh(self, cmd, timeout=120):
@@ -1198,13 +1221,13 @@ class Elevation:
 
     def verify(self, dev, rec, wait=90):
         """The service runs as root: by ps (the service answers only the app)."""
-        end = time.time() + wait
+        end = time.time() + seconds(wait)
         out = ''
         while time.time() < end:
             out = dev.service_root()
             if out.startswith('root') and 'homechooser-service' in out and 'jailer' not in out:
                 break
-            time.sleep(3)
+            sleep(3)
         rec.check('elevation (%s): service runs as root' % self.name,
                   out.startswith('root') and 'jailer' not in out, 'ps: ' + (out or '(not running)'))
 
@@ -1227,7 +1250,7 @@ class RootShellElevation(Elevation):
         # the (jailed) instance is started on demand by any call; call it, then make it quit
         dev.luna('luna://%s/status' % SVC_ID)
         dev.luna('luna://%s/quit' % SVC_ID)
-        time.sleep(2)
+        sleep(2)
         dev.luna('luna://%s/status' % SVC_ID)
 
 
@@ -1249,7 +1272,7 @@ class Inspector:
             self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                          start_new_session=True)
-            time.sleep(2)
+            sleep(2)
             if self.proc.poll() is None:
                 break
 
@@ -1475,7 +1498,7 @@ class Scenario:
             rc, out = self.host.viewer_open(self.vm)
             self.viewer_opened = True
             self.rec.say('FALLBACK: beanjar viewer open: rc=%s %s' % (rc, out.strip()[-120:]))
-            time.sleep(3)
+            sleep(3)
         vname = name.replace('.png', '-viewer.png')
         ok, out = self.host.screenshot(os.path.join(self.rec.outdir, vname))
         self.rec.say('FALLBACK screenshot %s (grim, whole Pi desktop): %s' % (vname, 'ok' if ok else out.strip()))
@@ -1528,7 +1551,7 @@ class Scenario:
                 ak = {'DOWN': 'DOWN', 'UP': 'UP', 'LEFT': 'LEFT', 'RIGHT': 'RIGHT', 'OK': 'ENTER', 'HOME': 'LEFTMETA',
                       'BACK': 'ESC'}[k]
                 result = self.dev.key(ak)
-            time.sleep(0.8)
+            sleep(0.8)
         return result
 
     def ui(self):
@@ -1539,13 +1562,13 @@ class Scenario:
             return None
 
     def wait(self, cond, timeout, every=3):
-        end = time.time() + timeout
+        end = time.time() + seconds(timeout)
         v = None
         while time.time() < end:
             v = cond()
             if v:
                 return v
-            time.sleep(every)
+            sleep(every)
         return v
 
     def probe_keys(self, rows, ui):
@@ -1566,7 +1589,7 @@ class Scenario:
         screenshot) and waits up to --wait-popup seconds for someone to dismiss it by hand, then
         fails the run."""
         r = self.rec
-        end = time.time() + self.a.wait_popup
+        end = time.time() + seconds(self.a.wait_popup)
         first = True
         while True:
             ui = self.ui()
@@ -1593,7 +1616,7 @@ class Scenario:
                 first = False
             if time.time() >= end:
                 break
-            time.sleep(10)
+            sleep(10)
         r.check('remote keys reach Home Chooser (no system popup holding key focus)', False,
                 'focus did not move after a probe key; see the keys-blocked screenshot')
         raise RuntimeError('keys blocked: a system popup probably holds key focus; not pressing OK on it')
@@ -1696,9 +1719,9 @@ class Scenario:
     def await_boot(self, label, boot0):
         """After a reboot (any route): LAN address, device entries, Homebrew Channel, a new boot id."""
         r, host = self.rec, self.host
-        end = time.time() + 120
+        end = time.time() + seconds(120)
         while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
-            time.sleep(3)
+            sleep(3)
         ensure_devices(host, self.vm, r)
         state = wait_for_device(self.vm, r)
         up = state == READY
@@ -1720,11 +1743,11 @@ class Scenario:
         """Wait for the TV to restart by itself (tvpower): 'rebooted' when a new boot id is read, 'off' when
         Beanjar shows the VM off (QEMU may power off on a guest reboot),
         'unreachable' when the guest stops responding, or '' when nothing happened."""
-        end = time.time() + timeout
+        end = time.time() + seconds(timeout)
         gone = False
         last_boot = boot0
         while time.time() < end:
-            time.sleep(10)
+            sleep(10)
             try:
                 if self.vm not in self.host.running_vms():
                     return 'off'
@@ -1836,7 +1859,7 @@ class Scenario:
         done |= pending
         fg0 = self.dev.foreground()[0]
         self.press('BACK')
-        time.sleep(2)
+        sleep(2)
         ui = self.ui() if self.insp else None
         if ui and ui.get('row') and (rows or ui.get('rows')):
             ok = self.probe_keys(rows or ui['rows'], ui)
@@ -1923,7 +1946,7 @@ class Scenario:
                     'alert reply: %s\nfallback:\n%s' % (reply, fb.strip()))
             return
         r.check('the user was told: the alert was accepted (watcher sends with -a com.webos.applicationManager)', True, 'reply: %s' % reply)
-        time.sleep(2)
+        sleep(2)
         self.foreign_popup('4-alert')
         self.shot('4-alert')
         r.note('look at screenshot 4-alert: an alert "Home Chooser" with the message "%s" and one OK button '
@@ -1937,7 +1960,7 @@ class Scenario:
                     '"returnValue":true' in out.replace(' ', ''), 'alertId %s\nreply: %s' % (m.group(1), out))
         else:
             r.note('accepted createAlert reply carries no alertId: alert not closed', reply)
-        time.sleep(3)
+        sleep(3)
         self.shot('4-alert-dismissed')
         r.note('alert closed by closeAlert; foreground before/after (the alert itself is not an app)',
                '%s -> %s' % (fg0[0], d.foreground()[0]))
@@ -2011,9 +2034,9 @@ class Scenario:
         t0, out = time.time(), []
         while True:
             out.append((int(time.time() - t0), STOCK in self.running_ids()))
-            if time.time() - t0 + every > seconds:
+            if time.time() - t0 + every * SLOWDOWN > seconds * SLOWDOWN:
                 break
-            time.sleep(every)
+            sleep(every)
         return out
 
     def check_preload_off(self, label, settle=PRELOAD_SETTLE):
@@ -2037,7 +2060,7 @@ class Scenario:
                    'stock running=%s; foreground=%s' % (STOCK in self.running_ids(), self.dev.foreground()[0]))
             return
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
-        time.sleep(settle)
+        sleep(settle)
         samples = self.stock_running_samples()
         if self.stock_left_running():
             self.check_stock_left_running(label, samples)
@@ -2071,7 +2094,7 @@ class Scenario:
         self.dev.launch(appid)
         fg = self.wait(lambda: (lambda x: x if x[0] == appid else None)(self.dev.foreground()), 30, 2)
         self.rec.say('front app %s: %s' % (appid, fg))
-        time.sleep(3)
+        sleep(3)
 
     def running_ids(self):
         """Ids in applicationManager/running whose process is alive.  On 12.x sam keeps a ghost entry
@@ -2105,7 +2128,7 @@ class Scenario:
             expect = FULLHOME
         if expect != STOCK:
             self.dev.close(expect)
-            time.sleep(3)
+            sleep(3)
             pre = expect in self.running_ids()
             r.say('%s: %s running before the press: %s%s' % (label, expect, pre,
                   ' (close did not stop it: this check does not discriminate)' if pre else ''))
@@ -2119,7 +2142,7 @@ class Scenario:
         mark = self.messages_mark()
         key_result = self.press('HOME')
         r.say('%s: Home key-send result: %r; log mark %s' % (label, key_result, mark))
-        time.sleep(6)
+        sleep(6)
         sam = []
 
         def seen():
@@ -2330,7 +2353,7 @@ class Scenario:
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
         self.strat.verify(d, r)
         self.shot('app-open')
-        time.sleep(4)  # the result toast of a left marker is set just after the list appears
+        sleep(4)  # the result toast of a left marker is set just after the list appears
         first = self.ui() or {}
         r.check('first open after a fresh install: no error toast (a marker left by an earlier install is dropped)',
                 not (first.get('toast') or '').startswith("Couldn't"), 'toast: %r' % first.get('toast'))
@@ -2341,7 +2364,7 @@ class Scenario:
         # uninstall; the choice was removed with it): the next open must drop it without a toast
         r.note('planted stale marker', self.insp.evaluate(PLANT_JS % self.launcher))
         d.close(APP_ID)
-        time.sleep(3)
+        sleep(3)
         self.launch_mark = self.messages_mark()
         d.launch(APP_ID)
         toasts = []
@@ -2352,7 +2375,7 @@ class Scenario:
                 toasts.append(u['toast'])
             return u if u and self.launcher in (u.get('rows') or []) else None
         self.wait(listed_stale, 120, every=1)
-        time.sleep(3)
+        sleep(3)
         stale = self.ui() or {}
         if stale.get('toast'):
             toasts.append(stale['toast'])
@@ -2474,7 +2497,7 @@ class Scenario:
         if not self.insp:
             self.insp = Inspector(self.vm)
         d.close(APP_ID)
-        time.sleep(3)
+        sleep(3)
         d.launch(APP_ID)
         seen = []
 
@@ -2484,7 +2507,7 @@ class Scenario:
                 seen.append(u['toast'])
             return u if u and self.launcher in (u.get('rows') or []) else None
         again = self.wait(listed, 120, every=1)
-        time.sleep(1)
+        sleep(1)
         again = self.ui() or again or {}
         r.note('toasts seen while re-opening', repr(seen + [again.get('toast')]))
         again['toast'] = again.get('toast') or next((t for t in seen if t.startswith("Couldn't")), None)
@@ -2692,7 +2715,7 @@ class Scenario:
                 up = self.beanjar_reboot('2 reboot (alert left alone, beanjar stop/start)')
         else:
             self.close_reboot_alert('2 reboot (Later)', info)
-            time.sleep(3)
+            sleep(3)
             self.shot('2-reboot-alert-closed')
             up = self.beanjar_reboot('2 reboot (alert closed, then beanjar stop/start)')
         if not up:
@@ -3113,7 +3136,7 @@ exit "$rc"
         self.press('BACK')
         gone = self.wait(lambda: not (self.ui() or {}).get('dialog'), 10, 1)
         r.check('request: Back cancels the dialog', bool(gone), json.dumps(self.ui()))
-        time.sleep(2)
+        sleep(2)
         r.check('request cancelled: the choice is unchanged', self.state()['choice'] == choice0, repr(self.state()['choice']))
 
     def api_close_probe(self, appid, label):
@@ -3251,7 +3274,7 @@ exit "$rc"
     def dismiss_alert(self, label):
         """Our createAlert: closed with closeAlert when its id is in the log, else with Back (never OK)."""
         r = self.rec
-        time.sleep(2)
+        sleep(2)
         self.foreign_popup(label)
         self.shot(label)
         aid, ev = self.uninstall_alert_id()
@@ -3262,7 +3285,7 @@ exit "$rc"
         else:
             r.note('%s: no alertId in the UNINSTALL_ASK log line; dismissing with Back' % label, ev or 'no UNINSTALL_ASK line')
             self.press('BACK')
-        time.sleep(3)
+        sleep(3)
         self.shot(label + '-dismissed')
 
     def api_uninstall_cancel(self):
@@ -3284,7 +3307,7 @@ exit "$rc"
             self.close_insp()
         elif how == 'alert':
             self.dismiss_alert('3a-uninstall-alert')
-        time.sleep(5)
+        sleep(5)
         r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
 
     def api_uninstall_confirm(self):
@@ -3407,7 +3430,7 @@ exit "$rc"
                 seen.append(u['toast'])
             return u if u and self.launcher in (u.get('rows') or []) else None
         ui = self.wait(listed, 120, every=1)
-        time.sleep(4)
+        sleep(4)
         ui = self.ui() or ui or {}
         if ui.get('toast'):
             seen.append(ui['toast'])
@@ -3681,7 +3704,7 @@ exit "$rc"
         r.check('ares-install --remove Home Chooser', rc == 0, out.strip())
         self.check_toast(toasts_before)
         self.wait(lambda: self.watcher_active() != 'active' and self.stock_record_ok(d.record_home()[0]), 150, 5)
-        time.sleep(5)
+        sleep(5)
         s = self.state()
         r.note('state after uninstall', json.dumps(s))
         self.residency('after the Home Chooser uninstall')
@@ -4045,7 +4068,7 @@ def wait_for_device(vm, rec, timeout=300):
     """One of the states above: READY as soon as it is reached, else the last state seen at the timeout.
     Every change of state is said, so a timeout shows which probe never passed."""
     dev = Device(vm)
-    end = time.time() + timeout
+    end = time.time() + seconds(timeout)
     state = None
     while True:
         rc, out = dev.sh('echo up', 20)
@@ -4063,7 +4086,7 @@ def wait_for_device(vm, rec, timeout=300):
             rec.say('VM %s: %s (%s)' % (vm, state, WAIT_STATES[state]))
         if state == READY or time.time() >= end:
             return state
-        time.sleep(5)
+        sleep(5)
 
 
 def failsafe_note(vm):
@@ -4175,7 +4198,7 @@ def main():
     args = ap.parse_args()
     if args.list:
         for m in MATRIX:
-            print('%-5s %-18s %-10s %-9s %s' % m)
+            print('%-5s %-18s %-10s %-9s %s' % (m[0], ' | '.join(candidates(m[1])), *m[2:]))
         print('launchers: dock, %s' % ', '.join(fixture_specs()))
         return 0
     if args.device:
@@ -4199,11 +4222,14 @@ def main():
                                lambda t: print(t, flush=True), dock_ipk, api=args.api_check) for sp in specs]
     args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
     host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
+    global SLOWDOWN
+    SLOWDOWN = host.slowdown
     args.new_ipk, args.old_ref = args.hc_ipk, None
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
     rec.say('artefacts: ' + outdir)
+    rec.say('host timing slowdown: %g' % host.slowdown)
     rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
     # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
     signal.signal(signal.SIGTERM, interrupted)
@@ -4227,9 +4253,9 @@ def main():
         rc, out = host.start(vm)
         rec.say('beanjar start: %s' % out.strip()[-200:])
         rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
-        end = time.time() + 120
+        end = time.time() + seconds(120)
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
-            time.sleep(3)
+            sleep(3)
         ensure_devices(host, vm, rec)
         state = wait_for_device(vm, rec)
         if state == NO_ROOT_SSH:
@@ -4238,9 +4264,9 @@ def main():
             rec.say('beanjar stop: %s' % out.strip()[-200:])
             rc, out = host.start(vm)
             rec.say('beanjar start: %s' % out.strip()[-200:])
-            end = time.time() + 120
+            end = time.time() + seconds(120)
             while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
-                time.sleep(3)
+                sleep(3)
             ensure_devices(host, vm, rec)
             state = wait_for_device(vm, rec)
         if state != READY:

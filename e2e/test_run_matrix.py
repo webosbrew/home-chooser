@@ -16,6 +16,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -89,6 +90,43 @@ class Fixture(unittest.TestCase):
 
 
 class Planning(unittest.TestCase):
+    def test_alternatives_three_hosts_and_unplaced(self):
+        q, problems = run_matrix.plan([('5.x', ('rk', 'pi')), ('6.x', 'only'), ('7.x', 'missing')],
+                                      CFG, {'a': {'pi', 'only'}, 'b': {'rk'}, 'c': set()})
+        self.assertEqual([(r['release'], r['vm']) for r in q['a']], [('6.x', 'only')])
+        self.assertEqual(q['b'][0]['vm'], 'rk')
+        self.assertNotIn('c', q)
+        self.assertEqual(len(problems), 1)
+        self.assertIn('missing', problems[0])
+
+    def test_cli_hosts_limits_discovery_and_release_selection(self):
+        with tempfile.TemporaryDirectory() as d:
+            hosts = os.path.join(d, 'hosts.toml')
+            write(hosts, '[hosts.a]\nssh = "a"\n[hosts.b]\nssh = "b"\n')
+            asked = []
+            def lister(host):
+                asked.append(host)
+                return ['w21a-kisscurl-rk1']
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--hosts', 'b', '--vms', '6.x'],
+                                     lister=lister)
+            self.assertEqual(rc, 0)
+            self.assertEqual(asked, ['b'])
+            self.assertIn('w21a-kisscurl-rk1', output.getvalue())
+            self.assertIn('--host b', output.getvalue())
+
+    def test_host_filter_and_release_alternatives(self):
+        cfg = run_matrix.select_hosts(CFG, 'b')
+        self.assertEqual(list(cfg['hosts']), ['b'])
+        with self.assertRaises(SystemExit):
+            run_matrix.select_hosts(CFG, 'missing')
+        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', e2e.MATRIX[1][1])])
+        rk = e2e.candidates(e2e.MATRIX[1][1])[0]
+        self.assertEqual(run_matrix.wanted_vms([rk]), [('6.x', rk)])
+        q, problems = run_matrix.plan(run_matrix.wanted_vms(['6.x']), cfg, {'b': {rk}})
+        self.assertEqual(problems, [])
+        self.assertEqual(q['b'][0]['vm'], rk)
+
     def test_discovered_vms_go_to_their_host(self):
         found = {'a': {'vm1', 'vm2'}, 'b': {'vm3'}, 'c': set()}
         q, problems = run_matrix.plan([('5.x', 'vm1'), ('6.x', 'vm3'), ('7.x', 'vm2')], CFG, found)
@@ -116,7 +154,7 @@ class Planning(unittest.TestCase):
     def test_releases_map_to_matrix_vms_once(self):
         first9 = next(m[1] for m in e2e.MATRIX if m[0] == '9.x')
         self.assertEqual(run_matrix.wanted_vms(['9.x', first9, '5.x']),
-                         [('9.x', first9), ('5.x', e2e.entry('5.x')[1])])
+                         [('9.x', first9), ('5.x', e2e.MATRIX[0][1])])
         self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in e2e.MATRIX}))
 
     def test_a_failing_host_is_reported_and_the_rest_discovered(self):
@@ -130,6 +168,20 @@ class Planning(unittest.TestCase):
 
 
 class Serialisation(Fixture):
+    def test_shared_pool_claims_every_slot_once(self):
+        wanted = [('9.x', ('a%d' % i, 'b%d' % i)) for i in range(6)]
+        q, problems = run_matrix.plan(wanted, CFG,
+            {'a': {'a%d' % i for i in range(6)}, 'b': {'b%d' % i for i in range(6)}})
+        self.assertEqual(problems, [])
+        m, _ = self.matrix(q)
+        m.start()
+        m.join(30)
+        self.assertFalse(m.alive())
+        starts = [c for c in self.calls() if c[0] == 'start']
+        self.assertEqual(len(starts), 6)
+        self.assertEqual(len({c[2][1:] for c in starts}), 6)
+        self.assertEqual(len([r for runs in m.results().values() for r in runs]), 6)
+
     def test_serial_within_a_host_parallel_across_hosts(self):
         queues = {h: [{'host': h, 'release': '9.x', 'vm': '%s-vm%d' % (h, i)} for i in range(3)] for h in ('a', 'b', 'c')}
         m, lines = self.matrix(queues)
@@ -220,7 +272,7 @@ class Main(Fixture):
 
     def test_dry_run_of_the_real_matrix_runs_nothing(self):
         hosts = self.hosts_file('default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n[hosts.pc2]\nssh = "pc2"\n')
-        vms = [m[1] for m in e2e.MATRIX]
+        vms = [e2e.candidates(m[1])[-1] for m in e2e.MATRIX]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--reboot-check', '--results', self.tmp],
@@ -378,6 +430,28 @@ class DevicesFile(unittest.TestCase):
 
 
 class HostsConfig(unittest.TestCase):
+    def test_user_at_host_and_slowdown(self):
+        cfg = {'hosts': {'rk': {'ssh': 'mariotaku@rockpi4a-1.lan', 'slowdown': 1.5}}}
+        host = e2e.BeanjarHost.from_config(cfg, 'rk')
+        self.assertEqual(host.slowdown, 1.5)
+        with patch.object(e2e, 'run', return_value=(0, '')) as command:
+            host.beanjar('list', '--local', '--json')
+            argv = command.call_args.args[0]
+            self.assertEqual(argv[-2:], ['mariotaku@rockpi4a-1.lan', 'beanjar list --local --json'])
+            self.assertTrue(host.fetch('/tmp/a.png', 'a.png'))
+            self.assertEqual(command.call_args.args[0][-2:], ['mariotaku@rockpi4a-1.lan:/tmp/a.png', 'a.png'])
+        with patch.object(e2e, 'SLOWDOWN', host.slowdown), patch.object(e2e.time, 'sleep') as sleeper:
+            e2e.sleep(4)
+            sleeper.assert_called_once_with(6)
+            self.assertEqual(e2e.seconds(240), 360)
+        with patch.object(e2e, 'SLOWDOWN', 1.5), patch.object(e2e.subprocess, 'run') as command:
+            command.return_value.returncode = 0
+            command.return_value.stdout = b''
+            e2e.run(['fake'], timeout=120)
+            self.assertEqual(command.call_args.kwargs['timeout'], 180)
+        with patch.object(e2e, 'SLOWDOWN', 1):
+            self.assertEqual(e2e.seconds(240), 240)
+
     def test_default_is_todays_pi(self):
         with tempfile.TemporaryDirectory() as d:
             saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
