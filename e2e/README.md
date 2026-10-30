@@ -58,7 +58,7 @@ beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart 
 (below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
 Every webOS 6–9 run exercises the minimal structural hook. After the selection boot and the
-reboot check, the runner asserts `mounted=yes` and `patch=possible`; the same Home-key launch
+reboot check, the runner asserts `active=yes` and `patch=possible`; the same Home-key launch
 proofs apply on every build. Offline checks also exercise the two-file core when optional
 systemUi anchors fail; the documented foreground-comparison degradation is expected there.
 
@@ -360,7 +360,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   with the fallback: an accepted `createToast` with the message. Through the inspector it also checks that
   the page shows no dialog, lists the "Restart now" row and showed the toast (a page that an overlay timeout
   closed is noted, not failed). Asserted before the restart: `homechooser-homekey status` says
-  `mounted=no` and `reboot=needed`, nothing is mounted, the flag and the `init.d` entry are written, the
+  `active=no` and `reboot=needed`, nothing is mounted, the flag and the `init.d` entry are written, the
   record names the launcher, and the compositor was not restarted.
   * `--reboot-via later` (the default): our alert is closed with `notification/closeAlert` (the `alertId`
     from the accepted `createAlert` reply in the `REBOOT_ASK` line, `luna-send -a com.webos.applicationManager`,
@@ -372,7 +372,7 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
     retry once. A second failure is a FAIL. No action is sent after missing or ambiguous proof.
     The key fallback retains the safe-default focus, one directional move and reciprocal appearance
     swap proof before ENTER; failed key proofs retain the 240 s MANUAL route.
-  After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
+  After the boot: the watcher is active, the boot hook mounted the patch (`active=yes`, `reboot=no`, at
   least 9 mounts), and the Home key hook log of that boot (its firmware-order compositor restart is the only
   one allowed) is noted; the minimal-hook status checks come here.
 * Step 2, patch already mounted (a second launcher of `--launchers` in the same boot): no dialog,

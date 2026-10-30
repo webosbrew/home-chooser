@@ -22,17 +22,22 @@ OUT ?= ../build/service
 
 CFLAGS ?= -O2 -g0
 CFLAGS += -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_40 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_40 -DHC_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
-INC = -I$(SYSROOT)/usr/include -I$(SYSROOT)/usr/include/glib-2.0 -I$(SYSROOT)/usr/lib/glib-2.0/include
+INC = -Isrc -I$(SYSROOT)/usr/include -I$(SYSROOT)/usr/include/glib-2.0 -I$(SYSROOT)/usr/lib/glib-2.0/include
 LIBS = -lluna-service2 -lpbnjson_c -lPmLogLib -lglib-2.0
+SOURCES = src/main.c src/json.c src/luna.c src/proc.c src/fs.c src/policy.c \
+	src/apps.c src/bootlink.c src/notify.c src/homekey-main.c src/homekey.c src/homekey-generator.c \
+	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c \
+	src/service/run.c src/service/launcher.c src/service/system.c
+HEADERS = $(wildcard src/*.h src/service/*.h) src/homekey-shapes.inc
 
 all: $(OUT)/homechooser-service
 
-$(OUT)/homechooser-service: src/main.c src/policy.c src/policy.h src/homekey.c src/homekey-generator.c src/homekey.h src/homekey-shapes.inc ../app/package.json
+$(OUT)/homechooser-service: $(SOURCES) $(HEADERS) Makefile ../app/package.json
 	@test -n "$(VERSION)" || { echo 'no version: app/package.json has no "version" (or set VERSION=)' >&2; exit 1; }
 	@test -x "$(CROSS)gcc" || { echo 'webOS native SDK compiler not found: $(CROSS)gcc; download the webosbrew native-toolchain and set SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot (or CROSS=...)' >&2; exit 1; }
 	@test -d "$(SYSROOT)/usr/include" || { echo 'webOS native SDK sysroot not found: $(SYSROOT); set SYSROOT=/path/to/sysroot' >&2; exit 1; }
 	mkdir -p $(OUT)
-	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ src/main.c src/policy.c src/homekey.c src/homekey-generator.c $(LIBS) -Wl,-O1,--as-needed
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ $(SOURCES) $(LIBS) -Wl,-O1,--as-needed
 	$(CROSS)strip $@
 
 # Dev build: any luna sender may call it (for luna-send on a test TV). Never ship this one.

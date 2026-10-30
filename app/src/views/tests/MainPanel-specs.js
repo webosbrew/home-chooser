@@ -303,7 +303,7 @@ describe('Home Chooser screen', () => {
 		};
 
 		test('first apply reloads Home immediately without a restart prompt', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, enabled: false, patch: 'possible'});
+			const homeKeyHook = homeKeyHookOf({active: false, enabled: false, patch: 'possible'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
 			await chooseOn('Plain Launcher');
@@ -322,7 +322,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('first choice validates the stock hook', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, enabled: false, hook: 'stale', patch: 'refused', reason: 'missing'});
+			const homeKeyHook = homeKeyHookOf({active: false, enabled: false, hook: 'stale', patch: 'refused', reason: 'missing'});
 			const env = makeEnv({version: [9, 2, 4], homeKeyHook});
 			mountApp(env);
 			await chooseOn('Plain Launcher');
@@ -334,7 +334,7 @@ describe('Home Chooser screen', () => {
 		test('a hidden document still completes without a reboot prompt', async () => {
 			const hidden = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
 			try {
-				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({mounted: false, enabled: false, patch: 'possible'})});
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({active: false, enabled: false, patch: 'possible'})});
 				mountApp(env);
 				await chooseOn('Plain Launcher');
 				fireEvent.click(await screen.findByText('Use as Home'));
@@ -347,15 +347,15 @@ describe('Home Chooser screen', () => {
 		});
 
 		test.each([true, false])('legacy reboot flag %s never raises a reboot alert or row', async (enabled) => {
-			const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({mounted: enabled, enabled, patch: 'possible', rebootNeeded: true})});
+			const env = makeEnv({version: [8, 3, 0], homeKeyHook: homeKeyHookOf({active: enabled, enabled, patch: 'possible', rebootNeeded: true})});
 			mountApp(env);
 			await screen.findByText('Plain Launcher');
 			expect(screen.queryByText('Restart now')).toBeNull();
 			expect(env.rebootPrompt).not.toHaveBeenCalled();
 		});
 
-		test('mounted and enabled: switching launchers makes no install call and no prompt', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: true, enabled: true, patch: 'possible', release: '8.3.0'});
+		test('active and enabled: switching launchers makes no install call and no prompt', async () => {
+			const homeKeyHook = homeKeyHookOf({active: true, enabled: true, patch: 'possible', release: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
 			await chooseOn('Plain Launcher');
@@ -367,8 +367,8 @@ describe('Home Chooser screen', () => {
 			expect(screen.queryByText('Restart the TV?')).toBeNull();
 		});
 
-		test('mounted but disabled (restored, not restarted): the install runs, no restart is asked for', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: true, enabled: false, release: '8.3.0'}, {install: {rebootNeeded: false}});
+		test('active but disabled (restored, not restarted): the install runs, no restart is asked for', async () => {
+			const homeKeyHook = homeKeyHookOf({active: true, enabled: false, release: '8.3.0'}, {install: {rebootNeeded: false}});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
 			await chooseOn('Plain Launcher');
@@ -380,7 +380,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('install failure is reported after the choice was applied', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, patch: 'possible'});
+			const homeKeyHook = homeKeyHookOf({active: false, patch: 'possible'});
 			homeKeyHook.install = jest.fn(async () => ok({ok: false, errors: ['boom']}));
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
@@ -391,7 +391,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('apply failure never installs the patch', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, patch: 'possible'});
+			const homeKeyHook = homeKeyHookOf({active: false, patch: 'possible'});
 			const apply = jest.fn(async () => ok({ok: false, errors: ['boom']}));
 			mountApp(makeEnv({version: [8, 3, 0], homeKeyHook, apply}));
 			fireEvent.click(await screen.findByText('Plain Launcher'));
@@ -401,7 +401,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('patch active: no install, no prompt', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: true, enabled: true, patch: 'refused', release: '8.3.0'});
+			const homeKeyHook = homeKeyHookOf({active: true, enabled: true, patch: 'refused', release: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
 			fireEvent.click(await screen.findByText('Plain Launcher'));
@@ -412,7 +412,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('anchor mismatch: says so plainly and applies nothing', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, enabled: false, patch: 'refused'});
+			const homeKeyHook = homeKeyHookOf({active: false, enabled: false, patch: 'refused'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook});
 			mountApp(env);
 			fireEvent.click(await screen.findByText('Plain Launcher'));
@@ -425,7 +425,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('restoring stock removes the live hook without a restart prompt', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: true, enabled: true, release: '8.3.0'});
+			const homeKeyHook = homeKeyHookOf({active: true, enabled: true, release: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook, currentHome: 'org.fancy.launcher'});
 			mountApp(env);
 			fireEvent.click(await screen.findByText('LG Home (stock)'));
@@ -436,8 +436,8 @@ describe('Home Chooser screen', () => {
 			expect(env.rebootPrompt).not.toHaveBeenCalled();
 		});
 
-		test('restoring stock when nothing is mounted needs no restart', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, enabled: true, patch: 'possible'}, {remove: {rebootNeeded: false}});
+		test('restoring stock when nothing is active needs no restart', async () => {
+			const homeKeyHook = homeKeyHookOf({active: false, enabled: true, patch: 'possible'}, {remove: {rebootNeeded: false}});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook, currentHome: 'org.fancy.launcher'});
 			mountApp(env);
 			fireEvent.click(await screen.findByText('LG Home (stock)'));
@@ -448,10 +448,10 @@ describe('Home Chooser screen', () => {
 	});
 
 	test.each([
-		[{mounted: false, patch: 'possible'}, 'ready'],
-		[{mounted: false, hook: 'stale', patch: 'refused', reason: 'missing'}, 'ready'],
-		[{mounted: true}, 'active'],
-		[{mounted: false, patch: 'refused'}, 'nomatch']
+		[{active: false, patch: 'possible'}, 'ready'],
+		[{active: false, hook: 'stale', patch: 'refused', reason: 'missing'}, 'ready'],
+		[{active: true}, 'active'],
+		[{active: false, patch: 'refused'}, 'nomatch']
 	])('patch state of %j is %s', (status, expected) => {
 		expect(patchStateOf({}, status)).toBe(expected);
 	});
@@ -462,9 +462,9 @@ describe('Home Chooser screen', () => {
 			homeKeyHook: status === undefined ? null : {status: jest.fn(async () => ok({status})), install: jest.fn(), remove: jest.fn()}
 		});
 		test.each([
-			['active', {mounted: true, enabled: true}, 'Home key hook: active'],
-			['not active', {mounted: false, enabled: false, patch: 'possible'}, 'Home key hook: not active'],
-			['no match', {mounted: false, enabled: false, patch: 'refused'}, "Home key hook: not available for this TV's software"]
+			['active', {active: true, enabled: true}, 'Home key hook: active'],
+			['not active', {active: false, enabled: false, patch: 'possible'}, 'Home key hook: not active'],
+			['no match', {active: false, enabled: false, patch: 'refused'}, "Home key hook: not available for this TV's software"]
 		])('webOS 8: %s', async (name, status, text) => {
 			mountApp(withStatus([8, 3, 0], status));
 			expect((await screen.findByTestId('footer')).textContent).toBe(text);
@@ -588,7 +588,7 @@ describe('Home Chooser screen', () => {
 		const pending = (id) => window.localStorage.setItem(PENDING_KEY, JSON.stringify({id, title: id, at: 1}));
 
 		test('never written by a choice that installs the patch', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: false, patch: 'possible'});
+			const homeKeyHook = homeKeyHookOf({active: false, patch: 'possible'});
 			let seen = 'unset';
 			homeKeyHook.install = jest.fn(async () => { seen = window.localStorage.getItem(PENDING_KEY); return ok({rebootNeeded: true}); });
 			mountApp(makeEnv({version: [8, 3, 0], homeKeyHook}));
@@ -600,7 +600,7 @@ describe('Home Chooser screen', () => {
 		});
 
 		test('no marker when the patch is already active', async () => {
-			const homeKeyHook = homeKeyHookOf({mounted: true, enabled: true});
+			const homeKeyHook = homeKeyHookOf({active: true, enabled: true});
 			const apply = jest.fn(async () => { expect(window.localStorage.getItem(PENDING_KEY)).toBeNull(); return ok(); });
 			mountApp(makeEnv({version: [8, 3, 0], homeKeyHook, apply}));
 			fireEvent.click(await screen.findByText('Plain Launcher'));

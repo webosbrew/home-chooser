@@ -347,12 +347,12 @@ static void test_list_fields(void)
 
 static void test_reboot(void)
 {
-	CHECK(hc_reboot_needed("mounted=no\nreboot=needed\n"));
+	CHECK(hc_reboot_needed("active=no\nreboot=needed\n"));
 	CHECK(hc_reboot_needed("reboot=needed"));
 	CHECK(hc_reboot_needed("a=1\r\nreboot=needed\r\nb=2\r\n"));
 	CHECK(hc_reboot_needed("a=1\n  reboot=needed \t\n"));
 	CHECK(!hc_reboot_needed("reboot=no\n"));
-	CHECK(!hc_reboot_needed("mounted=yes\n"));
+	CHECK(!hc_reboot_needed("active=yes\n"));
 	CHECK(!hc_reboot_needed(""));
 	CHECK(!hc_reboot_needed("xreboot=needed\n"));
 	CHECK(!hc_reboot_needed("reboot=needed2\n"));

@@ -517,8 +517,8 @@ The version has one source, `"version"` in `app/package.json`. `app/appinfo.json
 (`app/scripts/check-version.js`) fails on a mismatch, `npm run package` runs it first, a Jest spec
 checks it with the other tests, and `npm version <x.y.z>` rewrites `appinfo.json` through the
 `version` script. The service binary gets it from `service/Makefile` (`VERSION`, read from
-`package.json`, compiled in as `HC_VERSION`; `main.c` has no copy of its own and an empty version
-fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
+`package.json`, compiled in as `HC_VERSION`; `service/src/version.h` requires it and an empty
+version fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
 version. The ipk's control file is written by `ares-package`, which fills in
 `Maintainer: N/A <nobody@example.com>` itself; that placeholder is left as it is.
 

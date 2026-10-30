@@ -186,7 +186,7 @@ def expects_reboot_dialog(major, mounted_before):
 
 
 def parse_reboot_ask(text):
-    """The service's REBOOT_ASK PmLog lines (service/src/main.c on_reboot_prompt) -> what was asked and how
+    """The service's REBOOT_ASK PmLog lines (service/src/service/system.c on_reboot_prompt) -> what was asked and how
     the notification service answered:
     {'message', 'buttons' (list), 'alert' ('accepted'|'refused'|None), 'alert_id', 'toast' ('accepted'|'refused'|None)}.
     The request line carries no private parameters; replies are the createAlert / createToast lines with their JSON."""
@@ -1946,12 +1946,12 @@ class Scenario:
 
     def hook_mounts_match(self, mounts=None):
         st, _ = self.kf_status()
-        return st.get('mounted') == 'yes' and not self.dev.mounts()
+        return st.get('active') == 'yes' and not self.dev.mounts()
 
     def check_hook_status(self, label):
         rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
         self.rec.check('%s: live JS hook is selected' % label,
-                       rc == 0 and 'mounted=yes' in out and 'patch=possible' in out, out.strip())
+                       rc == 0 and 'active=yes' in out and 'patch=possible' in out, out.strip())
 
     def kf_status(self):
         """(parsed, raw) of `homechooser-homekey status` (6.x to 9.x)."""
@@ -2775,8 +2775,8 @@ class Scenario:
                 # the patch was mounted already (an earlier choice in this boot): a live switch
                 self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
                 st, raw = self.kf_status()
-                r.check('homekey status: mounted=yes and reboot=no (nothing to ask)',
-                        st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
+                r.check('homekey status: active=yes and reboot=no (nothing to ask)',
+                        st.get('active') == 'yes' and st.get('reboot') == 'no', raw)
                 self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
                 baked = self.baked_id()
                 r.check('the watcher wrote the launcher id into the selected systemUi.js (refresh, no restart)',
@@ -2983,8 +2983,8 @@ class Scenario:
         s = self.state()
         st, raw = self.kf_status()
         r.note('state with the restart prompt up', json.dumps(s))
-        r.check('before the reboot: homekey status says mounted=no and reboot=needed',
-                st.get('mounted') == 'no' and st.get('reboot') == 'needed', raw)
+        r.check('before the reboot: homekey status says active=no and reboot=needed',
+                st.get('active') == 'no' and st.get('reboot') == 'needed', raw)
         r.check('before the reboot: nothing is mounted', not s['mounts'], 'mounts: %s' % s['mounts'])
         r.check('before the reboot: the flag file and the init.d entry are written',
                 s['flag'] == 'yes' and s['initd'] == BOOT_SCRIPT, 'flag %s; init.d %s' % (s['flag'], s['initd']))
@@ -3055,8 +3055,8 @@ class Scenario:
         r.check(label + ': the watcher is active (started from init.d)', bool(active), self.watcher_active())
         self.wait(lambda: self.hook_mounts_match(), 180, 5)
         st, raw = self.kf_status()
-        r.check(label + ': the boot hook mounted the patch: status mounted=yes and reboot=no',
-                st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
+        r.check(label + ': the boot hook mounted the patch: status active=yes and reboot=no',
+                st.get('active') == 'yes' and st.get('reboot') == 'no', raw)
         r.note(label + ': native boot apply log (no GUI restart permitted)',
                self.dev.sh("grep -E 'HomeChooser.*(START|HOMEKEY)' /var/log/messages | tail -n 25")[1])
         r.note(label + ': compositor QML and crash evidence from retained messages logs', self.dev.sh(
