@@ -1119,6 +1119,326 @@ def scenario(major=9):
     return s
 
 
+class ScreensaverFakeDev(FakeDev):
+    """Offline tvpower model; fault injection happens at the selected scenario step."""
+    launcher = 'org.webosbrew.hcfixture.web.normal'
+
+    def __init__(self, rec, fault=None):
+        super().__init__()
+        self.rec, self.fault = rec, fault
+        self.selected, self.substate, self.processing = False, 'active', ''
+        self.fg, self.previous = HOME, HOME
+        self.choice, self.default_apps, self.policy = '', {'home': None, 'other': 'retained'}, True
+        self.logs, self.calls, self.buttons = [], [], []
+        self.saver_app, self.log_ignore = e2e.SCREENSAVERS[0], True
+        self.boot_applied = True
+
+    def broken(self, kind):
+        return self.fault == (int(self.rec.step[1]), kind)
+
+    def select(self):
+        self.selected = True
+        self.choice = self.launcher
+        self.default_apps['home'] = self.launcher
+        self.policy = False
+        self.fg = self.launcher
+
+    def installed(self):
+        return ['org.webosbrew.hbchannel'] + ([e2e.APP_ID, self.launcher] if self.selected else [])
+
+    def foreground(self):
+        return self.fg, json.dumps({'appId': self.fg})
+
+    def record_home(self):
+        return self.default_apps['home'], json.dumps({'returnValue': True, 'settings': {'defaultApps': self.default_apps}})
+
+    def preload_policy(self):
+        return self.policy, json.dumps({'applications': [{'id': HOME, 'isEnabled': self.policy}]})
+
+    def unit(self, name):
+        return dict(self.units.get(name, {'MainPID': '100' if self.selected else '0',
+                                         'NRestarts': '0', 'ActiveState': 'active' if self.selected else 'inactive'}))
+
+    def sh(self, cmd, timeout=60):
+        self.calls.append(cmd)
+        if cmd.startswith('cat ' + e2e.CHOICE):
+            return (0, self.choice) if self.selected else (1, 'No such file')
+        if cmd.startswith('cat /tmp/homechooser-home.log'):
+            return 0, '\n'.join(self.logs)
+        if 'tvpower' in cmd:
+            return 0, 'tvpower Screen Saver Ready; Failed to load lgchannels SDK'
+        return super().sh(cmd, timeout)
+
+    def launch(self, appid):
+        self.fg = appid
+        return 0, ''
+
+    def luna_as(self, app, uri, payload='{}', timeout=60):
+        self.calls.append((app, uri, payload))
+        assert app is None, 'tvpower must run as root without -a'
+        reply = {'returnValue': True}
+        if uri.endswith('/getPowerState'):
+            reply.update({'sub state': self.substate, 'processing': self.processing})
+        elif uri.endswith('/turnOnScreenSaver'):
+            if self.broken('skip'):
+                reply = {'returnValue': False, 'errorText': 'screenSaverEnabled is off (first use not completed)'}
+            elif self.broken('refuse'):
+                reply = {'returnValue': False, 'errorText': 'Unknown service error'}
+            elif self.broken('timeout'):
+                pass
+            else:
+                self.previous = self.fg
+                self.processing = 'Screen Saver Ready' if self.broken('ready') else ''
+                self.substate = 'active' if self.broken('ready') else 'screen saver'
+                self.fg = self.previous if self.broken('ready') else self.saver_app
+                if self.log_ignore:
+                    self.logs.append('ignoring screensaver app ' + self.saver_app)
+                if self.broken('choice'):
+                    self.choice = HOME
+                if self.broken('record'):
+                    self.default_apps['other'] = 'changed'
+                if self.broken('policy'):
+                    self.policy = True
+                if self.broken('close'):
+                    self.logs.append('closeByAppId ' + HOME)
+                if self.broken('policy_call'):
+                    self.logs.append('setPreloadPolicy ' + HOME)
+                if self.broken('restart'):
+                    self.units['homechooser-home'] = {'MainPID': '101', 'NRestarts': '1', 'ActiveState': 'active'}
+        elif uri == e2e.TVPOWER_REBOOT_URI:
+            if self.broken('busy'):
+                reply = {'returnValue': False, 'errorText': 'power is busy'}
+            elif self.broken('reboot_refuse'):
+                reply = {'returnValue': False, 'errorText': 'permission denied'}
+            else:
+                self.boot = 'b2'
+        else:
+            raise AssertionError('Unexpected endpoint: ' + uri)
+        return 0, json.dumps(reply), reply
+
+    def press(self, vm, key):
+        assert key in ('HOME', 'BACK'), 'Never confirm an LG dialog'
+        self.buttons.append(key)
+        if self.broken('key_error'):
+            return 1, 'remote unavailable'
+        if self.broken('dismiss_ready'):
+            self.processing, self.substate = 'Screen Saver Ready', 'active'
+        else:
+            self.processing, self.substate = '', 'active'
+        self.fg = self.previous if key == 'BACK' else (self.launcher if self.selected else HOME)
+        if self.broken('wrong_foreground'):
+            self.fg = 'com.webos.app.wrong'
+        return 0, ''
+
+
+class HomeAndScreensaver(unittest.TestCase):
+    def make(self, major=10, fault=None):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.rec = e2e.Recorder.__new__(e2e.Recorder)
+        s.rec.results, s.rec.step, s.rec.tag = [], '', ''
+        s.rec.say = Mock()
+        s.rec.note = Mock()
+        s.dev = ScreensaverFakeDev(s.rec, fault)
+        s.major, s.vm, s.stock_id, s.launcher = major, 'offline', HOME, s.dev.launcher
+        s.L = SimpleNamespace(is_fixture=True, overlay=False)
+        s.a = SimpleNamespace(api_check=False)
+        s.host = SimpleNamespace(remote_press=s.dev.press, vnc_start=Mock(), start=Mock(return_value=(0, '')))
+        s.shot = Mock()
+        # Exercise bounded polling without advancing wall time or reaching any transport.
+        s.wait = lambda cond, timeout, every=3: next((v for v in (cond() for _ in range(3)) if v), None)
+        s.messages_mark = lambda: '2026-10-24T01:00:00'
+        s.wait_reboot = lambda boot0, timeout=240: 'rebooted' if s.dev.boot != boot0 else ''
+        s.await_boot = Mock(return_value=True)
+        s.verify_reboot_apply = lambda: s.rec.check('boot applied', s.dev.boot_applied)
+        return s
+
+    def run_scenario(self, s, baseline='PASS'):
+        from unittest.mock import patch
+        with patch.object(e2e, 'sleep'), patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')):
+            s.dev.select()
+            s.screensaver_selected(baseline)
+        return {int(row['name'][1]): row['status'] for row in s.rec.results if row['name'].startswith('S') and not row['name'].startswith('S0')}
+
+    def test_pass_all_steps_both_screensaver_apps_and_firmware_routes(self):
+        from unittest.mock import patch
+        for major in (6, 7, 10, 11, 12):
+            for app in e2e.SCREENSAVERS:
+                with self.subTest(major=major, app=app), patch.object(e2e, 'sleep'):
+                    s = self.make(major)
+                    s.dev.saver_app = app
+                    self.assertEqual(s.screensaver_baseline(), 'PASS')
+                    self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
+                    self.assertEqual(s.dev.boot, 'b2')
+                    s.await_boot.assert_called_once()
+                    starts = [call for call in s.dev.calls if isinstance(call, tuple) and call[1].endswith('/turnOnScreenSaver')]
+                    self.assertTrue(starts)
+                    self.assertTrue(all(call[0] is None and ('/power/' if major == 6 else '/power2/') in call[1] for call in starts))
+                    self.assertTrue(all(key in ('HOME', 'BACK') for key in s.dev.buttons))
+                    for number in range(5):
+                        labels = [call.args[0] for call in s.shot.call_args_list]
+                        self.assertIn('S%d-before' % number, labels)
+                        self.assertIn('S%d-after' % number, labels)
+
+    def test_baseline_outcomes_capture_diagnostics_and_no_settings_writes(self):
+        for fault, expected in [('skip', 'SKIPPED'), ('ready', 'BLOCKED'), ('timeout', 'FAIL'),
+                                ('wrong_foreground', 'FAIL'), ('key_error', 'FAIL'), ('refuse', 'FAIL')]:
+            with self.subTest(fault=fault):
+                s = self.make(fault=(0, fault))
+                self.assertEqual(s.screensaver_baseline(), expected)
+                self.assertFalse(any('setSystemSettings' in str(call) for call in s.dev.calls))
+                if fault in ('skip', 'ready', 'timeout', 'refuse'):
+                    self.assertTrue(any('tvpower logs' in call.args[0] for call in s.rec.note.call_args_list))
+                self.assertEqual(s.shot.call_args_list[-1].args[0], 'S0-after')
+
+    def test_each_selected_step_pass_blocked_skipped_and_fail(self):
+        for step in range(1, 5):
+            for expected in ('PASS', 'BLOCKED', 'SKIPPED', 'FAIL'):
+                with self.subTest(step=step, expected=expected):
+                    if expected == 'PASS':
+                        fault = None
+                    elif expected == 'SKIPPED':
+                        # S2 consumes S1's screensaver, so its skip follows a refused S1 start.
+                        fault = (1 if step == 2 else step, 'skip')
+                    elif expected == 'BLOCKED':
+                        fault = (step, 'dismiss_ready' if step == 2 else ('busy' if step == 4 else 'ready'))
+                    else:
+                        fault = (step, 'wrong_foreground' if step == 2 else 'refuse')
+                    s = self.make(fault=fault)
+                    results = self.run_scenario(s)
+                    self.assertEqual(results[step], expected)
+                    self.assertIn('S%d-after' % step, [call.args[0] for call in s.shot.call_args_list])
+                    if expected == 'BLOCKED':
+                        self.assertTrue(any('tvpower logs' in call.args[0] for call in s.rec.note.call_args_list))
+
+    def test_daemon_mutations_and_forbidden_calls_fail_s1(self):
+        for fault in ('choice', 'record', 'policy', 'restart', 'close', 'policy_call'):
+            with self.subTest(fault=fault):
+                s = self.make(fault=(1, fault))
+                self.assertEqual(self.run_scenario(s)[1], 'FAIL')
+                self.assertFalse(any(isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI for call in s.dev.calls))
+
+    def test_silent_daemon_passes_on_every_release(self):
+        # Ignoring the screensaver is judged by the absence of actions, not by a log line.
+        for major in (10, 11, 12):
+            s = self.make(major)
+            s.dev.log_ignore = False
+            self.assertEqual(self.run_scenario(s)[1], 'PASS')
+
+    def test_stuck_dismissal_never_attempts_reboot(self):
+        s = self.make(fault=(4, 'dismiss_ready'))
+        self.assertEqual(self.run_scenario(s)[4], 'BLOCKED')
+        self.assertFalse(any(isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI for call in s.dev.calls))
+
+    def test_reboot_refusal_and_boot_apply_failure_fail(self):
+        s = self.make(fault=(4, 'reboot_refuse'))
+        self.assertEqual(self.run_scenario(s)[4], 'FAIL')
+        s = self.make()
+        s.dev.boot_applied = False
+        self.assertEqual(self.run_scenario(s)[4], 'FAIL')
+
+    def test_dependency_skip_and_block_preserve_before_after_evidence(self):
+        for baseline in ('SKIPPED', 'BLOCKED', 'FAIL'):
+            s = self.make()
+            results = self.run_scenario(s, baseline)
+            self.assertEqual(set(results.values()), {'SKIPPED' if baseline == 'SKIPPED' else 'BLOCKED'})
+            self.assertEqual(len(s.shot.call_args_list), 8)
+            self.assertFalse(s.dev.buttons)
+
+    def test_unsupported_5x_is_skipped_without_trigger(self):
+        s = self.make(5)
+        self.assertEqual(s.screensaver_baseline(), 'SKIPPED')
+        self.assertFalse(any(isinstance(call, tuple) and call[1].endswith('/turnOnScreenSaver') for call in s.dev.calls))
+
+    def test_after_snapshot_error_cannot_pass(self):
+        from unittest.mock import Mock
+        s = self.make()
+        s.screensaver_snapshot = Mock(side_effect=[{}, RuntimeError('capture unavailable')])
+        self.assertEqual(s.screensaver_step(0, lambda before: None), 'FAIL')
+
+    def test_selector_rejects_unvalidated_input_before_any_external_command(self):
+        from unittest.mock import patch
+        for argv in (['--scenario', 'screensaver', '--vm', '10.x', '--input', 'ares'],
+                     ['--scenario', 'all', '--vm', '10.x', '--input', 'qmp'],
+                     ['--scenario', 'screensaver', '--vm', '10.x', '--until', '2'],
+                     ['--scenario', 'screensaver', '--device', 'offline']):
+            with self.subTest(argv=argv), patch.object(sys, 'argv', ['runner'] + argv), \
+                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    e2e.main()
+                self.assertEqual(cm.exception.code, 2)
+
+
+    def test_selector_runs_screensaver_alone_or_with_lifecycle_and_cleans_up(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for mode, expected in (('lifecycle', [1, 2, 3, 4, 5, 6]),
+                               ('screensaver', ['S0', 1, 2, 'S1-S4', 6]),
+                               ('all', ['S0', 1, 2, 'S1-S4', 3, 4, 5, 6])):
+            with self.subTest(mode=mode):
+                s, events = self.make(), []
+                s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario=mode,
+                                      api_check=False, reboot_check=False, update_check=False,
+                                      launcher_update_check=False, restore_repair_check=False)
+                s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline state model'
+                s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+                s.host.mode = 'offline'
+                s.dev.release = lambda: (10, '10.3.1')
+                s.dev.app_installed = lambda app: False
+                s.state = lambda: {'choice': 'No such file'}
+                s.check_no_crash = Mock()
+                s.screensaver_baseline = lambda: events.append('S0') or 'PASS'
+                s.screensaver_selected = lambda baseline: events.append('S1-S4')
+                for number in range(1, 7):
+                    setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
+                s.run()
+                self.assertEqual(events, expected)
+
+    def test_selector_rejects_overlay_and_nonfixture_launchers(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        for fixture, overlay in ((True, True), (False, False)):
+            with self.subTest(fixture=fixture, overlay=overlay), \
+                    patch.object(sys, 'argv', ['runner', '--vm', '10.x', '--scenario', 'screensaver']), \
+                    patch.object(e2e, 'load_hosts', return_value={'paths': {}}), \
+                    patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(is_fixture=fixture, overlay=overlay)), \
+                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    e2e.main()
+                self.assertEqual(cm.exception.code, 2)
+
+    def test_refusal_classification_uses_precondition_reply_not_transport_error(self):
+        from unittest.mock import Mock
+        for text, expected in (('screen saver is disabled', 'SKIPPED'),
+                               ('First-use has not completed', 'SKIPPED'),
+                               ('Invalid sub state', 'SKIPPED'),
+                               ('Unknown service error', 'FAIL')):
+            s = self.make()
+            s.dev.luna_as = Mock(return_value=(0, text, {'returnValue': False, 'errorText': text}))
+            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                s.screensaver_start()
+            self.assertEqual(cm.exception.status, expected)
+        s = self.make()
+        s.dev.luna_as = Mock(return_value=(124, 'first use timeout', None))
+        with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            s.screensaver_start()
+        self.assertEqual(cm.exception.status, 'FAIL')
+
+    def test_reboot_timeout_captures_state_and_distinguishes_ready(self):
+        for ready, expected in ((False, 'FAIL'), (True, 'BLOCKED')):
+            s = self.make()
+            def timeout(boot0, timeout=240):
+                if ready:
+                    s.dev.processing = 'Screen Saver Ready'
+                return ''
+            s.wait_reboot = timeout
+            self.assertEqual(self.run_scenario(s)[4], expected)
+            self.assertTrue(any('S4 reboot timeout: tvpower logs' == call.args[0]
+                                for call in s.rec.note.call_args_list))
+
+
 class RestartDetection(unittest.TestCase):
     def test_no_restart_passes(self):
         s = scenario()
