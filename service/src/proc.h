@@ -3,6 +3,9 @@
 #define HC_PROC_H
 #include <glib.h>
 
+/* After fork: inherit the process group, reset signals, die with the parent. */
+void child_setup(void *parent_pid);
+
 /* Bounded argv execution; -1 spawn failure, -2 timeout. See proc.c for stream completion. */
 int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err, int (*done)(const char *));
 #endif

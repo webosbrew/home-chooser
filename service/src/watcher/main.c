@@ -35,7 +35,7 @@ static gboolean stage_file(const char *source, const char *target, int mode)
 }
 static gboolean stage_runtime(const HCWatchConfig *c)
 {
-    char *binary = g_build_filename(c->runtime, "homechooser-service", NULL);
+    char *binary = g_build_filename(c->runtime, "homechooser-daemon", NULL);
     gboolean ok = stage_file("/proc/self/exe", binary, 0755); g_free(binary);
     char *exe = g_file_read_link("/proc/self/exe", NULL);
     char *dir = exe ? g_path_get_dirname(exe) : NULL;
@@ -126,7 +126,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
 {
     Runner r = {0};
     r.loop = g_main_loop_new(NULL, FALSE);
-    r.luna = hc_luna_open(r.loop);
+    r.luna = hc_luna_open(r.loop, config->luna_send);
     if (!r.luna) { g_main_loop_unref(r.loop); return 1; }
     HCWatchConfig c = *config;
     HCWatchOps ops = {.call = runner_call, .wake = wake, .context = &r};
@@ -144,7 +144,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
     struct sigaction action = {0}, previous[G_N_ELEMENTS(signals)];
     action.sa_handler = signal_handler; sigemptyset(&action.sa_mask);
     guint signal_source = g_unix_fd_add(pipefd[0], G_IO_IN, stop_signal, &r);
-    /* Keep the same boot apply, now using this process's Luna client. The watcher
+    /* Boot apply uses the same bounded luna-send transport. The watcher
      * still runs on readiness failure and retries the live filter on app events. */
     HCKeyOps key = {c.state_dir, c.stock_js, c.osrelease, runner_call, &r, 30, 1000};
     GString *output = g_string_new(NULL);
@@ -173,8 +173,8 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
         wake(&r);
         if (hc_watch_status(r.watch) < 0) g_main_loop_run(r.loop);
     }
-    /* A hub disconnect quits the loop directly and must trigger unit restart. */
-    if (hc_watch_status(r.watch) < 0) hc_watch_stop(r.watch, 1, "Luna transport disconnected");
+    /* An unexpected loop end must trigger unit restart. */
+    if (hc_watch_status(r.watch) < 0) hc_watch_stop(r.watch, 1, "watcher event loop ended");
     for (unsigned i = 0; i < G_N_ELEMENTS(feeds); i++) hc_luna_cancel(feeds[i].subscription);
     if (tick) g_source_remove(tick);
     if (r.drain) g_source_remove(r.drain);

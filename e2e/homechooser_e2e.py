@@ -3073,7 +3073,7 @@ class Scenario:
         """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:
         the watcher (app copy and the running /tmp copy), the service binary, the app bundle."""
         r, d = self.rec, self.dev
-        notify = [SCRIPTS_DIR + '/../homechooser-service', '/tmp/homechooser-runtime/homechooser-service']
+        notify = [SCRIPTS_DIR + '/../homechooser-daemon', '/tmp/homechooser-runtime/homechooser-daemon']
         restore = notify
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
@@ -3086,7 +3086,7 @@ class Scenario:
         for text, sources in ((REMOVAL_ALERT[2:], notify), (UNINSTALL_TOAST, restore)):
             got = has(text, sources)
             r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
-        old = [(t, has(t, [SCRIPTS_DIR + '/../homechooser-service', '/tmp/homechooser-runtime/homechooser-service', APPDIR])) for t in OLD_RESTART_TEXTS]
+        old = [(t, has(t, [SCRIPTS_DIR + '/../homechooser-daemon', '/tmp/homechooser-runtime/homechooser-daemon', APPDIR])) for t in OLD_RESTART_TEXTS]
         r.check('device texts: no old restart wording in the watcher or the app', not any(g for _, g in old),
                 '; '.join('%r in %s' % (t, g) for t, g in old if g) or 'none')
         for reason, text in sorted(REBOOT_PROMPT.items()):
@@ -3632,7 +3632,7 @@ class Scenario:
     def watcher_procs(self):
         """Native --boot process count and the transient unit's own numbers."""
         d = self.dev
-        top = d.sh("ps -eo pid,ppid,args | awk '/homechooser-service.*--boot/ && !/awk/ && !/grep/ {pid[$1]=1; pp[$1]=$2} "
+        top = d.sh("ps -eo pid,ppid,args | awk '/homechooser-daemon.*--boot/ && !/awk/ && !/grep/ {pid[$1]=1; pp[$1]=$2} "
                    "END {n=0; for (p in pid) if (!(pp[p] in pid)) {n++; printf \"%s \", p}; print \"top=\" n}'")[1].strip()
         m = re.search(r'top=(\d+)', top)
         n = int(m.group(1)) if m else -1
@@ -3682,8 +3682,8 @@ class Scenario:
         s['watcher_procs'] = self.watcher_procs()
         s['preload'] = d.preload_policy()[0] if self.major >= 6 else None
         s['log_lines'] = len(self.log_lines())
-        s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-service')
-        s['service_md5'] = self.md5(SCRIPTS_DIR + '/../homechooser-service')
+        s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-daemon')
+        s['daemon_md5'] = self.md5(SCRIPTS_DIR + '/../homechooser-daemon')
         pid = s['watcher_procs']['main_pid']
         s['running_md5'] = self.md5('/proc/%s/exe' % pid) if pid and pid != '0' else 'missing'
         s['app_version'] = d.sh("sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' %s/appinfo.json | head -1" % APPDIR)[1].strip()
@@ -3701,7 +3701,7 @@ class Scenario:
         r, d = self.rec, self.dev
         r.begin('3u update Home Chooser over the old build (--update-check)')
         new_files, old_files = ipk_files(self.hc_new), ipk_files(self.a.old_ipk)
-        wk = 'usr/palm/services/%s/homechooser-service' % SVC_ID
+        wk = 'usr/palm/services/%s/homechooser-daemon' % SVC_ID
         r.check('both ipks carry the native watcher executable', wk in new_files and wk in old_files, wk)
         new_md5 = hashlib.md5(new_files.get(wk, b'')).hexdigest()
         old_md5 = hashlib.md5(old_files.get(wk, b'')).hexdigest()
@@ -3725,7 +3725,7 @@ class Scenario:
         new_log = self.log_lines()[before['log_lines']:]
         r.note('watcher log lines written during the update', '\n'.join(new_log) or '(none)')
         r.check('after the update: the service directory holds the new watcher (md5 = new, app version %s)' % after['app_version'],
-                after['service_md5'] == new_md5, 'device %s, new %s' % (after['service_md5'], new_md5))
+                after['daemon_md5'] == new_md5, 'device %s, new %s' % (after['daemon_md5'], new_md5))
         r.check('after the update: choice file unchanged', after['choice'] == before['choice'] == self.launcher, repr(after['choice']))
         r.check('after the update: record home is still the launcher', after['record_home'] == self.launcher, after['record_raw'])
         wp = after['watcher_procs']

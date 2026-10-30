@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# The same native service executable owns boot, live apply and restoration.
+# The native daemon executable owns boot, live apply and restoration.
 HERE=$(cd "$(dirname "$0")" && pwd)
-BINARY=${HOMECHOOSER_BINARY:-$HERE/../homechooser-service}
-[ -x "$BINARY" ] || BINARY="$HERE/homechooser-service"
+BINARY=${HOMECHOOSER_BINARY:-$HERE/../homechooser-daemon}
+[ -x "$BINARY" ] || BINARY="$HERE/homechooser-daemon"
 exec "$BINARY" --homekey "$@"

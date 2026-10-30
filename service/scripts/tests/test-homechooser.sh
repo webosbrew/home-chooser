@@ -17,7 +17,7 @@ export HOMECHOOSER_BINARY="$T/service" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" 
 $SH "$HERE/homechooser"
 [ "$(grep -c -- --no-block "$T/commands")" = 1 ]
 grep -qF -- "--unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c" "$T/commands"
-grep -qF -- "homechooser-boot $T/service /tmp/homechooser-runtime/homechooser-service" "$T/commands"
+grep -qF -- "homechooser-boot $T/service /tmp/homechooser-runtime/homechooser-daemon" "$T/commands"
 ! grep -E 'sleep|mount|restart sam|surface-manager' "$T/commands"
 : > "$T/commands"
 $SH "$HERE/homechooser" watch
@@ -40,9 +40,9 @@ for major in 5 6 7 8 9 10 11 12; do
     if [ "$major" -ge 6 ] && [ "$major" -le 9 ]; then
         [ ! -e "$T/boot" ]
     else
-        cmp "$T/service" "$T/boot/homechooser-service"
+        cmp "$T/service" "$T/boot/homechooser-daemon"
         cmp "$HERE/homechooser" "$T/boot/homechooser"
-        test -x "$T/boot/homechooser-service"
+        test -x "$T/boot/homechooser-daemon"
         test -f "$T/boot/lib/common.sh"
         : > "$T/commands"
         $SH "$HERE/homechooser"
@@ -54,10 +54,20 @@ for major in 5 6 7 8 9 10 11 12; do
         mv "$T/service" "$T/service.saved"
         : > "$T/commands"
         $SH "$T/boot/homechooser"
-        grep -qF -- "homechooser-boot $T/boot/homechooser-service /tmp/homechooser-runtime/homechooser-service" "$T/commands"
+        grep -qF -- "homechooser-boot $T/boot/homechooser-daemon /tmp/homechooser-runtime/homechooser-daemon" "$T/commands"
         mv "$T/service.saved" "$T/service"
         $SH "$HERE/homechooser" unstage
         [ ! -e "$T/boot" ]
     fi
 done
+# The default executable path and the Home-key worker both name the daemon.
+cp "$HERE/homechooser-homekey" "$T/service-scripts/homechooser-homekey"
+printf '#!/bin/sh\necho "$*" >> "$HC_TEST_COMMANDS"\n' > "$T/homechooser-daemon"
+chmod +x "$T/homechooser-daemon"
+: > "$T/commands"
+(unset HOMECHOOSER_BINARY; $SH "$T/service-scripts/homechooser-homekey" refresh stock)
+grep -qF -- '--homekey refresh stock' "$T/commands"
+: > "$T/commands"
+(unset HOMECHOOSER_BINARY; $SH "$HERE/homechooser" watch)
+grep -qF -- "homechooser-boot $T/service-scripts/../homechooser-daemon /tmp/homechooser-runtime/homechooser-daemon" "$T/commands"
 printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback (%s)\n' "$SH"

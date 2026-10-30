@@ -59,23 +59,51 @@ foreground,life,preload,preload-ready}` and the directory itself. Test-only over
 also include clock, sleeps, timeout binary and check mark paths; these are not
 installed product interfaces.
 
+## Transport decision — follow-up to the 7.6.0 blocker
+
+The coordinator's device report in the sibling `native-watcher-device` worktree,
+section “Device results — 2026-10-30: LS2 design blocker”, records anonymous
+application registration denied with “Invalid permissions for (null)”. Even the
+installed service's regular role cannot use FromApplication as SAM: “not privileged”.
+The existing luna-send executable has a privileged role. This follow-up uses that
+established route for **all** daemon LS2 traffic; it does not grant new permissions.
+No device work was performed in this follow-up.
+
+The user authorized two programs: `homechooser-service` keeps the on-demand LS2
+role and unchanged methods/policy; `homechooser-daemon` owns boot, watcher and
+Home-key one-offs. The daemon does not link libluna-service2 or call LSRegister.
+Common code is built once into a static archive linked by both; no library is
+installed. Only the service is declared in services.json and gets a service role.
+
+Subscriptions are direct `luna-send -a com.webos.applicationManager -i` children,
+read line by line with GIOChannel on the existing GLib loop. Framing accepts
+compact/pretty JSON and ignores garbage, including braces inside quoted strings.
+One-shot requests use bounded `-n 1` children. Watcher one-shots pump the GLib
+context so subscription I/O and timers continue. Standalone Home-key commands
+retain the existing bounded proc.c route. There are no intermediate shells/awk.
+
+EOF or child exit ends the stream: settings causes exit 1/restart; apps logs and
+keeps the 300 s timer; foreground/life logs only. A JSON refusal is not EOF.
+SIGCHLD is handled through a self-pipe and waitpid, with no child-watch thread.
+Every child inherits the daemon process group and is reaped after exit or killed
+and reaped on cancellation/deadline. PR_SET_PDEATHSIG covers a daemon killed alone;
+systemd's default unit cgroup cleanup covers the entire tree. After SIGKILL,
+surviving init/subreaper owns reaping; the test explicitly adopts and reaps it.
+
 ## Native lifetime decisions
 
-Use the existing executable for boot/apply and watcher. In-process LS2 client uses
-the same application identity as `luna-send -a`, without registering the RPC name.
-Single GLib thread; dispatch policy events serially, retaining bounded calls and
-confirmation/backoff delays with GLib sources. Preload retry/settle remains
-independent of the policy event queue. No extra periodic work beyond 300 s ticker.
+The daemon keeps a single policy/GLib thread, serial confirmation/backoff and
+independent preload timers. Idle residency is three processes on 5–10, five on
+11+ with preload enabled; one-shots add temporary children. RSS/PSS remains
+unmeasured and fewer processes alone do not prove a memory saving.
 
-The running image remains mapped after package unlink (**verified offline by unlinking the running ARM test image and completing restore; device validation pending**). It calls the native key-filter
-transaction directly, so removal recovery needs no executable spawn. Atomically
-stage the executable plus access/common helpers in `/tmp/homechooser-runtime`
-for unit crash/restart fallback. Keep persistent copies of that same executable
-and boot/access/common entry on 5/10–12 for stopped-watcher recovery next boot;
-6–9 retain only volatile recovery. No second binary or migration shim.
-Transport files/feeders/timeout-tool selection become LS2 callbacks, tokens and
-bounded GLib timers, with equivalent observable policy rather than filesystem
-markers or child-process identities. No change to the service's RPC method table.
+The daemon image survives package unlink (tested by unlinking the running ARM
+test image). Runtime staging now copies `homechooser-daemon` and access/common
+helpers to `/tmp/homechooser-runtime`, and the transient unit retries that daemon
+if its installed path is gone. On 5/10–12 persistent boot staging copies the
+daemon plus boot/access/common helpers; 6–9 retains only volatile recovery.
+No migration or compatibility binary is kept. The service's LS2 role is not needed
+by the installed, runtime or boot-copy daemon.
 
 ## Later device phase — prepared, not executed
 
@@ -113,9 +141,10 @@ and actual memory measurements belongs to the coordinator's phase.
 
 `test-watcher.c` tests the policy with a fake Luna transport, clock, confirmation
 mutations and temporary filesystem. `test-watcher-luna.c` exercises the actual
-`luna.c` client and `watcher/main.c` loop with fake LS2 entry points: registration
-identity, exact subscription payloads, deadlines, cancellation, terminal replies,
-hub loss, signals, bounded event queue, ticker fallback, source teardown, runtime
+`luna-child.c` and `watcher/main.c` with a directly executed Luna double: caller
+argv and exact subscription payloads, garbage/pretty JSON, EOF/nonzero exit,
+deadlines, cancellation, signals, killed-parent cleanup, bounded event queue,
+ticker fallback, source teardown, runtime
 staging, actual executable unlink and native 8.x boot/stock-filter transactions.
 Both ARM executables run with the same firmware libraries as `test-homekey`.
 
@@ -1341,20 +1370,20 @@ Inventory: W03. Native coverage: `test_uninstall`.
 
 </details>
 
-## Observed offline results
+## Initial port offline results (historical, before transport correction)
 
 | Command/check | Observed result |
 | --- | --- |
 | Original watcher suite, before deletion | 628 passed, 0 failed (sh) |
 | `make -C service test-watcher`, policy executable | 8269 passed, 0 failed |
-| Same target, actual Luna client/runtime executable | 446 passed, 0 failed |
+| Same target, former fake-LS2 client/runtime executable | 446 passed, 0 failed |
 | `ASAN_OPTIONS=detect_leaks=0 make -C service test` | 349 checks, 0 failed |
 | `make -C service test-homekey` | PASS native transaction (suite prints no numeric assertion count) |
 | `make -C service check-abi` | All five SONAMEs present; GLIBC_2.4/2.9/2.11 offered; no undefined symbols missing |
 | All five remaining `sh service/scripts/tests/test-*.sh` suites | Passed; each corpus wrapper reports 10 firmware sources passed, 9 missing sources |
 | `npm --prefix app test -- --runInBand` | 8 suites, 216 tests passed |
 | `TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p test_e2e_logic.py` | 110 tests, OK |
-| Packaging stage | One executable, services.json, three entry/access scripts and common.sh; no watcher shell/helper files |
+| Packaging stage | Daemon executable, services.json, three entry/access scripts and common.sh; no watcher shell/helper files |
 | RPC method table comparison with base | Unchanged, 21 registered methods |
 | Stripped executable | 67,792 bytes before; 92,540 bytes after; +24,748 bytes |
 
@@ -1374,8 +1403,7 @@ The native queue retains at most 128 events and each retained payload at most
 Overflow is an explicit failure/restart, replacing the shell pipes' backpressure;
 normal event ordering, including confirmation and backoff, is serialized. This
 transport overload rule is additional to the shell policy and is tested explicitly.
-Foreground/life and app-list subscription termination degrades; settings or hub
-loss restarts. Endpoints needed by the watcher were added only to the private
+Foreground/life and app-list subscription termination degrades; settings child loss restarts. Endpoints needed by the watcher were added only to the private
 Luna allowlist; the RPC forwarding allowlist and method surface are unchanged.
 
 The E2E harness's installed-text, process-count and package-update probes now use
@@ -1410,3 +1438,59 @@ Archive the printed per-process values with firmware/build/boot-state metadata,
 then sum each sample's RSS and PSS and compare repeated-boot medians/ranges.
 A PID disappearing during a sample invalidates that sample; repeat after the
 same idle interval rather than silently omitting a member of the old tree.
+
+## Transport/split follow-up offline results
+
+Worktree `watcher-lunasend`, branched from main `7718737`. No VM, TV, beanjar,
+ares command or commit was used for this follow-up.
+
+The policy test source and the 628-check legacy index remain unchanged. The former
+**8269 + 446** result described the policy suite plus a fake-LS2 API test. The policy
+suite still reports **8269**; the transport/runtime suite now reports **785** checks
+through real fork/exec children and GIOChannel rather than granting invented LS2
+permissions in stubs. Its `test_client` and `test_runtime` names in the C001–C628
+mapping are retained, with these replacements:
+
+| Former transport coverage | Child-path coverage now |
+| --- | --- |
+| Anonymous registration/attach and caller ID | No daemon LS dependency/symbols; direct child argv checked as `-a com.webos.applicationManager`; missing executable fails cleanly |
+| One-reply success, timeout, send failure and allowlist | Valid/false JSON, garbage, EOF without newline, nonzero exit, a child hanging beyond a one-second deadline, denied URI and exec failure |
+| Subscription callbacks and exact payloads | Real `-i` pipes, exact subscribe/defaultApps payload, garbage/truncated-line recovery, quoted braces, pretty JSON and nested object framing |
+| Terminal replies, hub loss and token cancellation | JSON refusal keeps the stream; stdout EOF (including a child still alive), zero/nonzero child exit and explicit cancellation; every child reaped |
+| Runtime settings failure versus auxiliary degradation | Settings EOF/crash returns 1; apps/foreground/life EOF continues until clean TERM; timer still detects removal without app events |
+| Signal/task-count and resource teardown | No added parent thread; inherited process group checked for each child; killed parent triggers PDEATHSIG; test subreaper adopts/reaps the child; waitpid proves no remaining children |
+| Boot, recovery and transaction coverage | Actual 8.x Home-key boot/stock transaction, full restore after package unlink, daemon runtime-copy byte comparison, actual running-image unlink, bounded queue overflow |
+
+The child executable double lives in `service/test/fake-luna-send.py`. It runs
+under the host Python interpreter from the ARM test process, directly through
+exec (no shell wrapper), and records argv/PID/group/payload for assertions. Its
+state and FIFOs are temporary test fixtures; the installed daemon never uses
+those files. The parent-death test uses a Linux subreaper solely to verify that
+the kernel kills and reaps the child after the parent receives SIGKILL.
+
+| Required command/check | Observed result |
+| --- | --- |
+| `ASAN_OPTIONS=detect_leaks=0 make -C service test` | 349 checks, 0 failed |
+| `make -C service test-homekey` | PASS native transaction; no numeric count printed |
+| `make -C service test-watcher` | 8269 policy + 785 child transport/runtime checks passed, 0 failed |
+| `make -C service check-abi` | Both binaries pass; no missing undefined symbols; GLIBC_2.4/2.9/2.11 offered |
+| All five remaining shell suites | Pass; each corpus wrapper reports 10 firmware sources passed, 9 missing sources (same missing-path evidence listed above) |
+| `npm --prefix app test -- --runInBand` | 8 suites, 216 tests passed |
+| `TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'` | 139 tests, OK |
+| Method table and policy comparison against main | Same 21 methods; policy.c/policy.h unchanged |
+| Packaging stage inspection | Two executables, one service declaration, no archive/shared library installed |
+
+Stripped size and direct ELF NEEDED entries, read from the produced artifacts:
+
+| Executable | Bytes | NEEDED |
+| --- | ---: | --- |
+| homechooser-service | 55,416 | libluna-service2.so.3; libpbnjson_c.so.2; libPmLogLib.so.3; libglib-2.0.so.0; libc.so.6 |
+| homechooser-daemon | 67,692 | libpbnjson_c.so.2; libPmLogLib.so.3; libglib-2.0.so.0; libc.so.6 |
+
+Only services.json's existing service entry is installed as an LS2 service. Its
+executable stays homechooser-service. Boot/default Home-key dispatch, volatile
+runtime fallback and legacy persistent boot recovery all name homechooser-daemon.
+The boot script suite verifies the daemon default path and `--homekey refresh stock`
+dispatch as well as the existing 5–12 staging and stopped-watcher recovery paths.
+The E2E update/text/process probes now name the daemon; their offline logic tests
+passed, but device execution and revised RSS/PSS collection remain pending.

@@ -70,8 +70,8 @@ timeout. The failures map to the problem screens: Homebrew Channel absent (`unre
 `elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
 Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
-content never meets a shell. Boot and Home-key entry scripts dispatch roles in the same native service executable. The
-watcher runs in-process with its own LS2 client; access-file edits retain the shell helper.
+content never meets a shell. Boot and Home-key entry scripts invoke `homechooser-daemon`. The
+watcher policy runs in C and uses luna-send child transport; access-file edits retain the shell helper.
 
 The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
 
@@ -129,20 +129,20 @@ Home Chooser keeps its own copy of the choice and enforces it.
   CR and LF, treats an empty result as no choice, and accepts only letters, digits, `.`, `-` and
   `_`; anything else is logged and ignored, never put into a Luna payload or generated JS.
 * **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`. On 6–9 it links to the installed
-  `scripts/homechooser`, which enqueues a nonblocking transient unit running the existing native
-  service's `--boot` mode. Readiness waits run inside that unit. After volatile apply the native
-  process becomes the watcher; its unit wrapper can use the same binary's runtime copy after removal.
+  `scripts/homechooser`, which enqueues a nonblocking transient unit running
+  `homechooser-daemon --boot`. Readiness waits run inside that unit. After volatile apply the native
+  process runs the watcher; its unit wrapper can use the same binary's runtime copy after removal.
   On 5 and 10–12, the existing persistent watcher restore copy remains under
   `/var/lib/webosbrew/homechooser/boot/`. `homechooser watch` starts the same lifecycle without
   waiting in the app's RPC request.
-* **The watcher** is `service/src/watcher/`, inside the same executable. The boot entry queues
+* **The watcher** is `service/src/watcher/`, inside `homechooser-daemon`. The boot entry queues
   `systemd-run --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5`
-  with a wrapper that runs the installed `homechooser-service --boot`, then its runtime copy if
+  with a wrapper that runs the installed `homechooser-daemon --boot`, then its runtime copy if
   the installed image is gone. It preserves an already active unit. No unit file is written.
   A clean exit stays stopped; transport/restore failures restart after five seconds.
-  * It subscribes in-process to `settingsservice/getSystemSettings` with
+  * It uses a direct `luna-send -i` child subscription to `settingsservice/getSystemSettings` with
     `{"category":"general","keys":["defaultApps"],"subscribe":true}` using the privileged
-    application identity. LS2 delivers complete JSON messages, including string-encoded records.
+    application identity. GIOChannel reads and frames JSON messages, including pretty output and string-encoded records.
   * When `home` is missing or differs from the choice it writes the choice again:
     `applicationManager/setDefaultApp` on 9.x and later (the merged `setSystemSettings` write on
     `Unknown method`), the merged `setSystemSettings` write (existing entries read back and kept) on
@@ -181,7 +181,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
   (`/tmp/homechooser-home.log`).
 
-Tests: `make -C service test-watcher` runs the C policy and LS2 client/runtime tests under
+Tests: `make -C service test-watcher` runs the C policy and child-transport/runtime tests under
 qemu-arm with firmware libraries and a fake transport. It covers record merging, backoff,
 per-version restore, package removal, notifications, preload retry/settle and foreground safety.
 The [port inventory](research/native-watcher-port.md) maps the removed shell checks to these tests.
@@ -258,7 +258,7 @@ on 6–9 the stock filter is restored separately and the record keeps the watche
 ### Home Chooser is uninstalled
 
 The app's files go with it, so the watcher cannot run anything from the app directory. At start it
-stages the same executable, `homechooser-access` and `lib/common.sh` into
+stages `homechooser-daemon`, `homechooser-access` and `lib/common.sh` into
 `/tmp/homechooser-runtime/` by rename. Its mapped executable continues after package unlink,
 and its native Home-key code restores configd without spawning a removed binary. When Home Chooser is
 gone it does, in order:
@@ -489,7 +489,7 @@ package` passes through to `make -C service`:
 | `CROSS` | `$(SDK)/bin/arm-webos-linux-gnueabi-` | `service/Makefile` (gcc, strip) and `service/test/check-abi.sh` (readelf, nm; `READELF` and `NM` override one tool) |
 | `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
 | `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
-| `OUT` | `../build/service` | `service/Makefile`: where the binary goes |
+| `OUT` | `../build/service` | `service/Makefile`: where both binaries go |
 | `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `service/scripts/tests/test-real-roundtrip.sh` and `service/scripts/tests/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
 | `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
 
@@ -499,7 +499,7 @@ The version has one source, `"version"` in `app/package.json`. `app/appinfo.json
 `ares-package` and the TV read) must carry the same: `npm run check-version`
 (`app/scripts/check-version.js`) fails on a mismatch, `npm run package` runs it first, a Jest spec
 checks it with the other tests, and `npm version <x.y.z>` rewrites `appinfo.json` through the
-`version` script. The service binary gets it from `service/Makefile` (`VERSION`, read from
+`version` script. Both native binaries get it from `service/Makefile` (`VERSION`, read from
 `package.json`, compiled in as `HC_VERSION`; `service/src/version.h` requires it and an empty
 version fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
 version. The ipk's control file is written by `ares-package`, which fills in
@@ -511,7 +511,7 @@ limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the
 directories, drops the other locale directories and the character maps, and rewrites iLib's
 manifest to the remaining files. The UI strings are English and come from the source and from
 Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/stage-service.js` copies the five runtime scripts from `service/scripts/` into
-the service package beside the native binary, at mode 755. The app bundle carries no scripts;
+the service package beside the native binaries, at mode 755. The app bundle carries no scripts;
 reviewed release manifests and diffs stay in the offline tests.
 
 The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in

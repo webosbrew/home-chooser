@@ -5,11 +5,23 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <time.h>
 #include <unistd.h>
 #include "proc.h"
 
 #define OUTPUT_MAX_BYTES (64 * 1024)
+
+void child_setup(void *context)
+{
+    pid_t parent = *(pid_t *)context;
+    const int signals[] = {SIGTERM, SIGINT, SIGHUP, SIGCHLD, SIGPIPE};
+    struct sigaction action = {0};
+    action.sa_handler = SIG_DFL; sigemptyset(&action.sa_mask);
+    for (unsigned i = 0; i < G_N_ELEMENTS(signals); i++) sigaction(signals[i], &action, NULL);
+    /* Also cover a watcher killed alone, before systemd kills the unit cgroup. */
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent) _exit(127);
+}
 
 static void drain(int fd, GString *dst)
 {
@@ -33,12 +45,14 @@ int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err,
 		close(po[0]); close(po[1]);
 		return -1;
 	}
+	pid_t parent = getpid();
 	pid_t pid = fork();
 	if (pid < 0) {
 		close(po[0]); close(po[1]); close(pe[0]); close(pe[1]);
 		return -1;
 	}
 	if (pid == 0) {
+		child_setup(&parent);
 		static char *const envp[] = {"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "HOME=/root", NULL};
 		int nul = open("/dev/null", O_RDONLY);
 		dup2(nul, 0);

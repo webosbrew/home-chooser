@@ -4,7 +4,7 @@
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
 BOOT_DIR=${HOMECHOOSER_BOOT_DIR:-/var/lib/webosbrew/homechooser/boot}
-BINARY=${HOMECHOOSER_BINARY:-$SERVICE_SCRIPTS/../homechooser-service}
+BINARY=${HOMECHOOSER_BINARY:-$SERVICE_SCRIPTS/../homechooser-daemon}
 SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
 SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
@@ -20,8 +20,8 @@ stage_boot() {
         cp "$SERVICE_SCRIPTS/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
             mv "$BOOT_DIR/$f.new" "$BOOT_DIR/$f" || return 1
     done
-    cp "$BINARY" "$BOOT_DIR/homechooser-service.new" && chmod 755 "$BOOT_DIR/homechooser-service.new" &&
-        mv "$BOOT_DIR/homechooser-service.new" "$BOOT_DIR/homechooser-service"
+    cp "$BINARY" "$BOOT_DIR/homechooser-daemon.new" && chmod 755 "$BOOT_DIR/homechooser-daemon.new" &&
+        mv "$BOOT_DIR/homechooser-daemon.new" "$BOOT_DIR/homechooser-daemon"
 }
 case "$1" in
     stage) stage_boot; exit $? ;;
@@ -39,11 +39,11 @@ if [ -x "$BINARY" ]; then
     fi
 else
     # A stopped watcher on a legacy release can still recover at the next boot.
-    BINARY=$BOOT_DIR/homechooser-service
+    BINARY=$BOOT_DIR/homechooser-daemon
 fi
-[ -x "$BINARY" ] || [ -x "$RUNTIME/homechooser-service" ] || exit 0
+[ -x "$BINARY" ] || [ -x "$RUNTIME/homechooser-daemon" ] || exit 0
 "$SYSTEMCTL" is-active --quiet homechooser-home && exit 0
 "$SYSTEMCTL" reset-failed homechooser-home 2>/dev/null
 exec "$SYSTEMD_RUN" --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 \
     /bin/sh -c '[ -x "$1" ] && exec "$1" --boot; [ -x "$2" ] && exec "$2" --boot; exit 0' \
-    homechooser-boot "$BINARY" "$RUNTIME/homechooser-service"
+    homechooser-boot "$BINARY" "$RUNTIME/homechooser-daemon"
