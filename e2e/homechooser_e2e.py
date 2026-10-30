@@ -299,6 +299,8 @@ def match_element(frame, text=None, role=None, region=None):
 # Some HOME takeover apps hook micomservice/lginput2 instead of declaring home.
 # HomeBack injects Frida into lginput2/micomservice; those hooks survive app removal until reboot.
 KNOWN_HOME_TAKEOVERS = ('com.homebrew.homeback',)
+# Live 10.3.1 appinfo: "Launcher", "Minimalist home screen", no appCategory.
+KNOWN_UNCATEGORIZED_LAUNCHERS = ('works.partridge.webos-launcher',)
 
 
 def launcher_removal_reason(app):
@@ -312,6 +314,8 @@ def launcher_removal_reason(app):
         return 'appCategory contains home'
     if ident in KNOWN_HOME_TAKEOVERS:
         return 'known HOME takeover app id'
+    if ident in KNOWN_UNCATEGORIZED_LAUNCHERS:
+        return 'known launcher without home category'
     return None
 
 
@@ -325,21 +329,35 @@ def startup_entry_owned(ident, name, target, content):
              for kind in ('applications', 'services') for app in (ident, ident + '.service')]
     if target:
         return any(target == root or target.startswith(root + '/') for root in roots)
+    # Observed 10.3.1 HomeBack bootstrap calls its remote worker through LS2,
+    # rather than executing a package path. Require its exact hook name and call.
+    if ident == 'com.homebrew.homeback' and name == 'homeback':
+        if re.search(r'(?m)^\s*output=\$\(luna-send\s+-n\s+1\s+-f\s+"luna://com\.homebrew\.homeback\.service/remote/start"\s', content):
+            return True
     return (name in (ident, ident + '.service') and
             any(re.search(r'(?m)^\s*(?:exec\s+)?(?:sh\s+|bash\s+)?[\"\']?' + re.escape(root) + r'/', content)
                 for root in roots))
 
 
+def startup_hook_directories(dev):
+    # Read the installed script; the package path is used on 10.3.1, where the
+    # historical /var/lib copy is absent. Never guess a hook directory.
+    for path in ('/var/lib/webosbrew/startup.sh',
+                 '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/startup.sh'):
+        rc, startup = dev.sh('cat ' + path)
+        if rc:
+            continue
+        dirs = re.findall(r'(?m)^\s*run-parts\s+(/var/lib/webosbrew/[A-Za-z0-9_./-]+)', startup)
+        if not dirs:
+            raise RuntimeError('no supported startup hook directory in ' + path)
+        return path, list(dict.fromkeys(dirs))
+    raise RuntimeError('cannot inspect installed Homebrew Channel startup')
+
+
 def clean_startup_entries(dev, rec, ident):
-    # The installed startup script is authoritative. Local hbchannel services/startup.sh
-    # also documents run-parts /var/lib/webosbrew/init.d; do not guess other directories.
-    rc, startup = dev.sh('cat /var/lib/webosbrew/startup.sh')
-    if rc:
-        raise RuntimeError('cannot inspect Homebrew Channel startup after removing ' + ident)
-    dirs = re.findall(r'(?m)^\s*run-parts\s+(/var/lib/webosbrew/[A-Za-z0-9_./-]+)', startup)
-    if not dirs:
-        raise RuntimeError('no supported startup hook directory found for ' + ident)
-    for directory in dict.fromkeys(dirs):
+    source, dirs = startup_hook_directories(dev)
+    rec.note('startup hook directories read from installed script', source)
+    for directory in dirs:
         rc, raw = dev.sh('find ' + shlex.quote(directory) + ' -mindepth 1 -maxdepth 1')
         if rc:
             raise RuntimeError('cannot inspect startup entries: ' + raw)
