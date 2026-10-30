@@ -104,6 +104,34 @@ class ClickInput(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             s.click_element('Use as Home', effect=lambda: False)
 
+    def test_confirmation_captures_transient_toast_before_ocr(self):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.launcher = 'fixture'
+        s.ui = Mock(side_effect=[{'toast': e2e.DONE_TEXT}, {'toast': None}])
+        s.state = Mock(return_value={'choice': s.launcher})
+        s.wait = lambda fn, *args: fn()
+
+        def click(text, *, effect, label, read_after):
+            self.assertEqual(text, 'Use as Home')
+            self.assertFalse(read_after)
+            self.assertTrue(effect())
+
+        s.click_element = click
+        self.assertEqual(s.confirm_home_choice(True), [e2e.DONE_TEXT])
+
+    def test_key_confirmation_keeps_choice_and_toast_checks(self):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.launcher = 'fixture'
+        s.ui = Mock(return_value={'toast': e2e.DONE_TEXT})
+        s.state = Mock(return_value={'choice': s.launcher})
+        s.wait = lambda fn, *args: fn()
+        s.press = Mock()
+        self.assertEqual(s.confirm_home_choice(False), [e2e.DONE_TEXT])
+        s.press.assert_called_once_with('OK')
+        s.state.assert_called_once()
+
     def retry(self, outcomes, closed=True):
         from unittest.mock import Mock
         s = e2e.Scenario.__new__(e2e.Scenario)
