@@ -9,7 +9,7 @@
 HCWatchConfig hc_watch_config(void)
 {
     HCWatchConfig c = {
-        .state_dir = HC_STATE_DIR, .osrelease = HC_OSRELEASE, .app_dir = HC_APP_DIR,
+        .luna_send = "/usr/bin/luna-send", .state_dir = HC_STATE_DIR, .osrelease = HC_OSRELEASE, .app_dir = HC_APP_DIR,
         .override = HC_OVERRIDE_FILE, .init_link = HC_INIT_LINK,
         .runtime = "/tmp/homechooser-runtime", .access_script = "/tmp/homechooser-runtime/homechooser-access",
         .scripts_dir = HC_SERVICE_DIR "/scripts",

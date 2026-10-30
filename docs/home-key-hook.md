@@ -6,15 +6,14 @@ including at boot. No QML source is changed or bind mounted. webOS 5 and 10–12
 settings/profile and watcher behavior.
 
 The native implementation is [homekey.c](../service/src/homekey.c), with the guarded generator in
-[homekey-generator.c](../service/src/homekey-generator.c). Both are part of the existing
-`homechooser-service` executable. `scripts/homechooser-homekey` only dispatches its `--homekey` mode.
+[homekey-generator.c](../service/src/homekey-generator.c). Both are compiled into the shared static archive and linked into
+`homechooser-daemon`. `scripts/homechooser-homekey` only dispatches its `--homekey` mode.
 
 ## Boot and watcher lifetime
 
 On 6–9, `/var/lib/webosbrew/init.d/homechooser` links to the installed `scripts/homechooser`.
 The HBC run-parts entry enqueues one `systemd-run --no-block --unit=homechooser-home` transient unit
-and returns immediately. It contains no readiness sleeps. The unit runs the existing native service
-with `--boot`; this dispatch happens **before** the normal RPC service name is registered.
+and returns immediately. It contains no readiness sleeps. The unit runs `homechooser-daemon --boot`; this dispatch happens **before** the normal RPC service name is registered.
 
 Inside the unit, bounded calls wait for both `surfacemanager/getCurrentState` (a successful reply with
 `currentState`) and configd's valid, nonempty keyFilters list. There are at most 30 attempts, with
@@ -22,20 +21,28 @@ one second between attempts and a timeout on every call. A best-effort `createTo
 “Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
 the privileged `com.webos.applicationManager` identity. Toast failure does not block apply.
 
-After the attempt, the same process runs the native watcher in `service/src/watcher/`.
-Its settings, app-list and (11+) foreground/life subscriptions use the existing GLib loop and a
-private LS2 client with the privileged application identity. The 300 s timer remains the fallback
-for missed app events. There are no resident shell, luna-send, awk or sleep children, and signal
-handling uses a pipe rather than GLib's signal helper, which would add a worker thread.
+After the attempt, the daemon runs the native watcher in `service/src/watcher/`.
+Its settings, app-list and (11+) foreground/life subscriptions are resident
+`luna-send -a com.webos.applicationManager -i` children read through GIOChannel.
+Every one-shot request uses bounded `luna-send -n 1` children with the same identity.
+No shell or awk sits between those children and the C watcher. The 300 s timer
+remains the missed-app-event fallback. Idle residency is the daemon plus two
+subscription children (four on 11+ when preload is enabled); memory is unmeasured.
 
-The running executable remains mapped if the package is removed. Restoration calls `homekey.c`
-directly, and the access helper/common file is staged alongside the same executable in
-`/tmp/homechooser-runtime`. The transient unit falls back to that executable after a crash if the
-installed one is gone. On 5/10–12 the same executable and boot/access helpers are also staged under
-`/var/lib/webosbrew/homechooser/boot` for stopped-watcher uninstall recovery on the next boot.
-On 6–9 recovery remains volatile. There is one installed executable and no migration shim.
-The [port report](research/native-watcher-port.md) maps old shell behaviour to native tests and
-contains the later device and RSS/PSS measurement plan; those device checks have not been run.
+The daemon does not link libluna-service2 or register an LS2 connection. The separate
+`homechooser-service` remains the on-demand app/launcher RPC executable and retains
+its role and method table. Shared code is statically linked; no shared library ships.
+
+The daemon's running image remains mapped after package removal. Restoration calls
+`homekey.c` directly, whose LS2 operations still go through luna-send. The access
+helper/common file and `homechooser-daemon` are staged in `/tmp/homechooser-runtime`
+for crash/restart recovery. On 5/10–12 the daemon and boot/access helpers are also
+staged under `/var/lib/webosbrew/homechooser/boot` for stopped-watcher recovery.
+On 6–9 recovery remains volatile. Child cancellation and EOF reap each PID, the
+children inherit the daemon group and die with their parent, and systemd cleans
+up the complete unit cgroup. The [transport decision and inventory](research/native-watcher-port.md)
+record the device permission blocker and the revised offline coverage; this change
+has not been tested on a VM or TV.
 
 ## Guarded JS generation
 

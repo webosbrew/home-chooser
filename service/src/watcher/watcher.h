@@ -7,7 +7,7 @@ typedef struct HCWatch HCWatch;
 typedef struct {
     const char *state_dir, *osrelease, *app_dir, *override, *init_link;
     const char *runtime, *scripts_dir, *access_script, *log, *stock_js;
-    const char *app_dirs, *install_dirs;
+    const char *app_dirs, *install_dirs, *luna_send;
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
     unsigned preload_retry_ms, preload_settle_ms, preload_tries;
     unsigned notify_retry_ms, notify_tries, log_max;

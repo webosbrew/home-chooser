@@ -1,21 +1,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include <signal.h>
-#include <string.h>
 #include <unistd.h>
 #include "log.h"
 #include "roles.h"
 #include "version.h"
 
-/* One executable: the on-demand LS2 service and root one-off workers. */
+/* On-demand LS2 service only. Root workers live in homechooser-daemon. */
 PmLogContext hc_log;
 
-int main(int argc, char **argv)
+int main(void)
 {
 	signal(SIGPIPE, SIG_IGN);
 	PmLogGetContext("HomeChooser", &hc_log);
 	LOGI("START", "version %s, uid %d", HC_VERSION, (int)geteuid());
 
-	if (argc > 1 && (!strcmp(argv[1], "--boot") || !strcmp(argv[1], "--homekey")))
-		return hc_homekey_main(argc, argv);
 	return hc_service_main();
 }

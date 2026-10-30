@@ -18,7 +18,7 @@ static char *homekey_call(const char *uri, const char *payload, int timeout, voi
     return g_string_free(out, FALSE);
 }
 
-/* Boot and watcher share one process and one private Luna client; no RPC registration. */
+/* Daemon boot/watch and one-off Home-key commands never register an LS2 client. */
 int hc_homekey_main(int argc, char **argv)
 {
     if (geteuid() != 0) return 1;

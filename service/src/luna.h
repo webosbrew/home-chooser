@@ -3,7 +3,6 @@
 #define HC_LUNA_H
 #include <glib.h>
 #include <pbnjson.h>
-#include <luna-service2/lunaservice.h>
 
 #define CALL_TIMEOUT_S 20
 
@@ -13,12 +12,12 @@ void call_start(const char *uri, const char *payload, void (*done)(Call *, jvalu
 /* All privileged calls use HC_LUNA_IDENTITY, never the service's own hub identity. */
 int luna_run(const char *uri, const char *payload, int replies, int timeout_s, int (*done)(const char *), GString *out);
 
-/* Private boot/watcher client, attached to the default GLib context. No RPC name.
- * Calls and subscriptions use the same application ID as luna-send -a. */
+/* Boot/watcher child transport on the default GLib context. No LS2 registration.
+ * All calls/subscriptions exec luna-send with the fixed application identity. */
 typedef struct HCLuna HCLuna;
 typedef struct HCSubscription HCSubscription;
 typedef void (*HCSubscriptionReply)(const char *text, gboolean ended, void *context);
-HCLuna *hc_luna_open(GMainLoop *loop);
+HCLuna *hc_luna_open(GMainLoop *loop, const char *program);
 void hc_luna_close(HCLuna *client);
 char *hc_luna_call(const char *uri, const char *payload, int timeout_s, void *client);
 HCSubscription *hc_luna_subscribe(HCLuna *client, const char *uri, const char *payload,
