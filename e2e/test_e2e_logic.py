@@ -1123,15 +1123,17 @@ class ScreensaverFakeDev(FakeDev):
     """Offline tvpower model; fault injection happens at the selected scenario step."""
     launcher = 'org.webosbrew.hcfixture.web.normal'
 
-    def __init__(self, rec, fault=None):
+    def __init__(self, rec, fault=None, major=10):
         super().__init__()
-        self.rec, self.fault = rec, fault
+        self.rec, self.fault, self.major = rec, fault, major
+        self.home_wakes, self.back_goes_home = False, False
         self.selected, self.substate, self.processing = False, 'active', ''
         self.fg, self.previous = HOME, HOME
         self.choice, self.default_apps, self.policy = '', {'home': None, 'other': 'retained'}, True
         self.logs, self.calls, self.buttons = [], [], []
         self.saver_app, self.log_ignore = e2e.SCREENSAVERS[0], True
         self.boot_applied = True
+        self.subprocessing, self.helper_mode = '', 'missing'
 
     def broken(self, kind):
         return self.fault == (int(self.rec.step[1]), kind)
@@ -1146,8 +1148,14 @@ class ScreensaverFakeDev(FakeDev):
     def installed(self):
         return ['org.webosbrew.hbchannel'] + ([e2e.APP_ID, self.launcher] if self.selected else [])
 
+    def luna(self, uri, payload='{}'):
+        self.calls.append(('foreground', uri, payload))
+        if uri.endswith('/getForegroundAppInfo'):
+            return json.dumps({'returnValue': True, 'appId': self.fg, 'processId': '', 'windowId': ''})
+        return json.dumps({'returnValue': False, 'errorText': 'Unknown method'})
+
     def foreground(self):
-        return self.fg, json.dumps({'appId': self.fg})
+        return e2e.Device.foreground(self)
 
     def record_home(self):
         return self.default_apps['home'], json.dumps({'returnValue': True, 'settings': {'defaultApps': self.default_apps}})
@@ -1178,7 +1186,15 @@ class ScreensaverFakeDev(FakeDev):
         assert app is None, 'tvpower must run as root without -a'
         reply = {'returnValue': True}
         if uri.endswith('/getPowerState'):
-            reply.update({'sub state': self.substate, 'processing': self.processing})
+            if '/power2/' in uri:
+                reply = ({'returnValue': False, 'errorText': 'Unknown method "getPowerState" for category "/power2"'}
+                         if self.major == 6 else
+                         {'returnValue': True, 'state': 'ACTIVE', 'sub state': self.substate,
+                          'sub processing': self.subprocessing})
+            else:
+                reply['state'] = 'Screen Saver' if self.substate == 'screen saver' else 'Active'
+                if self.processing:
+                    reply['processing'] = self.processing
         elif uri.endswith('/turnOnScreenSaver'):
             if self.broken('skip'):
                 reply = {'returnValue': False, 'errorText': 'screenSaverEnabled is off (first use not completed)'}
@@ -1190,7 +1206,7 @@ class ScreensaverFakeDev(FakeDev):
                 self.previous = self.fg
                 self.processing = 'Screen Saver Ready' if self.broken('ready') else ''
                 self.substate = 'active' if self.broken('ready') else 'screen saver'
-                self.fg = self.previous if self.broken('ready') else self.saver_app
+                # SAM's singular foreground keeps the card beneath the screensaver.
                 if self.log_ignore:
                     self.logs.append('ignoring screensaver app ' + self.saver_app)
                 if self.broken('choice'):
@@ -1206,7 +1222,7 @@ class ScreensaverFakeDev(FakeDev):
                 if self.broken('restart'):
                     self.units['homechooser-home'] = {'MainPID': '101', 'NRestarts': '1', 'ActiveState': 'active'}
         elif uri == e2e.TVPOWER_REBOOT_URI:
-            if self.broken('busy'):
+            if self.broken('busy') or self.processing == 'Screen Saver Ready' or self.subprocessing == 'screen saver ready':
                 reply = {'returnValue': False, 'errorText': 'power is busy'}
             elif self.broken('reboot_refuse'):
                 reply = {'returnValue': False, 'errorText': 'permission denied'}
@@ -1216,16 +1232,42 @@ class ScreensaverFakeDev(FakeDev):
             raise AssertionError('Unexpected endpoint: ' + uri)
         return 0, json.dumps(reply), reply
 
+    def screensaver(self, verb, vm):
+        self.calls.append(('beanjar', verb, vm))
+        if self.helper_mode == 'missing':
+            return None
+        if self.helper_mode == 'fail':
+            return 1, json.dumps({'error': 'screensaver: timed out waiting for native completion'})
+        if self.helper_mode == 'invalid_json':
+            return 0, 'not JSON'
+        if self.helper_mode != 'stays_ready':
+            self.processing = self.subprocessing = ''
+            if verb == 'start':
+                self.previous, self.substate = self.fg, 'screen saver'
+            else:
+                self.substate, self.fg = 'active', self.previous
+        # Mirrors Beanjar screensaver.control's result keys, not LS2 returnValue.
+        return 0, json.dumps({'action': verb, 'changed': True, 'fallback': True,
+                              'power': {'sub state': self.substate, 'sub processing': self.subprocessing},
+                              'screensaver_windows': [self.saver_app] if verb == 'start' else []})
+
     def press(self, vm, key):
         assert key in ('HOME', 'BACK'), 'Never confirm an LG dialog'
         self.buttons.append(key)
+        was_shown = self.substate == 'screen saver'
         if self.broken('key_error'):
             return 1, 'remote unavailable'
         if self.broken('dismiss_ready'):
             self.processing, self.substate = 'Screen Saver Ready', 'active'
         else:
             self.processing, self.substate = '', 'active'
-        self.fg = self.previous if key == 'BACK' else (self.launcher if self.selected else HOME)
+        home = self.launcher if self.selected else HOME
+        if key == 'BACK':
+            self.fg = home if was_shown and self.back_goes_home else self.previous
+        else:
+            self.fg = self.previous if was_shown and self.home_wakes else home
+        if key == 'HOME' and not was_shown and self.broken('no_home_dispatch'):
+            self.fg = self.previous
         if self.broken('wrong_foreground'):
             self.fg = 'com.webos.app.wrong'
         return 0, ''
@@ -1240,11 +1282,12 @@ class HomeAndScreensaver(unittest.TestCase):
         s.rec.results, s.rec.step, s.rec.tag = [], '', ''
         s.rec.say = Mock()
         s.rec.note = Mock()
-        s.dev = ScreensaverFakeDev(s.rec, fault)
+        s.dev = ScreensaverFakeDev(s.rec, fault, major)
         s.major, s.vm, s.stock_id, s.launcher = major, 'offline', HOME, s.dev.launcher
         s.L = SimpleNamespace(is_fixture=True, overlay=False)
         s.a = SimpleNamespace(api_check=False)
-        s.host = SimpleNamespace(remote_press=s.dev.press, vnc_start=Mock(), start=Mock(return_value=(0, '')))
+        s.host = SimpleNamespace(remote_press=s.dev.press, vnc_start=Mock(), start=Mock(return_value=(0, '')),
+                                 screensaver=s.dev.screensaver)
         s.shot = Mock()
         # Exercise bounded polling without advancing wall time or reaching any transport.
         s.wait = lambda cond, timeout, every=3: next((v for v in (cond() for _ in range(3)) if v), None)
@@ -1257,6 +1300,8 @@ class HomeAndScreensaver(unittest.TestCase):
     def run_scenario(self, s, baseline='PASS'):
         from unittest.mock import patch
         with patch.object(e2e, 'sleep'), patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')):
+            if baseline == 'PASS' and not getattr(s, 'screensaver_stock', None):
+                self.assertEqual(s.screensaver_baseline(), 'PASS')
             s.dev.select()
             s.screensaver_selected(baseline)
         return {int(row['name'][1]): row['status'] for row in s.rec.results if row['name'].startswith('S') and not row['name'].startswith('S0')}
@@ -1283,10 +1328,12 @@ class HomeAndScreensaver(unittest.TestCase):
 
     def test_baseline_outcomes_capture_diagnostics_and_no_settings_writes(self):
         for fault, expected in [('skip', 'SKIPPED'), ('ready', 'BLOCKED'), ('timeout', 'FAIL'),
-                                ('wrong_foreground', 'FAIL'), ('key_error', 'FAIL'), ('refuse', 'FAIL')]:
+                                ('wrong_foreground', 'PASS'), ('key_error', 'FAIL'), ('refuse', 'FAIL')]:
             with self.subTest(fault=fault):
                 s = self.make(fault=(0, fault))
-                self.assertEqual(s.screensaver_baseline(), expected)
+                from unittest.mock import patch
+                with patch.object(e2e, 'sleep'):
+                    self.assertEqual(s.screensaver_baseline(), expected)
                 self.assertFalse(any('setSystemSettings' in str(call) for call in s.dev.calls))
                 if fault in ('skip', 'ready', 'timeout', 'refuse'):
                     self.assertTrue(any('tvpower logs' in call.args[0] for call in s.rec.note.call_args_list))
@@ -1437,6 +1484,287 @@ class HomeAndScreensaver(unittest.TestCase):
             self.assertEqual(self.run_scenario(s)[4], expected)
             self.assertTrue(any('S4 reboot timeout: tvpower logs' == call.args[0]
                                 for call in s.rec.note.call_args_list))
+
+
+    def test_s4_stale_ready_recovers_then_reboots_with_explicit_result(self):
+        s = self.make(fault=(4, 'dismiss_ready'))
+        s.dev.helper_mode = 'success'
+        self.assertEqual(self.run_scenario(s)[4], 'PASS')
+        self.assertEqual(s.dev.boot, 'b2')
+        recovered = [row for row in s.rec.results if row['status'] == 'RECOVERED']
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0]['name'],
+                         'recovered stale Screen Saver Ready via beanjar screensaver stop, beanjar#56')
+        evidence = json.loads(recovered[0]['evidence'])
+        self.assertEqual(evidence['helper']['action'], 'stop')
+        self.assertEqual(evidence['before']['power'][1]['processing'], 'Screen Saver Ready')
+        self.assertNotIn('processing', evidence['after']['power'][1])
+        calls = s.dev.calls
+        stop = calls.index(('beanjar', 'stop', s.vm))
+        reboot = next(i for i, call in enumerate(calls) if isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI)
+        self.assertLess(stop, reboot)
+        state_reads = [call[1] for call in calls[stop + 1:reboot] if isinstance(call, tuple)]
+        self.assertIn(e2e.TVPOWER + 'power/getPowerState', state_reads)
+        self.assertIn(e2e.TVPOWER + 'power2/getPowerState', state_reads)
+        self.assertEqual(s.dev.buttons[-1], 'BACK')
+
+    def test_s4_recovery_failure_or_persistent_ready_blocks_without_reboot(self):
+        for mode in ('fail', 'stays_ready', 'invalid_json'):
+            with self.subTest(mode=mode):
+                s = self.make(fault=(4, 'dismiss_ready'))
+                s.dev.helper_mode = mode
+                self.assertEqual(self.run_scenario(s)[4], 'BLOCKED')
+                self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
+                self.assertEqual(s.dev.boot, 'b1')
+                self.assertTrue(any('power after beanjar screensaver stop' in call.args[0]
+                                    for call in s.rec.note.call_args_list))
+                self.assertTrue(any('recovery failed: tvpower logs' in call.args[0]
+                                    for call in s.rec.note.call_args_list))
+
+    def test_ready_detectors_include_both_native_fields_and_nested_replies(self):
+        for route in ('power', 'power2'):
+            s = self.make()
+            s.dev.select()
+            s.rec.step = 'S4'
+            s.dev.previous = s.dev.fg
+            s.dev.helper_mode = 'success'
+            if route == 'power':
+                s.dev.processing = 'Screen Saver Ready'
+            else:
+                s.dev.subprocessing = 'screen saver ready'
+            power = s.screensaver_power()
+            power[route] = (power[route][0], {'state': power[route][1]})
+            self.assertTrue(s.screensaver_ready(power))
+            self.assertTrue(s.prepare_tvpower_reboot('test'))
+            self.assertFalse(s.screensaver_ready(s.screensaver_power()))
+            self.assertEqual(s.rec.results[-1]['status'], 'RECOVERED')
+
+    def test_helper_missing_keeps_busy_reboot_handling_and_logs_once(self):
+        s = self.make()
+        s.dev.select()
+        s.rec.step = 'S4'
+        s.dev.processing = 'Screen Saver Ready'
+        self.assertFalse(s.prepare_tvpower_reboot('first'))
+        self.assertFalse(s.prepare_tvpower_reboot('second'))
+        missing = [call for call in s.rec.note.call_args_list if 'subcommand missing' in call.args[0]]
+        self.assertEqual(len(missing), 1)
+        # Old behaviour is retained: an attempted tvpower reboot still reports busy.
+        rc, raw, reply = s.dev.luna_as(None, e2e.TVPOWER_REBOOT_URI)
+        self.assertFalse(reply['returnValue'])
+        self.assertIn('power is busy', raw)
+        self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
+
+    def test_no_recovery_helper_when_state_is_not_ready(self):
+        s = self.make()
+        self.assertTrue(s.prepare_tvpower_reboot('ordinary reboot'))
+        self.assertFalse(any(isinstance(call, tuple) and call[0] == 'beanjar' for call in s.dev.calls))
+
+    def test_opt_in_beanjar_start_retains_button_dismissal_for_s0_to_s4(self):
+        from unittest.mock import patch
+        s = self.make()
+        s.a.saver_start = 'beanjar'
+        s.dev.helper_mode = 'success'
+        with patch.object(e2e, 'sleep'):
+            self.assertEqual(s.screensaver_baseline(), 'PASS')
+            self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
+        self.assertEqual(len([call for call in s.dev.calls if isinstance(call, tuple) and call[:2] == ('beanjar', 'start')]), 6)
+        self.assertFalse(any(isinstance(call, tuple) and call[1].endswith('/turnOnScreenSaver') for call in s.dev.calls))
+        self.assertEqual(s.dev.buttons, ['BACK', 'HOME', 'HOME', 'HOME', 'BACK', 'HOME', 'BACK', 'HOME', 'BACK'])
+        self.assertFalse(any(isinstance(call, tuple) and call[:2] == ('beanjar', 'stop') for call in s.dev.calls))
+
+    def test_opt_in_beanjar_start_missing_or_failing_is_reported(self):
+        for mode, expected in (('missing', 'SKIPPED'), ('fail', 'BLOCKED'), ('invalid_json', 'BLOCKED'),
+                               ('stays_ready', 'BLOCKED')):
+            s = self.make()
+            s.a.saver_start, s.dev.helper_mode = 'beanjar', mode
+            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                s.screensaver_start()
+            self.assertEqual(cm.exception.status, expected)
+
+    def test_main_reboot_step_recovers_before_restart_and_blocks_failures(self):
+        from unittest.mock import Mock
+        for mode in ('success', 'fail', 'missing'):
+            s = self.make()
+            s.dev.select()
+            s.dev.previous, s.dev.processing, s.dev.helper_mode = s.dev.fg, 'Screen Saver Ready', mode
+            def restart(label):
+                if mode == 'success':
+                    self.assertFalse(s.screensaver_ready(s.screensaver_power()))
+                    self.assertEqual(s.rec.results[-1]['status'], 'RECOVERED')
+                return True
+            s.beanjar_reboot = Mock(side_effect=restart)
+            if mode == 'fail':
+                with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                    s.step_reboot()
+                self.assertEqual(cm.exception.status, 'BLOCKED')
+                s.beanjar_reboot.assert_not_called()
+            else:
+                s.step_reboot()
+                s.beanjar_reboot.assert_called_once_with('3r')
+
+    def test_recovery_precedes_each_reboot_alert_attempt(self):
+        from unittest.mock import Mock
+        s, events = self.make(), []
+        s.press_alert = Mock(side_effect=lambda *args: events.append('press') or True)
+        s.use_click = lambda: True
+        outcomes = iter((False, 'rebooted'))
+        def verify():
+            events.append('verify')
+            return next(outcomes)
+        result = s.alert_action('message', 'Reboot', 'Later', 'test', None, verify,
+                                lambda: True, lambda: events.append('request'),
+                                before_action=lambda: events.append('recovery'))
+        self.assertEqual(result, 'rebooted')
+        self.assertEqual(events, ['recovery', 'press', 'verify', 'request', 'recovery', 'press', 'verify'])
+
+    def test_cli_saver_start_defaults_and_accepts_beanjar(self):
+        from unittest.mock import patch
+        for choice in ([], ['--saver-start', 'beanjar']):
+            with patch.object(sys, 'argv', ['runner', '--list'] + choice), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(e2e.main(), 0)
+
+    def test_main_recovery_failure_is_recorded_blocked_and_cleanup_still_runs(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = self.make()
+        s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario='lifecycle',
+                              api_check=False, reboot_check=True, update_check=False,
+                              launcher_update_check=False, restore_repair_check=False)
+        s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline'
+        s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.host.mode = 'offline'
+        s.dev.release = lambda: (10, '10.3.1')
+        s.dev.app_installed = lambda app: False
+        s.state = lambda: {'choice': 'No such file'}
+        s.check_no_crash = Mock()
+        for number in range(1, 7):
+            setattr(s, 'step%d' % number, Mock())
+        s.step1.side_effect = lambda strategy: s.dev.select()
+        def stale():
+            s.dev.processing, s.dev.helper_mode = 'Screen Saver Ready', 'fail'
+        s.step3.side_effect = stale
+        s.beanjar_reboot = Mock()
+        s.run()
+        s.beanjar_reboot.assert_not_called()
+        s.step4.assert_not_called()
+        s.step6.assert_called_once()
+        self.assertEqual([row['status'] for row in s.rec.results if row['name'] == 'tvpower reboot readiness'], ['BLOCKED'])
+        self.assertFalse(any(row['status'] == 'FAIL' for row in s.rec.results))
+
+
+    def test_stock_observations_drive_both_home_wake_and_direct_home_cases(self):
+        from unittest.mock import patch
+        # Device evidence: stock 7.6.0/9.2.1 wakes to hbchannel. Direct HOME is modeled
+        # too; neither behavior is selected by a firmware-version hand list.
+        for major in (6, 7, 9, 11):
+            for wake_only in (True, False):
+                with self.subTest(major=major, wake_only=wake_only), patch.object(e2e, 'sleep'):
+                    s = self.make(major)
+                    s.dev.home_wakes = wake_only
+                    self.assertEqual(s.screensaver_baseline(), 'PASS')
+                    measured = json.loads(next(row['evidence'] for row in s.rec.results
+                                               if row['name'] == 'S0 home and screensaver'))
+                    self.assertEqual(measured['HOME']['wake'][0], 'org.webosbrew.hbchannel' if wake_only else HOME)
+                    self.assertEqual(measured['HOME']['home'][0], HOME)
+                    self.assertEqual(measured['BACK']['wake'][0], 'org.webosbrew.hbchannel')
+                    self.assertEqual(measured['BACK']['home'][0], HOME)
+                    self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
+                    labels = [call.args[0] for call in s.shot.call_args_list]
+                    self.assertEqual('S2-home' in labels, wake_only)
+                    self.assertEqual(s.dev.fg, s.launcher)
+
+    def test_mismatched_wake_behavior_fails_against_measured_stock_baseline(self):
+        from unittest.mock import patch
+        for stock_wakes in (True, False):
+            with self.subTest(stock_wakes=stock_wakes), patch.object(e2e, 'sleep'):
+                s = self.make(9)
+                s.dev.home_wakes = stock_wakes
+                self.assertEqual(s.screensaver_baseline(), 'PASS')
+                s.dev.home_wakes = not stock_wakes
+                self.assertEqual(self.run_scenario(s)[2], 'FAIL')
+
+    def test_back_destination_also_comes_from_stock_instead_of_assuming_previous_app(self):
+        from unittest.mock import patch
+        s = self.make(7)
+        s.dev.back_goes_home = True
+        with patch.object(e2e, 'sleep'):
+            self.assertEqual(s.screensaver_baseline(), 'PASS')
+            self.assertEqual(s.screensaver_stock['BACK']['wake'][0], HOME)
+            self.assertEqual(self.run_scenario(s)[3], 'PASS')
+
+    def test_second_home_must_dispatch_chosen_launcher_after_stock_wake_only(self):
+        s = self.make(9, fault=(2, 'no_home_dispatch'))
+        s.dev.home_wakes = True
+        self.assertEqual(self.run_scenario(s)[2], 'FAIL')
+        row = next(row for row in s.rec.results if row['name'] == 'S2 home and screensaver')
+        self.assertIn('second HOME did not match S0', row['evidence'])
+
+    def test_stock_second_home_without_home_dispatch_is_observed_without_inventing_a_target(self):
+        from unittest.mock import patch
+        s = self.make(9, fault=(0, 'no_home_dispatch'))
+        s.dev.home_wakes = True
+        with patch.object(e2e, 'sleep'):
+            self.assertEqual(s.screensaver_baseline(), 'PASS')
+        self.assertEqual(s.screensaver_stock['HOME']['home'][0], 'org.webosbrew.hbchannel')
+        # A measured previous-app result maps to the previous app, not a fabricated stock HOME.
+        self.assertEqual(s.screensaver_expected('HOME', 'home', 'org.example.previous'), 'org.example.previous')
+
+    def test_6x_uses_legacy_power_and_singular_foreground_without_modern_routes(self):
+        s = self.make(6)
+        s.dev.home_wakes = True
+        self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
+        calls = [call[1] for call in s.dev.calls if isinstance(call, tuple)]
+        self.assertIn(e2e.TVPOWER + 'power/getPowerState', calls)
+        self.assertIn(e2e.TVPOWER + 'power/turnOnScreenSaver', calls)
+        self.assertIn('luna://com.webos.applicationManager/getForegroundAppInfo', calls)
+        self.assertFalse(any('/power2/' in uri or uri.endswith('/getForegroundApps') for uri in calls))
+        self.assertIsNone(s.screensaver_power()['power2'][1])
+
+    def test_6x_requires_real_shown_state_and_never_accepts_ready_or_trigger_success(self):
+        for fault, expected in (('ready', 'BLOCKED'), ('timeout', 'FAIL')):
+            s = self.make(6, fault=(0, fault))
+            self.assertEqual(s.screensaver_baseline(), expected)
+            self.assertFalse(s.screensaver_shown(s.screensaver_power()))
+        s = self.make(6)
+        s.dev.substate = 'screen saver'
+        self.assertTrue(s.screensaver_shown(s.screensaver_power()))
+        s.dev.processing = 'Screen Saver Ready'
+        self.assertFalse(s.screensaver_shown(s.screensaver_power()))
+
+
+
+class BeanjarScreensaverHelper(unittest.TestCase):
+    def host(self, mode='remote'):
+        from unittest.mock import Mock
+        host = e2e.BeanjarHost(mode=mode, name='pi')
+        host.display_beanjar = Mock(return_value=(0, 'help'))
+        return host
+
+    def test_help_is_probed_once_and_uses_local_multi_host_cli_with_bounded_calls(self):
+        for mode, target in (('remote', 'pi/vm'), ('local', 'vm')):
+            with self.subTest(mode=mode):
+                host = self.host(mode)
+                self.assertEqual(host.screensaver('stop', 'vm'), (0, 'help'))
+                host.screensaver('start', 'vm')
+                self.assertEqual([call.args for call in host.display_beanjar.call_args_list],
+                                 [('screensaver', '--help'),
+                                  ('screensaver', 'stop', target, '--timeout', '60', '--json'),
+                                  ('screensaver', 'start', target, '--timeout', '60', '--json')])
+                self.assertEqual([call.kwargs['timeout'] for call in host.display_beanjar.call_args_list], [15, 90, 90])
+
+    def test_old_cli_missing_command_is_cached_without_running_start_or_stop(self):
+        for rc, raw in ((2, "beanjar: error: invalid choice: 'screensaver'"), (127, 'beanjar not found')):
+            host = self.host()
+            host.display_beanjar.return_value = rc, raw
+            self.assertIsNone(host.screensaver('stop', 'vm'))
+            self.assertIsNone(host.screensaver('start', 'vm'))
+            host.display_beanjar.assert_called_once_with('screensaver', '--help', timeout=15)
+
+    def test_other_probe_errors_are_failures_rather_than_missing_subcommand(self):
+        host = self.host()
+        host.display_beanjar.return_value = 124, 'help timed out'
+        self.assertEqual(host.screensaver('stop', 'vm'), (124, 'help timed out'))
+        host.display_beanjar.assert_called_once()
 
 
 class RestartDetection(unittest.TestCase):

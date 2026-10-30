@@ -84,36 +84,97 @@ are for a later, coordinated VM run; development and the tests below are entirel
 ```sh
 python3 -I e2e/homechooser_e2e.py --vm 10.x --scenario screensaver
 python3 -I e2e/homechooser_e2e.py --vm 11.x --scenario all --launcher fixture:web.normal
+python3 -I e2e/homechooser_e2e.py --vm 10.x --scenario screensaver --saver-start beanjar
 ```
 
 | Step | Assertions |
 | --- | --- |
-| S0 | With Home Chooser and its choice file absent, start from Homebrew Channel. Start the screensaver, confirm it, press BACK and verify that app returns. Start again, press HOME and verify stock Home. This tests the firmware baseline first. |
+| S0 | With Home Chooser and its choice file absent, start from Homebrew Channel separately for BACK and HOME. Confirm a shown screensaver, press the key and confirm dismissal, then record the foreground. Press HOME once more and record that foreground too. Foreground destinations are firmware observations, not S0 pass/fail expectations. |
 | S1 | Put the selected fixture in front, start the screensaver, and observe for 5 seconds. Choice, the entire defaultApps reply, stock-home preload policy, daemon MainPID/NRestarts/active state, and boot id must stay unchanged. No daemon closeByAppId or setPreloadPolicy call is allowed. On 11+, where the daemon follows foreground and life events, its log lines naming a screensaver app are recorded; ignoring the screensaver is judged by the absence of actions, since the daemon logs actions and not skipped events. |
-| S2 | From S1's screensaver, press HOME. The screensaver must disappear and the selected fixture must be in the foreground. Home Chooser state must stay unchanged. |
-| S3 | From Homebrew Channel, start again, press BACK and verify it returns with Home Chooser state unchanged. HOME must then put the chosen fixture in front. |
-| S4 | Start again, dismiss with BACK, then request tvpower/power/reboot as root. Verify a new boot and reuse the existing boot-apply checks for the choice, record, watcher, hook, and preload policy. |
+| S2 | Dismiss S1's saver using the measured BACK behavior, put hbchannel in front, and start again. HOME must dismiss to the destination observed in S0: the previous app for wake-only firmware, or the chosen launcher where stock dispatched Home immediately. On wake-only firmware, a second HOME must open the chosen launcher where S0's second HOME opened stock Home. Home Chooser state stays unchanged. |
+| S3 | From hbchannel, start again and press BACK. Its destination must match S0's BACK observation, with a stock-Home dispatch mapped to the chosen launcher. The following HOME must likewise match S0: where it opened stock Home, it must now open the chosen fixture. Home Chooser state stays unchanged. |
+| S4 | Start again, dismiss with BACK, recover a stale Ready state if necessary (recorded as RECOVERED), then request tvpower/power/reboot as root. Verify a new boot and reuse the existing boot-apply checks for the choice, record, watcher, hook, and preload policy. |
 
-Each step records both `power/getPowerState` and `power2/getPowerState`, foreground, daemon unit,
+Each step records `power/getPowerState` and, on 7+, `power2/getPowerState`, foreground, daemon unit,
 choice file (including read status), defaultApps, stock-home preload policy and boot id, with a
 screenshot before and after. Additional snapshots record S1 while shown and button dismissal.
-The successful start proof is `sub state: screen saver`; an active state and the expected
-foreground prove dismissal.
+The successful start proof on 7+ is `power2`'s `sub state: screen saver`, with no Ready
+transition. On 6.x it is `power`'s actual `state: Screen Saver`; `returnValue:true` from a trigger
+or `Active` with `processing: Screen Saver Ready` never proves a shown saver. Dismissal requires
+the native active state and, after S0, the expected foreground.
 
-The trigger is a root `luna-send -n 1` with no `-a`, calling
+S0 stores both keys' `previous`, `wake`, and subsequent `home` foreground replies in its
+`results.json` evidence, plus logs and screenshots. After the follow-up HOME it observes a
+foreground change for up to 15 seconds and records the resulting foreground even if unchanged.
+A wake destination or a second HOME destination different from stock Home does not fail S0.
+Failure to show/dismiss still fails (or remains BLOCKED for Ready); precondition refusals remain
+SKIPPED. An unsuccessful S0 blocks later steps, preserving the existing dependency handling.
+
+The measured baseline supplies S2/S3's expectations without a per-firmware key-behavior table.
+An observed previous-app result maps to the previous app used by that step, an observed stock
+Home result maps to the selected launcher, and other observed destinations are retained.
+Unreadable baseline foreground evidence blocks the comparison. S2 deliberately uses hbchannel
+under its saver so a wake to an already foreground launcher cannot stand in for Home dispatch.
+The stock 7.6.0 and 9.2.1 device results showed that HOME and BACK both wake to hbchannel,
+despite a real `_WEBOS_WINDOW_TYPE_SCREENSAVER` window being shown; this is valid baseline
+behavior, separate from beanjar#56. A firmware that dispatches Home on the first press is
+measured and checked accordingly.
+
+On 6.5.2, `power2/getPowerState` and SAM `getForegroundApps` returned Unknown method. The 6.x
+path uses `power/getPowerState` and the supported singular `getForegroundAppInfo`, and marks
+power2 explicitly unqueried/unavailable in snapshots instead of querying it or treating a
+refusal as an empty successful response. Its legacy shown-state requirement remains strict;
+the retained 6.5.2 device run showed only Active/Ready and therefore supplied no shown-state
+proof. No real 6.5.2 shown-state success is claimed.
+
+The default `--saver-start tvpower` trigger is a root `luna-send -n 1` with no `-a`, calling
 `luna://com.webos.service.tvpower/power2/turnOnScreenSaver` with `{}` on 7+. On 6 it uses
-`power/turnOnScreenSaver` (permission-file evidence only; not yet validated on a device).
+`power/turnOnScreenSaver` (accepted on 6.5.2, but that device run stalled in Ready; successful
+shown-state completion remains unvalidated there).
 Releases below 6 are SKIPPED. Dismissal uses `beanjar remote press <vm> HOME|BACK`, with the
-existing VNC frontend started first. It never uses `turnOnScreen`, changes TV settings, or
-confirms LG dialogs. Start/state waits are limited to 45 seconds, foreground/dismissal waits
-to 30 seconds, and guest-reboot detection to 240 seconds, followed by the existing bounded
-boot-readiness waits (all use the host timing slowdown).
+existing VNC frontend started first. The harness keeps button dismissal under test, changes no
+TV settings, and never confirms LG dialogs. Start/state waits are limited to 45 seconds,
+foreground/dismissal waits to 30 seconds, and guest-reboot detection to 240 seconds, followed
+by the existing bounded boot-readiness waits (all use the host timing slowdown).
+
+For VMs whose firmware trigger stalls, opt into `--saver-start beanjar`. S0–S4 then use
+`beanjar screensaver start <vm> --timeout 60 --json` through the local multi-host CLI
+(`HOST/NAME` for a remote host). Beanjar waits for both native state and a real screensaver
+window; the harness records its JSON and independently confirms native state. Every dismissal
+is still a HOME/BACK remote-button check. This option explicitly selects the helper; the default
+firmware trigger does not silently fall back. A missing helper makes this opt-in start SKIPPED;
+a failing helper or unconfirmed native state is BLOCKED. Helper availability is probed with
+local `beanjar screensaver --help` once per runner host; this does not contact a VM.
+
+Before S4's tvpower reboot and every Reboot alert action (including its retry and manual
+fallback), the harness reads the supported native power states (power only on 6.x). The main
+scenario's Later/fallback and `--reboot-check` host restarts also get this check; their existing
+reboot route is preserved.
+If `power/getPowerState` has `processing: Screen Saver Ready` or `power2/getPowerState` has
+`sub processing: screen saver ready`, it captures diagnostics and runs
+`beanjar screensaver stop <vm> --timeout 60 --json`. It records the helper JSON, re-reads the
+available power states, and only proceeds after successful recovery with readable states and
+no Ready transition. A `RECOVERED` entry in `results.json` and the summary explicitly says
+`recovered stale Screen Saver Ready via beanjar screensaver stop, beanjar#56`, with the helper
+result and both before/after states. The later reboot/boot-apply assertions still run. S4 also
+uses this recovery if BACK was delivered but its completion wait remained stuck in Ready;
+it verifies the chosen launcher and unchanged Home Chooser state after recovery. Other
+screensaver steps retain their existing button and firmware-path assertions.
+
+This stop helper uses LG's built-in screensaver window, native wake, and normal close to
+recover beanjar#56 without a GUI restart. The harness does not substitute a direct wake for
+its remote-button assertions. A failed stop, malformed helper result, unreadable post-recovery
+state, or persistent Ready remains BLOCKED, and no reboot request follows. If an older Beanjar
+lacks the subcommand, recovery is skipped, a notice is logged once, and the previous reboot
+refusal/BLOCKED behaviour is retained. A failed help probe for another reason remains a helper
+failure. Helper calls have a 60-second native deadline and 90-second process timeout; help has
+a 15-second process timeout, all subject to the host timing slowdown.
 
 A refused trigger naming disabled screenSaverEnabled, incomplete first use, or an invalid
-sub state is **SKIPPED**, retaining the reply. Unknown refusals, wrong foreground, missing
-state proof, or Home Chooser mutations are **FAIL**. A persistent `Screen Saver Ready` state,
-or S4 reboot's `power is busy`, is **BLOCKED (beanjar#56)**: VM videoads can fail with
-`Failed to load lgchannels SDK`, close, and leave tvpower stuck. Both power replies and retained
+sub state is **SKIPPED**, retaining the reply. Unknown refusals, foreground parity mismatches
+after S0, missing shown/dismissal proof, or Home Chooser mutations are **FAIL**. A `Screen Saver Ready` state that is not
+recovered before reboot, or S4 reboot's `power is busy`, is **BLOCKED (beanjar#56)**: VM videoads
+can fail with `Failed to load lgchannels SDK`, close, and leave tvpower stuck. Both power replies and retained
 tvpower log lines are captured before recording the refusal/timeout outcome. The scenario never
 relabels a Home Chooser assertion failure as that VM fault. Later steps inherit SKIPPED from a
 skipped prerequisite and BLOCKED from an unsuccessful prerequisite, with before/after artefacts
@@ -121,8 +182,10 @@ still captured. These statuses appear in `results.json` and summary counts; FAIL
 runner's nonzero exit status. A run containing BLOCKED/SKIPPED needs a later completed run for
 screensaver validation.
 
-The fake device models trigger, shown/Ready state, button dismissal, busy reboot, and boot apply.
-Run its PASS/BLOCKED/SKIPPED/FAIL checks and the rest of the offline harness suite with:
+The fake device models trigger, shown/Ready state, HOME wake-only and direct-Home behavior,
+learned BACK behavior, second-HOME dispatch, legacy 6.x replies, helper recovery/failure,
+missing helpers, busy reboot, and boot apply. Run its PASS/BLOCKED/SKIPPED/FAIL/RECOVERED checks
+and the rest of the offline harness suite with:
 
 ```sh
 TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
