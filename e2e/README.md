@@ -71,6 +71,63 @@ Before booting, the runner stops if any VM is running on its machine. It adds th
 `<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a
 changed LAN address. It stops the VM at the end (not `w21p-kisscurl`).
 
+## Home and screensaver scenario
+
+`--scenario screensaver` runs S0–S4 with the normal web fixture by default. It performs the
+usual install, elevation, and launcher selection, then cleanup; it omits the other lifecycle
+steps. `--scenario all` adds S0 before installation and S1–S4 after selection to the full
+lifecycle. The default `--scenario lifecycle` preserves the existing run. This scenario requires
+Beanjar remote input (`--input beanjar`), a normal fixture (web/native/supported qml), and a
+complete run (`--until 5`). It is unavailable in the author-TV `--device` mode. These commands
+are for a later, coordinated VM run; development and the tests below are entirely offline.
+
+```sh
+python3 -I e2e/homechooser_e2e.py --vm 10.x --scenario screensaver
+python3 -I e2e/homechooser_e2e.py --vm 11.x --scenario all --launcher fixture:web.normal
+```
+
+| Step | Assertions |
+| --- | --- |
+| S0 | With Home Chooser and its choice file absent, start from Homebrew Channel. Start the screensaver, confirm it, press BACK and verify that app returns. Start again, press HOME and verify stock Home. This tests the firmware baseline first. |
+| S1 | Put the selected fixture in front, start the screensaver, and observe for 5 seconds. Choice, the entire defaultApps reply, stock-home preload policy, daemon MainPID/NRestarts/active state, and boot id must stay unchanged. No daemon closeByAppId or setPreloadPolicy call is allowed. On 11+, where the daemon follows foreground and life events, its log lines naming a screensaver app are recorded; ignoring the screensaver is judged by the absence of actions, since the daemon logs actions and not skipped events. |
+| S2 | From S1's screensaver, press HOME. The screensaver must disappear and the selected fixture must be in the foreground. Home Chooser state must stay unchanged. |
+| S3 | From Homebrew Channel, start again, press BACK and verify it returns with Home Chooser state unchanged. HOME must then put the chosen fixture in front. |
+| S4 | Start again, dismiss with BACK, then request tvpower/power/reboot as root. Verify a new boot and reuse the existing boot-apply checks for the choice, record, watcher, hook, and preload policy. |
+
+Each step records both `power/getPowerState` and `power2/getPowerState`, foreground, daemon unit,
+choice file (including read status), defaultApps, stock-home preload policy and boot id, with a
+screenshot before and after. Additional snapshots record S1 while shown and button dismissal.
+The successful start proof is `sub state: screen saver`; an active state and the expected
+foreground prove dismissal.
+
+The trigger is a root `luna-send -n 1` with no `-a`, calling
+`luna://com.webos.service.tvpower/power2/turnOnScreenSaver` with `{}` on 7+. On 6 it uses
+`power/turnOnScreenSaver` (permission-file evidence only; not yet validated on a device).
+Releases below 6 are SKIPPED. Dismissal uses `beanjar remote press <vm> HOME|BACK`, with the
+existing VNC frontend started first. It never uses `turnOnScreen`, changes TV settings, or
+confirms LG dialogs. Start/state waits are limited to 45 seconds, foreground/dismissal waits
+to 30 seconds, and guest-reboot detection to 240 seconds, followed by the existing bounded
+boot-readiness waits (all use the host timing slowdown).
+
+A refused trigger naming disabled screenSaverEnabled, incomplete first use, or an invalid
+sub state is **SKIPPED**, retaining the reply. Unknown refusals, wrong foreground, missing
+state proof, or Home Chooser mutations are **FAIL**. A persistent `Screen Saver Ready` state,
+or S4 reboot's `power is busy`, is **BLOCKED (beanjar#56)**: VM videoads can fail with
+`Failed to load lgchannels SDK`, close, and leave tvpower stuck. Both power replies and retained
+tvpower log lines are captured before recording the refusal/timeout outcome. The scenario never
+relabels a Home Chooser assertion failure as that VM fault. Later steps inherit SKIPPED from a
+skipped prerequisite and BLOCKED from an unsuccessful prerequisite, with before/after artefacts
+still captured. These statuses appear in `results.json` and summary counts; FAIL retains the
+runner's nonzero exit status. A run containing BLOCKED/SKIPPED needs a later completed run for
+screensaver validation.
+
+The fake device models trigger, shown/Ready state, button dismissal, busy reboot, and boot apply.
+Run its PASS/BLOCKED/SKIPPED/FAIL checks and the rest of the offline harness suite with:
+
+```sh
+TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
+```
+
 ## The matrix
 
 | Release | VM | Elevation | How sure |
