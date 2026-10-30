@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import {useCallback, useEffect, useRef, useState} from 'react';
 import BodyText from '@enact/moonstone/BodyText';
-import SlotItem from '@enact/moonstone/SlotItem';
 import Scroller from '@enact/moonstone/Scroller';
 import Spinner from '@enact/moonstone/Spinner';
 import {Header, Panel} from '@enact/moonstone/Panels';
@@ -9,7 +8,6 @@ import Spotlight from '@enact/spotlight';
 
 import {STOCK_HOME} from '../homechooser';
 import {ConfirmDialog, HomeItem, Toast} from './parts';
-import {RESTART_NOTE} from './useHomeChooser';
 import css from './Home.module.less';
 
 const FATAL_TEXT = {
@@ -126,14 +124,6 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 						<BodyText className={css.note}>
 							{'No Home apps are installed. A Home app is a launcher that declares appCategory "home" in its appinfo.json. LG Home stays in use.'}
 						</BodyText>
-					) : null}
-					{model.restartPending && !rootError ? (
-						<>
-							<BodyText className={css.note}>{RESTART_NOTE[model.restartReason]}</BodyText>
-							<SlotItem className={css.row} inline={false} spotlightId="restart-now" onClick={model.askReboot}>
-								Restart now
-							</SlotItem>
-						</>
 					) : null}
 					<div className={css.footerSpace} />
 				</Scroller>

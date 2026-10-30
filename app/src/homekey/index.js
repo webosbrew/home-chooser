@@ -37,7 +37,7 @@ export const parseStatus = (text) => {
 		recovered: out.recovered || null,
 		reason: out.reason || null,
 		unpatchedSites: Number(out['unpatched-sites'] || 0),
-		rebootNeeded: out.reboot === 'needed',
+		rebootNeeded: false,
 		files, skipped
 	};
 };
@@ -74,11 +74,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
-		// 1. make sure general/defaultApps exists, so the compositor's and sam's subscriptions see later writes
-		// 2. enable the Home key hook (flag file) and link the boot entry into init.d
-		// Nothing is mounted and nothing restarts: the boot entry mounts the patch on the next boot, and
-		// `rebootNeeded` in the result says whether a restart is what finishes the change (the patch is
-		// enabled but not mounted).
+		// Validate this firmware, enable boot apply, and reload the filter immediately.
 		async install() {
 			const log = [];
 			const run = runner(log);
@@ -99,6 +95,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 
 				await run.write(HOMEKEY_FLAG, '');
 				await run.run(ensureEntryCommand());
+				await run.run(script('apply'));
 
 				res.status = await readStatus(run);
 				res.rebootNeeded = res.status.rebootNeeded;
@@ -108,10 +105,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
-		// Disable the Home key hook: delete the flag file, so the next boot does not mount it again, and bake
-		// the empty home id into the mounted copy (the worker's refresh, which never restarts the
-		// compositor). Nothing is unmounted: a mounted patch stays until the next boot, and
-		// `rebootNeeded` says so. The init.d link stays: the watcher needs it while a choice is stored.
+		// Restore the exact stock list through configd before removing generated files.
 		async remove() {
 			const log = [];
 			const run = runner(log);

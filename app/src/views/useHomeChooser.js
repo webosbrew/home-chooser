@@ -13,30 +13,6 @@ import {clearPending, readPending} from './pending';
 export const LOG_PREFIX = '[HomeChooser]';
 
 const DONE_TEXT = 'Done. Press Home to try it.';
-const RESTART_ASKED_TEXT = 'Done. Restart the TV to finish.';
-const RESTART_FAILED_TEXT = 'Restart the TV to finish.';
-const CACHE_PROMPT_KEY = 'homechooser.hookCachePrompt';
-
-// The line above the "Restart now" row while a restart is pending, by reason ('apply' or 'remove').
-export const RESTART_NOTE = {
-	apply: 'The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it.',
-	remove: 'LG Home is on the Home button now. A restart removes the hook.'
-};
-
-// Ask the service for the restart prompt, a system alert (docs/service.md "Restarting the TV"): the
-// app has no dialog of its own for it, because an overlay is closed after a stretch without a key
-// press and the alert is not. Resolves true when the prompt was raised.
-const askRestart = async (e, reason) => {
-	try {
-		await e.rebootPrompt(reason);
-		return true;
-	} catch (err) {
-		// eslint-disable-next-line no-console
-		console.log(`${LOG_PREFIX} reboot prompt: ${errorMessage(err)}`);
-		return false;
-	}
-};
-
 export const logResult = (label, res) => {
 	/* eslint-disable no-console */
 	(res.steps || []).forEach((s) => console.log(`${LOG_PREFIX} ${label}: ${formatStep(s)}`));
@@ -45,13 +21,12 @@ export const logResult = (label, res) => {
 	/* eslint-enable no-console */
 };
 
-// The structural hook is either mounted, available for the next boot, or refused.
+// The live filter is selected, available for immediate apply, or refused.
 export const patchStateOf = (homeKeyHook, status) => {
 	if (!homeKeyHook) return null;
 	if (!status) return 'unknown';
 	if (status.mounted) return 'active';
-	// A missing or stale cache has not been checked against this firmware yet. The first choice
-	// calls install(), which prepares and validates it before enabling the boot entry.
+	// Retain recognition of an old stale status while validating it during installation.
 	return status.patch === 'possible' || status.hook === 'stale' ? 'ready' : 'nomatch';
 };
 
@@ -92,7 +67,6 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [icons, setIcons] = useState({});
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
-	const stalePrompted = useRef(false);
 
 	useEffect(() => {
 		mounted.current = true;
@@ -203,42 +177,11 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			// the outcome stands; the list may be stale
 		}
 		clearPending(); // an old marker is moot: the run finished in this window
-		// The change is done but needs a TV restart to take effect (outcome.reboot is the reason, 'apply'
-		// or 'remove'): the service puts up the system alert, and the screen only says so.
-		if (outcome.ok && outcome.reboot) {
-			outcome = {ok: true, text: (await askRestart(env, outcome.reboot)) ? RESTART_ASKED_TEXT : RESTART_FAILED_TEXT};
-		}
 		if (!mounted.current) return;
 		setNotice('');
 		setToast(outcome);
 		setBusy(false);
 	}, [env, busy, refreshWith]);
-
-	// A restart is pending (webOS 6 to 9; the worker's status says reboot=needed): the flag file without
-	// the patch mounted is an apply, the patch mounted without the flag file is a remove.
-	const restartPending = Boolean(patchStatus && patchStatus.rebootNeeded);
-	const restartReason = patchStatus && patchStatus.enabled ? 'apply' : 'remove';
-	useEffect(() => {
-		if (!env || busy || phase !== 'ready' || !restartPending || !patchStatus.enabled ||
-			patchStatus.hook !== 'stale' || !patchStatus.cacheGeneration || stalePrompted.current) return;
-		stalePrompted.current = true;
-		try {
-			if (window.localStorage.getItem(CACHE_PROMPT_KEY) === patchStatus.cacheGeneration) return;
-			window.localStorage.setItem(CACHE_PROMPT_KEY, patchStatus.cacheGeneration);
-		} catch (err) {
-			// The prompt still appears once in this window when storage is unavailable.
-		}
-		askRestart(env, 'apply').then((asked) => {
-			if (mounted.current) setToast({ok: asked, text: asked ? RESTART_ASKED_TEXT : RESTART_FAILED_TEXT});
-		});
-	}, [env, busy, phase, restartPending, patchStatus]);
-	const askReboot = useCallback(async () => {
-		if (!env || busy || !restartPending) return;
-		const asked = await askRestart(env, restartReason);
-		if (!mounted.current) return;
-		setToast(asked ? {ok: true, text: 'Check the restart prompt on the screen.'} : {ok: false, text: RESTART_FAILED_TEXT});
-		if (!asked) refreshWith(env); // it may have been restarted or settled in the meantime
-	}, [env, busy, restartPending, restartReason, refreshWith]);
 
 	const restoreWork = async (e) => {
 		setNotice('Restoring LG Home...');
@@ -246,12 +189,11 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		logResult('restore', res);
 		if (!res.ok) return {ok: false, text: plainFailure('restore LG Home', res.errors)};
 		// restoring stock takes the Home key hook patch out as well
-		// (the flag goes; the mounted copy stays until the next boot, so a restart finishes it)
+		// (configd restores stock before generated files are removed)
 		if (e.homeKeyHook && (patch === 'active' || (patchStatus && patchStatus.enabled))) {
 			const rem = await e.homeKeyHook.remove();
 			logResult('remove patch', rem);
 			if (!rem.ok) return {ok: false, text: plainFailure('restore LG Home', rem.errors)};
-			if (rem.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'remove'};
 		}
 		return {ok: true, text: DONE_TEXT};
 	};
@@ -263,18 +205,15 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		const mountedNow = Boolean(patchStatus && patchStatus.mounted);
 		const needPatch = Boolean(e.homeKeyHook) && !(mountedNow && patchStatus.enabled);
 		if (needPatch && !mountedNow && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
-		// Nothing restarts the compositor while the TV runs, so no step here can close this window.
-		// Only a patch that is not mounted yet needs a TV restart (the boot entry mounts it), and
-		// that restart restarts sam too, so the apply skips its own sam restart then.
+		// Apply and subsequent launcher changes take effect without a reboot.
 		setNotice(`Setting ${candidate.title} as Home...`);
-		const res = await e.chooser.apply(candidate.id, {deferSamRestart: needPatch && !mountedNow});
+		const res = await e.chooser.apply(candidate.id);
 		logResult('apply', res);
 		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
 		if (needPatch) {
 			const inst = await e.homeKeyHook.install();
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
-			if (inst.rebootNeeded) return {ok: true, text: DONE_TEXT, reboot: 'apply'};
 		}
 		return {ok: true, text: DONE_TEXT};
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -302,7 +241,6 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
 		patchMounted: Boolean(patchStatus && patchStatus.mounted),
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
-		restartPending, restartReason, askReboot,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };

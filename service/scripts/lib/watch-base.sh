@@ -10,13 +10,19 @@ now() {
 # replaced by rename, so a copy that is running is never rewritten in place.
 stage_runtime() {
     mkdir -p "$RT" || return 1
-    for f in homechooser-home-watch homechooser-homekey homechooser-homekey-hook.js homechooser-access; do
+    for f in homechooser-home-watch homechooser-homekey homechooser-access; do
         if [ ! -f "$1/$f" ]; then
             [ "$f" != homechooser-home-watch ] && continue
             return 1
         fi
         cp "$1/$f" "$RT/$f.new" && chmod 755 "$RT/$f.new" && mv "$RT/$f.new" "$RT/$f" || return 1
     done
+    # Keep the existing executable available for a volatile restore after package removal.
+    if [ -x "$1/../homechooser-service" ]; then
+        cp "$1/../homechooser-service" "$RT/homechooser-service.new" &&
+            chmod 755 "$RT/homechooser-service.new" &&
+            mv "$RT/homechooser-service.new" "$RT/homechooser-service" || return 1
+    fi
     if [ -d "$1/lib" ]; then
         mkdir -p "$RT/lib" || return 1
         for f in "$1"/lib/*.sh "$1"/lib/*.js; do

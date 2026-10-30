@@ -30,24 +30,13 @@ Home Chooser is in English only.
   one plain sentence ("Couldn't set the Home app. The Home Chooser service didn't respond."); the details
   are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
   a success; Back closes it.
-* **webOS 6 to 9.** The Home key hook is not shown as a feature, and nothing restarts the compositor
-  or `sam` while the TV runs, so no step can close the panel. Choosing a launcher applies the choice
-  first. If the patch is mounted and enabled, that is all: the patched QML reads `general/defaultApps`
-  first, so the record decides live and switching launchers needs no install and no restart. Otherwise
-  (not mounted, or mounted with the flag off after a restore that no restart has finished yet) the app
-  then calls `Home key hook.install()`, which writes the flag file and links the boot entry and runs nothing
-  else; its result says `rebootNeeded` when the flag is on and nothing is mounted (the worker's
-  `reboot=needed` status line). The patch is mounted by the boot entry on the next boot.
-  See [Restart prompt](#restart-prompt). Restoring LG Home removes the flag and bakes the empty id into
-  the mounted copy (`Home key hook.remove()`, which runs `homechooser-homekey refresh` and never `stop`); a
-  mounted patch stays until the next boot, so a restart prompt follows. If the structural hook refuses the
-  firmware, the dialog says the Home button can't be changed on this TV's software and
-  applies nothing. The earlier `localStorage` marker (`homechooser.pending`) is no longer written; on
-  startup the app still reads one left by an earlier version, judges it once against the actual home
-  and the stored choice (a marker whose id differs from the stored choice is stale and dropped without a
-  toast) and clears it.
+* **webOS 6 to 9.** Choosing a launcher validates and reloads a JS-only Home filter immediately.
+  Changing launchers and restoring LG Home use the same configd volatile transaction. Nothing
+  restarts the compositor or `sam`, including at boot; the panel stays open. There is no restart
+  prompt or “Restart now” row. Unknown firmware shapes are refused. The old pending-result marker
+  is only read/cleared for compatibility. See [Live Home key filter](home-key-hook.md).
+
 * **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key hook: active", "Home key hook: not active", or "Home key hook: not available for this TV's software" when the structural hook refuses the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
-* **Before uninstalling Home Chooser, choose LG Home.** Uninstalling while a launcher is the Home app leaves the Home key pointing at a missing app (see the failure table under Persistence).
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
   "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
   needs it."), or the service not coming up as root ("Home Chooser's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the
@@ -91,7 +80,7 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 | Release | Settings record `general/defaultApps` | System profile | After |
 | --- | --- | --- | --- |
 | 5.x | `setSystemSettings` with the existing entries and `home` | - | close previous custom home |
-| 6.x to 8.x | same | - | close previous custom home; `systemctl restart sam` last if the record did not exist |
+| 6.x to 8.x | same | - | close previous custom home; reload the volatile JS filter |
 | 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | close previous custom home |
 | 10.x to 12.x | `setDefaultApp` as on 9.x | override file, `debug/rescan`, read back | close previous custom home |
 
@@ -112,62 +101,20 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   `seniorhome`, and the other stock ids), on any release. On 11.x and 12.x the watcher can close
   `com.webos.app.home` later, after the chosen launcher is in front; see
   [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
-* On 6.x to 8.x, `sam` does not see the first write that creates `defaultApps` until it restarts
-  ([How `sam` resolves `launchDefaultApp`](research/home-key-and-home-app.md#how-sam-resolves-launchdefaultapp)).
-  `systemctl restart sam` is the last step; when the Home key hook still has to be installed, a TV
-  restart follows, which restarts `sam` as well, so the step is skipped (below).
-* On 6.x to 9.x the stock Home key handler launches `com.webos.app.home` by id, so the Home key follows
-  the choice only with the [Home key hook](home-key-hook.md) installed. The screen
-  enables it as part of choosing a launcher when it is not mounted and disables it again when
-  LG Home is restored; there are no separate Install and Remove buttons. Enabling takes a TV restart to
-  mount it, disabling takes one to unmount it.
+* On 6.x–9.x, the filter launches an explicit chosen app ID. This avoids the old first-write
+  `defaultApps` subscription issue in SAM, so no SAM restart is needed. Enabling validates the
+  stock source, writes the flag and boot entry, then applies the filter live; restoring LG Home
+  restores the exact stock list before removing generated files.
 
-Before these writes `apply` stores the choice, and after them it makes sure the boot entry and the
-watcher are in place; see [Persistence](#persistence). The sequence is: read the state, write
-`/var/lib/webosbrew/homechooser/home`, the platform writes, link the init.d entry and start the
-watcher, close the previous custom home, and `systemctl restart sam` last if it applies.
+Before these writes `apply` stores the choice, and afterward it ensures the boot entry and watcher
+are in place, closes a previous custom Home if necessary, and refreshes the live filter on 6–9.
 
-### Why the sam restart is skipped on 6 to 9 when the patch is installed
+### Live changes on webOS 6–9
 
-The `sam` restart brings the stock home forward as the last-input app and closes the panel's window.
-When the patch is not mounted yet, the choice is followed by a TV restart (the boot entry mounts the
-patch), and that restart restarts `sam` as well, so the panel passes `apply(id, {deferSamRestart: true})`,
-which skips the restart and returns `samRestartDeferred`. It passes it only then: with the patch
-mounted and enabled, or when no restart will follow, the apply restarts `sam` itself when it has to, as
-before. The panel never restarts the compositor: `Home key hook.install()` writes the flag and links the entry
-and runs no worker, so there is nothing that could close the panel between the choice and the install.
-
-### Restart prompt
-
-After `Home key hook.install()` or `Home key hook.remove()` reports `rebootNeeded`, the choose and restore
-flows ask for a TV restart. The reason is `apply` after an install and `remove` after a
-restore. Only webOS 6 to 9 have a patch, so only they ever ask;
-on 5.x and 10 and later `Home key hook` is null, no step reports `rebootNeeded` and nothing changes.
-
-The prompt is always the service's system alert, never a dialog of the app. Home Chooser is an overlay
-window and surface-manager closes an overlay after about 90 to 120 s without a key press
-(`userTimeout`, measured on 6.5.2 and 9.2.1), so a restart dialog inside the app is lost on an idle
-user, while the alert belongs to the notification service and stays.
-
-* The app calls `rebootPrompt {"reason"}` ([service](service.md)). The service raises the alert (title
-  "Home Chooser", the message for the reason, buttons "Reboot" and "Later"); the Reboot button calls
-  LG's `com.webos.service.tvpower/power/reboot` directly with `reason:"remoteKey"`. The service checks
-  `reboot=needed` before showing the alert. A stale alert can still request a reboot. If the alert is refused the service
-  shows a toast with the message instead.
-* The screen shows only its normal result toast, "Done. Restart the TV to finish." (no focus change, no
-  spinner left). If `rebootPrompt` fails (nothing pending any more, or the notification service refuses
-  both), the toast is "Restart the TV to finish."
-* While a restart is pending (`status` says `reboot=needed`, read at startup and after every run) the
-  list ends with a note, "The Home button changes after a restart. Use Restart now — turning the TV off with the remote may not restart it." (`apply`: the flag file is set and
-  nothing is mounted) or "LG Home is on the Home button now. A restart removes the hook." (`remove`:
-  the patch is mounted and the flag file is gone), and a "Restart now" row. The row calls `rebootPrompt`
-  again with the same reason and toasts "Check the restart prompt on the screen."; a refusal toasts
-  "Restart the TV to finish." and re-reads the state. This is what a user gets after pressing Later,
-  after the alert was closed by something else, or on opening Home Chooser later. Opening the screen does
-  not raise the alert by itself: an alert out of nowhere on every launch would be a nag, and the row is
-  one key press away.
-
-The service re-checks that a restart is needed before it asks and again before it restarts the TV.
+The first apply and later changes take effect immediately. Hook status always returns `reboot=no`.
+The retained service `rebootPrompt` compatibility endpoint refuses with `notPending`; the app does
+not call it. [The native implementation and recovery policy](home-key-hook.md) replace the earlier
+QML mounts, generated boot cache, compositor restart and restart prompt.
 
 ## Persistence
 
@@ -180,20 +127,16 @@ Home Chooser keeps its own copy of the choice and enforces it.
   id and nothing else, written as root by the app. An absent file means stock: nothing is
   enforced. Every reader (the watcher, the boot entry, the Home key hook worker) trims spaces, tabs,
   CR and LF, treats an empty result as no choice, and accepts only letters, digits, `.`, `-` and
-  `_`; anything else is logged and ignored, never put into a luna payload or into QML.
-* **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`, a symlink to the executable
-  `/var/lib/webosbrew/homechooser/boot/homechooser`. `linkEntry` stages that script, the watcher,
-  the access worker and their helpers outside the package before publishing the link. Homebrew
-  Channel's `run-parts` runs it as root once per boot. While Home Chooser is installed, the entry
-  uses the installed scripts and refreshes the boot copy. If Home Chooser was uninstalled while
-  the watcher was stopped, the copy runs the watcher once to restore stock and remove the link
-  and cache. During a normal boot it does two things: on webOS 6 to 9, when the flag file
-  `/var/lib/webosbrew/homechooser/homekey` exists, it runs `homechooser-homekey apply` (the
-  [Home key hook](home-key-hook.md)); and if the choice file exists it starts the watcher.
-  `homechooser watch` does only the second, and starts the watcher with or without a stored choice:
-  the app runs it after a choice and each time it opens, so a reinstalled Home Chooser looks for a
-  [leftover Home](#a-leftover-home) without waiting for a choice or a boot.
-* **The watcher** is `service/scripts/homechooser-home-watch`, started as a transient unit,
+  `_`; anything else is logged and ignored, never put into a Luna payload or generated JS.
+* **The boot entry** is `/var/lib/webosbrew/init.d/homechooser`. On 6–9 it links to the installed
+  `scripts/homechooser`, which enqueues a nonblocking transient unit running the existing native
+  service's `--boot` mode. Readiness waits run inside that unit. After volatile apply the native
+  process becomes the watcher; its unit wrapper can use the same binary's runtime copy after removal.
+  On 5 and 10–12, the existing persistent watcher restore copy remains under
+  `/var/lib/webosbrew/homechooser/boot/`. `homechooser watch` starts the same lifecycle without
+  waiting in the app's RPC request.
+* **The watcher** is `service/scripts/homechooser-home-watch`. On 6–9 the native boot process
+  becomes it via `exec`. The legacy 5/10–12 transient unit starts it directly:
   `systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
   '<wrapper>' homechooser-home-watch <service>/scripts/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
   where the wrapper runs the first script that exists and exits 0 if neither does. No unit file is written and no other service's unit,
@@ -227,15 +170,11 @@ Home Chooser keeps its own copy of the choice and enforces it.
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends. Started without a usable choice it makes the one
     [leftover Home](#a-leftover-home) check and exits 0.
-* **Restoring stock** stops the watcher (`systemctl stop homechooser-home`), removes the choice file,
-  then does the platform restore. On 6.x to 9.x it also runs `homechooser-homekey refresh`, which
-  clears the choice from the mounted `Settings.qml` copy (it does not restart the compositor: the
-  running compositor keeps its loaded id until the next start, and the settings record is read first).
-  On 5.x to 9.x the restore writes `home` as the stock launcher instead (`com.webos.app.fullhome` if
-  `listApps` shows it, else `com.webos.app.home`), because the patched QML on 6.x to 9.x reads the
-  record first and the running compositor would otherwise fall back to the id it loaded at start
-  (the old launcher, until a reboot); stock firmware ignores the record for the Home key, so the
-  explicit stock id may stay. On 10.x and later clearing `home` is one function in the app,
+* **Restoring stock** stops the watcher, removes the choice, and restores the platform record/profile.
+  On 6–9 it restores and verifies the exact stock keyFilters list through a volatile configd write
+  before deleting generated JS. On 5–9 the record names an installed stock launcher; the stock
+  6–9 key handler ignores that record, but it remains useful to SAM and the watcher.
+  On 10.x and later clearing `home` is one function in the app,
   `removeHomeFromRecord()`, and `merged_write ""` in the watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
   `general/defaultApps` can never be removed (a write that leaves `home` out only looks like a
   replace until the settings service restarts; `deleteSystemSettings` and `resetSystemSettings`
@@ -283,8 +222,7 @@ and for the chosen app; an uninstalled id answers `returnValue:false` (`Invalid 
 Unsupported Application Type`). The same look is repeated every 5 min (`HOMECHOOSER_RECHECK`) in case
 the subscription missed something, and once at start. Home Chooser counts as gone when `getAppInfo`
 says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
-(`HOMECHOOSER_CONFIRM_DELAY`), because updating an app removes it first and a revert restarts the
-compositor on webOS 6 to 9. A `getAppInfo` that does not answer changes nothing. At a watcher start
+(`HOMECHOOSER_CONFIRM_DELAY`), because an app update temporarily removes its directory and should not trigger a restore. A `getAppInfo` that does not answer changes nothing. At a watcher start
 (a boot, where `sam` may not have loaded every app yet) an app whose `appinfo.json` is still in
 `/media/developer/apps/usr/palm/applications`, `/usr/palm/applications` or
 `/media/cryptofs/apps/usr/palm/applications` is not taken as gone either, whatever `getAppInfo`
@@ -301,20 +239,19 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | `home` = the stock launcher (`com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home`) by the merged `setSystemSettings` write (other entries kept; not null, which would let the running compositor fall back to its baked old id); written only if `home` is not that already; `homechooser-homekey refresh stock` empties the id baked into the mounted `Settings.qml` | the Home key hook's `getHomeAppId()` reads the record first and gets the stock id, so LG Home opens at once; without the Home key hook the stock Home key handler never used the record |
+| 6.x to 9.x | Set a stock launcher in the record, keeping other entries, then `homechooser-homekey refresh stock` restores the exact stock keyFilters array with `volatile:true` | LG Home opens immediately; verified readback precedes deletion of unused generated JS |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
-`getProfiles`; 6.x to 9.x run `homechooser-homekey refresh`, which bakes the id back in. The
+`getProfiles`; 6.x to 9.x run `homechooser-homekey refresh` to generate and select the live filter. The
 screen says "The Home app you chose was removed; using LG Home." under the list when the stored choice is not
 among the installed apps that declare `appCategory: ["home"]`.
 
 **The user is told once.** After the revert (no compositor restart on any release), the watcher shows an alert with one OK button:
 `luna-send -n 1 luna://com.webos.notification/createAlert '{"sourceId":"org.webosbrew.homechooser","title":"Home Chooser","message":"<title> was removed, so the Home button opens LG Home again.","buttons":[{"label":"OK","focus":true}]}'`.
-The text is the same on every release: on 6.x to 9.x the record already names the stock home, so the
-running compositor (which reads the record before its baked id) opens LG Home at once, with
-`launchHome`'s failure path as a second line of defence.
+The text is the same on every release. On 6–9, configd selects the exact stock filter list before
+this notification, so HOME opens LG Home immediately.
 The title of an app that is gone cannot be looked up, so the watcher reads it from `getAppInfo`
 (failing that `appinfo.json`) while the app is installed and keeps it per choice, like the window
 type; a title it does not have, or one with a quote or backslash in it, is replaced by the app id.
@@ -323,9 +260,7 @@ event: the later checks find the app already marked missing and say nothing, and
 by a new removal is a new event. It is not sent for a temporary absence (the confirmation delay
 comes first), when the user restores stock from the app (the choice file is removed and the watcher
 stopped before anything is missing), when the choice is changed to another app, or when a watcher
-starts and finds the app already missing (a boot is not a new removal). The call is a plain root
-`luna-send` without `-a`, because `-a <appid>` would make the caller that app and `createAlert` is
-not in a public group, under a 5 s timeout; its reply is logged (`notification createAlert: ...`) and
+starts and finds the app already missing (a boot is not a new removal). The call uses root `luna-send -a com.webos.applicationManager`, under a 5 s timeout; its reply is logged (`notification createAlert: ...`) and
 nothing waits on it. A reply that says `returnValue:false` (a refusal) is logged
 (`the alert was refused`) and the same message is shown as a toast; no reply is logged and not
 retried. `HOMECHOOSER_NOTIFY=0` turns it off. What the notification service really does with the
@@ -334,9 +269,8 @@ device.
 
 On 10.x and later clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 [Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
-On 5.x to 9.x `home` is set to the stock id (the merged write), not cleared. The Home key hook
-Home key hook's `Settings.qml` takes only a non-empty string as the record's `home` and reads it before
-the baked id, which is why null is not used on 6.x to 9.x.
+On 5–9 the record names a stock launcher. The stock 5.x handler uses that record directly;
+on 6–9 the stock filter is restored separately and the record keeps the watcher/SAM policy consistent.
 
 ### Home Chooser is uninstalled
 
@@ -345,22 +279,16 @@ copies itself, `homechooser-homekey` and `homechooser-access` into
 `/tmp/homechooser-runtime/` (replacing each file by rename) and runs from there. When Home Chooser is
 gone it does, in order:
 
-1. the platform revert of the table above (webOS 5 to 9: `home` = stock launcher; 10 and
-   later: override removed, `home` null);
-2. removes the choice file, the Home key hook flag, the hook cache and stale marker;
-3. removes the `init.d/homechooser` symlink and the persistent boot copy, then the state
-   directory if empty;
-4. on webOS 6 to 9, nothing is unmounted and nothing restarts: the bind mounts stay until the next
-   boot (their sources are under `/tmp/homechooser-homekey/stage`, not in the app directory, so they
-   survive the uninstall), and at that boot nothing re-applies because the init.d link and the flag
-   are gone;
-5. shows a toast, once:
-   `luna-send -n 1 luna://com.webos.notification/createToast '{"sourceId":"org.webosbrew.homechooser","noaction":true,"message":"Home Chooser was removed. The Home button opens LG Home again."}'`
-   (the same text on every release; the record names the stock home on 6.x to 9.x, so no restart is needed for the Home button, only to drop the mounts)
-   (plain root, no `-a`, no `iconUrl` because the app's icon is being deleted; 5 s timeout, reply
-   logged, never blocks);
-6. logs `stock Home restored, exiting` and exits 0, so `Restart=on-failure` leaves the unit
-   stopped.
+1. Removes launcher access and reverts the platform record/profile as above.
+2. On 6–9, restores the exact stock filter array volatile and verifies its readback. Failure keeps
+   the source files and state available for retry.
+3. Removes the choice, flag, unused generated versions, saved stock list and init.d link. Legacy
+   watcher restore copies and old cache markers are cleaned up too.
+4. Shows “Home Chooser was removed. The Home button opens LG Home again.” through a best-effort
+   toast using the fixed privileged Luna identity, then exits successfully.
+
+No GUI restart or unmount is required. The runtime copy includes the existing native executable
+on 6–9 so removal does not delete the recovery code out from under the watcher.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
 changes nothing: with the record's `home` already the stock id (5.x to 9.x) or unset (10.x and later: null, empty or missing), "home is already ..." / "nothing to remove" is logged and no write
@@ -385,15 +313,14 @@ House left the platform alone breaks nothing.
 
 ### When the watcher is not running
 
-The installed service stages the boot restore copy before creating the init.d link. If Home
-Chooser is removed while its watcher is stopped or has already exited without a choice, the link
-still reaches that copy. At the next boot it starts a transient watcher, which confirms that Home
-Chooser is absent, restores the record to the stock id on 5.x–9.x or null on 10.x and later,
-removes the 10.x+ profile override, restores the preload policy and removes the link, flag,
-cache, access files and boot copy. On 6.x–9.x the hook mounts disappear with that boot. The
-transient unit retries if access cleanup or the Home record write fails, keeping the boot entry
-and state for another attempt. Reinstalling and opening Home Chooser before the boot also runs
-the existing [leftover Home](#a-leftover-home) repair.
+On 6–9, reboot discards the volatile override and returns to the firmware's stock keyFilters list.
+Generated sources live outside the package, so an uninstall never leaves a selected path pointing
+into a removed package. An active watcher handles normal uninstall immediately; without a watcher,
+opening a reinstalled Home Chooser also performs leftover repair.
+
+On 5 and 10–12, the existing persistent boot restore copy handles uninstall with the watcher stopped:
+it confirms absence, restores the record/profile and preload policy, and removes the link and copy.
+Failed restoration retains that state for retry.
 
 ### A leftover Home
 
@@ -504,9 +431,8 @@ manager is not touched.
   So on 6.x to 10.x **the stock home can stay resident after a launcher is chosen, until the next
   reboot**. It is not a defect of the choice: the system puts it back at once whatever is done to it.
   After a reboot it can be gone, because the watcher turns the stock home's preload off at every boot
-  (in memory only, never `permanent`) and nothing closes and reopens it any more. On 6.x to 9.x the
-  patch needs a reboot to be applied anyway, so the memory is freed by a step the user takes in any
-  case. On 5.x nothing is done (below). On 11.x and 12.x the close does stick (11.2.0 and 12.0.0, with
+  (in memory only, never `permanent`) and nothing closes and reopens it any more. The 6–9 live
+  filter needs no reboot; stock Home residency is independent of activation. On 5.x nothing is done (below). On 11.x and 12.x the close does stick (11.2.0 and 12.0.0, with
   Dock too), so it is kept there.
 * **Measured (2026-10-23, Beanjar VMs).** Root `luna-send` may call `getPreloadPolicy` and
   `setPreloadPolicy`; `getPreloadPolicy` answers `{"applications":[{"id":"com.webos.app.home",
@@ -539,8 +465,7 @@ manager is not touched.
   entries are kept ([5.6.1](research/home-key-and-home-app.md#561-supported-through-the-default-app-record)).
 * 6.x to 9.x: like 5.x, the record is written with `home` set to the stock launcher
   (`com.webos.app.fullhome` if `listApps` shows it, else `com.webos.app.home`) and the other entries
-  kept, through `setSystemSettings` (not null: the patched QML reads the record first, and the running
-  compositor would fall back to the old launcher it loaded at start until a reboot). The stock id stays
+  kept, through `setSystemSettings`. The volatile keyFilters list is restored separately. The stock id stays
   in the record after an uninstall; stock firmware ignores the record for the Home key.
   `setDefaultApp` is not used for this: the stock home has no `appCategory` and `sam` refuses it as a
   `setDefaultApp` target. For that reason choosing

@@ -146,7 +146,7 @@ describe('readState', () => {
 		const res = await chooser(fakeTV(), [6, 6, 0]).readState();
 		expect(res.ok).toBe(true);
 		expect(res.state.record).toBeNull();
-		expect(res.willRestartSam).toBe(true);
+		expect(res.willRestartSam).toBe(false);
 		expect(res.steps[0]).toMatchObject({ok: false, error: 'There is no matched result from DB'});
 	});
 
@@ -202,10 +202,10 @@ describe('apply', () => {
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
-		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
-		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', 'restartSam']);
-		expect(notices).toHaveLength(1);
-		expect(res.restartedSam).toBe(true);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
+		expect(tv.calls[tv.calls.length - 1]).toEqual(['exec', REFRESH]);
+		expect(notices).toHaveLength(0);
+		expect(res.restartedSam).toBe(false);
 		expect(res.needsHomeKeyHook).toBe(true);
 	});
 
@@ -215,9 +215,9 @@ describe('apply', () => {
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE, {deferSamRestart: true, onNotice: (n) => notices.push(n)});
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
-		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 		expect(res.restartedSam).toBe(false);
-		expect(res.samRestartDeferred).toBe(true);
+		expect(res.samRestartDeferred).toBe(false);
 		expect(notices).toEqual([]);
 	});
 
@@ -232,7 +232,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {home: OTHER, kidsApp: 'k'}});
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE);
 		expect(tv.luna).toEqual([GET, SET({home: MINE, kidsApp: 'k'}), CLOSE(OTHER)]);
-		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 		expect(res.restartedSam).toBe(false);
 	});
 
@@ -240,7 +240,7 @@ describe('apply', () => {
 		const tv = fakeTV();
 		await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
-		expect(tv.commands).toEqual([ENSURE, WATCH, 'restartSam']);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 	});
 
 	test('a failed close is a warning, not an error', async () => {
@@ -272,7 +272,7 @@ describe('apply', () => {
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE)]);
 		expect(tv.record()).toEqual({kidsApp: 'k', home: MINE});
 		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
-		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 		expect(res.needsHomeKeyHook).toBe(true);
 	});
 
@@ -282,7 +282,7 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE), SET({kidsApp: 'k', home: MINE})]);
 		expect(res.warnings[0]).toMatch(/setDefaultApp is unknown/);
-		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 	});
 
 	test('9.2.1: another setDefaultApp error is a failure', async () => {
@@ -371,7 +371,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {home: OTHER}});
 		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(res.steps.map((s) => [s.kind, s.ok])).toEqual([
-			['luna', true], ['writeFile', true], ['luna', true], ['exec', true], ['exec', true], ['luna', true]
+			['luna', true], ['writeFile', true], ['luna', true], ['exec', true], ['exec', true], ['luna', true], ['exec', true]
 		]);
 		expect(res.steps[2]).toMatchObject({uri: SET({})[0], reply: {returnValue: true}});
 	});

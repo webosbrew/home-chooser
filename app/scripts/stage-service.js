@@ -21,7 +21,7 @@ fs.chmodSync(path.join(out, 'homechooser-service'), 0o755);
 const sourceScripts = path.join(root, 'service', 'scripts');
 const packagedScripts = path.join(out, 'scripts');
 fs.mkdirSync(packagedScripts, {recursive: true});
-['homechooser', 'homechooser-access', 'homechooser-home-watch', 'homechooser-homekey', 'homechooser-homekey-hook.js'].forEach((name) => {
+['homechooser', 'homechooser-access', 'homechooser-home-watch', 'homechooser-homekey'].forEach((name) => {
 	fs.copyFileSync(path.join(sourceScripts, name), path.join(packagedScripts, name));
 	fs.chmodSync(path.join(packagedScripts, name), 0o755);
 });

@@ -1,279 +1,71 @@
 # SPDX-License-Identifier: Apache-2.0
-"""No LG sources are stored here. Corpus roots are read-only; all outputs are temporary."""
-import json
+"""Native JS-only generator against read-only firmware corpus; no vendor sources copied to repo."""
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
-import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-HOMEKEY = HERE.parent
-REWRITER = HOMEKEY / 'homechooser-homekey-hook.js'
-NODE = os.environ.get('NODE', 'node')
-Q = 'usr/lib/qml/'
-SET = Q + 'WebOSCompositorBase/global/Settings.qml'
-KF = Q + 'WebOSCompositor/controllers/StarfishKeyFilter.qml'
-SUI = Q + 'KeyFilters/systemUi.js'
-NUDGE = Q + 'WebOSCompositor/views/StarfishNudgeView.qml'
-RECENTS = Q + 'WebOSCompositor/controllers/fullscreen/StarfishRecents.qml'
-FSC = Q + 'WebOSCompositor/controllers/StarfishFullscreenController.qml'
-LUNA = Q + 'WebOSCompositor/services/StarfishBaseLunaServiceAPI.qml'
-PASS = FAIL = SKIP = BUILDS = SCENARIOS = 0
-
-
-def run(*args):
-    return subprocess.run([str(a) for a in args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, encoding='latin1', timeout=90)
-
-
-def check(label, ok, detail=''):
-    global PASS, FAIL
-    if ok:
-        PASS += 1
-    else:
-        FAIL += 1
-        print('FAIL: ' + label + ': ' + detail, flush=True)
-
-
-def put(root, file, text):
-    p = root / file
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding='latin1')
-
+REPO = HERE.parents[2]
 
 def corpus():
     env = dict(os.environ)
-    projects = Path.home() / 'Projects'
-    env.setdefault('OPENHOUSE_FIRMWARES', str(projects / 'webos-firmwares'))
-    env.setdefault('OPENHOUSE_HYPERVISOR', str(projects / 'webos-hypervisor'))
-    env.setdefault('OPENHOUSE_STOCK_COPIES', str(HOMEKEY.parents[1] / 'scratch/hk-universal/rw/stock'))
+    env.setdefault('OPENHOUSE_FIRMWARES', str(Path.home() / 'Projects/webos-firmwares'))
+    env.setdefault('OPENHOUSE_HYPERVISOR', str(Path.home() / 'Projects/webos-hypervisor'))
+    env.setdefault('OPENHOUSE_STOCK_COPIES', str(REPO / 'scratch/hk-universal/rw/stock'))
     env.setdefault('OPENHOUSE_WEBOS71', str(Path.home() / 'Temp/webos-7.1.0'))
-    rows = []
-    for line in Path(env.get('OPENHOUSE_CORPUS', HERE / 'corpus.tsv')).read_text().splitlines():
-        if not line or line.startswith('#'):
-            continue
+    for line in (HERE / 'corpus.tsv').read_text().splitlines():
+        if not line or line.startswith('#'): continue
         name, version, kind, root = line.split('\t')
-        root = re.sub(r'\$\{(\w+)\}', lambda m: env[m[1]], root)
-        rows.append((name, version, kind, Path(root)))
-    return rows
-
-
-def synthetic(root):
-    # Purpose-written anchor skeletons; these are not firmware copies.
-    put(root, 'etc/os-release', 'VERSION_ID="9.2.4"\n')
-    put(root, SET, 'pragma Singleton\nimport QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    id: root\n    function subscribe(type, method, key, returnRaw) {\n        return null;\n    }\n}\n')
-    put(root, KF, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    readonly property QtObject applicationManager: QtObject {\n        readonly property var launch: function(appId, params, checkUpdateOnLaunch, autoInstallation, reason) {\n        }\n        readonly property var checkLaunch: function(appId, params, checkUpdateOnLaunch, autoInstallation) {\n        }\n    }\n}\n')
-    put(root, SUI, 'var HOME_APP_ID = "com.webos.app.home";\nfunction handleHomeKeys(key, pressed, autoRepeat) {\n    if (fullscreenView.appId !== HOME_APP_ID) applicationManager.launch("com.webos.app.home", JSON.stringify({}));\n}\n')
-    for file in [NUDGE, LUNA]:
-        put(root, file, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property bool home: views.fullscreen.currentItem.appId === "com.webos.app.home"\n}\n')
-    put(root, RECENTS, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property bool keep: item.appId !== "com.webos.app.home"\n    property bool candidate: item.appId !== __lastInputApp\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
-    put(root, FSC, 'import QtQuick 2.4\nimport WebOSCompositorBase 1.0\nQtObject {\n    property string lastInput: supportNMRM ? "com.webos.app.home" : ""\n}\n')
-
-
-def restore(file, text):
-    """Remove only our known insertions/substitutions; remaining bytes must be stock."""
-    if file == SET:
-        start = text.index('\n    // Home Chooser:')
-        text = text[:start] + text[text.rindex('\n}') + 1:]
-        return text.replace('import WebOSServices 1.0\n', '', 1)
-    if file in [KF, SUI]:
-        return ''.join(line for line in text.splitlines(True) if '// Home Chooser' not in line)
-    text = re.sub(r'(\b([\w.]+)\.appId !== __lastInputApp) && \2\.appId !== "com.webos.app.home" && !Settings.isHomeApp\(\2\.appId\)', r'\1', text)
-    text = re.sub(r' && !Settings.isHomeApp\([\w.]+\)', '', text)
-    text = re.sub(r'Settings.isHomeApp\(([\w.]+)\)', r'\1 === "com.webos.app.home"', text)
-    return text.replace('Settings.getHomeAppId()', '"com.webos.app.home"')
-
-
-def build(name, version, root, work, harness=True):
-    global BUILDS, SCENARIOS
-    out, out2 = work / 'out', work / 'out2'
-    r = run(NODE, REWRITER, 'generate', '--root', root, '--out', out, '--manifest', work / 'manifest.json')
-    major = int(version.split('.')[0])
-    if not 6 <= major <= 9:
-        check(name + ': refuses version', r.returncode == 2, r.stdout)
-        check(name + ': refusal writes nothing', not out.exists())
-        r = run(NODE, REWRITER, 'check', '--root', root, '--skip-version-gate')
-        check(name + ': structural negative control', r.returncode == 2, r.stdout)
-        return
-    check(name + ': generate', r.returncode == 0, r.stdout)
-    if r.returncode:
-        return
-    BUILDS += 1
-    manifest = json.loads((work / 'manifest.json').read_text())
-    files = [e['path'].lstrip('/') for e in manifest['files']]
-    check(name + ': tier 1 and maximum seven files', SET in files and KF in files and 2 <= len(files) <= 7)
-    run(NODE, REWRITER, 'generate', '--root', root, '--out', out2)
-    check(name + ': deterministic', all((out / f).read_bytes() == (out2 / f).read_bytes() for f in files))
-    check(name + ': check agrees', run(NODE, REWRITER, 'check', '--root', root).returncode == 0)
-    for f in files:
-        text = (out / f).read_text(encoding='latin1')
-        stock = (root / f).read_text(encoding='latin1')
-        check(name + ': changed ' + f, text != stock)
-        check(name + ': removing edits restores stock ' + f, restore(f, text) == stock)
-        tool = ['qmllint'] if f.endswith('.qml') else [NODE, '--check']
-        if shutil.which(tool[0]):
-            lint = run(*tool, out / f)
-            check(name + ': syntax ' + f, lint.returncode == 0, lint.stdout)
-    if RECENTS in files and harness:
-        stock = (root / RECENTS).read_text(encoding='latin1')
-        patched = (out / RECENTS).read_text(encoding='latin1')
-        pattern = r'if \((!appExist && [^\n]*)\) \{'
-        before, after = re.search(pattern, stock), re.search(pattern, patched)
-        if before and after:
-            # Execute the actual kill predicate; LG Home and the chosen home must survive
-            # regardless of the NMRM/record last input. Other apps retain the stock predicate.
-            script = '''var old = new Function('item','appExist','__lastInputApp','Settings','return '+process.argv[1]);
-var hook = new Function('item','appExist','__lastInputApp','Settings','return '+process.argv[2]);
-var stock='com.webos.app.home', chosen='org.example.launcher';
-[stock,chosen].forEach(function(home) {
-  [stock,'com.webos.app.livetv'].forEach(function(input) {
-    [stock,chosen,input,'org.example.other','com.webos.app.homeconnect'].forEach(function(id) {
-      [false,true].forEach(function(exists) {
-        var item={appId:id}, settings={isHomeApp:function(app){return app===home;}};
-        var expected=old(item,exists,input,settings) && id!==stock && id!==home;
-        if (hook(item,exists,input,settings)!==expected) throw Error(id+' home='+home+' input='+input);
-      });
-    });
-  });
-});'''
-            result = run(NODE, '-e', script, before[1], after[1])
-            check(name + ': recents spares both homes and preserves other exclusions', result.returncode == 0, result.stdout)
-            if '__lastInputApp' in before[1]:
-                default = r'property string __lastInputApp:[^\n]*'
-                check(name + ': recents last-input property stays stock',
-                      re.search(default, stock)[0] == re.search(default, patched)[0])
-        else:
-            check(name + ': recents kill predicate found', False)
-    # Whole output plus a version lets a second run exercise the double-patch guard.
-    put(out, 'etc/os-release', 'VERSION_ID="' + version + '"\n')
-    if not (out / SUI).exists():
-        put(out, SUI, (root / SUI).read_text(encoding='latin1'))
-    r = run(NODE, REWRITER, 'check', '--root', out)
-    check(name + ': rejects second patch', r.returncode == 2 and 'already' in r.stdout, r.stdout)
-    if not harness:
-        return
-    stock_api = (root / LUNA).read_text(encoding='latin1')
-    check(name + ': stock QML readiness method exists', 'function getCurrentState(msg)' in stock_api and '"getCurrentState"' in stock_api)
-    # Generate the actual minimum plan with all five optional files absent.
-    core_root, core_out = work / 'core-stock', work / 'core-out'
-    put(core_root, 'etc/os-release', 'VERSION_ID="' + version + '"\n')
-    for f in [SET, KF]:
-        put(core_root, f, (root / f).read_text(encoding='latin1'))
-    core = run(NODE, REWRITER, 'generate', '--root', core_root, '--out', core_out, '--manifest', work / 'core.json')
-    check(name + ': core-only plan succeeds with five reported skips', core.returncode == 0 and 'unpatched-sites=5' in core.stdout, core.stdout)
-    if core.returncode == 0:
-        targets = json.loads((work / 'core.json').read_text())['files']
-        check(name + ': core-only writes exactly the dependent pair', {e['path'].lstrip('/') for e in targets} == {SET, KF})
-        check(name + ': core-only retains launch redirect and exposed getter',
-              'Settings.redirectHomeLaunch' in (core_out / KF).read_text() and 'readonly property var getHomeAppId' in (core_out / KF).read_text())
-    args = ['stock=' + str(root / SUI), 'core=' + str(root / SUI), 'min=' + str(out / SUI)]
-    h = run(NODE, HERE / 'home-key-harness.js', *args)
-    (work / 'harness.tsv').write_text(''.join(line + '\n' for line in h.stdout.splitlines() if '\t' in line))
-    v = run(sys.executable, '-I', HERE / 'home-key-verdict.py', work / 'harness.tsv', name)
-    check(name + ': behaviour', h.returncode == v.returncode == 0, v.stdout)
-    SCENARIOS += 144
-    print(v.stdout.strip(), flush=True)
-
-
-def mutations(root, work):
-    changes = [
-        ('dup-launch', KF, lambda t: t + '\n' + re.search(r'^\s*readonly property var launch:.*$', t, re.M)[0] + '\n}\n', 'matched 2 times'),
-        ('dup-checkLaunch', KF, lambda t: t + '\n' + re.search(r'^\s*readonly property var checkLaunch:.*$', t, re.M)[0] + '\n}\n', 'matched 2 times'),
-        ('renamed-launch', KF, lambda t: t.replace('function(appId, params, checkUpdateOnLaunch, autoInstallation, reason)', 'function(id, params, checkUpdateOnLaunch, autoInstallation, reason)'), 'matched 0 times'),
-        ('const-home', SUI, lambda t: t.replace('var HOME_APP_ID', 'const HOME_APP_ID'), 'stock id is used other than'),
-        ('outside-use', SUI, lambda t: t + '\nvar other = HOME_APP_ID;\n', 'outside handleHomeKeys'),
-        ('literal-compare', SUI, lambda t: t + '\nvar other = x === "com.webos.app.home";\n', 'stock id is used other than'),
-        ('non-comparison', SUI, lambda t: t.replace('function handleHomeKeys(key, pressed, autoRepeat) {', 'function handleHomeKeys(key, pressed, autoRepeat) {\n    var x = [HOME_APP_ID];'), 'other than in a comparison'),
-        ('renamed-checkLaunch', KF, lambda t: t.replace('checkLaunch:', 'unknownLaunch:'), 'checkLaunch: anchor matched 0 times'),
-        ('settings-id', SET, lambda t: t.replace('id: root', 'id: settingsRoot'), 'id: root'),
-        ('no-launch', SUI, lambda t: t.replace('launch("com.webos.app.home",', 'launch(HOME_APP_ID,'), 'no launch of the stock home'),
-        ('duplicate-singleton', SET, lambda t: 'pragma Singleton\n' + t, 'singleton'),
-        ('duplicate-settings-import', SET, lambda t: 'import WebOSCompositorBase 1.0\n' + t, 'Settings.qml import: anchor matched 2 times'),
-        ('duplicate-home-handler', SUI, lambda t: t + '\nfunction handleHomeKeys(key, pressed, autoRepeat) {\n}\n', 'handleHomeKeys: anchor matched 2 times'),
-    ]
-    for name, file, change, reason in changes:
-        dest = work / name
-        shutil.copytree(root, dest)
-        put(dest, file, change((dest / file).read_text(encoding='latin1')))
-        r = run(NODE, REWRITER, 'generate', '--root', dest, '--out', dest / 'out')
-        if file == SUI:
-            check(name + ': systemUi mismatch is a partial patch',
-                  r.returncode == 0 and reason in r.stdout and 'unpatched-sites=1' in r.stdout
-                  and (dest / 'out' / SET).is_file() and (dest / 'out' / KF).is_file()
-                  and not (dest / 'out' / SUI).exists(), r.stdout)
-        else:
-            check(name + ': specific core refusal, no writes', r.returncode == 2 and reason in r.stdout and not (dest / 'out').exists(), r.stdout)
-    for file in [SET, KF, SUI]:
-        dest = work / ('missing-' + Path(file).name)
-        shutil.copytree(root, dest)
-        (dest / file).unlink()
-        result = run(NODE, REWRITER, 'generate', '--root', dest, '--out', dest / 'out')
-        if file == SUI:
-            check('missing systemUi leaves a partial patch', result.returncode == 0 and file in result.stdout and 'unpatched-sites=1' in result.stdout)
-        else:
-            check('missing core file aborts without writes: ' + file, result.returncode == 2 and file in result.stdout and not (dest / 'out').exists())
-    dest = work / 'tier2'
-    shutil.copytree(root, dest)
-    put(dest, NUDGE, (dest / NUDGE).read_text().replace('views.fullscreen.currentItem.appId === "com.webos.app.home"', '"com.webos.app.home" === views.fullscreen.currentItem.appId'))
-    r = run(NODE, REWRITER, 'generate', '--root', dest, '--out', dest / 'out')
-    check('tier-2 drift skips only its file', r.returncode == 0 and 'unpatched-sites=1' in r.stdout and NUDGE in r.stdout and not (dest / 'out' / NUDGE).exists(), r.stdout)
-    dest = work / 'recents-drift'
-    shutil.copytree(root, dest)
-    put(dest, RECENTS, (dest / RECENTS).read_text().replace('item.appId !== __lastInputApp', 'item.appId != __lastInputApp'))
-    r = run(NODE, REWRITER, 'generate', '--root', dest, '--out', dest / 'out')
-    check('recents last-input drift skips its whole file', r.returncode == 0 and 'unpatched-sites=1' in r.stdout and not (dest / 'out' / RECENTS).exists(), r.stdout)
-    dest = work / 'recents-ambiguous'
-    shutil.copytree(root, dest)
-    put(dest, RECENTS, (dest / RECENTS).read_text() + '\n// item.appId !== "com.webos.app.home"\n')
-    r = run(NODE, REWRITER, 'generate', '--root', dest, '--out', dest / 'out')
-    check('ambiguous recents exclusion skips its whole file', r.returncode == 0 and 'ambiguous' in r.stdout and not (dest / 'out' / RECENTS).exists(), r.stdout)
-    for major in [5, 10, 11]:
-        put(root, 'etc/os-release', 'VERSION_ID="%d.0.0"\n' % major)
-        r = run(NODE, REWRITER, 'generate', '--root', root, '--out', work / ('v%d' % major))
-        check('version gate %d' % major, r.returncode == 2 and not (work / ('v%d' % major)).exists(), r.stdout)
-
-
-def main():
-    global SKIP
-    with tempfile.TemporaryDirectory(prefix='minhook-') as tmp:
-        w = Path(tmp)
-        root = w / 'synthetic'
-        synthetic(root)
-        build('synthetic', '9.2.4', root, w / 'synth-run', harness=False)
-        mutations(root, w / 'mutations')
-        existing = []
-        for name, version, kind, root in corpus():
-            if not (root / SET).exists():
-                SKIP += 1
-                print('SKIP: %s: missing firmware root %s' % (name, root), flush=True)
-                continue
-            work = w / name
-            work.mkdir()
-            existing.append((name, version, kind, root))
-            if kind == 'copy':
-                # Saved target files have no os-release. The study's corpus supplies version metadata.
-                copied = work / 'stock'
-                shutil.copytree(root, copied)
-                put(copied, 'etc/os-release', 'VERSION_ID="' + version + '"\n')
-                root = copied
-            build(name, version, root, work)
-        # The study matrix is generated from the same resolved corpus paths.
-        corpusfile = w / 'corpus.tsv'
-        corpusfile.write_text(''.join('\t'.join([n, v, k, str(r)]) + '\n' for n, v, k, r in existing))
-        matrix = run(sys.executable, '-I', HERE / 'minimal-hook-matrix.py', corpusfile)
-        check('pattern matrix runs', matrix.returncode == 0, matrix.stdout)
-        print(matrix.stdout)
-    print('%d passed, %d failed, %d skipped; %d supported builds, %d Home-key scenarios' % (PASS, FAIL, SKIP, BUILDS, SCENARIOS))
-    return bool(FAIL)
-
+        yield name, version, Path(re.sub(r'\$\{(\w+)\}', lambda m: env[m[1]], root))
 
 if __name__ == '__main__':
-    if '--list-corpus' in sys.argv:
-        for name, version, kind, root in corpus():
-            if 6 <= int(version.split('.')[0]) <= 9:
-                print(name + '=' + str(root))
-    else:
-        sys.exit(main())
+    count = skipped = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        binary = tmp / 'generator'
+        flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'glib-2.0'], text=True).split()
+        subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-I'+str(REPO/'service/src'),
+                        str(REPO/'service/test/homekey-generator.c'), str(REPO/'service/src/homekey-generator.c'),
+                        '-o', str(binary), *flags], check=True)
+        for name, version, root in corpus():
+            source = root / 'usr/lib/qml/KeyFilters/systemUi.js'
+            if not source.is_file():
+                print('SKIP', name, 'source absent:', source); skipped += 1; continue
+            if not 6 <= int(version.split('.')[0]) <= 9: continue
+            stock = source.read_bytes()
+            result = subprocess.run([binary, source, 'test.home'], capture_output=True)
+            assert result.returncode == 0, (name, result.stderr)
+            patched = result.stdout
+            a = stock.index(b'\nfunction launchHomeApp(key) {'); b = stock.index(b'\n}\n', a) + 3
+            # Exact byte oracle: only the constant and stock arguments in this function change.
+            expected = stock[:a] + stock[a:b].replace(b'"com.webos.app.home"', b'"test.home"') + stock[b:]
+            expected = expected.replace(b'var HOME_APP_ID = "com.webos.app.home";', b'var HOME_APP_ID = "test.home";')
+            assert patched == expected, name
+            js = tmp / 'systemUi.js'; js.write_bytes(patched)
+            subprocess.run(['node', '--check', js], check=True, capture_output=True)
+            # Execute both NMRM branches, retaining access/disable gates and launch parameters.
+            body = patched[patched.index(b'\nfunction launchHomeApp(key) {'):].split(b'\n}\n', 1)[0]+b'\n}'
+            harness = b'''const vm=require('vm'); const assert=require('assert');
+const code=process.argv[1]; for(const nmrm of [false,true]) for(const disabled of [false,true]) {
+ let calls=[]; const c={access:{ribbon:true},overlayView:{access:{ribbon:true}},settingsService:{disableHome:disabled},
+ bootManager:{bootFirstUse:false},systemPropertyService:{powerOnlyMode:false},pmLog:{info(){}},
+ configdService:{supportNMRM:nmrm},getActivateType:k=>k,
+ applicationManager:{launch:(...a)=>calls.push(a),checkLaunch:(...a)=>calls.push(a)}};
+ vm.createContext(c);vm.runInContext(code,c);c.launchHomeApp(773);
+ assert.equal(calls.length,disabled?0:1); if(!disabled){assert.equal(calls[0][0],'test.home');assert.equal(JSON.parse(calls[0][1]).activateType,773);}
+}'''
+            subprocess.run(['node', '-e', harness.decode(), body.decode()], check=True)
+            for mutation in [stock.replace(b'function launchHomeApp(key)', b'function launchHomeApp(other)'),
+                             stock[:a]+stock[a:b].replace(b'applicationManager.launch',b'applicationManager.newLaunch')+stock[b:],
+                             b'var HOME_APP_ID = \"other\";\n'+stock]:
+                js.write_bytes(mutation)
+                r = subprocess.run([binary, js, 'test.home'], capture_output=True)
+                assert r.returncode == 2 and not r.stdout, name
+            r = subprocess.run([binary, source, 'bad"id'], capture_output=True)
+            assert r.returncode == 2 and not r.stdout
+            count += 1
+            print('PASS', name, 'exact edits, executable branches/gates, syntax, unknown-shape refusal')
+    assert count, 'no firmware sources tested'
+    print(f'{count} firmware sources passed; {skipped} missing sources')

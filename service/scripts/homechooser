@@ -1,7 +1,25 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Homebrew Channel init.d entry: apply the prepared hook and start the watcher.
+# Homebrew Channel init.d entry: enqueue native boot apply on 6-9; preserve legacy watcher boot.
 # The watcher unit uses its /tmp copy if the service is removed after a crash.
+
+
+OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
+major=$(sed -n 's/^VERSION_ID=//p' "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -1)
+if [ "${major:-0}" -ge 6 ] && [ "${major:-0}" -le 9 ]; then
+    SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
+    BINARY=${HOMECHOOSER_BINARY:-$SERVICE_SCRIPTS/../homechooser-service}
+    SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
+    SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
+    case "$1" in stage|unstage) exit 0 ;; ""|watch) ;; *) exit 2 ;; esac
+    [ -x "$BINARY" ] || exit 0
+    "$SYSTEMCTL" is-active --quiet homechooser-home && exit 0
+    "$SYSTEMCTL" reset-failed homechooser-home 2>/dev/null
+    RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
+    exec "$SYSTEMD_RUN" --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 \
+        /bin/sh -c '[ -x "$1" ] && exec "$1" --boot; [ -x "$2" ] && exec "$2" --boot; exit 0' \
+        homechooser-boot "$BINARY" "$RUNTIME/homechooser-service"
+fi
 
 SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
 BOOT_DIR=${HOMECHOOSER_BOOT_DIR:-/var/lib/webosbrew/homechooser/boot}
@@ -37,7 +55,7 @@ locate() {
 
 stage_boot() {
     mkdir -p "$BOOT_DIR/lib" || return 1
-    for f in homechooser homechooser-home-watch homechooser-homekey homechooser-homekey-hook.js homechooser-access; do
+    for f in homechooser homechooser-home-watch homechooser-homekey homechooser-access; do
         [ -f "$HERE/$f" ] || return 1
         cp "$HERE/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
             mv "$BOOT_DIR/$f.new" "$BOOT_DIR/$f" || return 1
@@ -97,11 +115,6 @@ case "$1" in
         stage_boot || log "could not refresh the boot restore copy"
         if [ -f "$HERE/homechooser-access" ]; then
             sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
-        fi
-        major=$(major_version)
-        if [ "$major" -ge 6 ] && [ "$major" -le 9 ] && [ -f "$FLAG" ] && [ -f "$HERE/homechooser-homekey" ]; then
-            log "applying the Home key hook"
-            sh "$HERE/homechooser-homekey" apply >> "$LOG" 2>&1
         fi
         start_watcher
         ;;

@@ -587,9 +587,9 @@ class StockRecord(unittest.TestCase):
 
 
 class RebootDialog(unittest.TestCase):
-    def test_only_6_to_9_with_the_patch_not_mounted(self):
+    def test_no_release_needs_a_reboot_after_apply(self):
         for major in (6, 7, 8, 9):
-            self.assertTrue(e2e.expects_reboot_dialog(major, False))
+            self.assertFalse(e2e.expects_reboot_dialog(major, False))
             self.assertFalse(e2e.expects_reboot_dialog(major, True), 'mounted: a live switch')
         for major in (5, 10, 11, 12):
             self.assertFalse(e2e.expects_reboot_dialog(major, False))
@@ -636,11 +636,10 @@ class Texts(unittest.TestCase):
             for old in e2e.OLD_RESTART_TEXTS:
                 self.assertNotIn(old, body, '%r still in %s' % (old, rel))
 
-    def test_app_restart_note_matches(self):
+    def test_app_has_no_restart_prompt(self):
         body = self.read('app/src/views/useHomeChooser.js')
-        m = re.search(r"RESTART_NOTE = \{(.*?)\};", body, re.S)
-        found = dict(re.findall(r"(\w+): '([^']*)'", m.group(1)))
-        self.assertEqual(found, e2e.RESTART_NOTE)
+        self.assertNotIn('askRestart', body)
+        self.assertNotIn('RESTART_NOTE', body)
 
     def test_the_app_has_no_restart_dialog_and_the_service_says_what_it_logs(self):
         self.assertNotIn('rebootAsk', self.read('app/src/views/useHomeChooser.js'))
@@ -827,15 +826,15 @@ class KnownDvbCrash(unittest.TestCase):
     def reply(self, *faults):
         return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': len(faults), 'detectedFaults': list(faults)}})
 
-    def test_known_crash_is_noted_not_failed(self):
+    def test_known_crash_still_fails(self):
         self.assertEqual(e2e.crash_lines(self.CRASHD), [self.CRASHD])
         known, other = e2e.split_known_crashes([self.CRASHD], self.reply(self.NOISE, self.FAULT))
-        self.assertEqual((known, other), ([self.CRASHD], []))
+        self.assertEqual((known, other), ([], [self.CRASHD]))
         self.assertEqual(list(e2e.known_fault_pids(self.reply(self.NOISE, self.FAULT))), ['4892'])
 
-    def test_known_faultmanager_alert_is_not_foreign(self):
+    def test_known_faultmanager_alert_is_foreign(self):
         fault = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('4892', '7453'))
-        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(fault)), ([self.ALERT], []))
+        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(fault)), ([], [self.ALERT]))
         self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(self.FAULT)), ([], [self.ALERT]))
         other = self.ALERT.replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10')
         self.assertEqual(e2e.split_known_crashes([other], self.reply(fault)), ([], [other]))
@@ -858,7 +857,7 @@ class KnownDvbCrash(unittest.TestCase):
     def test_mixed_lines(self):
         web = 'x crashd CRASHED {"process":"WebAppMgr.5823"}'
         known, other = e2e.split_known_crashes([self.CRASHD, web], self.reply(self.FAULT))
-        self.assertEqual((known, other), ([self.CRASHD], [web]))
+        self.assertEqual((known, other), ([], [self.CRASHD, web]))
 
 
 class DismissKnownPopup(unittest.TestCase):
@@ -1088,14 +1087,13 @@ class RestartDetection(unittest.TestCase):
         s.check_no_crash('x', snap)
         self.assertEqual([ok for _, ok in s.rec.checks], [False, False])
 
-    def test_known_dvb_crash_is_a_note_not_a_fail(self):
+    def test_known_dvb_crash_fails_acceptance(self):
         s = scenario()
         snap = s.compositor_snapshot()
         s.dev.messages = KnownDvbCrash.CRASHD + '\n'
         s.dev.fault_reply = KnownDvbCrash().reply(KnownDvbCrash.NOISE, KnownDvbCrash.FAULT)
         s.check_no_crash('x', snap)
-        self.assertEqual([ok for _, ok in s.rec.checks], [True, True])
-        self.assertTrue(any('known LG crash' in n for n in s.rec.notes), s.rec.notes)
+        self.assertEqual([ok for _, ok in s.rec.checks], [False, True])
 
     def test_dvb_crash_at_another_location_or_with_wam_crash_fails(self):
         for fault_reply, extra in (('', ''), (KnownDvbCrash().reply(

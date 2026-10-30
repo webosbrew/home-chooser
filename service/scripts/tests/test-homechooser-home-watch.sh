@@ -206,6 +206,16 @@ kfn() { grep -c "$1" "$T/kfcalls"; }
 # one reply per line
 reply() { printf '{"returnValue":true,"subscribed":true,"settings":{"defaultApps":%s}}\n' "$1" >> "$T/stream"; }
 
+echo "== a failed live apply is retried when the app list changes"
+setup 8 'my.home\n'
+# A real native failure must not mark the choice as synchronized.
+printf '#!/bin/sh\necho "homekey $*" >> %s/kfcalls\nif [ ! -e %s/kf-tried ]; then touch %s/kf-tried; exit 1; fi\n' "$T" "$T" "$T" > "$T/service/scripts/homechooser-homekey"
+reply '{"home":"my.home"}'
+echo APPS >> "$T/stream"
+run
+check "failed start retried" test "$(kfn 'homekey refresh')" -ge 2
+cleanup
+
 echo "== record already holds the choice ($SH)"
 setup 8 'my.home\n'
 reply '{"home":"my.home","kidsApp":"k.app"}'
@@ -787,7 +797,7 @@ reply '{"home":"my.home","kidsApp":"k.app"}'
 run
 check "first run staged the copies" test -f "$T/rt/homechooser-home-watch"
 check "first run staged sourced helpers" test -f "$T/rt/lib/watch-restore.sh"
-check "first run staged the rewriter dependency" test -f "$T/rt/lib/homekey-settings.js"
+check "first run staged the native dispatch script" test -f "$T/rt/homechooser-homekey"
 rm -rf "$T/service/scripts"
 rm -rf "$T/app"
 printf 'my.home\n' > "$T/home"
@@ -807,7 +817,7 @@ echo "== idempotent: a second restore changes nothing"
 setup 8 'my.home\n'
 live '{"kidsApp":"k.app"}'
 rm -rf "$T/app"
-$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "runs from the repository copy, app dir missing: exit 0" rc 0
 check "6 to 9: a record without home gets the stock id" test "$(writes)" = 1
 check "6 to 9: record is stock, other entries kept" stockhome
@@ -817,7 +827,7 @@ echo "== idempotent: 10 and later, a record without home changes nothing"
 setup 11 'my.home\n'
 live '{"kidsApp":"k.app"}'
 rm -rf "$T/app"
-$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "no write (nothing to remove)" test "$(writes)" = 0
 cleanup
 
@@ -825,7 +835,7 @@ echo "== idempotent: 6 to 9, home already the stock id changes nothing"
 setup 8 'my.home\n'
 live '{"home":"com.webos.app.home","kidsApp":"k.app"}'
 rm -rf "$T/app"
-$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "no write (already stock)" test "$(writes)" = 0
 cleanup
 
@@ -833,14 +843,14 @@ echo "== idempotent: 10 and later, home already null changes nothing; 6 to 9 rep
 setup 11 'my.home\n'
 live '{"home":null,"kidsApp":"k.app"}'
 rm -rf "$T/app"
-$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "no write (nothing to clear)" test "$(writes)" = 0
 cleanup
 setup 8 'my.home\n'
 live '{"home":null,"kidsApp":"k.app"}'
 rm -rf "$T/app"
-$SH "$SCRIPT" > "$T/out" 2>&1; echo $? > "$T/rc"
+$SH "$T/service/scripts/homechooser-home-watch" > "$T/out" 2>&1; echo $? > "$T/rc"
 check "exit 0" rc 0
 check "null replaced by the stock id" test "$(writes)" = 1
 check "record is stock" stockhome
@@ -1450,13 +1460,12 @@ for major in 11 12; do
 done
 
 echo "== uninstall while chosen or unchosen: running copy or next boot restores stock and leaves no residue"
-for major in 5 6 9 10 12; do
+for major in 5 10 12; do
     for choice in chosen unchosen; do
         for mode in running stopped; do
             if [ "$choice" = chosen ]; then setup "$major" 'my.home\n'; else setup "$major" ''; fi
             live '{"home":"my.home","kidsApp":"k.app"}'
             cp "$HERE/homechooser" "$T/service/scripts/homechooser"
-            cp "$HERE/homechooser-homekey-hook.js" "$T/service/scripts/homechooser-homekey-hook.js"
             HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" stage > "$T/stage-out" 2>&1
             check "$major/$choice/$mode: boot copy staged" test -f "$T/boot/homechooser-home-watch" -a -f "$T/boot/lib/watch-restore.sh"
             rm -f "$T/init.d/homechooser"
@@ -1487,11 +1496,10 @@ for major in 5 6 9 10 12; do
 done
 
 echo "== a failed Home write keeps the boot restore copy for a retry"
-for major in 9 10; do
+for major in 10; do
     setup "$major" 'my.home\n'
     live '{"home":"my.home"}'
     cp "$HERE/homechooser" "$T/service/scripts/homechooser"
-    cp "$HERE/homechooser-homekey-hook.js" "$T/service/scripts/homechooser-homekey-hook.js"
     HOMECHOOSER_DIR="$T/service/scripts" $SH "$T/service/scripts/homechooser" stage > "$T/stage-out" 2>&1
     rm -f "$T/init.d/homechooser"
     ln -s "$T/boot/homechooser" "$T/init.d/homechooser"
