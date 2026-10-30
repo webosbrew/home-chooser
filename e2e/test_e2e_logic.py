@@ -360,7 +360,7 @@ class AlertFocus(unittest.TestCase):
 
     def test_extra_alert_control_fails_closed(self):
         frame = self.frame()
-        frame['elements'].append(dict(kind='button', text='LG action', box=[100,500,200,530]))
+        frame['elements'].append(dict(kind='button', text='LG action', box=[850,500,900,530]))  # inside the dialog rectangle
         with self.assertRaises(ValueError):
             self.parse(frame)
 
@@ -429,6 +429,93 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         frame['elements'].append(dict(kind='button', text='Other', box=[510,320,600,340]))
         with self.assertRaises(ValueError):
             e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+
+    def test_busy_list_beside_alert_is_not_extra_controls(self):
+        """A row title behind the dialog that OCR calls a button, sharing the band vertically but lying
+        beside the dialog (w22o-queue-us-rk2 'Aerial webOS screensaver'), is not an alert control."""
+        frame = self.frame('uninstall-alert-11x')
+        frame['elements'].append(dict(kind='button', text='Aerial webOS screensaver', box=[118, 311, 364, 335]))
+        self.assertEqual(e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+                         ('Cancel', 'UP'))
+        # the same kind of control inside the dialog rectangle still fails
+        frame['elements'].append(dict(kind='button', text='Inside', box=[600, 320, 700, 340]))
+        with self.assertRaises(ValueError):
+            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+
+    def test_missing_real_buttons_still_fail_with_busy_list(self):
+        frame = self.frame('uninstall-alert-11x')
+        frame['elements'] = [r for r in frame['elements'] if r.get('text') != 'Cancel']
+        frame['elements'].append(dict(kind='button', text='Aerial webOS screensaver', box=[118, 311, 364, 335]))
+        with self.assertRaises(ValueError):
+            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+
+    def test_click_not_observed_takes_diagnostics_first(self):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.host, s.rec, s.vm, s.insp = Mock(), Mock(), 'vm', None
+        s.host.remote_click.return_value = (0, 'ok')
+        s.elements = Mock(return_value=ClickInput.frame(self))
+        s.wait = lambda fn, *a: fn()
+        s.shot, s.ui = Mock(), Mock(return_value={'row': 'x', 'dialog': None})
+        with self.assertRaises(RuntimeError):
+            s.click_element('Use as Home', effect=lambda: False, label='launcher row')
+        s.shot.assert_called_once_with('launcher row-click-not-observed')
+        s.ui.assert_called_once()
+
+    def test_see_toast_recreates_dead_inspector_and_reads_screen(self):
+        from unittest.mock import Mock, patch
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.vm, s.rec = 'vm', Mock()
+        s.host = Mock()
+        s.host.remote_target.return_value = 'vm'
+        s.insp = Mock(last_error='websocket handshake/read: ConnectionResetError(104)')
+        s.ui = Mock(return_value=None)
+        s.close_insp = Mock(side_effect=lambda: setattr(s, 'insp', None))
+        s.host.display_beanjar.return_value = (0, json.dumps({'elements': [
+            {'kind': 'text', 'text': 'HC Fixture is already your Home.', 'box': [1, 2, 3, 4]}]}))
+        with patch.object(e2e, 'Inspector', return_value=Mock(last_error='x')) as new, patch.object(e2e, 'sleep'):
+            text, source = s.see_toast('already your Home', 5)
+        self.assertEqual(source, 'screen')
+        self.assertIn('already your Home', text)
+        s.close_insp.assert_called_once()
+        new.assert_called_once()
+
+    def test_see_toast_dom_source_and_failure(self):
+        from unittest.mock import Mock, patch
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.vm, s.rec, s.host = 'vm', Mock(), Mock()
+        s.host.remote_target.return_value = 'vm'
+        s.host.display_beanjar.return_value = (0, json.dumps({'elements': []}))
+        s.insp = Mock(last_error=None)
+        s.ui = Mock(return_value={'toast': 'X is already your Home.'})
+        self.assertEqual(s.see_toast('already your Home', 5), ('X is already your Home.', 'DOM'))
+        s.ui = Mock(return_value={'toast': None})
+        with patch.object(e2e, 'sleep'):
+            text, source = s.see_toast('already your Home', 0)
+        self.assertIsNone(text)
+        self.assertTrue(source.startswith('none'))
+
+    def test_foreground_probe_rules(self):
+        from unittest.mock import Mock
+        overlay_event = '{"event":"foreground","windowType":"_WEBOS_WINDOW_TYPE_OVERLAY"}'
+        for overlay, reply_id, ok in [(True, 'org.webosbrew.hbchannel', True),
+                                      (True, 'org.webosbrew.hcfixture.web.overlay', False),
+                                      (False, 'org.webosbrew.hcfixture.web.normal', True)]:
+            s = e2e.Scenario.__new__(e2e.Scenario)
+            s.rec, s.dev = Mock(), Mock()
+            s.launcher = 'org.webosbrew.hcfixture.web.' + ('overlay' if overlay else 'normal')
+            s.L = Mock(overlay=overlay)
+            s.dev.launch.return_value = (0, 'ok')
+            s.dev.foreground.return_value = ('org.webosbrew.hbchannel' if overlay else s.launcher, '{}')
+            s.api = Mock(return_value=({'returnValue': True, 'apiVersion': e2e.API_VERSION, 'appId': reply_id}, '{}'))
+            s.life_begin = Mock()
+            s.life_events = Mock(return_value=([('foreground', overlay_event)], True))
+            s.wait = lambda fn, *a: fn()
+            s.probe_foreground(s.launcher)
+            checks = {c.args[0]: c.args[1] for c in s.rec.check.call_args_list}
+            contract = [v for k, v in checks.items() if k.endswith('contract and appId')][0]
+            self.assertEqual(contract, ok, (overlay, reply_id))
+            self.assertEqual(s.life_begin.called, overlay)
 
     def test_ls2_owned_request_and_rejections(self):
         import copy
