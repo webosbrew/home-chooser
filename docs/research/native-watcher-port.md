@@ -1909,3 +1909,66 @@ S1 daemon MainPID **5065**, NRestarts **0**, active before/during; choice, compl
 Cleanup retained only hbchannel, restored stock home/preload, removed choice/init/hook state, left no profile override/QML mounts and stopped the daemon. The final supported power replies were Active/active with no Ready transition (`cleanup-power-before-stop.json`); no stop helper was needed. The full `beanjar-stop.txt` records true/Power Off and QEMU exit. `final-host-states.json` confirms every Pi VM Off with no VNC. **HOST RELEASED: pi**.
 
 The coordinator briefly cleared a later rockpi4a-2 queue (10.x full lifecycle separately, then screensaver on 10/8/11), then explicitly held that host before the Pi run finished. **No rockpi4a-2 VM was contacted in this phase, and none of those queued results is claimed.** Device work stopped after Pi cleanup as instructed. All test packages installed during this rerun are removed, both released hosts' VMs are Off with VNC stopped, and artifacts/scratch/baseline worktree are retained. Nothing was committed.
+
+
+## Resumed rockpi4a-2 device results — 2026-10-30 (ed0a852)
+
+After Beanjar released rockpi4a-2 with every VM Off, the worktree fast-forwarded from `62bfd34` to main `ed0a852` and rebuilt the package. All **185 offline E2E tests passed**. Build/test logs, retained IPK and checksum are under `build/screensaver-ed0a852/`. The resumed device adapter is scoped to rockpi4a-2's cleared VMs; no command contacts the Pi or rockpi4a-1 in this phase. Reboots use tvpower, Ready recovery follows the coordinator's beanjar#56 rule, and no TV settings or tvpowerd restart is used. Life's Good Without Spying is explicitly retained on 11.x. The 10.x full lifecycle run is reported separately from the screensaver runs below.
+
+### 10.3.1 — original full lifecycle E2E (separate from screensaver)
+
+`build/screensaver-ed0a852/w22o-ponytail-lifecycle/` completed with **76 PASS**, live firmware **10.3.1**. It used `--scenario lifecycle --reboot-check --launcher fixture:web.normal`. Installation/elevation, selection/profile override, real HOME dispatch, reboot apply, launcher removal/return and Home Chooser uninstall recovery all passed (`results.json`, `run.log`). The previously blocked original lifecycle acceptance is now PASS on this captured VM state.
+
+Preflight found only hbchannel and an empty `/var/lib/webosbrew/init.d`, confirming the coordinator-removed ad blocker and both foreign launchers were absent (`preexisting-apps-and-startup.json`). No preexisting app or hook was removed by this run. Immediately before step 3r, both power routes were Active/active with no Ready transition; the native unit was active, MainPID **6637**, NRestarts **0**, foreground was the fixture, REBOOT_ASK was absent and the watcher alert list empty (`power-01-3r-before.json`, `08-3r-before-tvpower-reboot.png`). Tvpower accepted `power/reboot {reason:remoteKey}` at **22:28:59 JST**, and the boot id changed. **No screensaver stop helper or RECOVERED path was needed**, including cleanup. This establishes that the old refusal did not recur; it does not by itself prove what caused the old stall.
+
+The inspected screenshots show the green fixture after HOME (`07-3-home.png`), the owned Home Chooser removal alert (`10-4-alert.png`, closed by its exact closeAlert API) and stock Home after uninstall (`15-5-home-stock.png`). No LG fault dialog was observed or confirmed. Uninstall restored stock defaultApps/preload, removed the profile override, choice/init entry/hook flag/access files and stopped the native unit. Cleanup retained only hbchannel, with both test packages removed. `cleanup-power-before-stop.json` records Active/active; full `beanjar-stop.txt` records true/Power Off. VNC stopped and every host VM was confirmed Off before the separate screensaver run (`final-host-states.json`).
+
+### 10.3.1 — screensaver scenario
+
+Evidence: `build/screensaver-ed0a852/w22o-ponytail-screensaver/`, live firmware **10.3.1**, **48 PASS**. The VM started fresh after full-lifecycle cleanup and Off verification. Preflight again retained only hbchannel and found an empty startup directory. Paths below are relative to this run.
+
+| Step | Status | Reason | Evidence |
+| --- | --- | --- | --- |
+| S0 | PASS | Both BACK and HOME woke a real saver to hbchannel; subsequent HOME opened stock Home. | `results.json` (both complete baseline replies), `S0-before.json`, `S0-after.json`, `foreground-window-polls.jsonl` |
+| S1 | PASS | Actual saver over fixture; HC state and complete stock-home policy unchanged; daemon log delta empty. | `S1-launcher-settled.json`, `S1-during.json`, `S1-daemon-observation.json`, `14-S1-during.png`, `run.log` |
+| S2 | PASS | HOME woke to hbchannel, then a second HOME opened the fixture, matching mapped S0 behavior. | `S2-dismissed.json`, `S2-home.json`, `S2-after.json`, `results.json` |
+| S3 | PASS | BACK returned hbchannel; the next HOME opened the fixture with unchanged state. | `S3-back.json`, `S3-home.json`, `S3-after.json`, `results.json` |
+| S4 | PASS | Active/no-Ready preflight, accepted reboot, changed boot id, native boot apply and disabled stock preload passed. | `S4-dismissed.json`, `S4-after.json`, `27-S4-after.png`, `run.log`, `results.json` |
+
+S1 daemon MainPID **7260**, NRestarts **0**, active before/during. Choice, entire defaultApps reply, boot id and stock-home preload entry stayed unchanged. No closeByAppId/setPreloadPolicy action was logged during observation. SAM recorded the fixture as CARD and `com.webos.app.screensaver` as `_WEBOS_WINDOW_TYPE_SCREENSAVER`; all S-step snapshots retain window types. The inspected S1 image shows the benign non-power-button wake instruction, and S4-after shows the green chosen fixture after boot. No LG fault dialog was seen or confirmed.
+
+No persistent Ready stall, stop helper attempt or RECOVERED entry occurred. S4's reboot was accepted at **22:49:53 JST**. Cleanup removed both test packages, retained only hbchannel, restored stock home/preload, removed the profile override/choice/init state and stopped the native unit. Pre-stop power was Active/active; Beanjar returned true/Power Off. VNC stopped and all host VMs were Off before 8.x started (`cleanup-power-before-stop.json`, `beanjar-stop.txt`, `final-host-states.json`).
+
+### 8.3.0 — screensaver scenario
+
+Evidence: `build/screensaver-ed0a852/w22o-number1-screensaver/`, live firmware **8.3.0**, **59 PASS**. Paths below are relative to this run.
+
+| Step | Status | Reason | Evidence |
+| --- | --- | --- | --- |
+| S0 | PASS | BACK and HOME each woke a confirmed saver to hbchannel; following HOME opened stock Home. | `results.json` (complete key baselines), `S0-before.json`, `S0-after.json`, `foreground-window-polls.jsonl` |
+| S1 | PASS | Actual saver over fixture, unchanged HC state/stock-home policy, empty daemon action-log delta. | `S1-launcher-settled.json`, `S1-during.json`, `S1-daemon-observation.json`, `14-S1-during.png`, `run.log` |
+| S2 | PASS | HOME woke to hbchannel and second HOME opened the fixture, matching mapped S0 behavior. | `S2-dismissed.json`, `S2-home.json`, `S2-after.json`, `results.json` |
+| S3 | PASS | BACK returned hbchannel, then HOME opened the fixture; state unchanged. | `S3-back.json`, `S3-home.json`, `S3-after.json`, `results.json` |
+| S4 | PASS | Active/no-Ready before reboot, accepted tvpower request, changed boot id and native hook/boot apply passed. | `S4-dismissed.json`, `S4-after.json`, `27-S4-after.png`, `run.log`, `results.json` |
+
+S1 daemon MainPID **5713**, NRestarts **0**, active before/during; choice, full defaultApps reply, stock-home policy and boot id were unchanged. No closeByAppId/setPreloadPolicy action occurred in the captured S1 delta. SAM recorded fixture CARD plus `com.webos.app.screensaver` SCREENSAVER, and all S-step snapshots retain window types. The inspected S1 image shows the normal fireworks saver; S4-after shows stock Home's user-agreement content, left untouched. Stock Home remains resident under the established 6–9 boot policy; the chosen launcher was independently proven by S2/S3. No LG fault dialog was observed or confirmed. The live selection checks retained stable SAM/MaliitServer PIDs and no WebAppMgr restart/crash.
+
+No persistent Ready stall, stop helper attempt or RECOVERED entry occurred. Tvpower accepted S4's reboot at **23:08:38 JST**. Cleanup retained only hbchannel and removed both test packages, restored stock home/preload, removed choice/init/hook state, left no override/QML mounts and stopped the daemon. Pre-stop states were Active/active; full Beanjar stop output records true/Power Off. VNC stopped and every host VM was Off before 11.x started (`cleanup-power-before-stop.json`, `beanjar-stop.txt`, `final-host-states.json`).
+
+### 11.2.0 — screensaver scenario, Life's Good Without Spying retained
+
+Evidence: `build/screensaver-ed0a852/w22o-queue-screensaver/`, live firmware **11.2.0**, **46 PASS**. Life's Good Without Spying (`ooo.lew.lifesgoodwithoutspying` **0.6.0**) was explicitly kept, along with preexisting 2048 **1.0.0** and hbchannel **0.7.3**. The captured startup directory was empty (`preexisting-apps-and-startup.json`); no claim is made that the installed app's filtering was active. No preexisting app, hook or TV setting was changed.
+
+| Step | Status | Reason | Evidence (relative to this run) |
+| --- | --- | --- | --- |
+| S0 | PASS | Both keys woke actual shown savers to hbchannel; following HOME opened stock Home. No persistent Ready stall. | `results.json` (complete BACK/HOME baselines), `S0-before.json`, `S0-after.json`, `foreground-window-polls.jsonl` |
+| S1 | PASS | Actual saver over fixture; unchanged HC state and stock-home policy; empty daemon action-log delta. | `S1-launcher-settled.json`, `S1-during.json`, `S1-daemon-observation.json`, `14-S1-during.png`, `run.log` |
+| S2 | PASS | HOME woke to hbchannel and second HOME opened the chosen fixture, matching mapped S0. | `S2-dismissed.json`, `S2-home.json`, `S2-after.json`, `results.json` |
+| S3 | PASS | BACK returned hbchannel; subsequent HOME opened the fixture with state unchanged. | `S3-back.json`, `S3-home.json`, `S3-after.json`, `results.json` |
+| S4 | PASS | Active/no-Ready before reboot; accepted tvpower request, changed boot id, native boot apply and stock-home close/preload checks passed. | `S4-dismissed.json`, `S4-after.json`, `27-S4-after.png`, `run.log`, `results.json` |
+
+S1 daemon MainPID **9590**, NRestarts **0**, active before/during; choice, entire defaultApps reply, stock-home policy and boot id stayed unchanged. The captured action-log delta was empty, with no closeByAppId/setPreloadPolicy calls; the optional screensaver-naming log list was `none`. No daemon action was observed while the real saver was shown; an explicit ignore log is not required by this test. SAM recorded fixture CARD plus `com.webos.app.screensaver` SCREENSAVER; all S-step JSON snapshots retain window types. The inspected S1 image shows the normal non-power-button wake instruction, and S4-after shows the green fixture. No LG fault dialog was seen or confirmed.
+
+**The screensaver did not stall on this captured 11.2.0 state. `beanjar screensaver stop` was not attempted and RECOVERED did not run**, including cleanup. S4's reboot was accepted at **23:24:27 JST**. The post-boot sample confirmed stock Home not running over 60 seconds. Cleanup removed both test packages, restored stock home/preload, removed override/choice/init state and stopped the native daemon. The final inventory still contains Life's Good Without Spying, 2048 and hbchannel (`results.json`). Supported power states were Active/active before shutdown; full Beanjar output records true/Power Off and QEMU exit (`cleanup-power-before-stop.json`, `beanjar-stop.txt`). VNC stopped and every host VM was confirmed Off (`final-host-states.json`). **HOST RELEASED: rockpi4a-2**.
+
+Resumed-phase outcome: **10.3.1 original full lifecycle: 76 PASS**, reported separately; screensaver S0–S4 all PASS on **10.3.1 (48 PASS), 8.3.0 (59 PASS), and 11.2.0 (46 PASS)**. Every measured baseline was wake-to-previous-app for either key, followed by HOME to stock Home; S2/S3 correctly mapped that dispatch to the chosen fixture. No persistent Ready stall, helper stop attempt or RECOVERED event occurred in these four runs. Test packages are removed, preexisting non-launcher apps/hbchannel retained, and all host VMs are Off with VNC stopped. Build/scratch/baseline artifacts are retained. No Home Chooser implementation fix was needed and nothing was committed.
