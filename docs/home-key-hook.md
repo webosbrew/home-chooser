@@ -1,215 +1,127 @@
-# Minimal Home key hook, webOS 6–9
+# Live Home key filter, webOS 6–9
 
-Home Chooser runs a structural rewriter against the stock compositor when preparing the persistent hook cache. The same guarded
-rules apply to webOS 6 through 9. A core mismatch leaves the device stock and logs the failed anchor. webOS 5 and 10 or later are refused.
+Home Chooser copies **this device's** stock `KeyFilters/systemUi.js`, changes the Home launch target,
+and selects the copy through configd. No compositor, SAM, WAM or input-method restart is required,
+including at boot. No QML source is changed or bind mounted. webOS 5 and 10–12 retain their existing
+settings/profile and watcher behavior.
 
-## The hook
+The native implementation is [homekey.c](../service/src/homekey.c), with the guarded generator in
+[homekey-generator.c](../service/src/homekey-generator.c). Both are part of the existing
+`homechooser-service` executable. `scripts/homechooser-homekey` only dispatches its `--homekey` mode.
 
-| Group | File | Change |
-| --- | --- | --- |
-| Core | `WebOSCompositorBase/global/Settings.qml` | Import WebOSServices; add the shared home-id, redirect and launch-fallback helpers. |
-| Core | `WebOSCompositor/controllers/StarfishKeyFilter.qml` | Expose `applicationManager.getHomeAppId`; redirect stock-home `launch` and `checkLaunch` calls. |
-| Best effort | `KeyFilters/systemUi.js`, when it defines `HOME_APP_ID` | Refresh that variable at the start of `handleHomeKeys`. Existing comparisons stay intact. |
-| Best effort | `StarfishNudgeView.qml` | Suppress nudges over the chosen home. |
-| Best effort | `StarfishBaseLunaServiceAPI.qml` | Report the chosen home as the launcher in `getCurrentState`. |
-| Best effort | `StarfishRecents.qml` | Spare both the chosen launcher and LG Home during cleanup, retaining the firmware's last-input exclusion and default. |
-| Best effort | `StarfishFullscreenController.qml` | Use the chosen home for NMRM last-input. |
+## Boot and watcher lifetime
 
-The two core files are all or nothing. The other five files are independent: a missing file or
-unexpected anchor skips that complete file and reports the reason in `unpatched-sites` and `skipped`. Everything outside this table stays stock, including the fallback
-Home view, splash/spinner logic, gestures, home-type window metadata and the multiview toolbar's
-literal case comparison. Launches through the Home key hook's applicationManager still use the redirect.
+On 6–9, `/var/lib/webosbrew/init.d/homechooser` links to the installed `scripts/homechooser`.
+The HBC run-parts entry enqueues one `systemd-run --no-block --unit=homechooser-home` transient unit
+and returns immediately. It contains no readiness sleeps. The unit runs the existing native service
+with `--boot`; this dispatch happens **before** the normal RPC service name is registered.
 
-The helper reads `general/defaultApps.home` live, then the stored id baked into Settings.qml, then
-`com.webos.app.home`. A property binding starts the settings subscription with the compositor.
-Changing the record updates Home behavior without restarting anything. A failed custom-home launch
-falls back to the stock home with the original request fields. An invalid JSON launch request stays
-on the stock path. With the stock id selected, the stock launch implementation runs.
+Inside the unit, bounded calls wait for both `surfacemanager/getCurrentState` (a successful reply with
+`currentState`) and configd's valid, nonempty keyFilters list. There are at most 30 attempts, with
+one second between attempts and a timeout on every call. A best-effort `createToast` says
+“Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
+the privileged `com.webos.applicationManager` identity. Toast failure does not block apply.
 
-Older builds with no `HOME_APP_ID` definition need only the two core QML files. Builds that
-compare the foreground app to that variable also mount systemUi.js. This preserves the firmware's
-own behavior when Home is already in front, when voice UI is running, and when overlays have focus.
+After the attempt, the native process uses `exec` to become the existing shell watcher. This keeps
+one unit and retains subscriptions/removal recovery without keeping an idle native worker resident.
+The watcher can retry after transient readiness failure. Its `/tmp/homechooser-runtime` copy includes
+the same executable so an active watcher can restore configd after package removal. The transient
+unit falls back to that runtime copy on failure/restart if the installed executable is gone. There is no
+second installed helper binary and no persistent generated boot cache on 6–9.
 
-## Guards and runtime
+The persistent **watcher restore copy** on webOS 5 and 10–12 is retained for their existing
+stopped-watcher uninstall recovery. It contains no QML patch generator.
 
-`service/scripts/homechooser-homekey-hook.js` is compatible with Node 8.12, the webOS 6 runtime: no
-lookbehind, named capture groups, dotAll, replaceAll or recursive mkdir. Preparation uses `node`
-from PATH, falling back to `/usr/bin/node`. Boot and status never start Node.
+## Guarded JS generation
 
-Every core anchor must occur exactly once: the singleton pragma, Settings root id, subscribe
-signature and import, and the applicationManager group, launch and checkLaunch headers. Both
-launch members must lie inside their group. A missing core file or existing core home helper
-refuses the complete plan before any output is written.
+The stock file is `/usr/lib/qt5/qml/KeyFilters/systemUi.js`. The generator recognizes the complete
+`launchHomeApp(key)` function shapes observed in the firmware corpus using SHA256 fingerprints
+([homekey-shapes.inc](../service/src/homekey-shapes.inc)); no vendor JS is shipped. Its edits are:
 
-The optional systemUi rule checks its definition, handler header and known stock-id uses. A
-mismatch leaves the original script in place while the core still redirects stock-home launches.
-On firmware with foreground-home comparisons, skipping this file has a measured degradation:
-with the chosen launcher already in front, Home relaunches it instead of handing it the key;
-with LG Home in front, the stock comparison can hand Home to LG Home rather than launching the
-chosen app. Voice and overlay decisions also retain their stock-home comparisons. Firmware with
-no such comparisons needs no script edit. The harness verifies this core-only behavior separately
-from the complete hook.
+- Change `HOME_APP_ID` when the stock file defines it.
+- Change only the stock-home first argument to `applicationManager.launch` and, where present,
+  `applicationManager.checkLaunch` inside `launchHomeApp`.
 
-Each output must change, retain the original bracket balance and have its Settings import.
-Settings.qml must contain exactly one stored-id placeholder. The entire plan is checked before
-writing output; the worker stages everything before mounting anything.
+The 7.1/7.4 variants without `HOME_APP_ID`, the older launch-only form and the NMRM/checkLaunch form
+are covered. Stock access restrictions, disableHome/first-use gates, branch decisions, parameters,
+timers, subscriptions and all other key handling remain intact. An unknown function or constant
+shape is refused. Boot retains/restores stock and posts a best-effort notice; interactive preparation
+fails before the hook is enabled. A missing or invalid choice, or an app SAM cannot confirm installed,
+selects stock behavior.
 
-```
-node service/scripts/homechooser-homekey-hook.js check --root /path/to/rootfs
-node service/scripts/homechooser-homekey-hook.js generate --root /path/to/rootfs --out /tmp/hook --manifest /tmp/manifest.json --version 0.1.0
-```
+Each changed version receives a fresh `systemUi-XXXXXX.js` filename under
+`/var/lib/webosbrew/homechooser/`. The service reads it back and compares SHA256 before selection.
+An unchanged choice and identical generated bytes avoid unnecessary loader recreation.
 
-Exit status is 0 for success, 2 for a guarded refusal (`ABORT: <specific reason>`), and 1 for usage
-or I/O failure. `--skip-version-gate` is for offline negative controls only; the worker never uses it.
-The manifest records each target path, stock and patched MD5, tier, skipped sites, and the
-Home Chooser version. The companion tab-separated index lets BusyBox shell validate it without
-starting Node. These hashes are per-TV cache keys, not a list of approved firmware hashes.
+## Configd transaction and restoration
 
-## Deployment
+The service reads `com.webos.surfacemanager.keyFilters` from `getConfigs`. It saves the entire exact
+stock array in `keyfilters-stock.json`, including entry order and every field. It replaces only the
+`file` fields of existing systemUi entries. It accepts either firmware spelling, `/usr/lib/qml/…`
+or `/usr/lib/qt5/qml/…`, without assuming a fixed handler list.
 
-The installed `service/scripts/homechooser` entry is linked from Homebrew Channel's
-`/var/lib/webosbrew/init.d/homechooser`. The `homekey` enable flag controls boot application.
-Packaging places the five runtime scripts beside the service binary; the app bundle carries none. Offline tests are kept in the source tree.
-The entry scripts source shared helpers from `scripts/lib/`: common paths, logging, Luna calls,
-timeouts and locking; watcher record, preload, notifications, restore and events; and hook cache,
-restart and mount logic. The watcher copies `lib/` with itself into `/tmp/homechooser-runtime`,
-so it can restore stock after the installed service directory disappears.
+Every write sends `setConfigs` with `configs.com.webos.surfacemanager.keyFilters` set to that
+validated nonempty array of original objects, and the top-level `volatile` set to `true`. A successful write must be followed by an exactly equal `getConfigs` readback.
+Only then are unused generated versions deleted. A rejected/ambiguous activation attempts an exact
+stock-list restore, also volatile and verified. If recovery cannot be verified, all files are retained.
+Unexpected external edits to the active list cause refusal instead of overwriting them.
 
-On first installation or after an update, `homekeyPrepare` generates copies under
-`/var/lib/webosbrew/homechooser/hook/`. Preparation validates every generated copy, builds in a
-temporary directory and renames it into place. At boot the worker checks the installed version,
-the cached copies and the MD5 of each stock file. It copies a valid cache to
-`/tmp/homechooser-homekey/stage`, writes the configured
-id into the staged Settings.qml, bind-mounts the files, then restarts the compositor once. An id is
-baked only if applicationManager confirms that app is installed; an absent or unanswered app uses
-an empty fallback until the watcher refreshes it. The underlying rootfs is never written.
+Changing launchers invokes the same transaction immediately. Disable, missing-launcher recovery
+and uninstall restore the exact saved stock array **before** removing generated files. Restoration
+uses an exact stock-list volatile write, rather than relying on unverified `null`-override semantics.
+There are no non-volatile writes: those create persistent overrides and `usrDefined` bookkeeping in
+`/var/preferences/configd_factory_db.json`.
 
-When the cache is absent, corrupt, or based on changed stock files, boot leaves Home stock and
-logs the reason. It removes the stale cache. The watcher regenerates it after boot, then status
-reports `hook=stale`, the reason and `reboot=needed`; the hook becomes active on the next restart.
-The app opens the existing restart alert once per cache generation when the user opens Home Chooser,
-and keeps the “Restart now” action visible. A version change also invalidates the cache. `status`
-reads the manifest and mounts without invoking Node. Removing the hook or uninstalling Home
-Chooser deletes the persistent cache.
+If the package and its watcher are both absent, the volatile filter still references an existing
+file outside the package; reboot resets it to firmware defaults without a recovery executable.
+An active watcher handles normal uninstall immediately.
 
-The boot hook runs after the compositor has already loaded stock QML. The restart follows the
-firmware's `lsm-ready.service` order: read its systemctl start lines (`/etc/systemd/system` before
-`/lib/systemd/system`), stop the listed clients that are running, restart
-`surface-manager-daemon.service`, then start those clients after the compositor is ready. The
-fallback list is webapp-mgr, booster, maliit-server. The compositor's notify-ready event is the
-lsm-ready emit, rather than the existence of the persistent `/tmp/lsm-ready` file.
+## Status and tests
 
-A bare compositor restart can crash WebAppMgr when it reconnects before outputs are ready. The
-worker keeps clients stopped until both the systemd restart and a functional QML check succeed.
-It calls the stock `com.webos.surfacemanager/getCurrentState` method as root with
-`-a com.webos.applicationManager`, polling against monotonic uptime for up to 24 seconds with each call bounded to two
-seconds. A successful reply must contain both `returnValue:true` and a string `currentState`.
-The method is implemented and registered by the stock StarfishBaseLunaServiceAPI QML object on
-all 19 corpus builds; it does not depend on the optional rewrite being applied. On 9.2.4 it stops
-answering when broken Settings.qml prevents main.qml from loading, even though systemd reports
-an active compositor, and answers again after stock rollback.
+For compatibility with the app's status parser, `mounted=yes` means that configd selects a Home
+Chooser JS version; it does **not** mean a mount exists. `patch=possible/refused` reports the native
+generator check, and `reboot=no` is unconditional. The app has no restart prompt or “Restart now” row.
 
-At boot only, either restart or QML-readiness failure unmounts the hook and attempts one stock
-restart, including the same readiness check. Remembered clients start only after QML responds.
-There are no further retries. Status preserves `recovered=stock` with the original failure
-`reason=` (or `recovered=failed` if stock recovery also fails); the enable flag remains. Both
-results are logged. Failed unmounts retain staged sources and the manifest for a later stop.
-The restart sequence runs in a waited child with detached output so an app closing cannot cut
-its stop/start sequence in half. See [the dated verification record](research/minimal-hook-verification.md).
-
-For the device recovery test only, `HOMECHOOSER_DEBUG_BREAK_SETTINGS=1` appends invalid QML to the
-staged Settings.qml after the real rewrite and before mounting. The app never sets this environment
-variable. Run it only as an explicit root diagnostic, then remove test apps, flags and temporary
-files. `HOMECHOOSER_READY_WAIT` overrides the polling window for tests. Offline readiness cases
-cover an immediate response, delayed registration, no response, a hung call, malformed success
-and failed replies, successful rollback, and failed stock recovery without a restart loop.
-
-There are no runtime restarts. Choosing another launcher updates the record and staged fallback;
-restoring LG Home removes the enable flag and writes the stock id into the live record. Mounted
-files remain until reboot. The app asks the owner to restart when enabling or removing the hook.
-
-For explicit manual/debug use:
-
-```
-homechooser-homekey status
-homechooser-homekey refresh
-homechooser-homekey refresh stock
-homechooser-homekey stop
+```sh
+make -C service test
+make -C service test-homekey ROOTFS=/path/to/7.6/rootfs
+OPENHOUSE_STOCK_COPIES=/path/to/stock sh service/scripts/tests/test-minimal-hook.sh
+sh service/scripts/tests/test-homechooser.sh
+sh service/scripts/tests/test-homechooser-home-watch.sh
+sh service/scripts/tests/test-homechooser-access.sh
+npm --prefix app test -- --runInBand
+python3 -m unittest discover -s e2e -p test_e2e_logic.py
 ```
 
-`refresh` changes the staged Settings.qml in place, retaining its inode and bind mount. It never
-restarts the compositor. `refresh stock` clears the baked id regardless of the stored choice.
-The live record still takes priority. `stop` unmounts and restarts; `refresh restart` and
-`apply samfirst` remain manual debugging commands. The app and watcher never call these restart
-commands. Logs are in `/tmp/homechooser-homekey.log`.
+The generator checks exact-byte edits, syntax, executed launch branches/gates and unknown-shape
+refusal against `service/scripts/tests/corpus.tsv`. Missing firmware paths are explicitly reported.
+The native ARM transaction test runs under qemu with real firmware libraries and fake Luna:
+readiness, failed toast, list metadata/order, live changes, missing apps, failed writes/readbacks,
+verified restoration, retained files on recovery failure and empty-list refusal.
 
-Status reports `mounted=yes|no`, `patch=possible|refused`, `reason=` on refusal,
-`unpatched-sites=N` for skipped best-effort files, repeated `skipped=<file>: <reason>` and
-`file=<patched path>` lines, `hook=stale` when applicable, and `reboot=needed|no`.
+The E2E runner expects the first apply to be live, verifies Home after boot and treats every crash,
+including the previously exempt legacy-broadcast crash, as an acceptance failure. A crash dialog may
+be dismissed for recovery, but cannot turn the run into a pass.
 
-## Offline verification
+## Evidence and portability
 
-Run every `service/scripts/tests/test-*.sh` under both sh and busybox sh; pass a one-line executable wrapper
-(`exec busybox sh "$@"`) as the shell argument to worker suites. Also run `make -C service test`,
-`cd app && npm ci && npm run lint && CI=true npm test`, and
-`python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
+[Native implementation validation](research/home-key-live-filter-validation.md) records this change’s
+7.6.0 device trials, local test results and final cleanup.
 
-`test-minimal-hook.sh` runs the study's pattern
-matrix, syntax checks, deterministic output, restoration of the original bytes after removing our
-edits, refusal/double-patch mutations, per-file best-effort drift, and the Home-key behavioral harness.
-For each supported firmware it compares 144 scenarios: no choice versus stock, chosen launcher
-versus stock with home roles exchanged, and the actual two-file core plan versus stock foreground
-comparisons with redirected launches. The latter explicitly checks the launcher-front relaunch
-degradation when systemUi is skipped.
-The harness emulates QML service boundaries; VM checks remain necessary for QML/script visibility
-and settings subscription timing. Synthetic anchor skeletons test failures even without a corpus.
+The 2026-10-30 7.6.0 feasibility investigation is recorded in
+`/home/mariotaku/scratch/hc-live-reload/report.md` and `source-matrix.json`; the independent restart
+crash analysis is `/tmp/maliit-verify/sol-conclusion.md`.
 
-`test-real-roundtrip.sh` exercises the real rewriter and worker with mount, systemctl and Luna
-stubs. `test-homechooser-homekey.sh` tests refusal and I/O failure, partial mounts, boot recovery,
-refresh inode preservation, install checks, restart order, locking and concurrent status calls.
+**Verified by that investigation:** configd notification destroys/recreates the key-filter loaders;
+new JS executes through Shell/Qt.include without QML edits; HOME opens the chosen app while core
+process identities stay stable. A stock-to-volatile boot apply also succeeded without replacing
+existing GUI clients. Ordinary setConfigs persisted into the factory database; volatile writes did
+not. That study removed its volatile value before reboot, so reboot loss was explicitly unverified
+there. Its stock suspend control reproduced the general tvpowerd/legacybroadcast standby dialog.
 
-Corpus locations are overridable:
-
-| Variable | Default / meaning |
-| --- | --- |
-| `OPENHOUSE_FIRMWARES` | `~/Projects/webos-firmwares` |
-| `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-hypervisor` |
-| `OPENHOUSE_STOCK_COPIES` | `scratch/hk-universal/rw/stock`, saved target files from deleted roots |
-| `OPENHOUSE_WEBOS71` | `~/Temp/webos-7.1.0`, partial QML tree |
-| `OPENHOUSE_CORPUS` | `service/scripts/tests/corpus.tsv`; id, version, kind, root in tab-separated columns |
-| `NODE` | Node executable for offline checks (use a Node 8.12 executable for compatibility) |
-
-Missing roots are skipped with a notice. No LG files are copied into the repository. Saved per-file
-copies contain no os-release; tests copy them into a temporary directory and add version metadata
-from the study's corpus. The original scratch study and its corpus are in `scratch/minimal-hook/`.
-
-## Known limitations
-
-* **Intermittent LG crash after the boot compositor restart (webOS 9.2.4).** On the W24G VM about 1 boot in 10 shows an LG `legacy-broadcast-dvb` crash at `API_SI_GetLinkageUriInfo+0x197` (`crashd CRASHED {"process":"legacy-broadcas.<pid>"}`, faultmanager entry `RDXDErr3_legacy-broadcas…`), with LG's "[crash] Fault Occured" popup. It shows only with the single boot-time compositor restart (stock boots: 0 of 10), and there is no restart-free option: the hook cannot load before the compositor's first QML load. See the [early-mount study](research/home-key-hook-early-mount-study.md). It is accepted as a known limitation pending a user acceptance test on a real TV. The E2E runner records it as a note, not a failure.
-
-* **Quick Start+ turns a power cycle into a resume.** With LG's Quick Start+ on (the default on the 9.2.1 VM), turning the TV off and on with the remote resumes it and `boot_id` stays unchanged (`scratch/quickstart/notes.md`), so the hook is not applied. Only Reboot / Restart now, or a restart from the TV's own menu, applies it. The panel note says so.
-
-## Verified on a device
-
-The minimal hook's device results are recorded here after VM verification. Offline coverage alone
-does not mark a build as device verified.
-
-These are the latest timestamped result directories for each VM as of 2026-10-25.
-Commits are inferred from each run's local start time against `git log`, not recorded by
-the runner. The 5–8, 9.2.4 and 11.x runs predate the starting tip `f392cf4`; the newer
-9.2.1, 10.3.1 and 12.0.0 runs are targeted checks on `prerelease-tasks`. The latest 9.2.1
-and 10.3.1 runs started at `69795e6` with the boot restore fix later committed as `a3a2d2b`.
-The 12.0.0 run started at `8eadf3c` with an uncommitted assertion later committed as `9d459fd`.
-Incomplete and failed runs are identified explicitly; the full matrix has not been rerun.
-
-| webOS | VM / build | Latest run (local date; inferred commit) | Result | Hook |
-| --- | --- | --- | --- | --- |
-| 5.6.1 | w20l-jhericurl / W20L | `e2e/results/w20l-jhericurl-20261024-151120` (2026-10-24; `88bde96`) | 1 FAIL, setup stopped; earlier `…015912` had 54 PASS | no hook needed |
-| 6.5.2 | w21a-kisscurl / W21A | `e2e/results/w21a-kisscurl-20261024-214245` (2026-10-24; `4818acf`) | 106 PASS, reboot checked | verified |
-| 7.6.0 | w22p-mullet / W22P | `e2e/results/w22p-mullet-20261024-220405` (2026-10-24; `5d89b26`) | 106 PASS, reboot checked | verified |
-| 8.3.0 | w22o-number1 / W22O | `e2e/results/w22o-number1-20261025-000109` (2026-10-25; `4e0bad5`) | 106 PASS, reboot checked | verified |
-| 9.2.1 | w22h-ombre / W22H | `e2e/results/w22h-ombre-20261025-231546` (2026-10-25; `69795e6`–`a3a2d2b`) | 76 PASS; stopped-watcher uninstall and next-boot cleanup | verified in earlier `…224555` run (214 PASS, 1 MANUAL) |
-| 9.2.4 | w24g-ombre / W24G | `e2e/results/w24g-ombre-20261025-201151` (2026-10-25; `7bf58f6`) | 186 PASS, 1 MANUAL; API checked | verified in earlier [runtime study](research/minimal-hook-verification.md) |
-| 10.3.1 | w22o-ponytail-us / W22O | `e2e/results/w22o-ponytail-us-20261025-232305` (2026-10-25; `69795e6`–`a3a2d2b`) | 55 PASS; stopped-watcher uninstall and next-boot cleanup | no hook needed |
-| 11.2.0 | w22o-queue-us / W22O | `e2e/results/w22o-queue-us-20261025-200110` (2026-10-25; `304d9c4`) | 139 PASS, 1 MANUAL; API checked | no hook needed |
-| 12.0.0 | w24g-spacebuns / W24G | `e2e/results/w24g-spacebuns-20261025-223559` (2026-10-25; `8eadf3c`–`9d459fd`) | 166 PASS, 1 MANUAL; update and API checked | no hook needed |
+**Source evidence:** the available 6/7/8/9 controllers share the subscription and loader recreation
+path. Similar source structure supports portability, but is not live certification for 6.x, 8.x,
+9.x or retail TVs. Those releases still need boot/readiness, permissions, caching, HOME semantics,
+live switch, removal, crash and reboot-persistence device coverage. The configured 6.3.1 corpus
+root is missing. Long-press, voice, multiview and launcher-specific home-window behavior remain
+firmware behavior outside this narrow JS edit.

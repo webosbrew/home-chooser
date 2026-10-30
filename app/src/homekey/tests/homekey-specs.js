@@ -14,11 +14,11 @@ const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSetting
 
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
 // script's `status` prints; `installed` is the enable flag file, `entry` the init.d link. `mounted`
-// only changes when the test says so (a boot mounts the patch; the app never does).
+// changes when the fake native worker selects or restores the live filter.
 const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails = false, failLuna = null} = {}) => {
 	const calls = [];
 	const tv = {installed: false, entry: 'none', mounted: false};
-	// the worker's reboot line: the flag is on and nothing is mounted (anchors match), or the flag is off and something is
+	// Legacy reboot status is ignored by the current parser.
 	const statusText = () => {
 		if (dataMissing) return 'data=missing\nmounted=no\npatch=refused\nreboot=no\n';
 		if (tv.mounted) return `mounted=yes\npatch=possible\nreboot=${tv.installed ? 'no' : 'needed'}\n`;
@@ -46,12 +46,14 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 			return {stdout: `entry=${entry}\nactive=\nstored=\nhomekey=${tv.installed ? 'yes' : 'no'}\n--log\n`, stderr: ''};
 		}
 		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};
-		if (command === homekeyCommand('prepare') || command === homekeyCommand('clear')) return {stdout: '', stderr: ''};
+		if (command === homekeyCommand('prepare')) return {stdout: '', stderr: ''};
+		if (command === homekeyCommand('clear')) { tv.mounted = false; return {stdout: '', stderr: ''}; }
+		if (command === RUN_WORKER) { tv.mounted = true; return {stdout: '', stderr: ''}; }
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
 		}
-		// the app never mounts, unmounts or restarts anything: these throw so a test sees the call
+		// Refresh failures must propagate to the app.
 		if (command === REFRESH) {
 			if (refreshFails) throw new ServiceError({returnValue: false, errorText: 'exit 1', stderrString: 'refresh failed'});
 			return {stdout: '', stderr: ''};
@@ -88,7 +90,7 @@ describe('parseStatus', () => {
 		expect(parseStatus('mounted=no\nrecovered=stock\nreason=QML unavailable\n')).toMatchObject({recovered: 'stock', reason: 'QML unavailable'});
 		expect(parseStatus('mounted=yes\npatch=possible\nunpatched-sites=1\nskipped=/nudge: anchor\nfile=/a.qml\nfile=/b.js\n')).toMatchObject({mounted: true, patch: 'possible', unpatchedSites: 1, files: ['/a.qml', '/b.js'], skipped: ['/nudge: anchor']});
 		expect(parseStatus('patch=refused\nreason=anchor missing\n')).toMatchObject({patch: 'refused', reason: 'anchor missing'});
-		expect(parseStatus('hook=stale\ncache-generation=123-45\nreboot=needed\n')).toMatchObject({hook: 'stale', cacheGeneration: '123-45', rebootNeeded: true});
+		expect(parseStatus('hook=stale\ncache-generation=123-45\nreboot=needed\n')).toMatchObject({hook: 'stale', cacheGeneration: '123-45', rebootNeeded: false});
 	});
 });
 
@@ -105,12 +107,12 @@ describe('status', () => {
 });
 
 describe('install', () => {
-	test('absent key: create it, enable and link; no worker run, no restart; a reboot finishes it', async () => {
+	test('absent key: create it, enable and link; reload worker runs without a restart', async () => {
 		const tv = fakeTV();
 		const res = await homeKeyHook(tv).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(true);
-		expect(res.rebootNeeded).toBe(true);
+		expect(res.rebootNeeded).toBe(false);
 		expect(tv.record()).toEqual({});
 		expect(tv.calls.filter((c) => c[0] === 'luna').map((c) => [c[1], c[2]])).toEqual([GET, SET({})]);
 		const seq = kinds(tv);
@@ -118,26 +120,26 @@ describe('install', () => {
 		expect(at('getSystemSettings')).toBeLessThan(at('setSystemSettings'));
 		expect(at('setSystemSettings')).toBeLessThan(at('write ' + HOMEKEY_FLAG));
 		expect(at('write ' + HOMEKEY_FLAG)).toBeLessThan(at(ENSURE));
-		[RUN_WORKER, RUN_WORKER_SAM, STOP, REFRESH, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
+		[RUN_WORKER_SAM, STOP, REFRESH, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => /\bcp\b/.test(x))).toEqual([]);
 		expect(tv.tv.installed).toBe(true);
 		expect(tv.tv.entry).toBe('ok');
-		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: false, rebootNeeded: true});
+		expect(res.status).toMatchObject({enabled: true, entry: 'ok', mounted: true, rebootNeeded: false});
 	});
 
-	test('record present: no write, no worker run, no sam restart', async () => {
+	test('record present: no write, reload worker runs, no SAM restart', async () => {
 		const tv = fakeTV({record: {home: 'x.y', kidsApp: 'k'}});
 		const res = await homeKeyHook(tv, [9, 2, 1]).install();
 		expect(res.ok).toBe(true);
 		expect(res.createdKey).toBe(false);
-		expect(res.rebootNeeded).toBe(true);
+		expect(res.rebootNeeded).toBe(false);
 		expect(tv.record()).toEqual({home: 'x.y', kidsApp: 'k'});
 		const seq = kinds(tv);
 		expect(seq).not.toContain('setSystemSettings');
-		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
+		[RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 	});
 
-	test('patch mounted but the flag was off (restored, not yet restarted): the flag comes back and no reboot is needed', async () => {
+	test('filter selected but the flag was off: the flag comes back and no reboot is needed', async () => {
 		const tv = fakeTV({record: {}, patch: 'possible'});
 		tv.tv.mounted = true;
 		tv.tv.release = '8.3.0';
@@ -187,10 +189,10 @@ describe('install', () => {
 });
 
 describe('remove', () => {
-	test('delete the flag, refresh the baked id, never stop; the init.d link stays; a mounted patch needs a reboot', async () => {
+	test('delete the flag, refresh the baked id, never stop; the init.d link stays; stock is effective immediately', async () => {
 		const tv = fakeTV({record: {}});
 		await homeKeyHook(tv).install();
-		tv.tv.mounted = true; // the next boot mounted it
+		tv.tv.mounted = true; // the filter is selected
 		tv.tv.release = '9.2.1';
 		tv.calls.length = 0;
 		const res = await homeKeyHook(tv).remove();
@@ -200,10 +202,10 @@ describe('remove', () => {
 		expect(seq[1]).toBe(homekeyCommand('clear'));
 		expect(seq[2]).toBe(REFRESH);
 		expect(seq).not.toContain(STOP);
-		[RUN_WORKER, RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
+		[RUN_WORKER_SAM, 'restartSam'].forEach((x) => expect(seq).not.toContain(x));
 		expect(seq.filter((x) => x.startsWith('rm '))).toEqual(['rm ' + HOMEKEY_FLAG]);
-		expect(res.rebootNeeded).toBe(true);
-		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: true, rebootNeeded: true});
+		expect(res.rebootNeeded).toBe(false);
+		expect(res.status).toMatchObject({enabled: false, entry: 'ok', mounted: false, rebootNeeded: false});
 	});
 
 	test('nothing mounted: no reboot needed', async () => {
@@ -227,7 +229,7 @@ describe('remove', () => {
 
 describe('parseStatus reboot', () => {
 	test('reboot=needed', () => {
-		expect(parseStatus('mounted=no\npatch=possible\nreboot=needed\n').rebootNeeded).toBe(true);
+		expect(parseStatus('mounted=no\npatch=possible\nreboot=needed\n').rebootNeeded).toBe(false);
 		expect(parseStatus('mounted=no\npatch=possible\nreboot=no\n').rebootNeeded).toBe(false);
 		expect(parseStatus('mounted=yes\npatch=possible\n').rebootNeeded).toBe(false);
 	});

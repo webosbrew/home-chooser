@@ -8,7 +8,8 @@
 #   SDK        the webOS buildroot SDK (arm-webos-linux-gnueabi)
 #   SYSROOT    its sysroot; CROSS the tool prefix (gcc, strip, readelf, nm)
 #   FIRMWARES  a directory of unpacked firmware images (else OPENHOUSE_FIRMWARES, as the Home key hook
-#              tests read it); ROOTFS the rootfs check-abi reads (5.6.1)
+#              tests read it); ROOTFS the rootfs check-abi reads (5.6.1); KEYFILTER_ROOTFS the 6-9
+#              rootfs whose libraries and systemUi.js test-homekey runs against (7.x)
 #   VERSION    the version compiled in: app/package.json's, the one source of the version
 SDK ?= /opt/arm-webos-linux-gnueabi_sdk-buildroot
 SYSROOT ?= $(SDK)/arm-webos-linux-gnueabi/sysroot
@@ -16,21 +17,22 @@ CROSS ?= $(SDK)/bin/arm-webos-linux-gnueabi-
 VERSION ?= $(shell sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' ../app/package.json | head -1)
 FIRMWARES ?= $(or $(OPENHOUSE_FIRMWARES),$(HOME)/Projects/webos-firmwares)
 ROOTFS ?= $(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs
+KEYFILTER_ROOTFS ?= $(FIRMWARES)/04.60.90.01-HE_DTV_W22P_AFADATAA/rootfs
 OUT ?= ../build/service
 
 CFLAGS ?= -O2 -g0
-CFLAGS += -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DHC_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
+CFLAGS += -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_40 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_40 -DHC_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
 INC = -I$(SYSROOT)/usr/include -I$(SYSROOT)/usr/include/glib-2.0 -I$(SYSROOT)/usr/lib/glib-2.0/include
 LIBS = -lluna-service2 -lpbnjson_c -lPmLogLib -lglib-2.0
 
 all: $(OUT)/homechooser-service
 
-$(OUT)/homechooser-service: src/main.c src/policy.c src/policy.h ../app/package.json
+$(OUT)/homechooser-service: src/main.c src/policy.c src/policy.h src/homekey.c src/homekey-generator.c src/homekey.h src/homekey-shapes.inc ../app/package.json
 	@test -n "$(VERSION)" || { echo 'no version: app/package.json has no "version" (or set VERSION=)' >&2; exit 1; }
 	@test -x "$(CROSS)gcc" || { echo 'webOS native SDK compiler not found: $(CROSS)gcc; download the webosbrew native-toolchain and set SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot (or CROSS=...)' >&2; exit 1; }
 	@test -d "$(SYSROOT)/usr/include" || { echo 'webOS native SDK sysroot not found: $(SYSROOT); set SYSROOT=/path/to/sysroot' >&2; exit 1; }
 	mkdir -p $(OUT)
-	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ src/main.c src/policy.c $(LIBS) -Wl,-O1,--as-needed
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ src/main.c src/policy.c src/homekey.c src/homekey-generator.c $(LIBS) -Wl,-O1,--as-needed
 	$(CROSS)strip $@
 
 # Dev build: any luna sender may call it (for luna-send on a test TV). Never ship this one.
@@ -50,4 +52,13 @@ check-abi: $(OUT)/homechooser-service
 clean:
 	rm -rf $(OUT) $(OUT)-dev test/test-policy
 
-.PHONY: all dev test check-abi clean
+.PHONY: all dev test test-homekey check-abi clean
+
+# Run the same native JSON/transaction code under qemu with a fake Luna transport.
+test-homekey: $(OUT)/test-homekey
+	@mkdir -p $(OUT)/keyfilter-test
+	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/test-homekey $(OUT)/keyfilter-test $(KEYFILTER_ROOTFS)/usr/lib/qml/KeyFilters/systemUi.js
+
+$(OUT)/test-homekey: test/test-homekey.c src/homekey.c src/homekey-generator.c src/homekey.h src/homekey-shapes.inc
+	mkdir -p $(OUT)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -Isrc -o $@ test/test-homekey.c src/homekey.c src/homekey-generator.c -lpbnjson_c -lglib-2.0

@@ -39,7 +39,7 @@ HOOK_CACHE = '/var/lib/webosbrew/homechooser/hook'
 HOOK_STALE = '/var/lib/webosbrew/homechooser/hook-stale'
 INITD = '/var/lib/webosbrew/init.d/homechooser'
 BOOT_DIR = '/var/lib/webosbrew/homechooser/boot'
-BOOT_SCRIPT = BOOT_DIR + '/homechooser'
+BOOT_SCRIPT = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 SCRIPTS_DIR = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts'
@@ -136,10 +136,6 @@ OLD_RESTART_TEXTS = ('Restart the TV to finish the change.', 'Restart the TV to 
 # (text, file relative to the repo that must contain it)
 TEXT_SOURCES = [
     (DONE_TEXT, 'app/src/views/useHomeChooser.js'),
-    (REBOOT_ASKED_TEXT, 'app/src/views/useHomeChooser.js'),
-    (RESTART_NOTE['apply'], 'app/src/views/useHomeChooser.js'),
-    (RESTART_NOTE['remove'], 'app/src/views/useHomeChooser.js'),
-    (RESTART_NOW, 'app/src/views/MainPanel.js'),
     (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
     ('$name' + REMOVAL_ALERT[2:], 'service/scripts/lib/watch-notify.sh'),
@@ -185,9 +181,8 @@ def stock_baseline_ok(major, home):
 
 
 def expects_reboot_dialog(major, mounted_before):
-    """6.x to 9.x: choosing a launcher with the patch not mounted asks for a restart; with the patch
-    already mounted (an earlier choice this boot) the switch is live and nothing is asked."""
-    return uses_home_key_hook(major) and not mounted_before
+    """Every supported release applies immediately; no reboot prompt is expected."""
+    return False
 
 
 def parse_reboot_ask(text):
@@ -725,19 +720,8 @@ def known_fault_pids(reply):
 
 
 def split_known_crashes(lines, reply):
-    """(known, other) crash and fault-popup lines, confirmed by a fault entry with the same pid."""
-    pids = known_fault_pids(reply)
-    known, other = [], []
-    for l in lines:
-        m = KNOWN_CRASHD_RE.search(l)
-        if not m and 'faultmanager' in l and ('createNotiPopup' in l or 'sendCreateAlert' in l):
-            # On 9.2.4 the popup line has the same title as the fault entry. A crashd
-            # match alone misses this later line and incorrectly treats the known alert
-            # as a foreign popup when a Home-key proof is about to send a key.
-            title = l.partition('title :')[2].partition(', message :')[0].strip()
-            m = KNOWN_FAULT_RE.match(title)
-        (known if m and m.group(1) in pids else other).append(l)
-    return known, other
+    """All crash lines fail acceptance, including previously documented firmware crashes."""
+    return [], list(lines)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1961,14 +1945,12 @@ class Scenario:
         return self.major >= 10
 
     def hook_mounts_match(self, mounts=None):
-        rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
-        planned = [line[5:] for line in out.splitlines() if line.startswith('file=')]
-        mounted = self.dev.mounts() if mounts is None else mounts
-        return rc == 0 and bool(planned) and set(planned) == set(mounted)
+        st, _ = self.kf_status()
+        return st.get('mounted') == 'yes' and not self.dev.mounts()
 
     def check_hook_status(self, label):
         rc, out = self.dev.exec(SCRIPTS_DIR + '/homechooser-homekey status')
-        self.rec.check('%s: minimal hook is mounted' % label,
+        self.rec.check('%s: live JS hook is selected' % label,
                        rc == 0 and 'mounted=yes' in out and 'patch=possible' in out, out.strip())
 
     def kf_status(self):
@@ -2006,7 +1988,7 @@ class Scenario:
 
     def check_no_crash(self, label, before):
         """6.x to 9.x: no crashd CRASHED / WebAppMgr crash line since `before`, and within one boot WebAppMgr
-        kept its MainPID and NRestarts.  The boot-time apply's restart is the only restart allowed."""
+        kept its MainPID and NRestarts.  Boot apply must keep existing GUI processes alive."""
         if not self.uses_home_key_hook() or not before:
             return
         d = self.dev
@@ -2111,8 +2093,15 @@ class Scenario:
         self.rec.say('home-app residency [%s]\n    %s' % (point, '\n    '.join(lines)))
 
     def baked_id(self):
-        rc, out = self.dev.sh("grep -h configuredHomeAppId /usr/lib/qml/WebOSCompositorBase/global/Settings.qml | head -2")
-        return out.strip()
+        raw = self.priv_luna('luna://com.webos.service.config/getConfigs',
+                             '{"configNames":["com.webos.surfacemanager.keyFilters"]}')
+        try:
+            filters = json.loads(raw)['configs']['com.webos.surfacemanager.keyFilters']
+        except (ValueError, KeyError, TypeError):
+            return ''
+        paths = {f.get('file', '') for f in filters if isinstance(f, dict)}
+        generated = sorted(p for p in paths if p.startswith('/var/lib/webosbrew/homechooser/systemUi-'))
+        return '\n'.join(self.dev.sh('grep -E '+shlex.quote('HOME_APP_ID|applicationManager\\.(launch|checkLaunch)')+' '+shlex.quote(p))[1] for p in generated)
 
     def assert_stock(self, label, s, baked_emptied=True):
         """The platform is back to stock.  6.x to 9.x: the record names the stock id (not null) and the
@@ -2126,11 +2115,10 @@ class Scenario:
         if self.uses_override():
             r.check(label + ': profile override absent', s['override'] == 'no', 'override exists: ' + s['override'])
         if self.uses_home_key_hook():
-            r.check(label + ': Home key hook stays mounted until the next boot', len(s['mounts']) >= 1, 'mounts: %s' % s['mounts'])
-            if baked_emptied:
-                baked = self.baked_id()
-                r.check(label + ': baked id in the mounted Settings.qml is emptied (refresh stock)',
-                        '""' in baked and self.launcher not in baked, baked)
+            raw = self.priv_luna('luna://com.webos.service.config/getConfigs',
+                                 '{"configNames":["com.webos.surfacemanager.keyFilters"]}')
+            r.check(label + ': stock keyFilters selected with no QML mounts',
+                    not s['mounts'] and 'systemUi-' not in raw and '/KeyFilters/systemUi.js' in raw, raw)
 
     # -- the removal notifications (docs/settings-app.md "When apps are removed")
     def notif_lines(self, method):
@@ -2199,20 +2187,19 @@ class Scenario:
         t_mark, up_mark = mark
         reply = self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus')
         real, noise = classify_faults(reply, up_mark)
-        kpids = known_fault_pids(reply)
-        kfaults = [f for f in real if f in kpids.values()]
-        real = [f for f in real if f not in kfaults]
+        try:
+            all_faults = json.loads(reply).get('faultDetectedStatus', {}).get('detectedFaults', [])
+        except (ValueError, TypeError, AttributeError):
+            all_faults = real
+        crashes = [f for f in all_faults if f.get('faultType') == 'crash']
+        self.rec.check(label + ': no LG [crash] fault dialog or crash fault this boot', not crashes,
+                       ' | '.join(json.dumps(f) for f in crashes) or 'none')
+        real = list(real)
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
         rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
         lines = [l for l in out.splitlines() if l.strip()]
         known_lines = split_known_crashes(lines, reply)[0]
         ev += [l for l in lines if l not in known_lines]
-        if kfaults or known_lines:
-            self.rec.note('%s: known LG crash popup (legacy-broadcast-dvb, API_SI_GetLinkageUriInfo+0x197), accepted '
-                          'limitation, not a FAIL; see %s' % (label, KNOWN_CRASH_DOC),
-                          ' | '.join([json.dumps(f) for f in kfaults] + known_lines))
-            if kfaults and not ev and dismiss and self.dismiss_known_popup(label) is False:
-                ev.append('key focus not back after dismissing the known LG crash popup')
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
                           % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))
@@ -2792,7 +2779,7 @@ class Scenario:
                         st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
                 self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
                 baked = self.baked_id()
-                r.check('the watcher baked the launcher id into the mounted Settings.qml (refresh, no restart)',
+                r.check('the watcher wrote the launcher id into the selected systemUi.js (refresh, no restart)',
                         self.launcher in baked, baked)
         self.wait(lambda: self.watcher_active() == 'active' and (not self.uses_home_key_hook() or self.hook_mounts_match()), 90)
         self.residency('right after "Use as Home" (settled)')
@@ -2801,10 +2788,10 @@ class Scenario:
         r.check('choice file holds the launcher id', s['choice'] == self.launcher, repr(s['choice']))
         r.check('general/defaultApps record home is the launcher', s['record_home'] == self.launcher, s['record_raw'])
         r.check('watcher unit homechooser-home is active', s['watcher'] == 'active', s['watcher'])
-        r.check('init.d entry points to the persistent boot restore copy',
-                s['initd'] == BOOT_SCRIPT, s['initd'])
+        r.check('init.d entry points to the installed boot entry',
+                s['initd'] == (BOOT_SCRIPT if self.uses_home_key_hook() else BOOT_DIR + '/homechooser'), s['initd'])
         if self.uses_home_key_hook():
-            r.check('Home key hook mounts are present (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
+            r.check('live key-filter is selected and QML mounts are absent (webOS 6-9%s)' % (', after the boot' if not mounted_before else ''),
                     self.hook_mounts_match(s['mounts']), 'mounts: %s' % s['mounts'])
             r.check('Home key hook flag file exists', s['flag'] == 'yes', s['flag'])
             self.check_hook_status('after selection' + (' and the boot' if not mounted_before else ''))
@@ -3062,8 +3049,7 @@ class Scenario:
         self.after_boot_checks('after the reboot')
 
     def after_boot_checks(self, label):
-        """6.x to 9.x after a boot with a launcher chosen: the init.d hook started the watcher and mounted
-        the patch (the boot apply, with its one firmware-order compositor restart)."""
+        """6-9 boot applies the volatile JS filter and starts the watcher without a GUI restart."""
         r = self.rec
         active = self.wait(lambda: self.watcher_active() == 'active', 180, 5)
         r.check(label + ': the watcher is active (started from init.d)', bool(active), self.watcher_active())
@@ -3071,8 +3057,8 @@ class Scenario:
         st, raw = self.kf_status()
         r.check(label + ': the boot hook mounted the patch: status mounted=yes and reboot=no',
                 st.get('mounted') == 'yes' and st.get('reboot') == 'no', raw)
-        r.note(label + ': Home key hook log of the boot apply (its compositor restart is the one allowed)',
-               self.dev.sh('tail -n 20 %s 2>&1' % self.HOMEKEY_LOG)[1])
+        r.note(label + ': native boot apply log (no GUI restart permitted)',
+               self.dev.sh("grep -E 'HomeChooser.*(START|HOMEKEY)' /var/log/messages | tail -n 25")[1])
         r.note(label + ': compositor QML and crash evidence from retained messages logs', self.dev.sh(
             messages_command() + " | grep -E 'surface-manager.*(WebOSCompositorWindow::setCompositorMain|"
             "Type .*unavailable|Syntax error|is not a type)|crashd.*CRASHED|WebAppMgr.*(SIGSEGV|segfault)'"
@@ -3106,11 +3092,9 @@ class Scenario:
         for reason, text in sorted(REBOOT_PROMPT.items()):
             got = has(text, [svcdir])
             r.check('device texts: the service reboot prompt (%s) is "%s"' % (reason, text), bool(got), 'found in %s' % got)
-        for reason, text in sorted(RESTART_NOTE.items()):
+        for text in list(RESTART_NOTE.values()) + [REBOOT_ASKED_TEXT, RESTART_NOW]:
             got = has(text, [APPDIR])
-            r.check('device texts: the app restart note (%s) says "%s"' % (reason, text), bool(got), 'found in %s' % got)
-        got = has(REBOOT_ASKED_TEXT, [APPDIR])
-        r.check('device texts: the app toast says "%s"' % REBOOT_ASKED_TEXT, bool(got), 'found in %s' % got)
+            r.check('app contains no reboot instruction: ' + text, not got, repr(got))
 
     def step3(self):
         self.rec.begin('3 Home opens the launcher')
@@ -3173,118 +3157,18 @@ class Scenario:
             self.api_after_reboot()
 
     def cache_prepare_measure(self):
-        """Prepare once before the first choice, recording the device's elapsed time and Node RSS."""
-        r, d = self.rec, self.dev
-        r.begin('1c prepare Home key hook cache on the TV')
-        script = SCRIPTS_DIR + '/homechooser-homekey'
-        shell = '''
-script=%s
-"$script" clear || exit 1
-if [ -x /usr/bin/time ] && /usr/bin/time -v true >/dev/null 2>&1; then timer=/usr/bin/time
-elif command -v busybox >/dev/null 2>&1 && busybox time -v true >/dev/null 2>&1; then timer='busybox time'
-else timer=; fi
-start=$(cut -d' ' -f1 /proc/uptime)
-if [ -n "$timer" ]; then $timer -v /bin/sh "$script" prepare > /tmp/homechooser-cache-measure 2>&1 &
-else /bin/sh "$script" prepare > /tmp/homechooser-cache-measure 2>&1 & fi
-worker=$!
-peak=0
-while kill -0 "$worker" 2>/dev/null; do
-    for pid in $(pidof node 2>/dev/null); do
-        [ -r "/proc/$pid/cmdline" ] || continue
-        args=$(tr '\\000' ' ' < "/proc/$pid/cmdline")
-        case "$args" in *homechooser-homekey-hook.js*)
-            rss=$(awk '/VmHWM:/ {print $2}' "/proc/$pid/status" 2>/dev/null)
-            [ "${rss:-0}" -le "$peak" ] || peak=$rss
-            ;;
-        esac
-    done
-    sleep 0.05
-done
-wait "$worker"; rc=$?
-end=$(cut -d' ' -f1 /proc/uptime)
-elapsed=$(awk -v a="$start" -v b="$end" 'BEGIN {printf "%%.0f", (b-a)*1000}')
-echo "measure_rc=$rc elapsed_ms=$elapsed sampled_peak_kb=$peak"
-cat /tmp/homechooser-cache-measure
-exit "$rc"
-''' % shlex.quote(script)
-        rc, out = d.sh('sh -c ' + shlex.quote(shell), timeout=180)
-        r.note('TV rewriter time and peak RSS (one preparation)', out[-2500:])
-        peak = re.search(r'Maximum resident set size \(kbytes\):\s*(\d+)', out)
-        sampled = re.search(r'sampled_peak_kb=(\d+)', out)
-        rss = int(peak.group(1)) if peak else int(sampled.group(1)) if sampled else 0
-        r.check('TV rewriter prepared the cache with measured elapsed time and peak RSS',
-                rc == 0 and bool(re.search(r'elapsed_ms=[1-9]\d*', out)) and rss > 0,
-                'peak RSS %d kB; %s' % (rss, out[-1000:]))
-        rc, out = d.sh('test -s /var/lib/webosbrew/homechooser/hook/manifest.tsv && echo ready')
-        r.check('persistent cache exists before the first choice', rc == 0 and out.strip() == 'ready', out)
+        """Validate the native generator without a Node process or prepared boot cache."""
+        rc, out = self.dev.sh('/bin/sh ' + SCRIPTS_DIR + '/homechooser-homekey prepare')
+        self.rec.check('native generator accepts this firmware', rc == 0, out)
 
     def step_cache(self):
-        """Exercise a normal shell-only boot and a firmware checksum change without editing LG files."""
-        r, d = self.rec, self.dev
-        r.begin('3c persistent Home key hook cache')
-        rc, out = d.sh('date -u "+%Y-%m-%dT%H:%M:%SZ"; '
-                       'for p in $(pidof node 2>/dev/null); do '
-                       'tr "\\000" " " < /proc/$p/cmdline 2>/dev/null | grep "homechooser-homekey-hook.js"; done; '
-                       'cat /tmp/homechooser-homekey.log 2>/dev/null')
-        r.check('normal reboot has no hook Node process or rewriter log line',
-                'homechooser-homekey-hook.js' not in out and 'cache generated' not in out,
-                'timestamped boot evidence:\n' + out[-2000:])
-        manifest = '/var/lib/webosbrew/homechooser/hook/manifest.tsv'
-        mutate = ('sed "1s/[0-9a-f]\\{32\\}/00000000000000000000000000000000/" %s > %s.new && '
-                  'mv %s.new %s && head -n 1 %s' % ((manifest,) * 5))
-        rc, out = d.sh(mutate)
-        r.check('test changed only the manifest stock MD5', rc == 0 and '00000000000000000000000000000000' in out, out)
-        if not self.beanjar_reboot('3c stale cache'):
-            return
-        st, raw = self.kf_status()
-        r.check('changed checksum leaves the entire hook unmounted for this boot',
-                st.get('mounted') == 'no' and not d.mounts(), raw)
-        r.check('stock boot reports hook=stale reason=stock-changed',
-                st.get('hook') == 'stale' and st.get('reason') == 'stock-changed', raw)
-        self.home_press(STOCK, '3c-stock-boot')
-        rebuilt = self.wait(lambda: d.sh('test -s %s && echo ready' % manifest)[1].strip() == 'ready', 180, 5)
-        st, raw = self.kf_status()
-        r.check('watcher regenerated the cache after boot', bool(rebuilt), raw)
-        r.check('rebuilt cache requests the next restart with the original stale reason',
-                st.get('hook') == 'stale' and st.get('reason') == 'stock-changed' and st.get('reboot') == 'needed', raw)
-        # The service's PmLog lines may be unavailable by the time the app finishes opening.
-        # Observe the notification call as well, just as the first-choice prompt does.
-        self.ask_mark = self.messages_mark()
-        self.ask_monitor = RebootAlertMonitor(d)
-        if not self.ask_monitor.start():
-            r.note('notification bus monitor did not start; using PmLog evidence', '')
-            self.ask_monitor.close()
-            self.ask_monitor = None
-        self.insp = Inspector(self.vm)
-        d.launch(APP_ID)
-        def rendered():
-            page = self.ui()
-            return page if page and self.launcher in (page.get('rows') or []) else None
-        ui = self.wait(rendered, 120, 2) or {}
-        self.shot('3c-restart-after-cache-rebuild')
-        r.check('app shows the restart action after cache rebuild', ui.get('restart') is True, json.dumps(ui))
-        def cache_alert():
-            item, _ = self.reboot_ask_evidence()
-            return item if item.get('alert') else None
-        info = self.wait(cache_alert, 45, 2) or {}
-        r.check('app raises the restart alert once for the rebuilt cache',
-                info.get('alert') == 'accepted' and info.get('message') == REBOOT_PROMPT['apply'],
-                self.reboot_ask_evidence()[1])
-        if info.get('alert') == 'accepted':
-            self.close_reboot_alert('3c rebuilt cache', info)
-        if self.ask_monitor:
-            self.ask_monitor.close()
-            self.ask_monitor = None
-        d.close(APP_ID)
-        self.insp.close()
-        self.insp = None
-        if not self.beanjar_reboot('3c rebuilt cache'):
-            return
-        self.after_boot_checks('after cache rebuild reboot')
-        st, raw = self.kf_status()
-        r.check('hook is active again after the next reboot',
-                st.get('mounted') == 'yes' and st.get('reboot') == 'no' and not st.get('hook'), raw)
-        self.home_press(self.launcher, '3c-hook-active')
+        """The former cache scenario now verifies JS-only activation after boot."""
+        self.after_boot_checks('native live-filter boot')
+        rc, out = self.dev.sh('test ! -d /var/lib/webosbrew/homechooser/hook && echo no-cache; '
+                              'test ! -e /var/preferences/configd_factory_db.json && echo no-factory-db')
+        self.rec.check('no boot cache and no persistent configd override',
+                       rc == 0 and 'no-cache' in out and 'no-factory-db' in out, out)
+        self.home_press(self.launcher, 'native-filter-home')
 
     # -- the launcher API (--api-check; docs/launcher-api.md)
     def api(self, method, payload=None, app='launcher'):
@@ -3859,13 +3743,13 @@ exit "$rc"
                '\n'.join(l for l in new_log if 'is back' in l) or 'not logged')
         r.note('after the update: which build the running watcher is (runtime copy md5; the design leaves it the old one until its next start)',
                'runtime %s; old %s; new %s' % (after['runtime_md5'], old_md5, new_md5))
-        r.check('after the update: init.d points to the persistent boot restore copy and its target exists',
-                after['initd'] == BOOT_SCRIPT and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
+        r.check('after the update: init.d points to the installed boot entry and its target exists',
+                after['initd'] == (BOOT_SCRIPT if self.uses_home_key_hook() else BOOT_DIR + '/homechooser') and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
         if self.uses_home_key_hook():
-            r.check('after the update: Home key hook mounts unchanged', sorted(after['mounts']) == sorted(before['mounts']) and bool(after['mounts']),
+            r.check('after the update: live key-filter remains selected without QML mounts', not after['mounts'] and not before['mounts'] and self.hook_mounts_match(),
                     'before %s after %s' % (before['mounts'], after['mounts']))
             r.check('after the update: Home key hook flag still exists', after['flag'] == 'yes', after['flag'])
-            r.check('after the update: the launcher id is still baked into the mounted Settings.qml', self.launcher in after['baked'], after['baked'])
+            r.check('after the update: the launcher id is still baked into the selected systemUi.js', self.launcher in after['baked'], after['baked'])
         else:
             r.check('after the update: no Home key hook mounts or flag on this release', not after['mounts'] and after['flag'] == 'no',
                     'mounts %s flag %s' % (after['mounts'], after['flag']))
@@ -3929,10 +3813,10 @@ exit "$rc"
         if self.uses_override():
             r.check('on return the override is rebuilt', s['override'] == 'yes', s['override'])
         if self.uses_home_key_hook():
-            r.check('on return the Home key hook is still mounted', bool(s['mounts']), 'mounts: %s' % s['mounts'])
+            r.check('on return the live key-filter is selected', self.hook_mounts_match(), 'mounts: %s' % s['mounts'])
             self.wait(lambda: self.launcher in self.baked_id(), 60, 5)
             baked = self.baked_id()
-            r.check('on return the id is baked into the mounted Settings.qml again',
+            r.check('on return the id is baked into the selected systemUi.js again',
                     self.launcher in baked, baked)
             # stock -> launcher with the patch mounted: the live switch
             self.check_no_compositor_restart('on return (a switch with the patch mounted)', comp0)

@@ -74,13 +74,6 @@ HOMEKEY=$SRC/homechooser-homekey
 trap 'finish "stopped by signal" 0' TERM INT HUP
 
 MAJOR=$(major_version)
-if [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] && [ -f "$KEYFLAG" ] &&
-   [ -f "${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}" ]; then
-    (
-        "$SLEEP" "${HOMECHOOSER_PREPARE_DELAY:-45}"
-        $WSH "$HOMEKEY" prepare >> "$LOG" 2>&1
-    ) </dev/null >/dev/null 2>&1 &
-fi
 if [ -f "$SRC/homechooser-access" ]; then
     $WSH "$SRC/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
 fi

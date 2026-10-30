@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include "policy.h"
+#include "homekey.h"
 
 /* From app/package.json, the one source of the version (service/Makefile). */
 #ifndef HC_VERSION
@@ -484,29 +485,37 @@ static bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 			return true;
 		}
 	}
-	/* Cache the restore scripts before publishing the link. The package can be removed while
-	 * the watcher is stopped; this copy must still be runnable at the next boot. */
-	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
-	const char *const stage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "stage", NULL};
-	int stage_rc = run_argv(stage, 20, out, err, NULL);
-	if (stage_rc != 0 || access(HC_BOOT_SCRIPT, X_OK) != 0) {
-		send_error(msg, "linkFailed", "Could not prepare the boot restore copy: %s", err->str);
-		g_string_free(out, TRUE);
-		g_string_free(err, TRUE);
-		return true;
-	}
-	g_string_free(out, TRUE);
-	g_string_free(err, TRUE);
+    /* Only legacy releases retain a persistent watcher restore copy. 6-9 volatile
+     * filters revert at reboot without an installed recovery binary. */
+    char *release_text = NULL;
+    slurp(HC_OSRELEASE_REAL, 65536, &release_text, NULL);
+    if (!release_text) slurp(HC_OSRELEASE, 65536, &release_text, NULL);
+    GRegex *rx = g_regex_new("(?m)^VERSION_ID=[\"']?([0-9]+)", 0, 0, NULL);
+    GMatchInfo *mi = NULL;
+    int major = 0;
+    if (release_text && g_regex_match(rx, release_text, 0, &mi)) {
+        char *v = g_match_info_fetch(mi, 1); major = atoi(v); g_free(v);
+    }
+    g_match_info_free(mi); g_regex_unref(rx); g_free(release_text);
+    bool live = major >= 6 && major <= 9;
+    const char *target = live ? HC_ENTRY_SCRIPT : HC_BOOT_SCRIPT;
+    if (!live) {
+        GString *out = g_string_new(NULL), *err = g_string_new(NULL);
+        const char *const stage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "stage", NULL};
+        int rc = run_argv(stage, 20, out, err, NULL);
+        g_string_free(out, TRUE); g_string_free(err, TRUE);
+        if (rc || access(target, X_OK)) { send_error(msg, "linkFailed", "Could not stage the legacy boot restore copy"); return true; }
+    }
 	/* a link is replaced, a regular file from an earlier install too */
 	if (unlink(HC_INIT_LINK) != 0 && errno != ENOENT) {
 		send_error(msg, "linkFailed", "Could not replace %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	if (symlink(HC_BOOT_SCRIPT, HC_INIT_LINK) != 0) {
+	if (symlink(target, HC_INIT_LINK) != 0) {
 		send_error(msg, "linkFailed", "Could not link %s: %s", HC_INIT_LINK, strerror(errno));
 		return true;
 	}
-	LOGI("LINKED", "%s -> %s", HC_INIT_LINK, HC_BOOT_SCRIPT);
+	LOGI("LINKED", "%s -> %s", HC_INIT_LINK, target);
 	send_ok(msg);
 	return true;
 }
@@ -521,18 +530,11 @@ static bool on_unlink(LSHandle *sh, LSMessage *msg, void *ctx)
 		send_error(msg, "unlinkFailed", "Could not remove the boot entry: %s", strerror(errno));
 		return true;
 	}
-	/* A deliberate return to stock no longer needs the persistent restore copy. */
-	GString *out = g_string_new(NULL), *err = g_string_new(NULL);
-	const char *const unstage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "unstage", NULL};
-	int unstage_rc = run_argv(unstage, 20, out, err, NULL);
-	if (unstage_rc != 0) {
-		send_error(msg, "unlinkFailed", "Could not remove the boot restore copy: %s", err->str);
-		g_string_free(out, TRUE);
-		g_string_free(err, TRUE);
-		return true;
-	}
-	g_string_free(out, TRUE);
-	g_string_free(err, TRUE);
+    GString *out = g_string_new(NULL), *err = g_string_new(NULL);
+    const char *const unstage[] = {"/bin/sh", HC_ENTRY_SCRIPT, "unstage", NULL};
+    int rc = run_argv(unstage, 20, out, err, NULL);
+    g_string_free(out, TRUE); g_string_free(err, TRUE);
+    if (rc) { send_error(msg, "unlinkFailed", "Could not remove legacy boot restore copy"); return true; }
 	LOGI("UNLINKED", "%s", HC_INIT_LINK);
 	send_ok(msg);
 	return true;
@@ -1740,11 +1742,43 @@ static LSMethod methods[] = {
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
 };
 
-int main(void)
+static char *homekey_call(const char *uri, const char *payload, int timeout, void *context)
+{
+    (void)context;
+    GString *out = g_string_new(NULL);
+    int rc = luna_run(uri, payload, 1, timeout, NULL, out);
+    if (rc) { g_string_free(out, TRUE); return NULL; }
+    return g_string_free(out, FALSE);
+}
+
+int main(int argc, char **argv)
 {
 	signal(SIGPIPE, SIG_IGN);
 	PmLogGetContext("HomeChooser", &hc_log);
 	LOGI("START", "version %s, uid %d", HC_VERSION, (int)geteuid());
+
+    /* Boot and command workers never register the RPC name. The transient unit becomes
+     * the existing watcher after apply, so no idle native worker remains resident. */
+    if (argc > 1 && (!strcmp(argv[1], "--boot") || !strcmp(argv[1], "--homekey"))) {
+        if (geteuid() != 0) return 1;
+        bool boot = !strcmp(argv[1], "--boot");
+        const char *action = boot ? "boot" : argc > 2 ? argv[2] : "status";
+        if (strcmp(action, "boot") && strcmp(action, "status") && strcmp(action, "prepare") &&
+            strcmp(action, "apply") && strcmp(action, "refresh") && strcmp(action, "stop") && strcmp(action, "clear")) return 2;
+        HCKeyOps ops = {HC_STATE_DIR, "/usr/lib/qt5/qml/KeyFilters/systemUi.js", HC_OSRELEASE,
+            homekey_call, NULL, 30, 1000};
+        GString *out = g_string_new(NULL);
+        int rc = hc_key_run(&ops, action, argc > 3 && !strcmp(argv[3], "stock"), out);
+        fputs(out->str, stdout); fflush(stdout); LOGI("HOMEKEY", "%s: %s", action, out->str);
+        g_string_free(out, TRUE);
+        if (boot) {
+            /* The watcher retries after readiness failure and retains removal recovery. */
+            execl("/bin/sh", "sh", access(HC_WATCH_SCRIPT, R_OK) == 0 ? HC_WATCH_SCRIPT :
+                "/tmp/homechooser-runtime/homechooser-home-watch", (char *)NULL);
+            return 1;
+        }
+        return rc;
+    }
 
 	g_loop = g_main_loop_new(NULL, FALSE);
 	LSError e;

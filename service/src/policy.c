@@ -69,12 +69,11 @@ bool hc_settings_ok(const char *category, const char *const *keys, size_t nkeys)
 }
 
 static const hc_command COMMANDS[] = {
-	{"restartSam", {"/bin/systemctl", "restart", "sam", NULL}, 60, false, false},
 	{"watch", {"/bin/sh", HC_ENTRY_SCRIPT, "watch", NULL}, 20, false, false},
 	{"homekeyStatus", {"/bin/sh", HC_HOMEKEY_SCRIPT, "status", NULL}, 20, false, false},
 	{"homekeyPrepare", {"/bin/sh", HC_HOMEKEY_SCRIPT, "prepare", NULL}, 120, false, false},
 	{"homekeyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "clear", NULL}, 20, false, false},
-	/* homekeyApply and homekeyStop restart the compositor: debug/manual only, the app never calls them */
+	/* All hook commands use configd volatile reload; no GUI process is restarted. */
 	{"homekeyApply", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", NULL}, 90, false, false},
 	{"homekeyStop", {"/bin/sh", HC_HOMEKEY_SCRIPT, "stop", NULL}, 90, false, false},
 	{"homekeyRefresh", {"/bin/sh", HC_HOMEKEY_SCRIPT, "refresh", NULL}, 90, false, false},
@@ -380,6 +379,9 @@ const char *const hc_launcher_list_fields[] = {
 };
 
 static const char *const LUNA_URIS[] = {
+	"luna://com.webos.service.config/getConfigs",
+	"luna://com.webos.service.config/setConfigs",
+	"luna://com.webos.surfacemanager/getCurrentState",
 	"luna://com.webos.notification/createAlert",
 	"luna://com.webos.notification/createToast",
 	"luna://com.webos.service.tvpower/power/reboot",

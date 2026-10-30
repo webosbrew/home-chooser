@@ -122,51 +122,10 @@ refused by launcher gates.
 
 ## Restarting the TV
 
-No step restarts the compositor while the TV runs. When the patch needs a restart to take effect
-(first apply) or to go away (restore), the app asks the user to reboot the TV with a system alert, through two
-methods. `homekeyApplySam` (`apply samfirst`, which restarted `sam` first) is removed: the app
-no longer restarts anything, so there is no such command. `homekeyApply` and `homekeyStop`
-stay for manual and debugging use only.
-
-`rebootPrompt {reason}` (Home Chooser only, root). `reason` is `apply` or `remove`.
-
-1. The pending check runs the worker's `status` (`homekeyStatus`, 20 s) and requires a line
-   exactly `reboot=needed` (`hc_reboot_needed`: CR and blanks at line ends are ignored, a longer
-   line such as `xreboot=needed` does not count). Otherwise the error is `notPending`.
-2. An unknown `reason` is `badRequest`. The text comes from `hc_reboot_message`: `apply` is
-   `Restart the TV to finish setting up the Home button.`, `remove` is `Restart the TV to finish removing the Home button patch.`
-3. The service raises a `createAlert` (as `com.webos.applicationManager`, source Home Chooser) with
-   the message and the buttons `Reboot` (onclick `luna://com.webos.service.tvpower/power/reboot`,
-   params `{"reason":"remoteKey"}`) and `Later` (focused): reply `{returnValue: true, pending: true, confirm: "alert"}`.
-   There is no on-screen variant: the app is an overlay that surface-manager closes after a stretch
-   without a key press, and the alert is not. If the alert is refused a
-   `createToast` (`noaction`) shows the message: `confirm: "toast"`. If the toast is refused too:
-   `confirmFailed`.
-
-The PmLog id `REBOOT_ASK` records the request (`createAlert request: message: <text>; buttons: Reboot
-(tvpower/power/reboot), Later (focused)`) and the notification service's reply to
-each call (`... createAlert accepted (exit 0): {...,"alertId":"..."}` or `refused`, then the
-`createToast` line when it falls back). The E2E runner reads these lines.
-
-Surface Manager executes the Reboot action as the alert's source, and tvpowerd handles its normal
-prepare and reboot sequence. The service checks `reboot=needed` before the alert is created. An
-already shown alert can still request a reboot if that state later changes; there is no second
-service-side pending check at the button press.
-
-There is no fallback to `systemctl reboot` or `reboot`. That skips tvpowerd's power-off sequence
-and its busy check (for example during a software update). If tvpowerd refuses, the user restarts
-the TV.
-
-The reboot method: tvpowerd (`usr/sbin/tvpowerd`) registers
-`com.webos.service.tvpower` `/power/reboot` on 5.6.x to 12.0.0 (and `/power2/reboot` from 7.x). The
-handler requires `reason` to be in `powerOffReasons` (`etc/tvpowerd/tvpowerd.json` up to 9.x;
-`etc/configd/layers/base/com.webos.service.tvpower.json` on 10.x and later). `remoteKey` is listed
-on every release and is not a force reason; an invalid reason answers `returnValue: false`. The
-handler then calls `com.palm.sleep/shutdown/machineReboot` after tvpowerd's prepare/notify round.
-ACG: the method is in group `tv.management` (`tv.internal.api.json`; on 12.0
-`com.webos.service.tvpower.api.json`) and private, plus `all` (`*/*`).
-`client-permissions.d/com.webos.sam.perm.json` gives `com.webos.applicationManager` both `all` and
-`tv.management` on every release checked, which is why the call runs under that identity.
+On webOS 6–9, hook installation, runtime changes and disable use a live configd **volatile**
+key-filter reload. No GUI process is restarted and no reboot prompt is raised. The retained
+`rebootPrompt` RPC is a compatibility endpoint: current status never reports a pending reboot,
+so it refuses with `notPending`. See [the live-filter design](home-key-hook.md).
 
 ## Privileged luna identity
 
@@ -326,8 +285,8 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
   file of at most 256 KiB.
 * **Boot entry**: `link` creates `/var/lib/webosbrew/init.d`, sets mode 755 on the installed scripts,
-  stages the boot and restore scripts in `/var/lib/webosbrew/homechooser/boot`, then links
-  `/var/lib/webosbrew/init.d/homechooser` to that boot copy (replacing an earlier entry). `unlink`
+  on 5/10–12 stages the watcher restore scripts in `/var/lib/webosbrew/homechooser/boot`, then links
+  `/var/lib/webosbrew/init.d/homechooser` to that boot copy on 5/10–12, or to the installed entry on 6–9 (replacing an earlier entry). On 6–9 the entry queues the same native executable with `--boot` in a nonblocking transient unit, before RPC name registration; it becomes the watcher after apply. `unlink`
   removes the link and copy.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
@@ -336,14 +295,13 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
 
 | Name | argv | Timeout |
 | --- | --- | --- |
-| `restartSam` | `/bin/systemctl restart sam` | 60 s |
 | `watch` | `/bin/sh <service>/scripts/homechooser watch` | 20 s |
 | `homekeyStatus` | `/bin/sh <service>/scripts/homechooser-homekey status` | 20 s |
-| `homekeyPrepare` | same with `prepare` (generates the persistent hook cache) | 120 s |
-| `homekeyClear` | same with `clear` (removes the hook cache) | 20 s |
-| `homekeyApply` | same with `apply` (restarts the compositor; debug only, the app does not call it) | 90 s |
-| `homekeyStop` | same with `stop` (unmounts and restarts the compositor; debug only) | 90 s |
-| `homekeyRefresh` | same with `refresh` (never restarts the compositor unless given `restart`) | 90 s |
+| `homekeyPrepare` | same with `prepare` (validate the native generator against this device’s stock JS) | 120 s |
+| `homekeyClear` | same with `clear` (restore stock and delete unused JS versions) | 20 s |
+| `homekeyApply` | same with `apply` (native, checksum-verified volatile reload) | 90 s |
+| `homekeyStop` | same with `stop` (restore exact stock list volatile before deleting unused copies) | 90 s |
+| `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
@@ -364,7 +322,7 @@ Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
 `CALL_FORWARD`, `CALL_DENIED`, `CALL_FAILED`, `REPLY_FAILED`, `RUN`, `RUN_DENIED`,
 `RUN_STDERR`, `WROTE`, `REMOVED`, `LINKED`, `UNLINKED`, `PATH_DENIED`, `REFUSED`,
 `NOT_ROOT`, `ICON_NONE`, `LAUNCHER_ERROR`, `UNINSTALL_ASK`, `UNINSTALL`, `REBOOT_ASK`,
-`REBOOT`, `REGISTER_FAILED`, `EXIT`. These ids are internal. The app logs its side with
+`REBOOT`, `HOMEKEY`, `REGISTER_FAILED`, `EXIT`. These ids are internal. The app logs its side with
 `[HomeChooser]` in the web console.
 
 ## Tests

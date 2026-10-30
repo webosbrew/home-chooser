@@ -25,16 +25,16 @@ homebrew app with three parts:
   requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
   calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
   again.
-* The webOS 6 to 9 Home key hook uses one guarded rewriter on stock compositor files at boot.
-  Settings and Home key QML edits apply together; systemUi and four supporting files are patched
-  independently when their anchors match. A core refusal leaves stock behavior. Copies are staged in `/tmp` and bind-mounted. See [The minimal hook](docs/home-key-hook.md).
+* On webOS 6–9, the native service generates a guarded copy of this device's stock systemUi.js
+  and reloads it through configd with `volatile:true`. First apply, launcher changes, boot and
+  disable leave the GUI running. No QML mounts or reboot prompt. See [The live Home key filter](docs/home-key-hook.md).
 * Home Chooser does not change other services: no edits to their environment files
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.
 * The choice persists through Home Chooser's own file, `/var/lib/webosbrew/homechooser/home` (the app
   id alone), which a watcher (a transient systemd unit started from the init.d entry) enforces
   against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
-  entry is a symlink into the installed service's scripts directory, never a copy. See
+  entry links to the installed service scripts on 6–9 and to the legacy persistent watcher restore copy on 5/10–12. See
   [Persistence](docs/settings-app.md#persistence).
 * The stock launcher keeps working when apps are removed. The watcher notices that the chosen app
   is uninstalled and puts the platform back to stock until it returns; when Home Chooser itself is

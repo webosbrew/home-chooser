@@ -26,25 +26,19 @@ hc_gone() {
     [ "$(app_state "$HC_ID")" = no ]
 }
 
-# kf_refresh [stock]: on webOS 6 to 9, bring the id baked into the mounted Settings.qml in line
-# (the worker never restarts the compositor here, and does nothing if not mounted).
+# kf_refresh [stock]: select the current choice or restore the exact stock list through configd.
 kf_refresh() {
     [ "$MAJOR" -ge 6 ] && [ "$MAJOR" -le 9 ] || return 0
-    [ -f "$HOMEKEY" ] || return 0
+    [ -f "$HOMEKEY" ] || return 1
     $WSH "$HOMEKEY" refresh $1 >> "$LOG" 2>&1
 }
 
-# sync_baked <choice>: the stored choice changed while the app is installed: write it into the
-# baked copy without restarting the compositor. The record is read first by the compositor's
-# lookup and the watcher has already put the choice there, so the baked id is only the fallback
-# for the next compositor start. A choice whose app is not installed (or whose state is unknown)
-# is left to check_apps.
+# sync_baked <choice>: retry live apply until configd confirms the selected choice.
 sync_baked() {
     [ "$1" = "$BAKED" ] && return 0
     [ "$(app_state "$1")" = yes ] || return 0
-    log "choice changed to $1, updating the baked home id"
-    kf_refresh
-    BAKED=$1
+    log "choice changed to $1, updating the live Home filter"
+    kf_refresh && BAKED=$1
 }
 
 # remove_home: write `home` as null in the record, keeping the other entries.
@@ -102,6 +96,7 @@ restore_all() {
     $WSH "$SRC/homechooser-access" remove >> "$LOG" 2>&1 ||
         finish "could not remove launcher access, restore pending" 1
     revert_platform "Home Chooser uninstalled" || finish "could not restore stock Home, restore pending" 1
+    kf_refresh stock || finish "could not restore stock keyFilters, restore pending" 1
     rm -f "$CHOICE" "$KEYFLAG"
     rm -rf "${HOMECHOOSER_CACHE:-/var/lib/webosbrew/homechooser/hook}"
     rm -f "${HOMECHOOSER_STALE:-/var/lib/webosbrew/homechooser/hook-stale}"
@@ -112,8 +107,8 @@ restore_all() {
         fi
     done
     rm -rf "$BOOT_DIR"
+    rm -f "$(dirname "$CHOICE")/keyfilters-stock.json" "$(dirname "$CHOICE")/keyfilter.lock"
     rmdir "$(dirname "$CHOICE")" 2>/dev/null
-    # No unmount and no compositor restart: the mounts stay until the next boot.
     notify_toast "Home Chooser was removed. The Home button opens LG Home again."
     finish "stock Home restored, exiting" 0
 }
@@ -165,11 +160,9 @@ check_apps() {
                 STREAK=0
                 if [ "$(current_home)" != "$want" ]; then apply_record "$want"; fi
                 check_override "$want"
-                kf_refresh
-                BAKED=$want
+                kf_refresh && BAKED=$want
             elif [ "$why" = start ]; then
-                kf_refresh
-                BAKED=$want
+                kf_refresh && BAKED=$want
             else
                 sync_baked "$want"
             fi

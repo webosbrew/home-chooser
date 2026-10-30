@@ -1,0 +1,4 @@
+/* Complete launchHomeApp shapes observed in the firmware corpus. */
+"8daf2c21e71898e48a1fd5aa45592988cff58b3bff46d5ec212fb2fe37c86171",
+"8ed86e04c43e469bdfdd0adc74bf2a3c256f76a36b088fd8cd0aa4f1a504c4e8",
+"eaa7a0d9946b0b3b53cc01991a28a974552fbf0afa628a9027f11497b8a8043e",

@@ -36,13 +36,13 @@ describe('service client', () => {
 		await s.link();
 		await s.unlink();
 		await expect(s.linkStatus()).resolves.toMatchObject({entry: 'none'});
-		await expect(s.run('restartSam')).resolves.toEqual({stdout: 'o', stderr: 'e', exitCode: 0});
+		await expect(s.run('homekeyRefresh')).resolves.toEqual({stdout: 'o', stderr: 'e', exitCode: 0});
 		await expect(s.readIcon('a.b')).resolves.toEqual({mime: 'image/png', data: 'AA=='});
 		expect(calls).toEqual([
 			[SERVICE_URI + '/status', {}], [SERVICE_URI + '/quit', {}], [SERVICE_URI + '/readFile', {path: '/p'}],
 			[SERVICE_URI + '/writeFile', {path: '/p', text: 't'}], [SERVICE_URI + '/removeFile', {path: '/p'}],
 			[SERVICE_URI + '/link', {}], [SERVICE_URI + '/unlink', {}], [SERVICE_URI + '/linkStatus', {}],
-			[SERVICE_URI + '/run', {command: 'restartSam'}], [SERVICE_URI + '/readIcon', {appId: 'a.b'}]
+			[SERVICE_URI + '/run', {command: 'homekeyRefresh'}], [SERVICE_URI + '/readIcon', {appId: 'a.b'}]
 		]);
 	});
 
@@ -225,7 +225,7 @@ describe('createPlatform', () => {
 		const p = createPlatform(call);
 		await p.rootLuna('luna://x/y', {});
 		await p.writeFile('/p', 't');
-		await p.exec('restartSam');
+		await p.exec('homekeyRefresh');
 		expect(calls.map((c) => c[0].slice(SERVICE_URI.length))).toEqual(['/call', '/writeFile', '/run']);
 		expect(typeof p.ensureRoot).toBe('function');
 		expect(typeof p.rebootPrompt).toBe('function');

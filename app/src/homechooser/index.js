@@ -188,8 +188,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 		return res;
 	};
 
-	// True when this write would create `defaultApps` on a release where sam misses a first write.
-	const needsSamRestart = (state) => info.major >= 6 && info.major <= 8 && state.record === null;
+	// Explicit JS launch targets on 6-9 remove the old first-write SAM restart requirement.
+	const needsSamRestart = () => false;
 
 	const writeRecord = writeDefaultApps;
 
@@ -251,7 +251,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
-		async apply(appId, {onNotice, deferSamRestart = false} = {}) {
+		async apply(appId) {
 			// the stock home is "no choice", not a choice (on 6.x to 9.x sam refuses it for lack of appCategory)
 			if (appId === STOCK_HOME) return this.restoreStock();
 			const log = [];
@@ -304,16 +304,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				const previous = state.recordHome || state.profileHome || STOCK_HOME;
 				if (previous !== appId && !STOCK_LABELS[previous]) await closeApp(run, res, previous);
 
-				// 5. webOS 6 to 8: the first write of defaultApps is missed by sam until it restarts
-				// (`deferSamRestart`: the caller passes it only when a TV restart will follow, because the patch
-				// is not mounted yet and is mounted at the next boot; that restart restarts sam as well)
-				if (needsSamRestart(state) && deferSamRestart) {
-					res.samRestartDeferred = true;
-				} else if (needsSamRestart(state)) {
-					if (onNotice) onNotice('Restarting sam so it sees the new setting; running apps may close.');
-					await run.run('restartSam');
-					res.restartedSam = true;
-				}
+				// The 6-9 filter launches an explicit id; SAM never needs restarting.
+				if (info.needsHomeKeyHook) await run.run(homekeyCommand('refresh'));
 			} catch (e) {
 				fail(res, e);
 			}
@@ -335,9 +327,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				await run.remove(HOME_FILE);
 				if (info.major <= 9) {
 					// 5.x: the stock Home handler launches the record's home directly, so name a stock home.
-					// 6 to 9: the patched QML reads the record before the id it loaded at compositor start (the
-					// old launcher, until a reboot), so the stock id is written, not null. Stock firmware ignores
-					// the record for the Home key, so it can stay.
+					// 6 to 9: keep a stock record for the watcher; the volatile JS filter is restored below.
 					const list = await run.luna(`${SAM}/listApps`, {properties: ['id']});
 					const ids = ((list && list.apps) || []).map((a) => a.id);
 					const stock = ids.indexOf(STOCK_FULLHOME) >= 0 ? STOCK_FULLHOME : STOCK_HOME;
@@ -355,7 +345,7 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					await readProfile(run);
 				}
 				if (info.needsHomeKeyHook) {
-					// the patched Settings.qml carries the stored choice as its fallback; clear it if mounted
+					// Restore the exact stock keyFilters list immediately.
 					try {
 						await run.run(homekeyCommand('refresh'));
 					} catch (e) {
