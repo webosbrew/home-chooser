@@ -1439,6 +1439,186 @@ then sum each sample's RSS and PSS and compare repeated-boot medians/ranges.
 A PID disappearing during a sample invalidates that sample; repeat after the
 same idle interval rather than silently omitting a member of the old tree.
 
+
+## Device results — 2026-10-30: LS2 design blocker
+
+Device work stopped for a coordinator decision before changing the native transport design.
+Only `rockpi4a-1/w22p-mullet-rk1` was booted. Live `/usr/lib/os-release` reports
+**7.6.0**. The other authorized 6.x/8.x/10.x/11.x VMs have not been started or
+verified in this session. No production transport or permission fix was applied.
+
+### Completed baseline memory collection
+
+Shell baseline: `3c10238`, built in detached worktree
+`/tmp/homechooser-baseline-3c10238`. Native package: `7718737`, built in this
+worktree before the E2E-only changes below. Both package build logs are under
+`build/device-20261030/`. Their service executable MD5s are, respectively,
+`57120ed51cbfd61ccbb9df21aa9acc59` and `39f55375d33eeec3c3ac28d885cbd961`.
+
+Every boot used the same web fixture (`org.webosbrew.hcfixture.web.normal`),
+waited for uptime >=180 s, pressed HOME, then idled 60 s. Five samples per boot
+were scheduled 10 s apart. The selected record and foreground both named that
+fixture and stock-home preload was disabled. All descendants of the
+`homechooser-home.service` cgroup were enumerated through `cgroup.procs`,
+including shells, both luna-send subscriptions, both awk readers and sleep.
+Membership was checked again after each sample. Per-process smaps/rollup fields
+and status VmRSS are retained; sums below use KiB (1024 bytes). RSS double-counts
+shared mappings; PSS is the comparison metric. There was no separate LS2 service
+process in any baseline sample (separate service totals 0 KiB, 0 processes).
+
+| Build / boot | Samples | Unit processes | RSS median [min–max], KiB | PSS median [min–max], KiB |
+| --- | --- | --- | --- | --- |
+| Shell / 1 | 5 | 9 | 17696 [17696–17696] | 2477 [2477–2477] |
+| Shell / 2 | 5 | 9 | 17804 [17804–17804] | 2486 [2486–2486] |
+| Shell / 3 | 5 | 9 | 17672 [17672–17672] | 2480 [2480–2480] |
+| Shell / across boots | 15 | 9 | 17696 [17672–17804] | 2480 [2477–2486] |
+| Native | Not collected: startup denied | — | — | — |
+
+Evidence: `build/device-20261030/baseline-memory/boot{1,2,3}-sample{1..5}.txt`,
+`boot{1,2,3}-state.json`, `all-boots.json`, and
+`build/device-20261030/baseline-removal/`. Baseline uninstall was observed to
+restore stock, stop the watcher, and remove the choice/init entry before native
+installation. Native resident memory is **unknown**; no estimate is substituted.
+
+### Native startup failure and role evidence
+
+The installed native image matches the native build. Its unit repeatedly exited
+with status 1; the captured unit status had NRestarts=19. The old baseline runtime
+image remained because native registration failed before runtime staging.
+Retained firmware logs identify `WATCH_LUNA: Invalid permissions for (null)`.
+The unit was then explicitly stopped to end the restart loop.
+
+* A standalone temporary executable, with no installed executable role, was denied
+  generic anonymous registration, application anonymous registration, and generic
+  named registration. This does not establish that all native clients are denied.
+* A read-only interposer ran registration probes inside the installed Home Chooser
+  executable, using its existing role, and returned before watcher/boot writes.
+  Generic anonymous and named registration both succeeded. For each,
+  `LSCallFromApplicationOneReply(..., "com.webos.applicationManager", ...)` failed
+  locally: `LSCallFromApplication with application ID com.webos.applicationManager
+  but not privileged`. No target settings method was reached by these calls.
+* Home Chooser's installed executable role has `type:"regular"`, broad allowed
+  names (including empty and `*`) and outbound `*`. Its root client-permissions
+  file is `{"org.webosbrew.homechooser.service*":["all"]}`; its ordinary service
+  file is `{"org.webosbrew.homechooser.service*":["public"]}`. A watcher client
+  using the existing grants must therefore use a matching service-name prefix;
+  successful anonymous registration alone does not establish these named grants.
+* `/usr/bin/luna-send` has `type:"privileged"`, `allowedNames:["*"]` and
+  `permissions:[{"service":"*","outbound":["*"]}]`.
+  `/usr/bin/luna-send-pub` instead has `type:"devmode"` with the same name/outbound
+  patterns. Broad method groups and the privileged application-ID capability are
+  separate permissions.
+
+Evidence: `build/device-20261030/native-watcher-failure.txt`,
+`native-boot-probe.txt`, `native-luna-log.txt`, `native-luna-roles.txt`,
+`luna-probe-results.txt`, `luna-registration-probe-results.txt`,
+`native-client-permissions.txt`, and `coordinator-role-and-state.txt`.
+The diagnostic sources are `luna-probe.c` and `luna-registration-probe.c` in the
+same evidence directory. Upstream
+[luna-send](https://github.com/webosose/luna-service2/blob/master/src/luna-send/luna-send.cpp)
+uses generic registration and supplies `-a` via `LSCallFromApplication`; that is
+not equivalent to the port's `LSRegisterApplicationService(NULL, appId, ...)`.
+
+### Design choices left to the coordinator
+
+All native PSS values below remain unmeasured. Counts refer to the watcher unit;
+the on-demand RPC service is additional if running.
+
+| Option | Change | Resident processes / memory expectation | Release and recovery risks | Homebrew Channel |
+| --- | --- | --- | --- | --- |
+| Privileged native client | Generic registration plus FromApplication calls; explicitly grant the Home Chooser executable a privileged role. Bootstrap/recovery paths need their own valid role lifecycle. | 1 watcher; PSS unknown. Keeps subscriptions and calls in process. | 6–9: boot grant readiness and volatile hook safety. 10–12: profile access and persistent boot recovery. Installer removal/update, runtime executable paths and grant cleanup must be designed and tested. The same executable also hosts RPC, so an exe-based privilege applies there too. | Existing root elevation remains needed. Could be HC-owned root helper/role work without changing hbchannel, or an explicit hbchannel elevation change; current elevation creates a regular role. |
+| Own HC caller throughout | Register a unique client under `org.webosbrew.homechooser.service*`, use ordinary LSCall APIs, retain existing all-group grants. Changes caller identity. | 1 watcher; PSS unknown. | No direct own-caller method calls were tested here. Known profile denials on 11/12 prohibit assuming universal compatibility. Post-uninstall/restart role and client-grant availability remain unresolved, especially 10–12 persistent recovery. | Existing root elevation needed; no privileged-role hbchannel change for installed operation. Recovery grants still need an explicit solution. |
+| Mixed native / luna-send | Use own HC grants where supported; use bounded `luna-send -a` children for identity-sensitive methods. | 1 idle watcher if all subscriptions work natively; add a resident child for each delegated subscription. One-shot children add temporary memory. PSS unknown. | Must classify methods per release. 6–9 settings subscription and configd boot/restore need verification; 10–12 profile calls need the trusted route. Native subscriptions also need uninstall/restart grant handling. This changes the fixed-caller contract for native calls. | Existing root elevation needed; no new privileged-role capability if trusted calls remain external. |
+| All LS2 transport via luna-send | Native policy/GLib loop manages subscription child streams and bounded one-shot children; preserve the established application identity and remove the failed native registration. | 3 resident processes on 6–10 (native + two subscriptions); 5 on 11/12 with preload enabled (also foreground/life). Extra bounded one-shot children when active. PSS unknown; fewer processes than measured shell baseline does not prove lower PSS. | Preserves the already-used caller/role route and avoids needing a role for the runtime native image's own LS2 connection. Still requires bounded child lifetime, JSON streaming, cancellation and uninstall/boot testing. Compromises the single-resident-process objective. | Existing root elevation needed; no hbchannel privilege change. |
+| Retain shell watcher | Revert the port pending a design decision. | Measured 9 processes on 7.6.0; median PSS 2480 KiB, RSS 17696 KiB. Other releases unmeasured here. | Restores baseline behavior; does not complete issue #5's native-process objective. | Existing elevation only. |
+
+### Which methods need the application identity?
+
+This session establishes a **client-level impersonation denial**, not a
+method-by-method denial under HC's own caller. No read-only native probe reached
+a target method as the HC caller; therefore none of those methods can honestly
+be marked newly verified as requiring the exact SAM app ID, or newly verified as
+working under the HC grants.
+
+Existing repository evidence specifically records own-service denials for
+`systemprofile/getProfiles` on 12.x and `systemprofile/debug/rescan` on 11.x/12.x
+(`app/src/homechooser/index.js:18`). These should retain the known working
+trusted route unless revalidated. They do not prove that SAM is the only
+identity that can work. Ordinary developer-app denial for
+`settings/getSystemSettings` of `general/defaultApps` is also recorded in
+`docs/research/home-key-and-home-app.md`; it is not an experiment using HC's
+root all-group grant.
+
+At the hub ACL layer, a matching HC service-name prefix already receives `all`.
+SAM listApps/getAppInfo/getForegroundAppInfo/getAppLifeEvents/setDefaultApp/
+closeByAppId, preloadmanager/setPreloadPolicy, config getConfigs/setConfigs,
+surfacemanager/getCurrentState and notification createAlert/createToast are
+candidates for the own-caller route, not confirmed successes. Settings
+getSystemSettings (including the subscription) / setSystemSettings require
+separate defaultApps key-policy validation beyond hub grants. Method-level
+caller checks, profile restrictions and notification ownership can still reject
+or alter behavior despite `all`. The native watcher's actual calls are inventoried
+in `service/src/watcher/{main,record,restore,preload,notify}.c` and `homekey.c`.
+
+### Checks, faults, harness fix, and handover state
+
+Native selection wrote the choice/settings and applied the live hook. Its
+compositor, SAM and MaliitServer PIDs remained stable during that selection.
+The native watcher-active check failed; native memory, boot enforcement, removal
+recovery, reboot cleanup and the remaining firmware matrix are not accepted.
+No fault dialog was observed. The initial setup encountered webOS `Screen Saver`;
+a coordinator-authorized single HOME press woke it. At the end of baseline
+collection/removal, tvpower reported `Active`. No TV settings were changed and no
+LG confirmation popup was accepted.
+
+A separate E2E issue was found: post-confirmation OCR took about 10 seconds, but
+the successful UI toast lasts 6 seconds (`app/src/views/parts.js`). The runner now
+captures it during the click-effect wait and skips the slow post-click OCR before
+that capture. Two regression tests were added; **141 E2E logic tests passed**.
+This change has not yet been rerun on a complete VM scenario. No product
+transport/permission changes and no commit were made.
+
+Per the coordinator's explicit handover instruction, the VM is **left running**,
+with native Home Chooser and `org.webosbrew.hcfixture.web.normal` installed, VNC
+stopped, and `homechooser-home` stopped (`MainPID=0`, `ActiveState=inactive`,
+`NRestarts=0` in the final read). Temporary diagnostics remain at
+`/tmp/hc-luna-probe` and `/tmp/hc-luna-registration-probe.so`; their processes
+have exited. No other authorized VM was started. The baseline worktree and build
+artefacts remain for continuation.
+
+
+### Coordinator decision and host release — 2026-10-30
+
+The coordinator chose native policy with all LS2 traffic through
+`luna-send -a com.webos.applicationManager`: resident subscription streams and
+bounded one-shot children. Another agent will implement that offline; this device
+session made no transport or role changes.
+
+Cleanup finished at 15:28 JST. Both temporary diagnostic files were deleted.
+The stock-restore UI attempt first encountered its specific `Use LG Home` label,
+then a subsequent row click did not open its dialog; no blind confirmation was
+sent. Cleanup therefore used the same Home Chooser service endpoints as the app's
+restore flow: stopWatcher, remove choice, merge only stock home into defaultApps,
+refresh, remove hook flag, clear, refresh. Exact configd readback matched the saved
+nonempty stock keyFilters list. A HOME press from Homebrew Channel opened stock
+Home, with both state/log evidence and a screenshot. No LG fault popup was observed
+at that check. The factory configd DB was absent.
+
+Home Chooser's accessRemove and unlink endpoints ran successfully before package
+uninstall. Home Chooser and the web fixture were removed; only Homebrew Channel
+remained installed. Residual owned state files were removed after stock readback;
+the state directory and init entry were absent, and the watcher was inactive.
+Stock defaultApps/keyFilters were verified again after package removal.
+
+VNC stopped and `beanjar stop` completed. `beanjar list --all --host rockpi4a-1
+--json` confirmed every listed VM Off with VNC null. The completed cleanup record
+has **30 PASS** assertions. Evidence:
+`build/device-20261030/cleanup-service/results.json`, `run.log`,
+`expected-stock-keyfilters.json`, `restored-keyfilters.json`,
+`01-restored-stock-home.png`, and `rockpi4a-1-final-list.json`.
+The baseline worktree, build artefacts and scratch directory were retained;
+nothing was committed. **HOST RELEASED: rockpi4a-1**.
+
 ## Transport/split follow-up offline results
 
 Worktree `watcher-lunasend`, branched from main `7718737`. No VM, TV, beanjar,
