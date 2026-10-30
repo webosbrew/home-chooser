@@ -21,8 +21,47 @@ build, and the one source of the version, are in
 The binary is C, linked against `libluna-service2.so.3`, `libpbnjson_c.so.2` (all JSON in the
 service is pbnjson), `libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. `make -C service
 check-abi` compares its needs with the oldest supported rootfs (webOS 5.6.1): SONAMEs present,
-only `GLIBC_2.4` and `GLIBC_2.9` symbol versions, every undefined symbol defined by those
+only `GLIBC_2.4`, `GLIBC_2.9` and `GLIBC_2.11` symbol versions, every undefined symbol defined by those
 libraries. No libstdc++.
+
+## Native source layout
+
+`service/src/main.c` initializes logging and dispatches roles in the same executable. With no
+arguments it runs the on-demand LS2 service. `--homekey <action>` runs the root one-off worker;
+`--boot` applies the redirect and then execs the existing shell watcher. Unknown arguments still
+take the service path. The dispatch has a place for the future native watcher role; the watcher
+remains in `service/scripts/homechooser-home-watch` and `scripts/lib/` for now.
+
+| Source under `service/src/` | Responsibility |
+| --- | --- |
+| `log.h`, `version.h`, `roles.h` | Shared log context, build version and role entry points |
+| `json.c` | pbnjson parsing, members and reply validation |
+| `luna.c` | Bounded calls with the fixed privileged identity and callback context |
+| `proc.c` | Process spawn, output limits, timeout and child reaping |
+| `fs.c` | Shared bounded reads, directory creation and atomic writes |
+| `policy.c` | Pure allow-lists and decision helpers |
+| `homekey-main.c`, `homekey.c`, `homekey-generator.c`, `homekey-shapes.inc` | Worker role, live key-filter transaction and guarded JS generation |
+| `apps.c` | Stored Home choice, icon loading and app/process field projection |
+| `bootlink.c` | Boot link methods and legacy restore staging |
+| `notify.c` | Bounded notification acceptance check and logging |
+| `service/main.c`, `service/methods.h` | LS2 registration, method table, main loop, status and quit |
+| `service/reply.c` | Settings sender/root gate and LS2 replies/errors |
+| `service/files.c`, `service/files.h` | File RPCs and shared file-size limit |
+| `service/call.c` | Allow-listed forwarding and settings icon requests |
+| `service/run.c` | Named command RPC and log tail |
+| `service/launcher.c` | Launcher gates, consent, requests and private uninstall tokens |
+| `service/system.c` | Retained reboot prompt method |
+
+The extra shared `fs.c` keeps file access available to app metadata, boot links and service methods
+without depending on the service role. Named commands have their own service module rather than
+living in the generic process runner. Boot link RPCs retain their gates and replies in `bootlink.c`.
+Luna calls remain synchronous and bounded on the service loop; subscriptions and native watcher
+modules will be added with the watcher port.
+
+The internal Home-key worker status uses `active=yes/no` for whether configd selects a generated
+Home Chooser filter. The app and E2E parser use that field directly, without a legacy field alias.
+The [module refactor report](research/service-module-refactor.md) records the old section map and
+offline verification.
 
 ## Elevation
 

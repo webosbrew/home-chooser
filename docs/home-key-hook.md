@@ -78,13 +78,13 @@ An active watcher handles normal uninstall immediately.
 
 ## Status and tests
 
-For compatibility with the app's status parser, `mounted=yes` means that configd selects a Home
-Chooser JS version; it does **not** mean a mount exists. `patch=possible/refused` reports the native
-generator check, and `reboot=no` is unconditional. The app has no restart prompt or “Restart now” row.
+`active=yes` means that configd selects a Home Chooser JS version; `active=no` means it does not.
+`patch=possible/refused` reports the native generator check, and `reboot=no` is unconditional.
+The app has no restart prompt or “Restart now” row.
 
 ```sh
 make -C service test
-make -C service test-homekey ROOTFS=/path/to/7.6/rootfs
+make -C service test-homekey KEYFILTER_ROOTFS=/path/to/7.6/rootfs
 OPENHOUSE_STOCK_COPIES=/path/to/stock sh service/scripts/tests/test-minimal-hook.sh
 sh service/scripts/tests/test-homechooser.sh
 sh service/scripts/tests/test-homechooser-home-watch.sh

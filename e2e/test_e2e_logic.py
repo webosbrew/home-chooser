@@ -595,11 +595,11 @@ class RebootDialog(unittest.TestCase):
             self.assertFalse(e2e.expects_reboot_dialog(major, False))
 
     def test_parse_status(self):
-        out = 'data=missing\nmounted=no\npatch=possible\nreboot=needed\n'
+        out = 'data=missing\nactive=no\npatch=possible\nreboot=needed\n'
         st = e2e.parse_status(out)
-        self.assertEqual((st['mounted'], st['patch'], st['reboot']), ('no', 'possible', 'needed'))
-        st = e2e.parse_status('mounted=yes\npatch=possible\nreboot=no')
-        self.assertEqual((st['mounted'], st['reboot']), ('yes', 'no'))
+        self.assertEqual((st['active'], st['patch'], st['reboot']), ('no', 'possible', 'needed'))
+        st = e2e.parse_status('active=yes\npatch=possible\nreboot=no')
+        self.assertEqual((st['active'], st['reboot']), ('yes', 'no'))
         self.assertEqual(e2e.parse_status('some log line = with spaces\n'), {})
 
 
@@ -644,8 +644,8 @@ class Texts(unittest.TestCase):
     def test_the_app_has_no_restart_dialog_and_the_service_says_what_it_logs(self):
         self.assertNotIn('rebootAsk', self.read('app/src/views/useHomeChooser.js'))
         self.assertNotIn('Restart the TV?', self.read('app/src/views/MainPanel.js'))
-        main = self.read('service/src/main.c')
-        self.assertIn('createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)', main)
+        system = self.read('service/src/service/system.c')
+        self.assertIn('createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)', system)
 
 
 class RebootAsk(unittest.TestCase):

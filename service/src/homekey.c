@@ -146,7 +146,7 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         char *v = g_match_info_fetch(match, 1); major = atoi(v); g_free(v);
     }
     g_match_info_free(match); g_regex_unref(release); g_free(os);
-    if (major < 6 || major > 9) { g_string_append(out, "mounted=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
+    if (major < 6 || major > 9) { g_string_append(out, "active=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
     if (boot && !ready(o)) { reason = g_strdup("boot readiness timed out; stock Home retained"); goto done; }
     if (boot) toast(o, "Your new home will start shortly");
     source = readfile(o->stock_js);
@@ -155,7 +155,7 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     if (prepare) { rc = generated ? 0 : 2; goto done; }
     if (status) {
         current = get_list(o);
-        g_string_append_printf(out, "mounted=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", generated ? "possible" : "refused");
+        g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", generated ? "possible" : "refused");
         rc = 0; goto done;
     }
     if (g_mkdir_with_parents(o->state_dir, 0755)) goto done;
@@ -241,7 +241,7 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         goto done;
     }
     collect(o, next);
-    g_string_append_printf(out, "mounted=%s\nreboot=no\n", restore ? "no" : "yes");
+    g_string_append_printf(out, "active=%s\nreboot=no\n", restore ? "no" : "yes");
     rc = 0;
     if (reason) toast(o, "Home Chooser cannot change Home on this firmware. LG Home remains available.");
 done:

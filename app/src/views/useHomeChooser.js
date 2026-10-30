@@ -25,7 +25,7 @@ export const logResult = (label, res) => {
 export const patchStateOf = (homeKeyHook, status) => {
 	if (!homeKeyHook) return null;
 	if (!status) return 'unknown';
-	if (status.mounted) return 'active';
+	if (status.active) return 'active';
 	// Retain recognition of an old stale status while validating it during installation.
 	return status.patch === 'possible' || status.hook === 'stale' ? 'ready' : 'nomatch';
 };
@@ -200,11 +200,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
 		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
-		// The patch is needed unless it is mounted and enabled (mounted but disabled: a restore was done
-		// and no restart yet; the install just sets the flag again).
-		const mountedNow = Boolean(patchStatus && patchStatus.mounted);
-		const needPatch = Boolean(e.homeKeyHook) && !(mountedNow && patchStatus.enabled);
-		if (needPatch && !mountedNow && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
+		// Enable the boot flag and select the live filter when either is missing.
+		const activeNow = Boolean(patchStatus && patchStatus.active);
+		const needPatch = Boolean(e.homeKeyHook) && !(activeNow && patchStatus.enabled);
+		if (needPatch && !activeNow && patch !== 'ready') return {ok: false, text: "The Home button can't be changed on this TV's software."};
 		// Apply and subsequent launcher changes take effect without a reboot.
 		setNotice(`Setting ${candidate.title} as Home...`);
 		const res = await e.chooser.apply(candidate.id);
@@ -239,7 +238,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
-		patchMounted: Boolean(patchStatus && patchStatus.mounted),
+		patchActive: Boolean(patchStatus && patchStatus.active),
 		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};

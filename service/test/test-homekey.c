@@ -37,7 +37,14 @@ static char *fake(const char *uri, const char *payload, int timeout, void *conte
 }
 static int run(HCKeyOps *o, const char *action, gboolean stock) {
     GString *out = g_string_new(NULL); int rc = hc_key_run(o, action, stock, out);
+    assert(!strstr(out->str, "mounted="));
     printf("%s rc=%d %s", action, rc, out->str); g_string_free(out, TRUE); return rc;
+}
+static void status(HCKeyOps *o, const char *expected) {
+    GString *out = g_string_new(NULL);
+    assert(hc_key_run(o, "status", FALSE, out) == 0);
+    assert(strstr(out->str, expected) && !strstr(out->str, "mounted="));
+    printf("status %s", out->str); g_string_free(out, TRUE);
 }
 int main(int argc, char **argv) {
     setbuf(stdout,NULL);
@@ -50,7 +57,9 @@ int main(int argc, char **argv) {
     current = parse("[{\"file\":\"/other.js\",\"handler\":\"first\",\"extra\":[1,true]}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"second\",\"extra\":{\"a\":2}}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"third\"}]");
     jvalue_ref original = jvalue_duplicate(current);
     ready = 0; assert(run(&o, "boot", FALSE) == 1); assert(sets == 0 && gets == 3); ready = 1;
+    status(&o, "active=no\n");
     assert(run(&o, "boot", FALSE) == 0); assert(sets == 1); assert(toasts >= 2);
+    status(&o, "active=yes\n");
     assert(jarray_size(current) == jarray_size(original));
     jvalue_ref normalized = jvalue_duplicate(current);
     for (int i = 1; i < 3; i++) {
@@ -76,6 +85,7 @@ int main(int argc, char **argv) {
     jvalue_ref item=jarray_get(current,1); raw_buffer b=jstring_get_fast(jobject_get(item,kb("file")));
     char *p=g_strndup(b.m_str,b.m_len); assert(g_file_test(p,G_FILE_TEST_EXISTS)); g_free(p);
     fails=0; assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original));
+    status(&o, "active=no\n");
     unlink(flag); assert(run(&o,"apply",FALSE)==0); assert(jvalue_equal(current,original));
     g_file_set_contents(flag,"",-1,NULL); assert(run(&o,"apply",FALSE)==0);
     char *unknown=g_build_filename(o.state_dir,"unknown.js",NULL), *bytes=NULL;

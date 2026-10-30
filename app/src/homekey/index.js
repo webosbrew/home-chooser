@@ -30,7 +30,7 @@ export const parseStatus = (text) => {
 	});
 	return {
 		dataMissing: out.data === 'missing',
-		mounted: out.mounted === 'yes',
+		active: out.active === 'yes',
 		patch: out.patch || null,
 		hook: out.hook || null,
 		cacheGeneration: out['cache-generation'] || null,
@@ -83,7 +83,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 				await run.run(script('prepare'));
 				const before = await readStatus(run);
 				if (before.dataMissing) throw new Error('The Home key hook files are missing from the service package');
-				if (!before.mounted && before.patch !== 'possible') {
+				if (!before.active && before.patch !== 'possible') {
 					throw new Error('The Home key hook refused this firmware: ' + (before.reason || 'unknown reason'));
 				}
 
