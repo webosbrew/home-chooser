@@ -2740,20 +2740,7 @@ class Scenario:
             self.ask_monitor = RebootAlertMonitor(d)
             if not self.ask_monitor.start():
                 r.note('notification bus monitor did not start; using PmLog evidence', '')
-        if clicking:
-            self.click_element('Use as Home', effect=lambda: self.state()['choice'] == self.launcher,
-                               label='Use as Home')
-        else:
-            self.press('OK')
-        # the choice is applied; nothing restarts the compositor any more, so the panel stays open
-        toasts = []
-
-        def chosen():
-            u = self.ui() or {}
-            if u.get('toast'):
-                toasts.append(u['toast'])
-            return self.state()['choice'] == self.launcher
-        self.wait(chosen, 90, 2)
+        toasts = self.confirm_home_choice(clicking)
         if self.major >= 11:
             page = self.insp._page() if self.insp else None
             state = self.page_state() or {}
@@ -2853,6 +2840,24 @@ class Scenario:
             return json.loads(v) if v else None
         except ValueError:
             return None
+
+    def confirm_home_choice(self, clicking):
+        # A successful toast lasts six seconds. Capture it while checking the click's
+        # effect: a fresh OCR frame can take longer than the toast's entire lifetime.
+        toasts = []
+
+        def chosen():
+            u = self.ui() or {}
+            if u.get('toast'):
+                toasts.append(u['toast'])
+            return self.state()['choice'] == self.launcher
+
+        if clicking:
+            self.click_element('Use as Home', effect=chosen, label='Use as Home', read_after=False)
+        else:
+            self.press('OK')
+        self.wait(chosen, 90, 2)
+        return toasts
 
     def ensure_page(self, label):
         """Before keys go to the list: our page must be readable.  surface-manager closes an overlay window
