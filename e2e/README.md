@@ -98,6 +98,8 @@ python3 -I e2e/homechooser_e2e.py --vm 10.x --scenario screensaver --saver-start
 Each step records `power/getPowerState` and, on 7+, `power2/getPowerState`, foreground, daemon unit,
 choice file (including read status), defaultApps, stock-home preload policy and boot id, with a
 screenshot before and after. Additional snapshots record S1 while shown and button dismissal.
+The preload comparison uses the complete parsed stock-Home policy entry; the full raw reply
+is retained, but unrelated app entries and their array ordering are not HC state assertions.
 The successful start proof on 7+ is `power2`'s `sub state: screen saver`, with no Ready
 transition. On 6.x it is `power`'s actual `state: Screen Saver`; `returnValue:true` from a trigger
 or `Active` with `processing: Screen Saver Ready` never proves a shown saver. Dismissal requires
@@ -145,12 +147,17 @@ is still a HOME/BACK remote-button check. This option explicitly selects the hel
 firmware trigger does not silently fall back. A missing helper makes this opt-in start SKIPPED;
 a failing helper or unconfirmed native state is BLOCKED. Helper availability is probed with
 local `beanjar screensaver --help` once per runner host; this does not contact a VM.
+This helper is unavailable on 6.x: it requires power2 and plural foreground window types.
+The harness never invokes it there. A 6.x Ready stall remains BLOCKED (#56), with legacy
+power/foreground evidence and normal synced-stop cleanup; tvpowerd is never restarted.
 
 Before S4's tvpower reboot and every Reboot alert action (including its retry and manual
 fallback), the harness reads the supported native power states (power only on 6.x). The main
 scenario's Later/fallback and `--reboot-check` host restarts also get this check; their existing
 reboot route is preserved.
-If `power/getPowerState` has `processing: Screen Saver Ready` or `power2/getPowerState` has
+On 6.x, a captured Ready state blocks the reboot request because the recovery helper is
+unsupported; cleanup uses the normal synced stop without trying the helper.
+On 7+, if `power/getPowerState` has `processing: Screen Saver Ready` or `power2/getPowerState` has
 `sub processing: screen saver ready`, it captures diagnostics and runs
 `beanjar screensaver stop <vm> --timeout 60 --json`. It records the helper JSON, re-reads the
 available power states, and only proceeds after successful recovery with readable states and

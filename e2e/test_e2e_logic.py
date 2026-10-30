@@ -1161,7 +1161,7 @@ class ScreensaverFakeDev(FakeDev):
         return self.default_apps['home'], json.dumps({'returnValue': True, 'settings': {'defaultApps': self.default_apps}})
 
     def preload_policy(self):
-        return self.policy, json.dumps({'applications': [{'id': HOME, 'isEnabled': self.policy}]})
+        return self.policy, json.dumps({'returnValue': True, 'applications': [{'id': HOME, 'isEnabled': self.policy}]})
 
     def unit(self, name):
         return dict(self.units.get(name, {'MainPID': '100' if self.selected else '0',
@@ -1366,12 +1366,72 @@ class HomeAndScreensaver(unittest.TestCase):
                 self.assertEqual(self.run_scenario(s)[1], 'FAIL')
                 self.assertFalse(any(isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI for call in s.dev.calls))
 
+    def test_screensaver_preload_ignores_other_apps_and_response_order(self):
+        import copy
+        s = self.make()
+        s.dev.select()
+        before = s.screensaver_snapshot('before')
+        stock = {'id': HOME, 'isEnabled': False, 'preloadMode': 'criu',
+                 'extPolicy': [{'preloadMode': 'full', 'requiredMemory': 50}]}
+        other = {'id': 'com.webos.app.browser', 'isEnabled': True}
+        before['preload'] = [False, json.dumps({'returnValue': True, 'applications': [other, stock]})]
+        after = copy.deepcopy(before)
+        # The observed device change was array order only. An unrelated app's
+        # policy is also outside the stock-home assertion.
+        for row in (other, dict(other, isEnabled=False)):
+            after['preload'][1] = json.dumps({'applications': [stock, row], 'returnValue': True}, indent=2)
+            s.screensaver_unchanged(before, after)
+
+    def test_screensaver_preload_requires_readable_unchanged_stock_entry(self):
+        import copy
+        s = self.make()
+        s.dev.select()
+        before = s.screensaver_snapshot('before')
+        stock = {'id': HOME, 'isEnabled': False, 'preloadMode': 'criu'}
+        before['preload'] = [False, json.dumps({'returnValue': True, 'applications': [stock]})]
+        bad_replies = [
+            {'returnValue': True, 'applications': [dict(stock, preloadMode='full')]},
+            {'returnValue': True, 'applications': [dict(stock, isEnabled=True)]},
+            {'returnValue': True, 'applications': []},
+            {'returnValue': True, 'applications': [stock, stock]},
+            {'returnValue': False, 'applications': [stock]},
+            {'returnValue': True, 'applications': None},
+        ]
+        for reply in bad_replies + ['not JSON']:
+            with self.subTest(reply=reply):
+                after = copy.deepcopy(before)
+                after['preload'][1] = reply if isinstance(reply, str) else json.dumps(reply)
+                with self.assertRaises(e2e.ScreensaverOutcome):
+                    s.screensaver_unchanged(before, after)
+
     def test_silent_daemon_passes_on_every_release(self):
         # Ignoring the screensaver is judged by the absence of actions, not by a log line.
         for major in (10, 11, 12):
             s = self.make(major)
             s.dev.log_ignore = False
             self.assertEqual(self.run_scenario(s)[1], 'PASS')
+
+    def test_6x_never_invokes_unsupported_beanjar_screensaver_helper(self):
+        from unittest.mock import Mock
+        s = self.make(6)
+        s.host.screensaver = Mock(side_effect=AssertionError('unsupported on 6.x'))
+        for verb in ('start', 'stop'):
+            self.assertIsNone(s.beanjar_screensaver(verb))
+        s.dev.processing = 'Screen Saver Ready'
+        with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            s.prepare_tvpower_reboot('offline Ready evidence')
+        self.assertEqual(cm.exception.status, 'BLOCKED')
+        s.host.screensaver.assert_not_called()
+        self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
+
+    def test_6x_ready_blocks_s4_before_reboot_or_helper(self):
+        s = self.make(6, fault=(4, 'dismiss_ready'))
+        s.dev.helper_mode = 'success'  # Even a nominally available helper must not be called.
+        self.assertEqual(self.run_scenario(s)[4], 'BLOCKED')
+        self.assertFalse(any(isinstance(call, tuple) and
+                             (call[0] == 'beanjar' or call[1] == e2e.TVPOWER_REBOOT_URI)
+                             for call in s.dev.calls))
+        self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
 
     def test_stuck_dismissal_never_attempts_reboot(self):
         s = self.make(fault=(4, 'dismiss_ready'))

@@ -2729,6 +2729,11 @@ class Scenario:
                 or power_field(power['power2'][1], 'sub processing') == 'screen saver ready')
 
     def beanjar_screensaver(self, verb):
+        if self.major == 6:
+            self.rec.note('beanjar screensaver unavailable on webOS 6; not attempted',
+                          'Beanjar requires power2/getPowerState and getForegroundApps window types; '
+                          'use legacy state evidence and normal synced-stop cleanup for beanjar#56.')
+            return None
         result = self.host.screensaver(verb, self.vm)
         if result is None:
             if not getattr(self.host, '_screensaver_missing_logged', False):
@@ -2747,6 +2752,9 @@ class Scenario:
         if not self.screensaver_ready(before):
             return True
         self.screensaver_diagnostics(label + ': stale Screen Saver Ready before reboot')
+        if self.major == 6:
+            raise ScreensaverOutcome('BLOCKED', 'beanjar#56: Screen Saver Ready on webOS 6; '
+                                     'Beanjar screensaver helper unsupported; use normal synced-stop cleanup')
         helper = self.beanjar_screensaver('stop')
         if helper is None:
             return False  # Old Beanjar: caller keeps its existing refusal/BLOCKED path.
@@ -2833,9 +2841,25 @@ class Scenario:
         return foreground
 
     def screensaver_unchanged(self, before, after):
-        for field in ('choice', 'defaultApps', 'preload', 'unit', 'boot'):
+        for field in ('choice', 'defaultApps', 'unit', 'boot'):
             self.screensaver_require(before[field] == after[field], '%s changed: %r -> %r' %
                                      (field, before[field], after[field]))
+        # getPreloadPolicy returns every app, and firmware can reorder that array while
+        # showing a screensaver. Compare the complete stock-home entry, retaining raw
+        # replies in snapshots, rather than asserting unrelated ordering is stable.
+        def stock_policy(sample):
+            reply = parse_luna(sample[1])
+            rows = reply.get('applications') if isinstance(reply, dict) and reply.get('returnValue') is True else None
+            if not isinstance(rows, list):
+                return None
+            matches = [row for row in rows if isinstance(row, dict) and row.get('id') == STOCK]
+            return matches[0] if len(matches) == 1 else None
+        old_policy, new_policy = stock_policy(before['preload']), stock_policy(after['preload'])
+        self.screensaver_require(old_policy is not None and new_policy is not None
+                                 and old_policy == new_policy
+                                 and before['preload'][0] == after['preload'][0],
+                                 'Stock-home preload policy changed or unreadable: %r -> %r' %
+                                 (before['preload'], after['preload']))
         self.screensaver_require(after['choice'] == [0, self.launcher]
                                  and after['record_home'] == self.launcher
                                  and after['defaultApps'] is not None
