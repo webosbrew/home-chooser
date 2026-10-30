@@ -196,6 +196,12 @@ class LauncherPreflight(unittest.TestCase):
                          'known HOME takeover app id')
         self.assertIsNone(e2e.launcher_removal_reason({'id': 'example.app', 'title': 'HomeBack manual'}))
 
+    def test_observed_partridge_launcher_without_home_category(self):
+        self.assertEqual(e2e.launcher_removal_reason({'id': 'works.partridge.webos-launcher',
+                                                     'version': '1.0.0', 'title': 'Launcher'}),
+                         'known launcher without home category')
+        self.assertIsNone(e2e.launcher_removal_reason({'id': 'example.app', 'title': 'Launcher'}))
+
     def test_owned_startup_entries_only(self):
         root = '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service'
         self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'homeback', root + '/startup.sh', ''))
@@ -204,6 +210,16 @@ class LauncherPreflight(unittest.TestCase):
                                       ('com.homebrew.homeback', '', '# ' + root + '/startup.sh'),
                                       ('homeback', root + '.other/startup.sh', '')]:
             self.assertFalse(e2e.startup_entry_owned('com.homebrew.homeback', name, target, content))
+
+    def test_observed_homeback_remote_bootstrap_ownership(self):
+        # Actual command from the retained 10.3.1 /var/lib/webosbrew/init.d/homeback.
+        command = '    output=$(luna-send -n 1 -f "luna://com.homebrew.homeback.service/remote/start" \'{}\' 2>&1)\n'
+        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'homeback', '', command))
+        for ident, name, content in [('example.app', 'homeback', command),
+                                      ('com.homebrew.homeback', 'shared', command),
+                                      ('com.homebrew.homeback', 'homeback', '# ' + command),
+                                      ('com.homebrew.homeback', 'homeback', command.replace('/remote/start', '/status'))]:
+            self.assertFalse(e2e.startup_entry_owned(ident, name, '', content))
 
     def test_startup_cleanup_uses_installed_layout(self):
         from unittest.mock import Mock
@@ -215,6 +231,30 @@ class LauncherPreflight(unittest.TestCase):
         e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
         self.assertEqual(d.sh.call_args.args[0], 'rm -- ' + path)
         self.assertTrue(r.check.call_args.args[1])
+
+    def test_startup_cleanup_package_script_when_varlib_copy_absent(self):
+        from unittest.mock import Mock
+        d, r = Mock(), Mock()
+        path = '/var/lib/webosbrew/init.d/homeback'
+        package = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/startup.sh'
+        d.sh.side_effect = [(1, 'No such file or directory'),
+                            (0, '    run-parts /var/lib/webosbrew/init.d 200>&-\n'),
+                            (0, path),
+                            (0, '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service/startup.sh'),
+                            (1, 'missing target'), (0, '')]
+        e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+        self.assertEqual(d.sh.call_args_list[1].args[0], 'cat ' + package)
+        self.assertEqual(d.sh.call_args.args[0], 'rm -- ' + path)
+
+    def test_startup_cleanup_without_installed_layout_does_not_remove(self):
+        from unittest.mock import Mock
+        for replies in ([(1, 'missing'), (1, 'missing')], [(0, '# no run-parts\n')]):
+            with self.subTest(replies=replies):
+                d, r = Mock(), Mock()
+                d.sh.side_effect = replies
+                with self.assertRaises(RuntimeError):
+                    e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+                self.assertTrue(all(c.args[0].startswith('cat ') for c in d.sh.call_args_list))
 
     def test_removal_reboots_before_proceeding(self):
         from unittest.mock import Mock
