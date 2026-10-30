@@ -102,7 +102,7 @@ MATRIX = [
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
-# Stock-home preload policy (service/scripts/homechooser-home-watch; docs/settings-app.md "The stock home is
+# Stock-home preload policy (service/src/watcher/preload.c; docs/settings-app.md "The stock home is
 # not preloaded").  On 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app,
 # whatever the launcher (measured on 9.2.1, 8.3.0 and 10.3.1, 75 to 89 MB), so since 8791f6e neither the
 # watcher nor the app closes it there: the expected result is the preload policy off, the skip line in
@@ -128,7 +128,7 @@ REBOOT_BUTTONS = ('Reboot', 'Later')
 # the service's system alert (or the toast when the alert is refused; service/src/policy.c hc_reboot_message)
 REBOOT_PROMPT = {'apply': 'Restart the TV to finish setting up the Home button.',
                  'remove': 'Restart the TV to finish removing the Home button patch.'}
-# the watcher (service/scripts/homechooser-home-watch): the same on every release, no restart mentioned
+# the watcher (service/src/watcher/notify.c): the same on every release, no restart mentioned
 REMOVAL_ALERT = '%s was removed, so the Home button opens LG Home again.'
 UNINSTALL_TOAST = 'Home Chooser was removed. The Home button opens LG Home again.'
 OLD_RESTART_TEXTS = ('Restart the TV to finish the change.', 'Restart the TV to put LG Home back on the Home button.',
@@ -138,8 +138,8 @@ TEXT_SOURCES = [
     (DONE_TEXT, 'app/src/views/useHomeChooser.js'),
     (REBOOT_PROMPT['apply'], 'service/src/policy.c'),
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
-    ('$name' + REMOVAL_ALERT[2:], 'service/scripts/lib/watch-notify.sh'),
-    (UNINSTALL_TOAST, 'service/scripts/lib/watch-restore.sh'),
+    (REMOVAL_ALERT, 'service/src/watcher/notify.c'),
+    (UNINSTALL_TOAST, 'service/src/watcher/restore.c'),
 ]
 
 
@@ -3073,8 +3073,8 @@ class Scenario:
         """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:
         the watcher (app copy and the running /tmp copy), the service binary, the app bundle."""
         r, d = self.rec, self.dev
-        notify = [SCRIPTS_DIR + '/lib/watch-notify.sh', '/tmp/homechooser-runtime/lib/watch-notify.sh']
-        restore = [SCRIPTS_DIR + '/lib/watch-restore.sh', '/tmp/homechooser-runtime/lib/watch-restore.sh']
+        notify = [SCRIPTS_DIR + '/../homechooser-service', '/tmp/homechooser-runtime/homechooser-service']
+        restore = notify
         svcdir = '/media/developer/apps/usr/palm/services/' + SVC_ID
 
         def has(text, paths):
@@ -3086,7 +3086,7 @@ class Scenario:
         for text, sources in ((REMOVAL_ALERT[2:], notify), (UNINSTALL_TOAST, restore)):
             got = has(text, sources)
             r.check('device texts: the watcher says "%s"' % text.strip(), len(got) == 2, 'found in %s' % got)
-        old = [(t, has(t, [SCRIPTS_DIR + '/lib', '/tmp/homechooser-runtime/lib', APPDIR])) for t in OLD_RESTART_TEXTS]
+        old = [(t, has(t, [SCRIPTS_DIR + '/../homechooser-service', '/tmp/homechooser-runtime/homechooser-service', APPDIR])) for t in OLD_RESTART_TEXTS]
         r.check('device texts: no old restart wording in the watcher or the app', not any(g for _, g in old),
                 '; '.join('%r in %s' % (t, g) for t, g in old if g) or 'none')
         for reason, text in sorted(REBOOT_PROMPT.items()):
@@ -3630,10 +3630,9 @@ class Scenario:
 
     # -- the app update (--update-check)
     def watcher_procs(self):
-        """Top-level watcher processes (a forked subshell shares the command line, so only a process
-        whose parent is not itself a watcher counts) and the unit's own numbers."""
+        """Native --boot process count and the transient unit's own numbers."""
         d = self.dev
-        top = d.sh("ps -eo pid,ppid,args | awk '/homechooser-home-watch/ && !/awk/ && !/grep/ {pid[$1]=1; pp[$1]=$2} "
+        top = d.sh("ps -eo pid,ppid,args | awk '/homechooser-service.*--boot/ && !/awk/ && !/grep/ {pid[$1]=1; pp[$1]=$2} "
                    "END {n=0; for (p in pid) if (!(pp[p] in pid)) {n++; printf \"%s \", p}; print \"top=\" n}'")[1].strip()
         m = re.search(r'top=(\d+)', top)
         n = int(m.group(1)) if m else -1
@@ -3683,38 +3682,38 @@ class Scenario:
         s['watcher_procs'] = self.watcher_procs()
         s['preload'] = d.preload_policy()[0] if self.major >= 6 else None
         s['log_lines'] = len(self.log_lines())
-        s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-home-watch')
-        s['service_md5'] = self.md5(SCRIPTS_DIR + '/homechooser-home-watch')
+        s['runtime_md5'] = self.md5('/tmp/homechooser-runtime/homechooser-service')
+        s['service_md5'] = self.md5(SCRIPTS_DIR + '/../homechooser-service')
+        pid = s['watcher_procs']['main_pid']
+        s['running_md5'] = self.md5('/proc/%s/exe' % pid) if pid and pid != '0' else 'missing'
         s['app_version'] = d.sh("sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' %s/appinfo.json | head -1" % APPDIR)[1].strip()
         s['baked'] = self.baked_id() if self.uses_home_key_hook() else ''
         return s
 
     def step_update(self):
         """The Home Chooser update: the current build installed over the old one with ares-install and no
-        uninstall in between.  Design basis (service/scripts/homechooser-home-watch, header and check_hc; docs/settings-app.md
-        "When apps are removed"): an update installs by removing first, so the watcher takes Home Chooser as gone only
-        if it is still gone HOMECHOOSER_CONFIRM_DELAY (15 s) later (check_hc: "Home Chooser is back, not removing
-        anything"); no notification is sent "for the temporary absence of an update"; the watcher runs from a copy in
-        /tmp/homechooser-runtime, so the app directory being replaced does not pull the script from under it, and the
-        unit is NOT restarted by the update: one watcher, the same MainPID, still the old build's code until its next
+        uninstall in between. The native watcher confirms package absence twice, 15 s apart, so
+        a temporary update gap does not restore stock. Its mapped image survives package replacement,
+        and /tmp/homechooser-runtime retains a restart copy. The unit is not restarted by the update:
+        one watcher, the same MainPID, still the old build's code until its next
         start (boot or restart).  So the log must show no restore and no \"watching, home=\" line from the update; a
         "Home Chooser is back" line appears only if the watcher happened to look during the gap."""
         r, d = self.rec, self.dev
         r.begin('3u update Home Chooser over the old build (--update-check)')
         new_files, old_files = ipk_files(self.hc_new), ipk_files(self.a.old_ipk)
-        wk = 'usr/palm/services/%s/scripts/homechooser-home-watch' % SVC_ID
-        r.check('both ipks carry the watcher script', wk in new_files and wk in old_files, wk)
+        wk = 'usr/palm/services/%s/homechooser-service' % SVC_ID
+        r.check('both ipks carry the native watcher executable', wk in new_files and wk in old_files, wk)
         new_md5 = hashlib.md5(new_files.get(wk, b'')).hexdigest()
         old_md5 = hashlib.md5(old_files.get(wk, b'')).hexdigest()
-        r.note('old build %s (%s) vs new build %s: watcher script md5 old=%s new=%s' % (
+        r.note('old build %s (%s) vs new build %s: watcher executable md5 old=%s new=%s' % (
             self.a.old_ref, os.path.basename(self.a.old_ipk), os.path.basename(self.hc_new), old_md5, new_md5),
-            'identical scripts: the script-level checks do not discriminate' if old_md5 == new_md5 else 'scripts differ')
+            'identical executables: hashes do not discriminate' if old_md5 == new_md5 else 'executables differ')
         before = self.update_snapshot()
         r.note('state before the update', json.dumps(before))
         r.check('before the update: exactly one watcher unit and one watcher process',
                 before['watcher_procs']['top'] == 1 and before['watcher_procs']['units'] == '1', json.dumps(before['watcher_procs']))
-        r.check('before the update: the running watcher is the old build (runtime copy md5 = old script)',
-                before['runtime_md5'] == old_md5, 'runtime %s, old %s' % (before['runtime_md5'], old_md5))
+        r.check('before the update: the running watcher is the old build (mapped executable hash)',
+                before['running_md5'] == old_md5, 'running %s, old %s' % (before['running_md5'], old_md5))
         t_install = self.messages_mark()
         rc, out = d.install(self.hc_new)
         r.check('ares-install of the current build over the old one (no uninstall)', rc == 0 and 'Installed package' in out, out.strip())
@@ -3732,7 +3731,7 @@ class Scenario:
         wp = after['watcher_procs']
         r.check('after the update: watcher unit active, exactly ONE watcher unit and ONE process (no duplicate)',
                 after['watcher'] == 'active' and wp['top'] == 1 and wp['units'] == '1', json.dumps(wp))
-        r.check('after the update: the watcher was not restarted (same MainPID, NRestarts unchanged: the design keeps it running from /tmp)',
+        r.check('after the update: the watcher was not restarted (same MainPID, NRestarts unchanged: its mapped image survives replacement)',
                 wp['main_pid'] == before['watcher_procs']['main_pid'] and wp['restarts'] == before['watcher_procs']['restarts'],
                 'before %s, after %s' % (json.dumps(before['watcher_procs']), json.dumps(wp)))
         r.check('after the update: no \"watching, home=\" line (no watcher restart logged)',
@@ -3741,8 +3740,8 @@ class Scenario:
         r.check('after the update: the watcher log shows no restore, no revert, no notification', not bad, '\n'.join(bad) or 'none')
         r.note('after the update: "Home Chooser is back" (only logged if the watcher looked during the gap)',
                '\n'.join(l for l in new_log if 'is back' in l) or 'not logged')
-        r.note('after the update: which build the running watcher is (runtime copy md5; the design leaves it the old one until its next start)',
-               'runtime %s; old %s; new %s' % (after['runtime_md5'], old_md5, new_md5))
+        r.check('after the update: the mapped watcher executable remains the old build',
+                after['running_md5'] == old_md5, 'running %s; old %s; new %s' % (after['running_md5'], old_md5, new_md5))
         r.check('after the update: init.d points to the installed boot entry and its target exists',
                 after['initd'] == (BOOT_SCRIPT if self.uses_home_key_hook() else BOOT_DIR + '/homechooser') and d.sh('test -f %s && echo y' % INITD)[1].strip() == 'y', after['initd'])
         if self.uses_home_key_hook():

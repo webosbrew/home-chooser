@@ -7,6 +7,7 @@
 #include "luna.h"
 #include "policy.h"
 #include "roles.h"
+#include "watcher/watcher.h"
 
 static char *homekey_call(const char *uri, const char *payload, int timeout, void *context)
 {
@@ -17,11 +18,12 @@ static char *homekey_call(const char *uri, const char *payload, int timeout, voi
     return g_string_free(out, FALSE);
 }
 
-/* Boot workers apply before handing off to the existing shell watcher; no RPC registration. */
+/* Boot and watcher share one process and one private Luna client; no RPC registration. */
 int hc_homekey_main(int argc, char **argv)
 {
     if (geteuid() != 0) return 1;
     bool boot = !strcmp(argv[1], "--boot");
+    if (boot) return hc_watcher_main();
     const char *action = boot ? "boot" : argc > 2 ? argv[2] : "status";
     if (strcmp(action, "boot") && strcmp(action, "status") && strcmp(action, "prepare") &&
         strcmp(action, "apply") && strcmp(action, "refresh") && strcmp(action, "stop") && strcmp(action, "clear")) return 2;
@@ -31,11 +33,5 @@ int hc_homekey_main(int argc, char **argv)
     int rc = hc_key_run(&ops, action, argc > 3 && !strcmp(argv[3], "stock"), out);
     fputs(out->str, stdout); fflush(stdout); LOGI("HOMEKEY", "%s: %s", action, out->str);
     g_string_free(out, TRUE);
-    if (boot) {
-        /* The watcher retries after readiness failure and retains removal recovery. */
-        execl("/bin/sh", "sh", access(HC_WATCH_SCRIPT, R_OK) == 0 ? HC_WATCH_SCRIPT :
-            "/tmp/homechooser-runtime/homechooser-home-watch", (char *)NULL);
-        return 1;
-    }
     return rc;
 }

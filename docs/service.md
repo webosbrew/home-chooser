@@ -10,7 +10,7 @@ the [README](../README.md#decisions) and [Root access](settings-app.md#root-acce
 
 `ares-package dist build/service-pkg` packs the app and the service together
 (`npm run package` in `app/` builds the service with `make -C service`, stages
-`services.json`, the binary, five entry scripts and their `scripts/lib/` helpers with
+`services.json`, the binary, three entry scripts and their `scripts/lib/` helpers with
 `app/scripts/stage-service.js`, then packages). The ipk holds
 `usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,services.json,scripts/}` (binary mode
 755) next to the app. `services.json` has `"engine": "native"` and `"executable":
@@ -28,15 +28,16 @@ libraries. No libstdc++.
 
 `service/src/main.c` initializes logging and dispatches roles in the same executable. With no
 arguments it runs the on-demand LS2 service. `--homekey <action>` runs the root one-off worker;
-`--boot` applies the redirect and then execs the existing shell watcher. Unknown arguments still
-take the service path. The dispatch has a place for the future native watcher role; the watcher
-remains in `service/scripts/homechooser-home-watch` and `scripts/lib/` for now.
+`--boot` applies the redirect and then runs the native watcher in the same process. Unknown
+arguments still take the service path. The watcher uses in-process LS2 subscriptions on the GLib
+loop, without registering the service RPC name or starting extra threads.
 
 | Source under `service/src/` | Responsibility |
 | --- | --- |
 | `log.h`, `version.h`, `roles.h` | Shared log context, build version and role entry points |
 | `json.c` | pbnjson parsing, members and reply validation |
-| `luna.c` | Bounded calls with the fixed privileged identity and callback context |
+| `luna.c` | Bounded service calls, private watcher LS2 client, subscriptions and cancellation |
+| `watcher/{main,core,record,restore,preload,notify}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards and notices |
 | `proc.c` | Process spawn, output limits, timeout and child reaping |
 | `fs.c` | Shared bounded reads, directory creation and atomic writes |
 | `policy.c` | Pure allow-lists and decision helpers |
@@ -55,8 +56,9 @@ remains in `service/scripts/homechooser-home-watch` and `scripts/lib/` for now.
 The extra shared `fs.c` keeps file access available to app metadata, boot links and service methods
 without depending on the service role. Named commands have their own service module rather than
 living in the generic process runner. Boot link RPCs retain their gates and replies in `bootlink.c`.
-Luna calls remain synchronous and bounded on the service loop; subscriptions and native watcher
-modules will be added with the watcher port.
+Service calls remain synchronous and bounded. The watcher has its own anonymous LS2 client,
+serializes policy events, and uses GLib sources for confirmation/backoff and preload deadlines.
+See the [port inventory and offline validation](research/native-watcher-port.md).
 
 The internal Home-key worker status uses `active=yes/no` for whether configd selects a generated
 Home Chooser filter. The app and E2E parser use that field directly, without a legacy field alias.
@@ -168,9 +170,10 @@ so it refuses with `notPending`. See [the live-filter design](home-key-hook.md).
 
 ## Privileged luna identity
 
-Every privileged luna call in the native service uses
-`/usr/bin/luna-send -a com.webos.applicationManager`, the constant `HC_LUNA_IDENTITY`. There are no
-calls under the native service's own luna identity. This includes `listApps`, `listRunning`, every
+Privileged RPC workers use `/usr/bin/luna-send -a com.webos.applicationManager`, the constant
+`HC_LUNA_IDENTITY`. The boot/watcher role registers an anonymous application client with that same
+identity through `LSRegisterApplicationService`, then uses `LSCall`/`LSCallOneReply`. Privileged
+calls retain that identity. This includes `listApps`, `listRunning`, every
 `getAppInfo` lookup (consent, icons, uninstall, forwarding), `closeByAppId`, settings/default-app
 calls, notifications, removal and the fixed profile commands. Arguments go directly to `execve`,
 without a shell, using allow-listed URIs and the settings payload restriction below. Watcher
@@ -324,8 +327,8 @@ The policy is in `service/src/policy.c` and tested on the host (`make -C service
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
   file of at most 256 KiB.
 * **Boot entry**: `link` creates `/var/lib/webosbrew/init.d`, sets mode 755 on the installed scripts,
-  on 5/10–12 stages the watcher restore scripts in `/var/lib/webosbrew/homechooser/boot`, then links
-  `/var/lib/webosbrew/init.d/homechooser` to that boot copy on 5/10–12, or to the installed entry on 6–9 (replacing an earlier entry). On 6–9 the entry queues the same native executable with `--boot` in a nonblocking transient unit, before RPC name registration; it becomes the watcher after apply. `unlink`
+  on 5/10–12 stages the same executable and boot/access helpers in `/var/lib/webosbrew/homechooser/boot`, then links
+  `/var/lib/webosbrew/init.d/homechooser` to that boot copy on 5/10–12, or to the installed entry on 6–9 (replacing an earlier entry). The entry queues the same native executable with `--boot` in a nonblocking transient unit, before RPC name registration; it becomes the watcher after apply. `unlink`
   removes the link and copy.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
@@ -368,6 +371,10 @@ Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
 
 * `make -C service test`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
+* `make -C service test-watcher`: native watcher policy and actual LS2 client/loop with a fake
+  hub under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
+  subscription cancellation, signal exit, transport loss, preload retry/settle and close guards.
+* `make -C service test-homekey`: native live-filter transactions with fake Luna.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.

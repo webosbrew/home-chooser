@@ -16,7 +16,7 @@ bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	if (!gate(msg, "link", true)) return true;
-	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_HOMEKEY_SCRIPT, HC_WATCH_SCRIPT, HC_ACCESS_SCRIPT, NULL};
+	static const char *const scripts[] = {HC_ENTRY_SCRIPT, HC_HOMEKEY_SCRIPT, HC_ACCESS_SCRIPT, NULL};
 	if (!mkdir_p(HC_INIT_DIR)) {
 		send_error(msg, "linkFailed", "Could not create %s: %s", HC_INIT_DIR, strerror(errno));
 		return true;

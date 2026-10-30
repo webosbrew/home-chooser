@@ -22,15 +22,20 @@ one second between attempts and a timeout on every call. A best-effort `createTo
 “Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
 the privileged `com.webos.applicationManager` identity. Toast failure does not block apply.
 
-After the attempt, the native process uses `exec` to become the existing shell watcher. This keeps
-one unit and retains subscriptions/removal recovery without keeping an idle native worker resident.
-The watcher can retry after transient readiness failure. Its `/tmp/homechooser-runtime` copy includes
-the same executable so an active watcher can restore configd after package removal. The transient
-unit falls back to that runtime copy on failure/restart if the installed executable is gone. There is no
-second installed helper binary and no persistent generated boot cache on 6–9.
+After the attempt, the same process runs the native watcher in `service/src/watcher/`.
+Its settings, app-list and (11+) foreground/life subscriptions use the existing GLib loop and a
+private LS2 client with the privileged application identity. The 300 s timer remains the fallback
+for missed app events. There are no resident shell, luna-send, awk or sleep children, and signal
+handling uses a pipe rather than GLib's signal helper, which would add a worker thread.
 
-The persistent **watcher restore copy** on webOS 5 and 10–12 is retained for their existing
-stopped-watcher uninstall recovery. It contains no QML patch generator.
+The running executable remains mapped if the package is removed. Restoration calls `homekey.c`
+directly, and the access helper/common file is staged alongside the same executable in
+`/tmp/homechooser-runtime`. The transient unit falls back to that executable after a crash if the
+installed one is gone. On 5/10–12 the same executable and boot/access helpers are also staged under
+`/var/lib/webosbrew/homechooser/boot` for stopped-watcher uninstall recovery on the next boot.
+On 6–9 recovery remains volatile. There is one installed executable and no migration shim.
+The [port report](research/native-watcher-port.md) maps old shell behaviour to native tests and
+contains the later device and RSS/PSS measurement plan; those device checks have not been run.
 
 ## Guarded JS generation
 
@@ -87,7 +92,7 @@ make -C service test
 make -C service test-homekey KEYFILTER_ROOTFS=/path/to/7.6/rootfs
 OPENHOUSE_STOCK_COPIES=/path/to/stock sh service/scripts/tests/test-minimal-hook.sh
 sh service/scripts/tests/test-homechooser.sh
-sh service/scripts/tests/test-homechooser-home-watch.sh
+make -C service test-watcher
 sh service/scripts/tests/test-homechooser-access.sh
 npm --prefix app test -- --runInBand
 python3 -m unittest discover -s e2e -p test_e2e_logic.py

@@ -23,7 +23,6 @@
 #define HC_BOOT_DIR HC_STATE_DIR "/boot"
 #define HC_BOOT_SCRIPT HC_BOOT_DIR "/homechooser"
 #define HC_HOMEKEY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-homekey"
-#define HC_WATCH_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-home-watch"
 #define HC_ACCESS_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-access"
 #define HC_OSRELEASE "/etc/os-release"
 #define HC_OSRELEASE_REAL "/usr/lib/os-release"

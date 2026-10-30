@@ -32,7 +32,7 @@ homebrew app with three parts:
   (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
   Homebrew Channel's `/var/lib/webosbrew/init.d`.
 * The choice persists through Home Chooser's own file, `/var/lib/webosbrew/homechooser/home` (the app
-  id alone), which a watcher (a transient systemd unit started from the init.d entry) enforces
+  id alone), which the native watcher in `homechooser-service` (a transient systemd unit started from the init.d entry) enforces
   against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
   entry links to the installed service scripts on 6–9 and to the legacy persistent watcher restore copy on 5/10–12. See
   [Persistence](docs/settings-app.md#persistence).

@@ -379,6 +379,10 @@ const char *const hc_launcher_list_fields[] = {
 };
 
 static const char *const LUNA_URIS[] = {
+	"luna://com.webos.service.preloadmanager/setPreloadPolicy",
+	"luna://com.webos.applicationManager/getAppLifeEvents",
+	"luna://com.webos.service.systemprofile/getProfiles",
+	"luna://com.webos.service.systemprofile/debug/rescan",
 	"luna://com.webos.service.config/getConfigs",
 	"luna://com.webos.service.config/setConfigs",
 	"luna://com.webos.surfacemanager/getCurrentState",
