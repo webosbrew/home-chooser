@@ -479,8 +479,17 @@ def alert_focus(frame, message, target, safe, require_focus=True):
                     < min(msg['box'][2], max(b['box'][2] for b in buttons))):
             raise ValueError('message is outside the alert dialog')
         top = msg['box'][1]
+    # The dialog rectangle is the union of its message and its two buttons.  A control counts as being
+    # in the alert only if it overlaps that rectangle; OCR "buttons" in the app list behind the dialog
+    # (e.g. a Homebrew Channel row title) share the vertical band but lie beside it, so they are not
+    # extra alert controls.  A third control inside the rectangle still fails, and the exact message and
+    # the two exact buttons were already required above.
+    left = min([b['box'][0] for b in buttons] + [msg['box'][0]])
+    right = max([b['box'][2] for b in buttons] + [msg['box'][2]])
     band = [r for r in rows if r.get('kind') == 'button'
-            and r.get('box') and r['box'][1] < bottom and r['box'][3] > top]
+            and isinstance(r.get('box'), list) and len(r['box']) == 4
+            and r['box'][1] < bottom and r['box'][3] > top
+            and r['box'][0] < right and r['box'][2] > left]
     if len(band) != 2:
         raise ValueError('extra controls in the alert band')
     return focused[0]['text'], direction
@@ -1815,8 +1824,24 @@ class Scenario:
             raise KeySendError('click failed: ' + out)
         if effect is not None:
             if not self.wait(effect, 20, 1):
+                self.click_diagnostics(label)
                 raise RuntimeError('click effect not observed: ' + label)
         return self.elements(label + '-after') if read_after else None
+
+    def click_diagnostics(self, label):
+        """Evidence only, before 'click effect not observed' is raised: the screen and one ui() read
+        (focused element, dialog) after the click.  Never raises and never changes the click."""
+        try:
+            self.shot(label + '-click-not-observed')
+        except Exception as exc:
+            self.rec.say('click diagnostics: screenshot failed: %r' % (exc,))
+        try:
+            ui = self.ui()
+            self.rec.say('click diagnostics (%s): ui() = %s' % (label, json.dumps(ui) if ui is not None else
+                         'None (inspector read failed: %s)' % (getattr(self.insp, 'last_error', None)
+                                                                if self.insp else 'no inspector')))
+        except Exception as exc:
+            self.rec.say('click diagnostics: ui() failed: %r' % (exc,))
 
     def alert_action(self, message, target, safe, label, proof, verify, closed, request, before_action=None):
         """Verify every alert click; retry only a proven dismissal without its action."""
@@ -3685,19 +3710,49 @@ class Scenario:
                             and reply.get('apiVersion') == API_VERSION, raw[:400])
         if self.major == 9 and label == 'before selection' and self.L.is_fixture:
             # This one-shot method has no target parameter: put each sampled app in front first.
-            for appid in (STOCK, 'org.webosbrew.hbchannel', self.launcher):
-                rc, out = self.dev.launch(appid)
-                r.check('getForegroundApp probe launches %s' % appid, rc == 0, out.strip()[-400:])
-                platform = self.wait(lambda: self.dev.foreground()[0] == appid, 20, 2)
-                r.check('getForegroundApp probe sees %s in front' % appid, bool(platform), self.dev.foreground()[1][:400])
-                start = time.monotonic()
-                reply, raw = self.api('getForegroundApp')
-                elapsed = (time.monotonic() - start) * 1000
-                r.check('getForegroundApp %s contract and appId' % appid,
-                        not api_reply_problems('getForegroundApp', reply)
-                        and (reply or {}).get('appId') == appid, raw[:400])
-                r.note('getForegroundApp %s timing and reply size' % appid,
-                       '%.1f ms; %d bytes; %s' % (elapsed, len(raw.encode()), raw[:400]))
+            try:
+                for appid in (STOCK, 'org.webosbrew.hbchannel', self.launcher):
+                    self.probe_foreground(appid)
+            finally:
+                self.life_end()
+
+    def probe_foreground(self, appid):
+        """Put appid in front and compare getForegroundApp with the platform.  A card app is named by SAM's
+        getForegroundAppInfo.  An overlay launcher is not: SAM keeps naming the card beneath while
+        getAppLifeEvents emits `foreground` with _WEBOS_WINDOW_TYPE_OVERLAY, so for it the overlay is proven
+        by that life event and the service must agree with SAM's reply at that moment (the card beneath)."""
+        r = self.rec
+        overlay = appid == self.launcher and self.L.overlay
+        if overlay:
+            self.life_begin()
+        rc, out = self.dev.launch(appid)
+        r.check('getForegroundApp probe launches %s' % appid, rc == 0, out.strip()[-400:])
+        if overlay:
+            def came_up():
+                ev, _ = self.life_events(appid)
+                return [line for kind, line in ev if kind == 'foreground' and '_WEBOS_WINDOW_TYPE_OVERLAY' in line]
+            seen = self.wait(came_up, 20, 2)
+            r.check('getForegroundApp probe sees overlay %s in front (rule: life-event foreground with '
+                    '_WEBOS_WINDOW_TYPE_OVERLAY; SAM getForegroundAppInfo keeps the card beneath)' % appid,
+                    bool(seen), (seen[-1] if seen else 'no overlay foreground event: %r' % (self.life_events(appid)[0][-4:],)))
+        else:
+            platform = self.wait(lambda: self.dev.foreground()[0] == appid, 20, 2)
+            r.check('getForegroundApp probe sees %s in front' % appid, bool(platform), self.dev.foreground()[1][:400])
+        start = time.monotonic()
+        reply, raw = self.api('getForegroundApp')
+        elapsed = (time.monotonic() - start) * 1000
+        platform_id, platform_raw = self.dev.foreground()
+        if overlay:
+            rule = 'overlay rule: service appId must equal SAM getForegroundAppInfo now (%r), the card beneath' % platform_id
+            ok = (reply or {}).get('appId') == platform_id
+        else:
+            rule = 'card rule: service appId must equal %r' % appid
+            ok = (reply or {}).get('appId') == appid
+        r.check('getForegroundApp %s contract and appId' % appid,
+                not api_reply_problems('getForegroundApp', reply) and ok,
+                '%s; SAM: %s; service: %s' % (rule, platform_raw[:200], raw[:400]))
+        r.note('getForegroundApp %s timing and reply size' % appid,
+               '%.1f ms; %d bytes; %s' % (elapsed, len(raw.encode()), raw[:400]))
 
     def api_before_selection(self):
         """Home Chooser open and elevated, the launcher installed but not chosen."""
@@ -3764,6 +3819,47 @@ class Scenario:
                 api_refused(rep), raw[:400])
         self.api_request(selected=False)
 
+    def see_toast(self, needle, timeout, max_recreates=2):
+        """Look for a toast (the app hides it after 6 s) in two independent places each round: the DOM
+        through the Inspector, then the screen through `beanjar elements` OCR.  A dead Inspector forward
+        (/json reset, no page, websocket error) is closed and recreated, at most max_recreates times.
+        Returns (text, source) with source 'DOM' or 'screen', or (None, <why not>) when it never showed."""
+        end = time.time() + seconds(timeout)
+        recreated, notes = 0, []
+        while True:
+            if self.insp is None:
+                self.insp = Inspector(self.vm)
+            try:
+                ui = self.ui()
+            except Exception as exc:
+                ui = None
+                self.insp.last_error = 'ui() raised %r' % (exc,)
+            text = (ui or {}).get('toast')
+            if text and needle in text:
+                return text, 'DOM'
+            err = getattr(self.insp, 'last_error', None)
+            if ui is None and err and recreated < max_recreates and time.time() < end:
+                recreated += 1
+                notes.append('inspector recreated #%d after: %s' % (recreated, str(err)[:120]))
+                self.rec.say('toast check: ' + notes[-1])
+                self.close_insp()
+                self.insp = Inspector(self.vm)
+            try:
+                rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
+                if not rc:
+                    for row in json.loads(raw).get('elements', []):
+                        t = row.get('text') or ''
+                        if row.get('kind') == 'text' and needle.lower() in t.lower():
+                            self.rec.say('toast check: screen OCR row %r box %s' % (t, row.get('box')))
+                            return t, 'screen'
+                else:
+                    notes.append('elements rc=%s' % rc)
+            except Exception as exc:
+                notes.append('elements failed: %r' % (exc,))
+            if time.time() >= end:
+                return None, 'none (DOM last_error=%s; %s)' % (getattr(self.insp, 'last_error', None), '; '.join(notes[-4:]))
+            sleep(0.5)
+
     def api_request(self, selected):
         """The `request` launch parameter: Home Chooser opens "Use <title> as Home?" for the requesting
         launcher (cancelled with Back, on our own dialog); once it is Home, the "already your Home" toast."""
@@ -3774,9 +3870,10 @@ class Scenario:
         rc, out = d.launch(APP_ID, {'request': self.launcher})
         r.check('ares-launch %s -p {"request":"%s"}' % (APP_ID, self.launcher), rc == 0, out.strip())
         if selected:
-            toast = self.wait(lambda: (lambda t: t if t and 'already your Home' in t else None)((self.ui() or {}).get('toast')), 30, 1)
+            toast, source = self.see_toast('already your Home', 30)
             self.shot('3a-request-selected')
-            r.check('request while it is Home: the toast "<title> is already your Home."', bool(toast), repr(toast))
+            r.check('request while it is Home: the toast "<title> is already your Home."', bool(toast),
+                    'source=%s: %r' % (source, toast))
             d.close(APP_ID)
             self.close_insp()
             return
