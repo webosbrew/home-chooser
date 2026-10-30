@@ -271,7 +271,135 @@ def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=No
     return False
 
 
-def alert_focus(frame, message, target, safe):
+def match_element(frame, text=None, role=None, region=None):
+    """Select one exact screen element; never guess between OCR hits."""
+    if text is None and role is None:
+        raise ValueError('text or role is required')
+    rows = frame.get('elements')
+    if not isinstance(rows, list):
+        raise ValueError('missing elements array')
+    matches = []
+    for row in rows:
+        if text is not None and row.get('text') != text:
+            continue
+        if role is not None and row.get('kind') not in (role if isinstance(role, tuple) else (role,)):
+            continue
+        box = row.get('box')
+        centre = row.get('centre')
+        if not isinstance(box, list) or len(box) != 4:
+            raise ValueError('missing element geometry')
+        if centre is None:
+            centre = [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2]
+        if (len(centre) != 2 or any(type(v) not in (int, float) for v in centre)
+                or not 0 <= centre[0] < frame['width'] or not 0 <= centre[1] < frame['height']):
+            raise ValueError('invalid element centre')
+        if region and not (region[0] <= centre[0] <= region[2] and region[1] <= centre[1] <= region[3]):
+            continue
+        matches.append(dict(row, centre=centre))
+    if len(matches) != 1:
+        raise ValueError('expected exactly one element text=%r role=%r; found %s' % (text, role, len(matches)))
+    return matches[0]
+
+
+# Some HOME takeover apps hook micomservice/lginput2 instead of declaring home.
+# HomeBack injects Frida into lginput2/micomservice; those hooks survive app removal until reboot.
+KNOWN_HOME_TAKEOVERS = ('com.homebrew.homeback',)
+
+
+def launcher_removal_reason(app):
+    """Candidate rule plus documented HOME takeover exceptions, only for developer apps."""
+    ident = app['id']
+    if ident in (APP_ID, 'org.webosbrew.hbchannel') or ident.startswith('org.webosbrew.hcfixture.'):
+        return None
+    category = app.get('appCategory') or []
+    category = [category] if isinstance(category, str) else category
+    if 'home' in category:
+        return 'appCategory contains home'
+    if ident in KNOWN_HOME_TAKEOVERS:
+        return 'known HOME takeover app id'
+    return None
+
+
+def foreign_launcher(app):
+    return launcher_removal_reason(app) is not None
+
+
+def startup_entry_owned(ident, name, target, content):
+    """A package symlink, or an exact-id script that executes a package path."""
+    roots = ['/media/developer/apps/usr/palm/' + kind + '/' + app
+             for kind in ('applications', 'services') for app in (ident, ident + '.service')]
+    if target:
+        return any(target == root or target.startswith(root + '/') for root in roots)
+    return (name in (ident, ident + '.service') and
+            any(re.search(r'(?m)^\s*(?:exec\s+)?(?:sh\s+|bash\s+)?[\"\']?' + re.escape(root) + r'/', content)
+                for root in roots))
+
+
+def clean_startup_entries(dev, rec, ident):
+    # The installed startup script is authoritative. Local hbchannel services/startup.sh
+    # also documents run-parts /var/lib/webosbrew/init.d; do not guess other directories.
+    rc, startup = dev.sh('cat /var/lib/webosbrew/startup.sh')
+    if rc:
+        raise RuntimeError('cannot inspect Homebrew Channel startup after removing ' + ident)
+    dirs = re.findall(r'(?m)^\s*run-parts\s+(/var/lib/webosbrew/[A-Za-z0-9_./-]+)', startup)
+    if not dirs:
+        raise RuntimeError('no supported startup hook directory found for ' + ident)
+    for directory in dict.fromkeys(dirs):
+        rc, raw = dev.sh('find ' + shlex.quote(directory) + ' -mindepth 1 -maxdepth 1')
+        if rc:
+            raise RuntimeError('cannot inspect startup entries: ' + raw)
+        for path in raw.splitlines():
+            if os.path.dirname(path) != directory:
+                raise RuntimeError('unexpected startup entry path: ' + path)
+            _, target = dev.sh('readlink ' + shlex.quote(path))
+            _, content = dev.sh('cat ' + shlex.quote(path))
+            if startup_entry_owned(ident, os.path.basename(path), target.strip(), content):
+                rc, out = dev.sh('rm -- ' + shlex.quote(path))
+                rec.check('remove owned startup entry ' + path, rc == 0, out)
+                rec.note('removed startup entry owned by ' + ident, path + ' -> ' + target.strip())
+                if rc:
+                    raise RuntimeError('startup entry removal failed: ' + path)
+            else:
+                rec.note('retained startup entry: ownership not proven for ' + ident, path)
+
+
+def restart_after_launcher_cleanup(scenario, removed):
+    if removed:
+        scenario.rec.note('preflight restarting after launcher removal',
+                          ', '.join(removed) + ': HOME hooks injected into running processes survive uninstall')
+        if not scenario.beanjar_reboot('preflight launcher cleanup reboot'):
+            raise RuntimeError('VM did not return after launcher cleanup')
+
+
+def clean_launchers(dev, rec):
+    installed = dev.installed()
+    kept, removed = [], []
+    for ident in installed:
+        # Read the developer appinfo itself: SAM may omit appCategory on older releases.
+        path = '/media/developer/apps/usr/palm/applications/' + ident + '/appinfo.json'
+        rc, raw = dev.sh('cat ' + shlex.quote(path))
+        if rc:
+            raise RuntimeError('cannot read developer appinfo for %s: %s' % (ident, raw))
+        app = json.loads(raw)
+        if app.get('id') != ident:
+            raise RuntimeError('appinfo id mismatch for ' + ident)
+        if foreign_launcher(app):
+            rc, out = dev.remove(ident)
+            ok = rc == 0 and ident not in dev.installed()
+            rec.note('preflight launcher removal %s version %s: %s' %
+                     (ident, app.get('version'), launcher_removal_reason(app)), out)
+            rec.check('preflight removed foreign launcher ' + ident, ok, out)
+            if not ok:
+                raise RuntimeError('foreign launcher removal failed: ' + ident)
+            removed.append(ident)
+            clean_startup_entries(dev, rec, ident)
+        else:
+            kept.append('%s version %s' % (ident, app.get('version')))
+    rec.note('preflight retained developer apps (ours or non-launchers)', ', '.join(kept) or 'none')
+    return removed
+
+
+def alert_focus(frame, message, target, safe, require_focus=True):
     """Fail closed on incomplete OCR, extra controls, or ambiguous contrast/geometry."""
     if not isinstance(frame, dict) or not isinstance(frame.get('elements'), list):
         raise ValueError('missing elements array')
@@ -308,9 +436,11 @@ def alert_focus(frame, message, target, safe):
         horizontal = True
         focused = [b for b in buttons if b['style'].get('highlighted') is True]
         direction = 'LEFT' if first['text'] == target else 'RIGHT'
-    if all(b['style']['disabled'] for b in buttons):
+    if not require_focus:
+        focused = [buttons[0]]
+    if require_focus and all(b['style']['disabled'] for b in buttons):
         raise ValueError('both buttons are dimmed')
-    if len(focused) != 1:
+    if require_focus and len(focused) != 1:
         # Provisional only: ENTER also requires a reciprocal appearance swap.
         contrasts = [b['style'].get('contrast', 0) for b in buttons]
         if max(contrasts) - min(contrasts) < 2:
@@ -1045,6 +1175,7 @@ class BeanjarHost:
         self.slowdown = 1.0
         self.input_rec = None
         self._remote_keys = {}
+        self._frame_mapping_logged = False
 
     @classmethod
     def from_config(cls, cfg, name, mode=None, device=None):
@@ -1139,6 +1270,19 @@ class BeanjarHost:
             return run(['beanjar', *args], timeout)
         except OSError as e:
             return 127, str(e)
+
+    def click_available(self):
+        if not hasattr(self, '_click_available'):
+            rc, out = self.beanjar('remote', 'click', '--help', timeout=30)
+            self._click_available = rc == 0 and '--frame' in out
+            if not self._click_available and self.input_rec:
+                self.input_rec.note('click unavailable on %s; falling back to keys' % self.name, out)
+        return self._click_available
+
+    def remote_click(self, vm, centre, frame):
+        return self.display_beanjar('remote', 'click', self.remote_target(vm),
+                                   str(centre[0]), str(centre[1]), '--frame',
+                                   '%sx%s' % (frame['width'], frame['height']), '--json')
 
     def vnc_start(self, vm):
         if self.input_rec is None:
@@ -1601,26 +1745,78 @@ class Scenario:
         self.rec.say('FALLBACK: no host desktop capture; screenshots unavailable')
         return path
 
+    def use_click(self):
+        return (getattr(getattr(self, 'a', None), 'input_mode', 'keys') == 'click'
+                and self.host is not None and self.host.click_available())
+
+    def elements(self, label):
+        rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
+        self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
+        if rc:
+            raise RuntimeError('elements failed: ' + raw)
+        frame = json.loads(raw)
+        if getattr(self.host, '_frame_mapping_logged', False) is not True:
+            self.rec.note('screen coordinate mapping', json.dumps({k: frame.get(k) for k in
+                          ('width', 'height', 'source_width', 'source_height', 'scale', 'offset_x', 'offset_y')}))
+            self.host._frame_mapping_logged = True
+        return frame
+
+    def click_element(self, text=None, role=None, region=None, effect=None, label='UI', frame=None, read_after=True):
+        frame = frame if frame is not None else self.elements(label)
+        row = match_element(frame, text, role, region)
+        self.rec.say('input click: %s %r at %s' % (label, text or role, row['centre']))
+        rc, out = self.host.remote_click(self.vm, row['centre'], frame)
+        if rc:
+            raise KeySendError('click failed: ' + out)
+        if effect is not None:
+            if not self.wait(effect, 20, 1):
+                raise RuntimeError('click effect not observed: ' + label)
+        return self.elements(label + '-after') if read_after else None
+
+    def alert_action(self, message, target, safe, label, proof, verify, closed, request):
+        """Verify every alert click; retry only a proven dismissal without its action."""
+        for attempt in range(2):
+            if not self.press_alert(message, target, safe, label, proof):
+                return False
+            result = verify()
+            if result:
+                return result
+            if not self.use_click() or not closed():
+                raise RuntimeError(label + ': alert action was not observed')
+            evidence = '%s closed without %s; attempt %s' % (message, target, attempt + 1)
+            self.rec.note(label + ': alert click did not act', evidence)
+            if attempt:
+                raise RuntimeError(label + ': second alert click failed: ' + evidence)
+            request()
+        return False
+
     def press_alert(self, message, target, safe, label, service_proof):
-        """Two independent screen proofs, with no ENTER after any failed proof."""
+        """Prove ownership and screen buttons; keys additionally require two focus proofs."""
         def read():
             raw_service, proven = service_proof()
             self.rec.say('%s service ownership proof:\n%s' % (label, raw_service))
             if not proven:
                 raise ValueError('no matching accepted service alert from this request')
-            # OCR runs on this PC: the remote Beanjar host need not have go-textshot.
-            path = self.shot(label + '-focus-proof')
-            if not os.path.isfile(path):
-                raise ValueError('screen proof screenshot missing')
-            rc, raw = run(['beanjar', 'elements', '--image', path, '--json'], timeout=60)
-            self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
-            if rc:
-                raise ValueError('elements command failed')
-            frame = json.loads(raw)
-            focus, direction = alert_focus(frame, message, target, safe)
+            if self.use_click():
+                frame = self.elements(label)
+                path = 'live beanjar elements'
+            else:
+                # OCR runs locally for older hosts without pointer input.
+                path = self.shot(label + '-focus-proof')
+                if not os.path.isfile(path):
+                    raise ValueError('screen proof screenshot missing')
+                rc, raw = run(['beanjar', 'elements', '--image', path, '--json'], timeout=60)
+                self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
+                if rc:
+                    raise ValueError('elements command failed')
+                frame = json.loads(raw)
+            focus, direction = alert_focus(frame, message, target, safe, require_focus=not self.use_click())
             return focus, direction, path, frame
         try:
             focus, direction, _, before = read()
+            if self.use_click():
+                self.click_element(target, 'button', label=label, frame=before, read_after=False)
+                return True
             if focus != safe:
                 raise ValueError('initial focus is %s, expected safe default %s' % (focus, safe))
             self.press(direction)
@@ -1632,6 +1828,8 @@ class Scenario:
         except KeySendError:
             raise
         except (ValueError, TypeError, KeyError, IndexError, RuntimeError, OSError) as exc:
+            if self.use_click():
+                raise RuntimeError(label + ': click proof failed: ' + str(exc)) from exc
             self.alert_decline_reason = str(exc)
             self.rec.note(label + ': automatic press declined: ' + str(exc), 'MANUAL fallback')
             return False
@@ -1642,6 +1840,7 @@ class Scenario:
     def press(self, *keys):
         result = None
         for k in keys:
+            self.rec.say('input keys: ' + str(k))
             key = str(k).upper()
             key = 'ENTER' if key == 'OK' else key
             if self.a.input == 'beanjar':
@@ -2507,37 +2706,43 @@ class Scenario:
             raise RuntimeError('Home Chooser is not on screen; not pressing keys')
         self.ensure_key_focus(rows)
         ui = self.ui() or ui
-        # move focus to the launcher's row; a key only while our page is readable
-        for _ in range(len(rows) + 2):
-            ui = self.ui()
-            if ui is None:
-                r.note('2: our page went away while moving the focus; no more keys',
-                       self.page_gone_evidence(getattr(self, 'launch_mark', '') or ''))
-                ui = {}
-                break
-            if ui.get('row') == self.launcher:
-                break
-            cur, tgt = rows.index(ui['row']) if ui.get('row') in rows else 0, rows.index(self.launcher)
-            self.press('DOWN' if tgt > cur else 'UP')
-            r.say('focus move: was %s, now %s; foreground %s' % (ui.get('row'), (self.ui() or {}).get('row'),
-                                                                 self.dev.foreground()[0]))
-        ui = self.ui() or {}
-        r.check('focus is on the launcher row', ui.get('row') == self.launcher, json.dumps(ui))
-        self.shot('row-focused')
-        if ui.get('row') != self.launcher or (self.ui() or {}).get('row') != self.launcher:
-            raise RuntimeError('focus is not on the launcher row of our page; not pressing OK')
-        self.press('OK')
+        clicking = self.use_click()
+        if clicking:
+            self.click_element(self.L.title, role=('text', 'button'), effect=lambda: bool((self.ui() or {}).get('dialog')),
+                               label='launcher row')
+        else:
+            # move focus to the launcher's row; a key only while our page is readable
+            for _ in range(len(rows) + 2):
+                ui = self.ui()
+                if ui is None:
+                    r.note('2: our page went away while moving the focus; no more keys',
+                           self.page_gone_evidence(getattr(self, 'launch_mark', '') or ''))
+                    ui = {}
+                    break
+                if ui.get('row') == self.launcher:
+                    break
+                cur, tgt = rows.index(ui['row']) if ui.get('row') in rows else 0, rows.index(self.launcher)
+                self.press('DOWN' if tgt > cur else 'UP')
+                r.say('focus move: was %s, now %s; foreground %s' % (ui.get('row'), (self.ui() or {}).get('row'),
+                                                                     self.dev.foreground()[0]))
+            ui = self.ui() or {}
+            r.check('focus is on the launcher row', ui.get('row') == self.launcher, json.dumps(ui))
+            self.shot('row-focused')
+            if ui.get('row') != self.launcher or (self.ui() or {}).get('row') != self.launcher:
+                raise RuntimeError('focus is not on the launcher row of our page; not pressing OK')
+            self.press('OK')
         ui = self.wait(lambda: (lambda u: u if u and u.get('dialog') else None)(self.ui()), 15, 1) or {}
         r.check('the confirmation dialog opened ("Use <name> as Home?")',
                 bool(ui.get('dialog')) and ui['dialog'].startswith('Use '), json.dumps(ui))
         r.say('UI driven: dialog "%s", focus "%s"' % (ui.get('dialog'), ui.get('text')))
         self.shot('dialog')
-        if ui.get('dialog') and ui.get('text') != 'Use as Home':
-            self.press('UP')
-            ui = self.ui() or {}
-        r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
-        if ui.get('text') != 'Use as Home':
-            raise RuntimeError('focus is not on "Use as Home" in our dialog; not pressing OK')
+        if not clicking:
+            if ui.get('dialog') and ui.get('text') != 'Use as Home':
+                self.press('UP')
+                ui = self.ui() or {}
+            r.check('focus is on "Use as Home"', ui.get('text') == 'Use as Home', json.dumps(ui))
+            if ui.get('text') != 'Use as Home':
+                raise RuntimeError('focus is not on "Use as Home" in our dialog; not pressing OK')
         mounted_before = bool(d.mounts()) if self.uses_home_key_hook() else False
         comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
         if self.uses_home_key_hook():
@@ -2548,7 +2753,11 @@ class Scenario:
             self.ask_monitor = RebootAlertMonitor(d)
             if not self.ask_monitor.start():
                 r.note('notification bus monitor did not start; using PmLog evidence', '')
-        self.press('OK')
+        if clicking:
+            self.click_element('Use as Home', effect=lambda: self.state()['choice'] == self.launcher,
+                               label='Use as Home')
+        else:
+            self.press('OK')
         # the choice is applied; nothing restarts the compositor any more, so the panel stays open
         toasts = []
 
@@ -2744,8 +2953,8 @@ class Scenario:
 
         --reboot-via later (default): our alert is closed with closeAlert and the VM is restarted with
         beanjar stop/start.  No key is pressed.
-        --reboot-via alert: prove ownership and safe focus from Beanjar elements, move to Reboot,
-        prove focus again, then press ENTER. On a failed proof, keep the 240 s human fallback."""
+        --reboot-via alert: prove ownership and exact buttons with Beanjar elements, click Reboot,
+        and verify the boot changed. Keys retain the two-frame focus proof and human fallback."""
         r, d = self.rec, self.dev
         toasts = []
 
@@ -2804,11 +3013,27 @@ class Scenario:
             def service_proof():
                 raw = self.reboot_ask_log()
                 return raw + '\nLS2: ' + json.dumps(observed), alert_service_proof(raw, REBOOT_PROMPT['apply'], 'Reboot', 'Later', observed=observed)
-            automatic = self.press_alert(REBOOT_PROMPT['apply'], 'Reboot', 'Later', '2-reboot-alert', service_proof)
+            def request_again():
+                nonlocal observed
+                observed = None
+                self.ask_mark = self.messages_mark()
+                d.launch(APP_ID)
+                sleep(3)
+                self.click_element(RESTART_NOW, label='retry Restart now')
+                self.wait(lambda: self.reboot_ask_evidence()[0]['alert'] == 'accepted', 30, 1)
+            outcome = None
+            def verify_reboot():
+                nonlocal outcome
+                outcome = self.wait_reboot(boot0, timeout=40 if self.use_click() else 240)
+                return outcome if outcome in ('rebooted', 'off') else False
+            automatic = self.alert_action(REBOOT_PROMPT['apply'], 'Reboot', 'Later',
+                                          '2-reboot-alert', service_proof, verify_reboot,
+                                          lambda: not any(e.get('text') == REBOOT_PROMPT['apply']
+                                              for e in self.elements('reboot-result')['elements']), request_again)
             if not automatic:
                 r.manual('press Reboot on the restart alert', ('automatic press declined: ' + self.alert_decline_reason + '. Press Reboot by hand within ') +
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
-            how = self.wait_reboot(boot0)
+            how = outcome if automatic else self.wait_reboot(boot0)
             if how in ('rebooted', 'off'):
                 r.check('Reboot restarted the TV%s (alert -> tvpower/power/reboot; a VM that powers off counts)'
                         % (' (automatic press)' if automatic else ''), True, how)
@@ -3425,7 +3650,7 @@ exit "$rc"
         r.check('after the cancel the disposable app is still installed', d.app_installed(DISPOSABLE_ID), DISPOSABLE_ID)
 
     def api_uninstall_confirm(self):
-        """Confirm our alert with two screen proofs, falling back to the human wait."""
+        """Confirm our owned alert and verify removal; keys retain the human fallback."""
         r, d = self.rec, self.dev
         how = self.uninstall_ask('confirmation')
         if how == 'alert':
@@ -3440,8 +3665,16 @@ exit "$rc"
                     observed = self.uninstall_monitor.snapshot() if getattr(self, 'uninstall_monitor', None) else None
                     return raw + '\nLS2: ' + json.dumps(observed), alert_service_proof(raw, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
                                                     DISPOSABLE_ID, self.launcher, observed=observed)
-                automatic = self.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
-                                             '3a-uninstall-alert', service_proof)
+                def request_again():
+                    if self.uninstall_ask('retry confirmation') != 'alert':
+                        raise RuntimeError('uninstall retry did not raise an alert')
+                    sleep(3)
+                automatic = self.alert_action('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                             '3a-uninstall-alert', service_proof,
+                                             lambda: self.wait(lambda: not d.app_installed(DISPOSABLE_ID),
+                                                               30 if self.use_click() else 240, 2),
+                                             lambda: not any(e.get('text') == 'Uninstall HC Fixture disposable?'
+                                                 for e in self.elements('uninstall-result')['elements']), request_again)
                 if not automatic:
                     r.manual('press Uninstall on our alert', 'automatic press declined: ' + self.alert_decline_reason + '; waiting up to 240 seconds')
                 gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)
@@ -3473,11 +3706,14 @@ exit "$rc"
         r.check('confirm: the "Uninstall ...?" dialog is ours and in front', ok, why)
         if not ok:
             return
-        ok = self.focus_button('Uninstall')
-        r.check('confirm: focus is on "Uninstall"', ok, json.dumps(self.ui()))
-        if not ok:
-            return
-        self.press('OK')
+        if self.use_click():
+            self.click_element('Uninstall', effect=lambda: not d.app_installed(DISPOSABLE_ID), label='screen Uninstall')
+        else:
+            ok = self.focus_button('Uninstall')
+            r.check('confirm: focus is on "Uninstall"', ok, json.dumps(self.ui()))
+            if not ok:
+                return
+            self.press('OK')
         gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 120, 5)
         self.shot('3a-uninstalled')
         r.check('confirm on our screen: uninstallConfirmed removed %s' % DISPOSABLE_ID, bool(gone),
@@ -4287,6 +4523,8 @@ def main():
                     help="override the matrix's elevation strategy")
     ap.add_argument('--input', choices=['beanjar', 'qmp', 'ares'], default='beanjar',
                     help='remote-key path: Beanjar IR remote (default), QEMU keyboard, or ares-do key')
+    ap.add_argument('--input-mode', choices=['click', 'keys'], default='click',
+                    help='prefer screen elements and pointer clicks (default), or key navigation')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
     ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
     ap.add_argument('--wait-popup', type=int, default=0,
@@ -4342,7 +4580,7 @@ def main():
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
-    host.input_rec = rec if args.input == 'beanjar' else None
+    host.input_rec = rec if args.input == 'beanjar' or args.input_mode == 'click' else None
     rec.say('artefacts: ' + outdir)
     rec.say('host timing slowdown: %g' % host.slowdown)
     rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
@@ -4386,11 +4624,14 @@ def main():
             state = wait_for_device(vm, rec)
         if state != READY:
             raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
+        removed_launchers = clean_launchers(Device(vm), rec)
         for index, launcher in enumerate(launchers):
             rec.tag = '[%s]' % launcher.spec if args.multi else ''
             rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))
             scenario = Scenario(args, host, rec, row, launcher)
             try:
+                if index == 0:
+                    restart_after_launcher_cleanup(scenario, removed_launchers)
                 scenario.run()
                 if index + 1 < len(launchers) and args.until >= 5:
                     # Give every fixture a stock boot. On 6-9, uninstall removes the cached hook

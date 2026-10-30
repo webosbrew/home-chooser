@@ -49,7 +49,7 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--dock-ipk <path>` (required for Dock unless configured in `hosts.toml`);
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
-`--elevation luna|root-shell`; `--input beanjar|qmp|ares` (default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
+`--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
 (webOS 6-9, how the restart the first choice asks for is done: `later`, the default, closes our alert and restarts the VM with
 beanjar; `alert` leaves pressing Reboot to a person; see "webOS 6-9: no restart while the TV runs");
@@ -124,19 +124,37 @@ the VM directory `beanjar info` reports. No remote quoting exists outside that c
 
 ## Several machines
 
-The default input runs `beanjar remote press HOST/NAME KEY` on this PC, using the configured
-Beanjar host name (a local VM uses `NAME`). Install Beanjar here and register remote hosts with
-the same names as `hosts.toml`. This input needs no helper or extra installation on the VM host.
-It sends the LG remote's IR codes through the display front end, keeping keys ordered with future
-pointer commands. `OK`/`ENTER` map to `ENTER`; HOME, BACK, arrows and digits keep their names.
-The runner reads `remote layout --json` once per run and rejects missing or inactive keys.
+The default `--input-mode click` reads `beanjar elements HOST/NAME --json` on this PC,
+selects exactly one element by exact text, optional kind and region, and clicks its centre with
+`beanjar remote click HOST/NAME X Y --frame WxH`. Missing or ambiguous matches fail without input.
+Launcher labels accept text/button kinds, excluding icons which can repeat the label. Each action
+logs its input path and checks its effect using a fresh screen read or the existing state assertions.
+The screen/source dimensions, scale and offsets are noted once per run. Hosts without
+`remote click` use keys with an explicit NOTE. `--input-mode keys` selects the old navigation.
+HOME proofs, Back cancellation and the probe proving remote keys reach Home Chooser always use keys.
+The ares-only `--device` contract keeps keys because it has no Beanjar display host.
 
-For this input the runner starts beanjar-vnc after each Beanjar start and again after a tvpower
-reboot returns, before further keys. An already running beanjar-vnc is accepted. It uses `--port 0`
-to choose a free host port; the VM's LAN listener remains on 5900. Starts and stops are logged.
-VNC stops before each Beanjar stop and at exit, including failures, Ctrl-C and `--no-stop`.
-`--input qmp` keeps the Python 3 QMP keyboard path; `--input ares` uses `ares-do key`.
-These alternatives do not start VNC.
+The key backend defaults to `beanjar remote press HOST/NAME KEY`, using the configured Beanjar host
+name (local VMs use `NAME`). Register hosts here with the same names as `hosts.toml`.
+`OK`/`ENTER` map to `ENTER`; HOME, BACK, arrows and digits keep their names. The runner reads
+`remote layout --json` once and rejects missing or inactive keys. `--input qmp` uses QMP keyboard
+input; `--input ares` uses `ares-do key`.
+
+With clicks or the Beanjar key backend, the runner starts beanjar-vnc after each Beanjar start and
+after a tvpower reboot returns. An already running beanjar-vnc is accepted. `--port 0` chooses a free
+host port; the VM's LAN listener stays on 5900. VNC stops before each Beanjar stop and at exit,
+including failures, Ctrl-C and `--no-stop`. QMP/ares with `--input-mode keys` do not start VNC.
+
+Before installing Home Chooser, preflight reads `ares-install -l` and each developer app's appinfo.
+It removes foreign apps declaring `appCategory` containing `home` (the candidate rule in
+`app/src/homechooser/index.js`; the service API forwards the category), plus known HOME takeover ids
+in `KNOWN_HOME_TAKEOVERS`. HomeBack (`com.homebrew.homeback`) hooks lginput2/micomservice through
+Frida without declaring the home category. Home Chooser, `org.webosbrew.hcfixture.*` and Homebrew
+Channel are exempt. Each removal records id, version and rule; non-launchers are retained and noted.
+Removal failure fails setup. After removal the runner reads the installed Homebrew Channel
+`startup.sh` for its `run-parts` directory and removes only package-owned symlinks or exact-id
+scripts executing the package path; ambiguous entries are retained and noted. It then restarts the
+VM through the normal stop/start/VNC path before any HOME tests, clearing injected in-memory hooks.
 
 Host helper code must use `python3` with the standard library only (or baseline POSIX shell/coreutils), without extra tools such as socat, nc, jq or grim; Beanjar itself is required.
 
@@ -255,7 +273,8 @@ and Home key hook docs.
 
 0. Baseline: release matches the row; no Home Chooser, Homebrew Channel present; state recorded.
 1. Install Home Chooser and the launcher; elevate (strategy above).
-2. Open Home Chooser, drive it with remote keys (`beanjar remote press` by default; QMP `sendkey` with
+2. Open Home Chooser, prove remote keys reach it, then click the launcher label and Use as Home.
+   With `--input-mode keys`, drive it with remote keys (`beanjar remote press`; QMP `sendkey` with
    `--input qmp`, or `ares-do key` with `--input ares`): the focus is read from the app's DOM through the web inspector (port 9998,
    forwarded with `ares-novacom -f`; rows carry `data-app-id`), moved to the launcher's row, OK,
    then the "Use <name> as Home?" dialog is checked and "Use as Home" is pressed. Asserted:
@@ -346,18 +365,13 @@ Since 144ef21 nothing restarts the compositor on a running TV (a bare restart cr
   * `--reboot-via later` (the default): our alert is closed with `notification/closeAlert` (the `alertId`
     from the accepted `createAlert` reply in the `REBOOT_ASK` line, `luna-send -a com.webos.applicationManager`,
     as the removal alert is closed) and the VM is restarted with `beanjar stop` and `start`. No key is pressed.
-  * `--reboot-via alert`: capture the TV with Beanjar and run local `beanjar elements --image PNG --json`.
-    Require the exact restart message, exactly Reboot/Later in the alert's
-    message/button band, and Later as the sole undimmed button (`style.disabled == false`). Derive
-    UP/DOWN/LEFT/RIGHT from their boxes, move once through the selected QMP/ares input path, then
-    capture and prove ownership and Reboot focus again before ENTER. Both frames and their elements
-    are saved in the run evidence. Each proof also requires this request's matching accepted
-    `REBOOT_ASK` service log lines (message, buttons and alert id); bus-only evidence falls back
-    to MANUAL. Titles are optional: webOS 9 renders no alert title, and an app title behind the
-    alert does not prove ownership. The Pi needs no OCR installation. A new `boot_id` yields
-    PASS (automatic press); an Off VM is started again and its new boot checked.
-    Any failed proof stops key input and falls back to the existing 240 s MANUAL wait; if no reboot
-    follows, close our alert with `closeAlert` and restart with Beanjar.
+  * `--reboot-via alert`: prove the current request's ownership with service logs or LS2
+    createAlert evidence, exact restart message and exactly the Reboot/Later button pair in the
+    alert band. Click Reboot's centre, then require a new boot id (an Off VM is started and checked).
+    If the alert closed without acting, record a NOTE, raise the request again via Restart now and
+    retry once. A second failure is a FAIL. No action is sent after missing or ambiguous proof.
+    The key fallback retains the safe-default focus, one directional move and reciprocal appearance
+    swap proof before ENTER; failed key proofs retain the 240 s MANUAL route.
   After the boot: the watcher is active, the boot hook mounted the patch (`mounted=yes`, `reboot=no`, at
   least 9 mounts), and the Home key hook log of that boot (its firmware-order compositor restart is the only
   one allowed) is noted; the minimal-hook status checks come here.
@@ -446,12 +460,13 @@ declare it and are refused. The run also installs a disposable non-home app,
   our dialog and the app must be gone within 120 s (`uninstallConfirmed`); on the alert route it is `MANUAL`
   (the button calls LG's remove endpoint directly). Then a `request` while the launcher is Home must give
   the toast "<title> is already your Home.". On 6-9 there must be no compositor restart.
-  With `--uninstall-via alert`, use the same two-frame proof as Reboot with the exact question
-  `Uninstall HC Fixture disposable?`, buttons Uninstall/Cancel, and Cancel initially undimmed.
+  With `--uninstall-via alert`, use the same ownership and button proof as Reboot with the exact question
+  `Uninstall HC Fixture disposable?`, buttons Uninstall/Cancel (the key fallback additionally proves the safe Cancel focus).
   Require a matching `UNINSTALL_ASK` alert-shown line since this request's log mark, naming
   the disposable target and requesting launcher, successful remove route, and accepted alert id.
-  After automatic ENTER, verify the installed app set lost only the disposable fixture, yielding
-  PASS (automatic press). A failed proof falls back to the 240 s MANUAL wait; timeout closes our alert.
+  After clicking Uninstall, verify the installed app set lost only the disposable fixture. An alert
+  dismissed without removal is noted, requested again and clicked once more; a second failure fails.
+  The key fallback retains the two-frame focus proof and MANUAL wait after a declined proof.
 * With `--reboot-check`, after the boot: `getInfo` (root, permitted, isSelectedHome), `listApps` and `listRunning`
   still succeed: the grants and the elevation survive a boot.
 * After step 5: `getInfo` and `listApps` as the launcher fail cleanly (a JSON `returnValue:false` in
