@@ -17,6 +17,5 @@ int main(int argc, char **argv)
 
 	if (argc > 1 && (!strcmp(argv[1], "--boot") || !strcmp(argv[1], "--homekey")))
 		return hc_homekey_main(argc, argv);
-	/* A native watcher role will join this dispatch when the shell watcher is ported. */
 	return hc_service_main();
 }

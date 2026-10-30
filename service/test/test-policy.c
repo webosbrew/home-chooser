@@ -307,7 +307,12 @@ static void test_luna_run(void)
     CHECK(hc_luna_argv("luna://com.webos.surfacemanager/getCurrentState", "{}", 1, argv));
     CHECK(hc_call_lookup("luna://com.webos.service.config/setConfigs") == HC_CALL_DENIED);
 	CHECK(hc_luna_uri_allowed("luna://com.webos.appInstallService/dev/remove"));
-	CHECK(!hc_luna_uri_allowed("luna://com.webos.service.systemprofile/debug/rescan"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.systemprofile/debug/rescan"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.systemprofile/getProfiles"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.preloadmanager/setPreloadPolicy"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/getAppLifeEvents"));
+	CHECK(hc_call_lookup("luna://com.webos.service.preloadmanager/setPreloadPolicy") == HC_CALL_DENIED);
+	CHECK(hc_call_lookup("luna://com.webos.service.systemprofile/getProfiles") == HC_CALL_DENIED);
 	CHECK(!hc_luna_uri_allowed("luna://com.webos.applicationManager/uninstallApp"));
 	CHECK(!hc_luna_uri_allowed("luna://com.webos.appInstallService/install"));
 	CHECK(!hc_luna_uri_allowed(NULL));

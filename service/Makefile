@@ -26,9 +26,11 @@ INC = -Isrc -I$(SYSROOT)/usr/include -I$(SYSROOT)/usr/include/glib-2.0 -I$(SYSRO
 LIBS = -lluna-service2 -lpbnjson_c -lPmLogLib -lglib-2.0
 SOURCES = src/main.c src/json.c src/luna.c src/proc.c src/fs.c src/policy.c \
 	src/apps.c src/bootlink.c src/notify.c src/homekey-main.c src/homekey.c src/homekey-generator.c \
+	$(WATCHER_SOURCES) src/watcher/main.c \
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c \
 	src/service/run.c src/service/launcher.c src/service/system.c
-HEADERS = $(wildcard src/*.h src/service/*.h) src/homekey-shapes.inc
+WATCHER_SOURCES = src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c
+HEADERS = $(wildcard src/*.h src/service/*.h src/watcher/*.h) src/homekey-shapes.inc
 
 all: $(OUT)/homechooser-service
 
@@ -57,7 +59,7 @@ check-abi: $(OUT)/homechooser-service
 clean:
 	rm -rf $(OUT) $(OUT)-dev test/test-policy
 
-.PHONY: all dev test test-homekey check-abi clean
+.PHONY: all dev test test-homekey test-watcher check-abi clean
 
 # Run the same native JSON/transaction code under qemu with a fake Luna transport.
 test-homekey: $(OUT)/test-homekey
@@ -67,3 +69,17 @@ test-homekey: $(OUT)/test-homekey
 $(OUT)/test-homekey: test/test-homekey.c src/homekey.c src/homekey-generator.c src/homekey.h src/homekey-shapes.inc
 	mkdir -p $(OUT)
 	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -Isrc -o $@ test/test-homekey.c src/homekey.c src/homekey-generator.c -lpbnjson_c -lglib-2.0
+
+test-watcher: $(OUT)/test-watcher $(OUT)/test-watcher-luna
+	@mkdir -p $(OUT)/watcher-test
+	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/test-watcher $(OUT)/watcher-test
+	cp $(OUT)/test-watcher-luna $(OUT)/watcher-test/runtime-image
+	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/watcher-test/runtime-image $(OUT)/watcher-test $(KEYFILTER_ROOTFS)/usr/lib/qml/KeyFilters/systemUi.js
+
+$(OUT)/test-watcher: test/test-watcher.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c
+	mkdir -p $(OUT)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c -lpbnjson_c -lglib-2.0
+
+$(OUT)/test-watcher-luna: test/test-watcher-luna.c src/luna.c src/watcher/main.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c
+	mkdir -p $(OUT)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher-luna.c src/luna.c src/watcher/main.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c $(LIBS)

@@ -26,4 +26,38 @@ printf '#!/bin/sh\nexit 0\n' > "$T/bin/systemctl"
 : > "$T/commands"
 $SH "$HERE/homechooser"
 [ ! -s "$T/commands" ]
-printf 'PASS boot entry: one nonblocking native unit, no boot waits, existing unit retained (%s)\n' "$SH"
+# Legacy boot staging and stopped/no-choice uninstall recovery use the same executable.
+printf '#!/bin/sh\necho "$*" >> "$HC_TEST_COMMANDS"\n[ "$1" != is-active ]\n' > "$T/bin/systemctl"
+mkdir -p "$T/service-scripts/lib"
+cp "$HERE/homechooser" "$T/service-scripts/homechooser"
+printf '#!/bin/sh\nexit 0\n' > "$T/service-scripts/homechooser-access"
+printf 'HC_TEST=yes\n' > "$T/service-scripts/lib/common.sh"
+export HOMECHOOSER_SERVICE_SCRIPTS="$T/service-scripts" HOMECHOOSER_BOOT_DIR="$T/boot" HOMECHOOSER_CHOICE="$T/home"
+for major in 5 6 7 8 9 10 11 12; do
+    printf 'VERSION_ID="%s.0"\n' "$major" > "$T/os-release"
+    rm -rf "$T/boot"
+    $SH "$HERE/homechooser" stage
+    if [ "$major" -ge 6 ] && [ "$major" -le 9 ]; then
+        [ ! -e "$T/boot" ]
+    else
+        cmp "$T/service" "$T/boot/homechooser-service"
+        cmp "$HERE/homechooser" "$T/boot/homechooser"
+        test -x "$T/boot/homechooser-service"
+        test -f "$T/boot/lib/common.sh"
+        : > "$T/commands"
+        $SH "$HERE/homechooser"
+        [ ! -s "$T/commands" ] # unchosen installed legacy boot only applies access
+        : > "$T/commands"
+        $SH "$HERE/homechooser" watch
+        grep -qF -- --no-block "$T/commands"
+        # Package removed: cached boot entry still starts with no stored choice.
+        mv "$T/service" "$T/service.saved"
+        : > "$T/commands"
+        $SH "$T/boot/homechooser"
+        grep -qF -- "homechooser-boot $T/boot/homechooser-service /tmp/homechooser-runtime/homechooser-service" "$T/commands"
+        mv "$T/service.saved" "$T/service"
+        $SH "$HERE/homechooser" unstage
+        [ ! -e "$T/boot" ]
+    fi
+done
+printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback (%s)\n' "$SH"

@@ -70,8 +70,8 @@ timeout. The failures map to the problem screens: Homebrew Channel absent (`unre
 `elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
 Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
-content never meets a shell. The shell scripts (`service/scripts/homechooser`, the watcher, the Home key hook
-worker) are unchanged; the service runs them with a fixed argv.
+content never meets a shell. Boot and Home-key entry scripts dispatch roles in the same native service executable. The
+watcher runs in-process with its own LS2 client; access-file edits retain the shell helper.
 
 The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
 
@@ -135,19 +135,14 @@ Home Chooser keeps its own copy of the choice and enforces it.
   On 5 and 10–12, the existing persistent watcher restore copy remains under
   `/var/lib/webosbrew/homechooser/boot/`. `homechooser watch` starts the same lifecycle without
   waiting in the app's RPC request.
-* **The watcher** is `service/scripts/homechooser-home-watch`. On 6–9 the native boot process
-  becomes it via `exec`. The legacy 5/10–12 transient unit starts it directly:
-  `systemd-run --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 /bin/sh -c
-  '<wrapper>' homechooser-home-watch <service>/scripts/homechooser-home-watch /tmp/homechooser-runtime/homechooser-home-watch`,
-  where the wrapper runs the first script that exists and exits 0 if neither does. No unit file is written and no other service's unit,
-  environment file or binary is touched. The flags are those of systemd 230 and later, which is
-  what is assumed for webOS 5; the newest flag (`--collect`, 236) is not used, and a failed unit is
-  cleared with `reset-failed` before the next start. It is `on-failure`, not `always`, because the
-  watcher exits 0 when the choice is removed and has to stay stopped then.
-  * It subscribes with `luna-send -i luna://com.webos.settingsservice/getSystemSettings
-    {"category":"general","keys":["defaultApps"],"subscribe":true}`. It reads a reply as complete
-    when its braces balance, so both one-line and pretty-printed output work, and takes `home` from
-    an object or from a JSON string record.
+* **The watcher** is `service/src/watcher/`, inside the same executable. The boot entry queues
+  `systemd-run --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5`
+  with a wrapper that runs the installed `homechooser-service --boot`, then its runtime copy if
+  the installed image is gone. It preserves an already active unit. No unit file is written.
+  A clean exit stays stopped; transport/restore failures restart after five seconds.
+  * It subscribes in-process to `settingsservice/getSystemSettings` with
+    `{"category":"general","keys":["defaultApps"],"subscribe":true}` using the privileged
+    application identity. LS2 delivers complete JSON messages, including string-encoded records.
   * When `home` is missing or differs from the choice it writes the choice again:
     `applicationManager/setDefaultApp` on 9.x and later (the merged `setSystemSettings` write on
     `Unknown method`), the merged `setSystemSettings` write (existing entries read back and kept) on
@@ -163,7 +158,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
   * It also watches the apps it depends on; see [When apps are removed](#when-apps-are-removed).
     It subscribes to `applicationManager/listApps {"subscribe":true}` as a trigger only, checks the
     chosen app and `org.webosbrew.homechooser` with `getAppInfo` on every message and every 5 min,
-    and runs from a copy of itself in `/tmp/homechooser-runtime/`.
+    and stages restart recovery in `/tmp/homechooser-runtime/`. The running image survives package unlink.
   * It keeps the stock home from being preloaded while a third-party home is chosen; see
     [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
   * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
@@ -175,7 +170,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
   before deleting generated JS. On 5–9 the record names an installed stock launcher; the stock
   6–9 key handler ignores that record, but it remains useful to SAM and the watcher.
   On 10.x and later clearing `home` is one function in the app,
-  `removeHomeFromRecord()`, and `merged_write ""` in the watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
+  `removeHomeFromRecord()`, and `merged_write(w, NULL)` in the watcher: the record is written with `"home": null` and the other entries kept. Sub-keys of
   `general/defaultApps` can never be removed (a write that leaves `home` out only looks like a
   replace until the settings service restarts; `deleteSystemSettings` and `resetSystemSettings`
   are no-ops), but a stored `null` reads as unset and `launchDefaultApp {"category":"home"}`
@@ -186,22 +181,11 @@ Home Chooser keeps its own copy of the choice and enforces it.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
   (`/tmp/homechooser-home.log`).
 
-The watcher does not use a mocked preload manager in its tests; the preload calls only have to be tolerated by the stub.
-
-Tests: `service/scripts/tests/test-homechooser-home-watch.sh` (a stub `luna-send` plays a stream of replies:
-present, missing, different, `Unknown method`, pretty-printed, string records, a storm, the choice
-file in each form, the override on 10.x; a fake clock and sleep check the rate limiting; markers in
-the stream install and uninstall apps and wait for the watcher's app check, so the removal cases
-are deterministic: the chosen app removed and back on 5, 6 to 9 and 10+, Home Chooser removed with
-the full restore, both in either order and one removed during the other's confirmation wait with its message delivered or lost, the alert and toast triggers (once, not on a transient absence, not at a start, not after a restore from the app), a transient absence, a silent `getAppInfo`, the periodic
-check, the restore from the runtime copy after the app directory is deleted, the leftover Home
-without a stored choice on 5, 6 to 9 and 10+ with what it leaves alone, and the start-time
-files-on-disk guard),
-`service/scripts/tests/test-homechooser.sh` (the boot entry with stubbed `systemd-run` and `systemctl`: the 5.x,
-6 to 9 and 10+ paths, the flag, the symlink, a service scripts directory that is gone, the unit's wrapper),
-`service/scripts/tests/test-homechooser-homekey.sh` and `service/scripts/tests/test-real-roundtrip.sh` (see the
-[Home key hook](home-key-hook.md#deployment)), run as `sh` and `busybox sh`, and the Jest specs
-for `apply`, `restoreStock`, the status parsing and the missing-choice message.
+Tests: `make -C service test-watcher` runs the C policy and LS2 client/runtime tests under
+qemu-arm with firmware libraries and a fake transport. It covers record merging, backoff,
+per-version restore, package removal, notifications, preload retry/settle and foreground safety.
+The [port inventory](research/native-watcher-port.md) maps the removed shell checks to these tests.
+`service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
 
 ## When apps are removed
 
@@ -219,10 +203,9 @@ So the watcher notices a removal and undoes the writes itself. Nothing here reli
 {"subscribe":true}` (`luna-send -i`) and treats every message as a reason to look, nothing more. A
 look is `luna://com.webos.applicationManager/getAppInfo {"id":"..."}` for `org.webosbrew.homechooser`
 and for the chosen app; an uninstalled id answers `returnValue:false` (`Invalid appId specified OR
-Unsupported Application Type`). The same look is repeated every 5 min (`HOMECHOOSER_RECHECK`) in case
+Unsupported Application Type`). The same look is repeated every 5 min in case
 the subscription missed something, and once at start. Home Chooser counts as gone when `getAppInfo`
-says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later
-(`HOMECHOOSER_CONFIRM_DELAY`), because an app update temporarily removes its directory and should not trigger a restore. A `getAppInfo` that does not answer changes nothing. At a watcher start
+says so or its app directory is missing. An app counts as gone only if it is still gone 15 s later, because an app update temporarily removes its directory and should not trigger a restore. A `getAppInfo` that does not answer changes nothing. At a watcher start
 (a boot, where `sam` may not have loaded every app yet) an app whose `appinfo.json` is still in
 `/media/developer/apps/usr/palm/applications`, `/usr/palm/applications` or
 `/media/cryptofs/apps/usr/palm/applications` is not taken as gone either, whatever `getAppInfo`
@@ -275,8 +258,9 @@ on 6–9 the stock filter is restored separately and the record keeps the watche
 ### Home Chooser is uninstalled
 
 The app's files go with it, so the watcher cannot run anything from the app directory. At start it
-copies itself, `homechooser-homekey` and `homechooser-access` into
-`/tmp/homechooser-runtime/` (replacing each file by rename) and runs from there. When Home Chooser is
+stages the same executable, `homechooser-access` and `lib/common.sh` into
+`/tmp/homechooser-runtime/` by rename. Its mapped executable continues after package unlink,
+and its native Home-key code restores configd without spawning a removed binary. When Home Chooser is
 gone it does, in order:
 
 1. Removes launcher access and reverts the platform record/profile as above.
@@ -287,14 +271,13 @@ gone it does, in order:
 4. Shows “Home Chooser was removed. The Home button opens LG Home again.” through a best-effort
    toast using the fixed privileged Luna identity, then exits successfully.
 
-No GUI restart or unmount is required. The runtime copy includes the existing native executable
-on 6–9 so removal does not delete the recovery code out from under the watcher.
+No GUI restart or unmount is required. Runtime copies on all releases provide crash/restart recovery.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
-changes nothing: with the record's `home` already the stock id (5.x to 9.x) or unset (10.x and later: null, empty or missing), "home is already ..." / "nothing to remove" is logged and no write
+changes nothing: with the record's `home` already the stock id (5.x to 9.x) or unset (10.x and later: null, empty or missing), no write
 is made. The unit's command is a small wrapper that runs the app's copy of the watcher, else the
 runtime copy, else exits 0, so a watcher that crashes and is restarted after the app is gone still
-finishes the restore, from `/tmp`, instead of failing to find its script every 5 s. The log
+finishes the restore, from `/tmp`, instead of failing to find its executable every 5 s. The log
 (`/tmp/homechooser-home.log`) and the runtime copy stay in `/tmp` until reboot.
 
 Both removed, in either order and at any spacing while the watcher runs, ends at the same clean
@@ -354,9 +337,9 @@ opened after a reinstall, through `homechooser watch`):
 * With a stored choice none of this applies: the choice is enforced, and a record or override
   naming something else is overwritten by it (the [Persistence](#persistence) rules).
 
-The boot entry does not start the watcher without a choice, so this check does not run at every
-boot: the leftover comes from an uninstall, which removes the `init.d` link, so nothing would run at
-boot anyway until the app is opened again.
+On 6–9 the native boot role can perform this check even without a choice. Legacy installed
+boot entries start it when a choice exists; explicit `watch` and cached uninstall recovery start
+it regardless of a stored choice.
 
 What only a live test settles: that
 `getAppInfo` of an uninstalled id answers `returnValue:false` on every release, and that `sam`

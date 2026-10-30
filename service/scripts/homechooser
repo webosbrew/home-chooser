@@ -1,126 +1,49 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Homebrew Channel init.d entry: enqueue native boot apply on 6-9; preserve legacy watcher boot.
-# The watcher unit uses its /tmp copy if the service is removed after a crash.
-
-
+# HBC entry: queue the native boot/watcher role once; never wait for readiness.
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
-major=$(sed -n 's/^VERSION_ID=//p' "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -1)
-if [ "${major:-0}" -ge 6 ] && [ "${major:-0}" -le 9 ]; then
-    SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
-    BINARY=${HOMECHOOSER_BINARY:-$SERVICE_SCRIPTS/../homechooser-service}
-    SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
-    SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
-    case "$1" in stage|unstage) exit 0 ;; ""|watch) ;; *) exit 2 ;; esac
-    [ -x "$BINARY" ] || exit 0
-    "$SYSTEMCTL" is-active --quiet homechooser-home && exit 0
-    "$SYSTEMCTL" reset-failed homechooser-home 2>/dev/null
-    RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
-    exec "$SYSTEMD_RUN" --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 \
-        /bin/sh -c '[ -x "$1" ] && exec "$1" --boot; [ -x "$2" ] && exec "$2" --boot; exit 0' \
-        homechooser-boot "$BINARY" "$RUNTIME/homechooser-service"
-fi
-
 SERVICE_SCRIPTS=${HOMECHOOSER_SERVICE_SCRIPTS:-/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts}
 BOOT_DIR=${HOMECHOOSER_BOOT_DIR:-/var/lib/webosbrew/homechooser/boot}
-CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
-FLAG=${HOMECHOOSER_HOMEKEY_FLAG:-/var/lib/webosbrew/homechooser/homekey}
-OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
+BINARY=${HOMECHOOSER_BINARY:-$SERVICE_SCRIPTS/../homechooser-service}
 SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
 SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
-LOG=${HOMECHOOSER_LOG:-/tmp/homechooser-boot.log}
-UNIT=homechooser-home
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
+CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
+major=$(sed -n 's/^VERSION_ID=//p' "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -1)
 
-# Prefer the installed scripts while the app is present; after uninstall the init.d link still
-# reaches the boot copy, which has the watcher and its helpers beside it.
-locate() {
-    if [ -n "$HOMECHOOSER_DIR" ]; then
-        HERE=$HOMECHOOSER_DIR
-    elif [ -f "$SERVICE_SCRIPTS/homechooser-home-watch" ]; then
-        HERE=$SERVICE_SCRIPTS
-    else
-        real=$(readlink -f "$0" 2>/dev/null)
-        if [ -z "$real" ]; then
-            real=$(readlink "$0" 2>/dev/null)
-            [ -n "$real" ] || real=$0
-        fi
-        HERE=$(dirname "$real")
-        [ -f "$HERE/homechooser-home-watch" ] || HERE=$SERVICE_SCRIPTS
-    fi
-    if [ ! -f "$HERE/homechooser-home-watch" ] && [ ! -f "$HERE/homechooser-homekey" ]; then
-        exit 0
-    fi
-}
-
+# 5/10+ retain a boot restore copy even if the unit was stopped at uninstall.
+# 6-9 reset the volatile hook at reboot and need no persistent executable.
 stage_boot() {
+    [ "${major:-0}" -lt 6 ] || [ "${major:-0}" -gt 9 ] || return 0
     mkdir -p "$BOOT_DIR/lib" || return 1
-    for f in homechooser homechooser-home-watch homechooser-homekey homechooser-access; do
-        [ -f "$HERE/$f" ] || return 1
-        cp "$HERE/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
+    for f in homechooser homechooser-access lib/common.sh; do
+        cp "$SERVICE_SCRIPTS/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
             mv "$BOOT_DIR/$f.new" "$BOOT_DIR/$f" || return 1
     done
-    for f in "$HERE"/lib/*.sh "$HERE"/lib/*.js; do
-        [ -f "$f" ] || continue
-        cp "$f" "$BOOT_DIR/lib/$(basename "$f").new" &&
-            mv "$BOOT_DIR/lib/$(basename "$f").new" "$BOOT_DIR/lib/$(basename "$f")" || return 1
-    done
+    cp "$BINARY" "$BOOT_DIR/homechooser-service.new" && chmod 755 "$BOOT_DIR/homechooser-service.new" &&
+        mv "$BOOT_DIR/homechooser-service.new" "$BOOT_DIR/homechooser-service"
 }
-
-# start_watcher [any]: start the unit if a choice is stored, or with `any` in any case.
-start_watcher() {
-    [ -f "$CHOICE" ] || [ "$1" = any ] || return 0
-    [ -f "$HERE/homechooser-home-watch" ] || { log "no watcher script in $HERE"; return 0; }
-    if "$SYSTEMCTL" is-active --quiet "$UNIT"; then
-        log "$UNIT is already running"
-        return 0
-    fi
-    "$SYSTEMCTL" reset-failed "$UNIT" 2>/dev/null
-    if "$SYSTEMD_RUN" --unit="$UNIT" --property=Restart=on-failure --property=RestartSec=5 \
-            /bin/sh -c '[ -f "$1" ] && exec /bin/sh "$1"; [ -f "$2" ] && exec /bin/sh "$2"; exit 0' \
-            homechooser-home-watch "$HERE/homechooser-home-watch" "$RUNTIME/homechooser-home-watch" >> "$LOG" 2>&1; then
-        log "started $UNIT"
-    else
-        log "ERROR: could not start $UNIT"
-        return 1
-    fi
-}
-
-locate
-. "$HERE/lib/common.sh"
-
-# The app is gone: the cached watcher restores stock even when it had been stopped before
-# uninstall, or when no launcher was chosen. The watcher removes this cache after restoring.
-if [ "$HERE" = "$BOOT_DIR" ] && [ ! -f "$SERVICE_SCRIPTS/homechooser-home-watch" ]; then
-    start_watcher any
-    exit $?
-fi
-
 case "$1" in
-    stage)
-        stage_boot
-        exit $?
-        ;;
-    unstage)
-        rm -rf "$BOOT_DIR"
-        rmdir "$(dirname "$BOOT_DIR")" 2>/dev/null || :
-        exit 0
-        ;;
-    watch)
-        stage_boot || { log "could not refresh the boot restore copy"; exit 1; }
-        start_watcher any
-        exit $?
-        ;;
-    "")
-        stage_boot || log "could not refresh the boot restore copy"
-        if [ -f "$HERE/homechooser-access" ]; then
-            sh "$HERE/homechooser-access" apply >> "$LOG" 2>&1 || log "could not apply launcher access"
-        fi
-        start_watcher
-        ;;
-    *)
-        echo "usage: $0 [watch]" >&2
-        exit 2
-        ;;
+    stage) stage_boot; exit $? ;;
+    unstage) rm -rf "$BOOT_DIR"; exit 0 ;;
+    ""|watch) ;;
+    *) exit 2 ;;
 esac
-exit 0
+if [ -x "$BINARY" ]; then
+    stage_boot || exit 1
+    if [ "${major:-0}" -lt 6 ] || [ "${major:-0}" -gt 9 ]; then
+        if [ -z "$1" ]; then
+            [ ! -f "$SERVICE_SCRIPTS/homechooser-access" ] || /bin/sh "$SERVICE_SCRIPTS/homechooser-access" apply
+            [ -f "$CHOICE" ] || exit 0
+        fi
+    fi
+else
+    # A stopped watcher on a legacy release can still recover at the next boot.
+    BINARY=$BOOT_DIR/homechooser-service
+fi
+[ -x "$BINARY" ] || [ -x "$RUNTIME/homechooser-service" ] || exit 0
+"$SYSTEMCTL" is-active --quiet homechooser-home && exit 0
+"$SYSTEMCTL" reset-failed homechooser-home 2>/dev/null
+exec "$SYSTEMD_RUN" --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 \
+    /bin/sh -c '[ -x "$1" ] && exec "$1" --boot; [ -x "$2" ] && exec "$2" --boot; exit 0' \
+    homechooser-boot "$BINARY" "$RUNTIME/homechooser-service"
