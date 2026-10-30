@@ -1770,3 +1770,69 @@ Evidence is in `build/device-82e0c9e/w22o-ponytail-e2e-power-retry/`: `power-01-
 Cleanup confirmed stock `home:null` with MembershipApp retained, no choice/init entry/profile override/hook flag, watcher inactive, and only hbchannel plus the preexisting non-launcher Life's Good Without Spying app installed. The native log confirms stock restoration and preload re-enable. Beanjar power-off was also refused as busy; Beanjar reported syncing disks and stopping the VM. `final-host-states.json` confirms all rockpi4a-2 VMs Off and VNC stopped. Final independent listings (`final-rockpi4a-1.json`, `final-pi.json`) also confirm every VM on those hosts Off with VNC stopped. **HOST RELEASED: rockpi4a-2**.
 
 Final acceptance: 7.6.0 memory/transport/lifecycle requirements passed with the documented follow-up resolving the old transient-unit assertion; 6.5.2, 8.3.0 and 9.2.1 each passed 111 E2E assertions; 11.2.0 passed 76. **10.3.1 remains blocked at reboot by the repeated firmware power refusal**; boot/removal-return/full uninstall acceptance is not claimed there. Its cleanup recovery passed on both power-failed runs. HomeBack 0.7.2, its exact owned startup hook and Partridge Launcher 1.0.0 remain removed as approved; all unrelated apps and hbchannel were retained. The baseline worktree, build artifacts and scratch data remain available. Nothing was committed.
+
+
+## Home and screensaver device results — 2026-10-30 (0e46b02)
+
+The worktree fast-forwarded from `23a6586` to main `0e46b02` and rebuilt the package. All **160 E2E logic tests passed**. Build/test logs, the retained IPK and checksum are under `build/screensaver-0e46b02/`. The first build attempt could not write the existing dependency cache under the sandbox; the authorized rebuild completed. No TV settings were changed. The device adapter permits only the two cleared rockpi4a-1 VMs and pi/w22h-ombre, in order; rockpi4a-2 is excluded.
+
+All runs use `--scenario screensaver --launcher fixture:web.normal`. SAM `getForegroundApps` is called with `extraInfo:true`; each S-step snapshot is saved as `S*-*.json` with raw/parsed foreground data and window types. `foreground-window-polls.jsonl` also retains both power states and SAM windows throughout start/dismissal polling. The scenario's actual start proof remains `sub state: screen saver`, rather than accepting the trigger reply alone. Screensaver triggers run as root without `-a`; S4 reboots retain the standing `com.webos.applicationManager` identity. No LG dialog confirmation is authorized.
+
+The initial 7.6.0 attempt (`w22p/`) omitted `extraInfo:true`, so its SAM records contain app IDs without window types. It was stopped through the runner's cleanup path and confirmed Off before the corrected run; its partial evidence is preserved, not used as a complete S0–S4 run. It also observed a real S0 baseline failure: after confirmed screensaver states and successful BACK return to hbchannel, HOME dismissed the second screensaver to hbchannel rather than LG Home, with Home Chooser absent. The S0-after screenshot and state show hbchannel foreground and both power routes active; that FAIL was not reclassified as beanjar#56. Both test packages were removed during cleanup, the watcher/choice/init entry were absent, VNC stopped and all rockpi4a-1 VMs were Off (`w22p/final-host-states.json`).
+
+
+### 7.6.0 — rockpi4a-1/w22p-mullet-rk1
+
+The complete run is `build/screensaver-0e46b02/w22p-complete/` (**44 PASS, 1 FAIL, 4 BLOCKED**, including setup/cleanup). Its live os-release is **7.6.0**. `results.json` preserves the exact step outcomes; paths below are relative to that directory. Each S-step has both before/after JSON and screenshots.
+
+| Step | Status | Reason | Evidence |
+| --- | --- | --- | --- |
+| S0 | FAIL | Both starts reached screen saver and SAM observed a real screensaver window. BACK returned hbchannel. HOME dismissed the second saver to Active/hbchannel, not the expected stock Home; HC was absent. | `S0-before.json`, `S0-after.json`, `foreground-window-polls.jsonl`, `02-S0-after.png`, `results.json` |
+| S1 | BLOCKED | Failed S0 prerequisite; controlled S1 action was not run. Ancillary observations below do not turn this into PASS. | `S1-before.json`, `S1-after.json`, `S1-daemon-observation.json`, `results.json` |
+| S2 | BLOCKED | S1 prerequisite BLOCKED; no controlled HOME dismissal test. | `S2-before.json`, `S2-after.json`, `results.json` |
+| S3 | BLOCKED | S2 prerequisite BLOCKED; no controlled BACK/next-HOME test. | `S3-before.json`, `S3-after.json`, `results.json` |
+| S4 | BLOCKED | S3 prerequisite BLOCKED; no S4 reboot was requested. | `S4-before.json`, `S4-after.json`, `results.json` |
+
+Window types: S0-before contains stock Home `_WEBOS_WINDOW_TYPE_CARD`; S0-after contains hbchannel `_WEBOS_WINDOW_TYPE_CARD`. The polling trace records `com.webos.app.screensaver` as `_WEBOS_WINDOW_TYPE_SCREENSAVER` during the actual starts. During the ordinary post-selection idle observation, a saver also appeared naturally: every S1–S4 before/after snapshot contains hbchannel CARD plus that SCREENSAVER window, and both power routes confirm the shown state. The inspected S1 screenshot shows the normal fireworks/press-any-non-power-button screensaver, not a fault or confirmation dialog. This is not beanjar#56's Ready-without-window failure.
+
+S1 ancillary daemon observations: MainPID **5929**, NRestarts **0**, active before/after; choice, complete defaultApps reply, preload policy and boot id unchanged. The captured native log has no lines during the 11:07:20–11:07:26 UTC S1 snapshot interval (`S1-daemon-observation.json`). Thus no daemon action was observed during that interval with a real saver already shown, while the specified controlled S1 test remains BLOCKED by S0. No LG fault dialog was observed or confirmed. Cleanup inventory contained only hbchannel; the native unit restored stock and stopped, both test packages were removed, VNC stopped, and all rockpi4a-1 VMs were confirmed Off (`final-host-states.json`).
+
+
+### 6.5.2 — rockpi4a-1/w21a-kisscurl-rk1
+
+Evidence is `build/screensaver-0e46b02/w21a/`; live os-release is **6.5.2**. The legacy root/no-identity `power/turnOnScreenSaver` trigger returned `returnValue:true`, but power remained `Active` / `processing: Screen Saver Ready` throughout the bounded start wait. S0 is therefore BLOCKED by the scenario's beanjar#56 rule, with Home Chooser absent and its daemon inactive. The retained log says “Screen Saver is launched”; it does not establish an ad/SDK-close sequence or a real window.
+
+Both `power2/getPowerState` and SAM `getForegroundApps` return Unknown method on this firmware. The complete errors are saved in `S0-before.json`, `S0-after.json` and `foreground-window-polls.jsonl`. **Window types are unavailable, not an observed absence of windows.** No unsupported route was treated as an empty successful response, and no settings were changed to satisfy the precondition.
+
+| Step | Status | Reason | Evidence |
+| --- | --- | --- | --- |
+| S0 | BLOCKED | Trigger accepted, but no shown-state proof; Screen Saver Ready persisted through the start deadline. | `S0-before.json`, `S0-after.json`, `foreground-window-polls.jsonl`, `run.log`, `results.json` |
+| S1 | BLOCKED (not reached) | S0 prerequisite blocked; subsequent setup could not complete. No S1 daemon observation interval or snapshot exists. | `not-reached-steps.json`, `results.json`, `run.log` |
+| S2 | BLOCKED (not reached) | Same failed prerequisite/setup; no selected-HOME dismissal test. | `not-reached-steps.json`, `run.log` |
+| S3 | BLOCKED (not reached) | Same failed prerequisite/setup; no BACK/next-HOME test. | `not-reached-steps.json`, `run.log` |
+| S4 | BLOCKED (not reached) | Same failed prerequisite/setup; no S4 reboot requested. | `not-reached-steps.json`, `run.log` |
+
+The subsequent setup failure is separate and remains **FAIL** in the raw runner results: service elevation did not produce root (`ps` showed `6811 /media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/homechooser-service`), and the inspector repeatedly listed only hbchannel rather than the HC page. Its cause is not established. The run was ended through its normal finally cleanup after this failure; unrun S1–S4 are reporting classifications in `not-reached-steps.json`, not invented executed outcomes in `results.json`. The raw count is **11 PASS, 1 BLOCKED, 1 FAIL** before interruption. No S1 daemon behavior is certified. Inspected S0-after/app-open screenshots show hbchannel without a fault dialog. Cleanup confirmed only hbchannel installed, stock record, choice/init entry absent and watcher inactive. Beanjar's tvpower power-off returned true/Power Off. VNC stopped and all rockpi4a-1 VMs were confirmed Off (`final-host-states.json`). **HOST RELEASED: rockpi4a-1**.
+
+
+### 9.2.1 — pi/w22h-ombre
+
+Live os-release is **9.2.1**. Original baseline/install evidence is `build/screensaver-0e46b02/w22h/`; setup continuation, S1–S4 and cleanup evidence is `build/screensaver-0e46b02/w22h-resumed/`. Only this VM ran on the Pi. No action targeted pi/w21p-kisscurl, and rockpi4a-2 was not contacted in this phase.
+
+S0 reached the actual shown state twice, with SAM observing `com.webos.app.screensaver` as `_WEBOS_WINDOW_TYPE_SCREENSAVER` alongside hbchannel CARD. BACK returned hbchannel. HOME dismissed the second saver to Active/hbchannel rather than stock Home, reproducing 7.6.0's firmware baseline FAIL with Home Chooser absent. This is not Ready-without-window beanjar#56. `w22h/S0-before.json` contains stock Home CARD; `S0-after.json` contains hbchannel CARD, as does its inspected screenshot.
+
+The original command session exited **143** during setup after installing both packages; no normal cleanup or final results file was produced. Its cause is not established. The orphaned inspector forward was stopped by exact PID after verifying its argv. The continuation attached to the same VM, verified the boot id unchanged from both S0 snapshots, both packages still installed and choice absent, then resumed setup without re-executing S0 (`w22h/interruption.json`, `w22h-resumed/run.log`). The carried S0 FAIL is explicitly labelled in the continuation results. Elevation, selection and the live hook checks passed. The continuation count is **36 PASS, 1 carried FAIL, 4 BLOCKED**; it is not a second full baseline run.
+
+| Step | Status | Reason | Evidence (under the directories above) |
+| --- | --- | --- | --- |
+| S0 | FAIL | Real saver shown; BACK returned hbchannel; HOME woke to hbchannel instead of stock Home, with HC absent. | `w22h/S0-before.json`, `w22h/S0-after.json`, `w22h/foreground-window-polls.jsonl`, `w22h/run.log`, `w22h/02-S0-after.png` |
+| S1 | BLOCKED | Carried S0 FAIL; controlled S1 action was not run. | `w22h-resumed/S1-before.json`, `S1-after.json`, `S1-daemon-observation.json`, `results.json` |
+| S2 | BLOCKED | S1 prerequisite BLOCKED; no selected-HOME dismissal test. | `w22h-resumed/S2-before.json`, `S2-after.json`, `results.json` |
+| S3 | BLOCKED | S2 prerequisite BLOCKED; no BACK/next-HOME test. | `w22h-resumed/S3-before.json`, `S3-after.json`, `results.json` |
+| S4 | BLOCKED | S3 prerequisite BLOCKED; no S4 reboot requested. | `w22h-resumed/S4-before.json`, `S4-after.json`, `results.json` |
+
+Every S1–S4 before/after snapshot contains hbchannel `_WEBOS_WINDOW_TYPE_CARD` only; both power routes report active. The inspected S1-before screenshot shows hbchannel, without a fault or confirmation dialog. S1 ancillary comparison records the daemon active, MainPID **5460**, NRestarts **0**, with choice, entire defaultApps reply, preload and boot id unchanged. The retained watcher log records selection's preload disable and normal deferred stock-home skip before these snapshots, then uninstall restoration afterwards. No daemon activity was observed between the blocked S1 snapshots; no controlled screensaver observation or S1 PASS is claimed (`S1-daemon-observation.json`).
+
+Cleanup removed both test packages and retained only hbchannel. The running daemon restored stock `home:com.webos.app.home`, re-enabled stock preload, removed the choice/init entry/hook flag and exited; no profile override or QML mounts remained. Beanjar's tvpower power-off returned true/Power Off, VNC stopped and `w22h-resumed/final-host-states.json` confirms every Pi VM Off with no VNC. No LG fault dialog was seen or confirmed. **HOST RELEASED: pi**.
+
+Final disposition for this scenario: **no firmware completed S0–S4 validation**. The 7.6.0 and 9.2.1 stock-HOME baseline assertions failed before HC installation; 6.5.2 remained Screen Saver Ready and subsequently failed elevation/setup. Later S-steps are blocked or explicitly not reached, as tabulated above. No TV setting or vendor code was changed to satisfy an expectation. All test packages are removed, all VMs on both released hosts are Off with VNC stopped, and build/scratch/baseline artifacts are retained. Nothing was committed.
