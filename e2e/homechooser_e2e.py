@@ -1293,6 +1293,20 @@ class BeanjarHost:
         except OSError as e:
             return 127, str(e)
 
+    def screensaver(self, verb, vm):
+        """Use the local multi-host CLI; None means an older CLI lacks the helper."""
+        if not hasattr(self, '_screensaver_probe'):
+            self._screensaver_probe = self.display_beanjar('screensaver', '--help', timeout=15)
+        rc, help_text = self._screensaver_probe
+        if rc == 127 or (rc == 2 and re.search(
+                r"(?:invalid choice|unknown command|unrecognized (?:command|arguments)).*screensaver",
+                help_text, re.I)):
+            return None
+        if rc:
+            return rc, help_text  # A broken probe is a helper failure, not an older CLI.
+        return self.display_beanjar('screensaver', verb, self.remote_target(vm),
+                                    '--timeout', '60', '--json', timeout=90)
+
     def click_available(self):
         if not hasattr(self, '_click_available'):
             rc, out = self.beanjar('remote', 'click', '--help', timeout=30)
@@ -1712,7 +1726,7 @@ class Recorder:
 
     def outcome(self, name, status, evidence):
         """An unavailable scenario is distinct from a product assertion failure."""
-        if status not in ('PASS', 'FAIL', 'BLOCKED', 'SKIPPED'):
+        if status not in ('PASS', 'FAIL', 'BLOCKED', 'SKIPPED', 'RECOVERED'):
             raise ValueError(status)
         evidence = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(evidence))
         self.results.append({'step': self.step, 'name': name, 'status': status,
@@ -1804,9 +1818,11 @@ class Scenario:
                 raise RuntimeError('click effect not observed: ' + label)
         return self.elements(label + '-after') if read_after else None
 
-    def alert_action(self, message, target, safe, label, proof, verify, closed, request):
+    def alert_action(self, message, target, safe, label, proof, verify, closed, request, before_action=None):
         """Verify every alert click; retry only a proven dismissal without its action."""
         for attempt in range(2):
+            if before_action:
+                before_action()
             if not self.press_alert(message, target, safe, label, proof):
                 return False
             result = verify()
@@ -2661,6 +2677,8 @@ class Scenario:
                 if i == 3 and self.a.restore_repair_check:
                     guarded(self.step_restore_repair)
                     break
+        except ScreensaverOutcome as exc:
+            r.outcome('tvpower reboot readiness', exc.status, str(exc))
         finally:
             if getattr(self, 'ask_monitor', None):
                 self.ask_monitor.close()
@@ -2672,8 +2690,11 @@ class Scenario:
 
     # -- home and screensaver (all calls below are bounded; no settings writes or ENTER)
     def screensaver_power(self):
-        return {route: self.dev.luna_as(None, TVPOWER + route + '/getPowerState')[1:]
-                for route in ('power', 'power2')}
+        power = {'power': self.dev.luna_as(None, TVPOWER + 'power/getPowerState')[1:]}
+        power['power2'] = (('Not queried on webOS 6 (6.5.2 device evidence: Unknown method)', None)
+                           if self.major == 6 else
+                           self.dev.luna_as(None, TVPOWER + 'power2/getPowerState')[1:])
+        return power
 
     def screensaver_snapshot(self, label):
         d = self.dev
@@ -2704,17 +2725,73 @@ class Scenario:
             raise ScreensaverOutcome('FAIL', evidence)
 
     def screensaver_ready(self, power):
-        return any(power_field(row[1], 'processing') == 'Screen Saver Ready' for row in power.values())
+        return (any(power_field(row[1], 'processing') == 'Screen Saver Ready' for row in power.values())
+                or power_field(power['power2'][1], 'sub processing') == 'screen saver ready')
 
-    def screensaver_shown(self, power):
+    def beanjar_screensaver(self, verb):
+        result = self.host.screensaver(verb, self.vm)
+        if result is None:
+            if not getattr(self.host, '_screensaver_missing_logged', False):
+                self.rec.note('beanjar screensaver subcommand missing; recovery unavailable; keeping existing behaviour',
+                              str(getattr(self.host, '_screensaver_probe', 'older Beanjar')))
+                self.host._screensaver_missing_logged = True
+            return None
+        rc, raw = result
+        self.rec.note('beanjar screensaver %s JSON (rc=%s)' % (verb, rc), raw)
+        return rc, raw, parse_luna(raw)
+
+    def prepare_tvpower_reboot(self, label):
+        """Recover only a stale Ready state; retain helper output and independent state proof."""
+        before = self.screensaver_power()
+        self.rec.note(label + ': power before reboot', json.dumps(before))
+        if not self.screensaver_ready(before):
+            return True
+        self.screensaver_diagnostics(label + ': stale Screen Saver Ready before reboot')
+        helper = self.beanjar_screensaver('stop')
+        if helper is None:
+            return False  # Old Beanjar: caller keeps its existing refusal/BLOCKED path.
+        rc, raw, reply = helper
+        after = self.screensaver_power()
+        self.rec.note(label + ': power after beanjar screensaver stop', json.dumps(after))
+        routes = ('power', 'power2') if self.major >= 7 else ('power',)
+        readable = all(after[route][1] and after[route][1].get('returnValue') is True for route in routes)
+        if rc or not reply or reply.get('action') != 'stop' or not readable or self.screensaver_ready(after):
+            self.screensaver_diagnostics(label + ': screensaver recovery failed')
+            raise ScreensaverOutcome('BLOCKED', 'beanjar#56: stale Screen Saver Ready recovery failed: ' + raw)
+        self.rec.outcome('recovered stale Screen Saver Ready via beanjar screensaver stop, beanjar#56',
+                         'RECOVERED', json.dumps({'helper': reply, 'before': before, 'after': after}))
+        return True
+
+    def screensaver_state(self, power, shown):
         route = 'power' if self.major == 6 else 'power2'
         reply = power[route][1]
-        return bool(reply and reply.get('returnValue') is True
-                    and power_field(reply, 'sub state') == 'screen saver')
+        field = 'state' if self.major == 6 else 'sub state'
+        expected = ('Screen Saver' if shown else 'Active') if self.major == 6 else ('screen saver' if shown else 'active')
+        return bool(reply and reply.get('returnValue') is True and not self.screensaver_ready(power)
+                    and power_field(reply, field) == expected)
+
+    def screensaver_shown(self, power):
+        return self.screensaver_state(power, shown=True)
+
+    def screensaver_active(self, power):
+        return self.screensaver_state(power, shown=False)
 
     def screensaver_start(self):
         if self.major < 6:
             raise ScreensaverOutcome('SKIPPED', 'No evidenced screensaver endpoint for webOS <6')
+        if getattr(self.a, 'saver_start', 'tvpower') == 'beanjar':
+            helper = self.beanjar_screensaver('start')
+            if helper is None:
+                raise ScreensaverOutcome('SKIPPED', '--saver-start beanjar requires the beanjar screensaver subcommand')
+            rc, raw, reply = helper
+            if rc or not reply or reply.get('action') != 'start':
+                self.screensaver_diagnostics('beanjar screensaver start failed')
+                raise ScreensaverOutcome('BLOCKED', 'beanjar screensaver start failed: ' + raw)
+            if not self.wait(lambda: self.screensaver_shown(self.screensaver_power()), 45, 2):
+                self.screensaver_diagnostics('beanjar screensaver start state not confirmed')
+                raise ScreensaverOutcome('BLOCKED', 'beanjar screensaver start did not reach screen saver: ' + raw)
+            self.rec.note('screensaver confirmed after beanjar start', json.dumps(self.screensaver_power()))
+            return
         route = 'power' if self.major == 6 else 'power2'
         rc, raw, reply = self.dev.luna_as(None, TVPOWER + route + '/turnOnScreenSaver')
         self.rec.note('screensaver start reply (root, no -a)', raw)
@@ -2731,20 +2808,17 @@ class Scenario:
             self.screensaver_diagnostics('screensaver start timeout')
             raise ScreensaverOutcome('BLOCKED' if self.screensaver_ready(power) else 'FAIL',
                                      'beanjar#56: Screen Saver Ready' if self.screensaver_ready(power)
-                                     else 'Screensaver did not reach sub state screen saver')
-        self.rec.note('screensaver confirmed: sub state screen saver', json.dumps(self.screensaver_power()))
+                                     else 'Screensaver did not reach the native shown state')
+        self.rec.note('screensaver confirmed: native shown state', json.dumps(self.screensaver_power()))
 
-    def screensaver_button(self, key, expected):
+    def screensaver_button(self, key, expected=None):
         # This path deliberately uses Beanjar's IR remote, never turnOnScreen or a dialog action.
         rc, raw = self.host.remote_press(self.vm, key)
         self.screensaver_require(rc == 0, 'Remote %s failed: %s' % (key, raw))
         def dismissed():
             power = self.screensaver_power()
-            route = 'power' if self.major == 6 else 'power2'
-            reply = power[route][1]
-            return (reply and reply.get('returnValue') is True
-                    and power_field(reply, 'sub state') == 'active'
-                    and not self.screensaver_ready(power) and self.dev.foreground()[0] == expected)
+            return (self.screensaver_active(power)
+                    and (expected is None or self.dev.foreground()[0] == expected))
         if not self.wait(dismissed, 30, 2):
             power = self.screensaver_power()
             self.screensaver_diagnostics('screensaver dismissal timeout')
@@ -2752,8 +2826,11 @@ class Scenario:
                                      'beanjar#56: Screen Saver Ready after button dismissal'
                                      if self.screensaver_ready(power) else
                                      '%s did not dismiss screensaver and return %s' % (key, expected))
-        self.rec.note('%s dismissed screensaver; foreground %s' % (key, expected),
-                      json.dumps(self.screensaver_power()))
+        sleep(1)
+        foreground = self.dev.foreground()
+        self.rec.note('%s dismissed screensaver; observed foreground %s' % (key, foreground[0]),
+                      json.dumps({'power': self.screensaver_power(), 'foreground': foreground}))
+        return foreground
 
     def screensaver_unchanged(self, before, after):
         for field in ('choice', 'defaultApps', 'preload', 'unit', 'boot'):
@@ -2779,7 +2856,9 @@ class Scenario:
             if dependency and dependency != 'PASS':
                 raise ScreensaverOutcome('SKIPPED' if dependency == 'SKIPPED' else 'BLOCKED',
                                          'Prerequisite screensaver step: ' + dependency)
-            action(before)
+            observed = action(before)
+            if observed is not None:
+                evidence = json.dumps(observed)
         except ScreensaverOutcome as exc:
             status, evidence = exc.status, str(exc)
         except Exception as exc:
@@ -2793,20 +2872,50 @@ class Scenario:
         return status
 
     def screensaver_baseline(self):
+        self.screensaver_stock = {}
         def action(before):
             self.screensaver_require(APP_ID not in self.dev.installed() and before['choice'][0] != 0,
                                      'S0 requires Home Chooser absent, including its choice file')
-            self.dev.launch('org.webosbrew.hbchannel')
-            self.screensaver_require(bool(self.wait(lambda: self.dev.foreground()[0] ==
-                                                    'org.webosbrew.hbchannel', 30, 2)),
-                                     'Baseline previous app did not reach foreground')
-            previous = self.dev.foreground()[0]
-            self.screensaver_start()
-            self.screensaver_button('BACK', previous)
-            self.screensaver_start()
-            self.screensaver_button('HOME', self.stock_id or STOCK)
+            for key in ('BACK', 'HOME'):
+                self.dev.launch('org.webosbrew.hbchannel')
+                self.screensaver_require(bool(self.wait(lambda: self.dev.foreground()[0] ==
+                                                        'org.webosbrew.hbchannel', 30, 2)),
+                                         'Baseline previous app did not reach foreground')
+                previous = self.dev.foreground()
+                self.screensaver_start()
+                wake = self.screensaver_button(key)  # Firmware observation, no assumed destination.
+                self.shot('S0-%s-wake' % key.lower())
+                rc, raw = self.host.remote_press(self.vm, 'HOME')
+                self.screensaver_require(rc == 0, 'S0 second HOME delivery failed: ' + raw)
+                self.wait(lambda: (lambda fg: fg if fg[0] and fg[0] != wake[0] else None)(
+                    self.dev.foreground()), 15, 1)
+                sleep(1)
+                home = self.dev.foreground()
+                self.shot('S0-%s-then-home' % key.lower())
+                self.screensaver_stock[key] = {'previous': previous, 'wake': wake, 'home': home}
+                self.rec.note('S0 stock %s then HOME baseline' % key, json.dumps(self.screensaver_stock[key]))
+            return self.screensaver_stock
         self.host.vnc_start(self.vm)
         return self.screensaver_step(0, action)
+
+    def screensaver_expected(self, key, phase, previous):
+        """Map an observed stock-Home dispatch to our launcher; retain every other destination."""
+        stock = getattr(self, 'screensaver_stock', {}).get(key)
+        if not stock or not stock[phase][0] or not stock['previous'][0]:
+            raise ScreensaverOutcome('BLOCKED', 'S0 has no readable %s %s foreground baseline' % (key, phase))
+        observed = stock[phase][0]
+        if observed == stock['previous'][0]:
+            return previous
+        if observed in (STOCK, FULLHOME, self.stock_id):
+            return self.launcher
+        return observed
+
+    def screensaver_followup_home(self, key, previous, label):
+        expected = self.screensaver_expected(key, 'home', previous)
+        rc, raw = self.host.remote_press(self.vm, 'HOME')
+        self.screensaver_require(rc == 0 and bool(self.wait(lambda: self.dev.foreground()[0] == expected, 30, 2)),
+                                 '%s: second HOME did not match S0 (%s): %s' % (label, expected, raw))
+        self.rec.note(label + ': second HOME matched S0', self.dev.foreground()[1])
 
     def screensaver_selected(self, baseline):
         def s1(before):
@@ -2836,26 +2945,48 @@ class Scenario:
         first = self.screensaver_step(1, s1, baseline)
         def s2(before):
             self.screensaver_require(self.screensaver_shown(before['power']), 'S2 requires the S1 screensaver')
-            self.screensaver_button('HOME', self.launcher)
+            # Leave S1's saver using the measured BACK behaviour, then test HOME from the same
+            # ordinary app as S0. A wake to an already foreground launcher cannot prove dispatch.
+            self.screensaver_button('BACK', self.screensaver_expected('BACK', 'wake', self.launcher))
+            previous = 'org.webosbrew.hbchannel'
+            self.dev.launch(previous)
+            self.screensaver_require(bool(self.wait(lambda: self.dev.foreground()[0] == previous, 30, 2)),
+                                     'S2 previous app not foreground')
+            self.screensaver_start()
+            self.screensaver_button('HOME', self.screensaver_expected('HOME', 'wake', previous))
             self.screensaver_unchanged(before, self.screensaver_snapshot('S2-dismissed'))
+            stock = self.screensaver_stock['HOME']
+            if stock['wake'][0] not in (STOCK, FULLHOME, self.stock_id):
+                self.screensaver_followup_home('HOME', previous, 'S2')
+                self.screensaver_unchanged(before, self.screensaver_snapshot('S2-home'))
         second = self.screensaver_step(2, s2, first)
         def s3(before):
-            self.dev.launch('org.webosbrew.hbchannel')
-            self.screensaver_require(bool(self.wait(lambda: self.dev.foreground()[0] ==
-                                                    'org.webosbrew.hbchannel', 30, 2)), 'Previous app not foreground')
+            previous = 'org.webosbrew.hbchannel'
+            self.dev.launch(previous)
+            self.screensaver_require(bool(self.wait(lambda: self.dev.foreground()[0] == previous, 30, 2)),
+                                     'Previous app not foreground')
             self.screensaver_start()
-            self.screensaver_button('BACK', 'org.webosbrew.hbchannel')
+            self.screensaver_button('BACK', self.screensaver_expected('BACK', 'wake', previous))
             self.screensaver_unchanged(before, self.screensaver_snapshot('S3-back'))
-            rc, raw = self.host.remote_press(self.vm, 'HOME')
-            self.screensaver_require(rc == 0 and bool(self.wait(lambda: self.dev.foreground()[0] ==
-                                                               self.launcher, 30, 2)), 'HOME did not open chosen launcher: ' + raw)
+            self.screensaver_followup_home('BACK', previous, 'S3')
             self.screensaver_unchanged(before, self.screensaver_snapshot('S3-home'))
         third = self.screensaver_step(3, s3, second)
         def s4(before):
             self.screensaver_start()
-            self.screensaver_button('BACK', self.launcher)
+            try:
+                self.screensaver_button('BACK', self.launcher)
+            except ScreensaverOutcome as exc:
+                if exc.status != 'BLOCKED' or not self.screensaver_ready(self.screensaver_power()):
+                    raise
+                if not self.prepare_tvpower_reboot('S4 after BACK'):
+                    raise
+                power = self.screensaver_power()
+                self.screensaver_require(self.screensaver_active(power)
+                                         and self.dev.foreground()[0] == self.launcher,
+                                         'S4 recovered Ready but previous foreground did not return')
             self.screensaver_unchanged(before, self.screensaver_snapshot('S4-dismissed'))
             boot0 = self.dev.boot_id()
+            self.prepare_tvpower_reboot('S4 tvpower reboot')
             rc, raw, reply = self.dev.luna_as(None, TVPOWER_REBOOT_URI, '{"reason":"remoteKey"}')
             self.rec.note('S4 tvpower reboot reply', raw)
             if rc or not reply or reply.get('returnValue') is not True:
@@ -3285,7 +3416,8 @@ class Scenario:
             automatic = self.alert_action(REBOOT_PROMPT['apply'], 'Reboot', 'Later',
                                           '2-reboot-alert', service_proof, verify_reboot,
                                           lambda: not any(e.get('text') == REBOOT_PROMPT['apply']
-                                              for e in self.elements('reboot-result')['elements']), request_again)
+                                              for e in self.elements('reboot-result')['elements']), request_again,
+                                          before_action=lambda: self.prepare_tvpower_reboot('2 reboot alert'))
             if not automatic:
                 r.manual('press Reboot on the restart alert', ('automatic press declined: ' + self.alert_decline_reason + '. Press Reboot by hand within ') +
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')
@@ -3307,11 +3439,13 @@ class Scenario:
                     r.note('closeAlert skipped: the guest is unreachable after the restart attempt', info.get('alert_id'))
                 else:
                     self.close_reboot_alert('2 reboot', info)
+                self.prepare_tvpower_reboot('2 reboot fallback')
                 up = self.beanjar_reboot('2 reboot (alert left alone, beanjar stop/start)')
         else:
             self.close_reboot_alert('2 reboot (Later)', info)
             sleep(3)
             self.shot('2-reboot-alert-closed')
+            self.prepare_tvpower_reboot('2 reboot Later')
             up = self.beanjar_reboot('2 reboot (alert closed, then beanjar stop/start)')
         if not up:
             raise RuntimeError('the VM did not come back after the reboot')
@@ -3396,6 +3530,7 @@ class Scenario:
         watcher's delayed close (45 s) is what removes it.  5.x: no policy call is expected."""
         r, d, host = self.rec, self.dev, self.host
         r.begin('3r reboot with the launcher chosen (--reboot-check)')
+        self.prepare_tvpower_reboot('3r reboot')
         up = self.beanjar_reboot('3r')
         if not up:
             return
@@ -4647,6 +4782,8 @@ def main():
     ap = argparse.ArgumentParser(description='Home Chooser E2E on a Beanjar VM or API contract on an ares TV')
     ap.add_argument('--scenario', choices=['lifecycle', 'screensaver', 'all'], default='lifecycle',
                     help='Home-key lifecycle (default), home and screensaver alone, or both')
+    ap.add_argument('--saver-start', choices=['tvpower', 'beanjar'], default='tvpower',
+                    help='screensaver trigger: root tvpower firmware call (default), or bounded Beanjar helper')
     ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
     ap.add_argument('--device', help='an existing root-capable ares device name; run --api-check without Beanjar or reboot')
     ap.add_argument('--launcher', default=None,
@@ -4712,8 +4849,8 @@ def main():
         print('launchers: dock, %s' % ', '.join(fixture_specs()))
         return 0
     if args.device:
-        if args.scenario != 'lifecycle':
-            ap.error('--scenario screensaver/all requires VM mode')
+        if args.scenario != 'lifecycle' or args.saver_start != 'tvpower':
+            ap.error('--scenario screensaver/all and --saver-start beanjar require VM mode')
         return run_device_api(args, ap)
     if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
         ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
