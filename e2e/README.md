@@ -512,7 +512,7 @@ the watcher makes no preload call, so the checks only assert the policy is not d
   home runs is recorded, not asserted. On 6.x to 9.x the home gate ([../docs/home-gate.md](../docs/home-gate.md))
   replaces that: the runner asserts the gate is mounted over `/usr/bin/com.webos.app.home` (`/proc/mounts`), stock
   Home is not in `running` (a bounded wait of 150 s, since the watcher retries the close of a boot-started Home every
-  10 s) and the watcher log has the `home gate mounted` line. After the `--reboot-check` boot the runner notes whether it runs and sam's
+  10 s) and the watcher log shows it manages the gate (the `home gate mounted` line, or another `home gate:` line when `homekey refresh` mounted first). After the `--reboot-check` boot the runner notes whether it runs and sam's
   launch lines for it (`snapshot-boot-components` may launch it at boot outside the preload manager: an open risk);
 * after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
   after the launcher is reinstalled, `isEnabled:false` again;

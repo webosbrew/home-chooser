@@ -523,6 +523,36 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         self.assertEqual(s.reopen_evidence(info, 'org.x.launcher', True), 'ticked rows: %r; DOM: %s' % (
             'org.x.launcher', json.dumps(dom)))
 
+    def test_reopen_ticked_comes_from_the_dom_reads(self):
+        from unittest.mock import Mock, patch
+        # the tick rides along with the DOM read; a later read without it (page going away) keeps it
+        dom = {'rows': ['org.x.launcher'], 'toast': None, 'ticked': 'org.x.launcher'}
+        gone = {'rows': ['org.x.launcher'], 'toast': None}
+        s = self._reopen_scenario([dom, gone])
+        s.insp = Mock(last_error=None)
+        with patch.object(e2e, 'sleep'):
+            info = s.reopen_panel(30)
+        self.assertEqual(e2e.Scenario.ticked_after_reopen(info), 'org.x.launcher')
+        self.assertIn("ticked:", e2e.FOCUS_JS)
+        self.assertEqual(e2e.Scenario.ticked_after_reopen({'again': {}}), None)
+        self.assertEqual(e2e.Scenario.ticked_after_reopen({'again': {'ticked': ''}}), None)
+
+    def test_gate_log_verdict(self):
+        seen = {}
+        self.assertFalse(e2e.Scenario.gate_log_verdict(seen)[0])
+        e2e.Scenario.gate_log_sightings(['22:14:58 boot apply: active=no', '22:16:03 setPreloadPolicy x'], seen)
+        self.assertFalse(e2e.Scenario.gate_log_verdict(seen)[0])
+        # the refresh mounted first: only the close / launch lines are in the watcher log
+        e2e.Scenario.gate_log_sightings(['22:16:03 home gate: closeByAppId com.webos.app.home: {}; stock Home close confirmed'], seen)
+        ok, detail = e2e.Scenario.gate_log_verdict(seen)
+        self.assertTrue(ok)
+        self.assertIn('closeByAppId', detail)
+        # a mount line seen later wins, and the trimmed log keeps the earlier sighting
+        e2e.Scenario.gate_log_sightings(['22:24:18 home gate: home gate mounted over /usr/bin/x; '], seen)
+        self.assertEqual(e2e.Scenario.gate_log_verdict(seen), (True, '22:24:18 home gate: home gate mounted over /usr/bin/x; '))
+        e2e.Scenario.gate_log_sightings([], seen)
+        self.assertTrue(e2e.Scenario.gate_log_verdict(seen)[0])
+
     def test_reopen_miss_evidence_without_dom(self):
         from unittest.mock import Mock, patch
         s = self._reopen_scenario([], launch_rc=1)

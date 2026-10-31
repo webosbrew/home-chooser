@@ -1723,6 +1723,8 @@ FOCUS_JS = ("(function(){var e=document.activeElement;var r=e&&e.closest&&e.clos
             "dialogText:(function(){var d=document.querySelector('[role=dialog]');return d?(d.textContent||'').trim().slice(0,300):null})(),"
             "toast:(function(){var d=document.querySelector('[role=status]');return d?d.textContent:null})(),"
             "restart:!!document.querySelector('[data-spotlight-id=restart-now]'),"
+            "ticked:(function(){var c=document.querySelector('[data-app-id] [aria-label=Current]');"
+            "var r=c&&c.closest('[data-app-id]');return r?r.getAttribute('data-app-id'):''})(),"
             "rows:Array.prototype.map.call(document.querySelectorAll('[data-app-id]'),function(x){return x.getAttribute('data-app-id')})})})()")
 # Key focus of the Home Chooser page: on 9.x its window is an overlay (appinfo defaultWindowType), so sam's
 # foreground app stays the card beneath (com.webos.app.home) while our dialog has the keys; the page's own
@@ -2494,31 +2496,54 @@ class Scenario:
         mount, and stock Home is not running.  A Home the boot started before the mount is closed by the
         watcher's retry (every 10 s, up to 12 times), so the wait for it is bounded."""
         r = self.rec
-        # The watcher trims its log to the last 200 lines once it passes 64 KB, so the mount line can
-        # leave the file while the run goes on (the file is read whole; it is the file that lost the
-        # line). Look as early as possible and remember the first sighting.
-        seen = []
+        # The watcher trims its log to the last 200 lines once it passes 64 KB, so a line can leave the file
+        # while the run goes on (the file is read whole; it is the file that lost the line). Look as early
+        # as possible and remember the first sightings.
+        # Who logs the mount is a race: the app starts the watcher and then runs `homekey refresh`, and
+        # whichever of the two reaches the gate first mounts it.  When the refresh wins, it logs to syslog
+        # only, and the watcher finds the gate already mounted (HC_GATE_UNCHANGED, no line) and writes just
+        # the later close / launch lines.  So the evidence that the watcher manages the gate is the mount
+        # line or any other 'home gate:' line; the mount itself is checked on /proc/mounts below.
+        seen = {}
 
-        def mount_line_seen():
-            lines = [l for l in self.log_lines() if GATE_LINE in l]
-            if lines:
-                seen[:] = lines[-1:]
-            return bool(seen)
-        mount_line_seen()
+        def log_seen():
+            self.gate_log_sightings(self.log_lines(), seen)
+            return bool(seen.get('mounted') or seen.get('managed'))
+        log_seen()
         count = self.gate_mount_count()
         r.check(label + ': the home gate is mounted over ' + GATE_TARGET, count >= 1,
                 '%d mount(s) of %s in /proc/mounts' % (count, GATE_TARGET))
         gone = self.wait(lambda: STOCK not in self.running_ids(), 150, 5)
         r.check(label + ': stock Home (the real binary) is not running', bool(gone), repr(self.running_ids()))
-        self.wait(mount_line_seen, 60, 5)
-        mounted = list(seen)
-        detail = mounted[-1] if mounted else 'no line containing %r' % GATE_LINE
-        if not mounted:
+        self.wait(log_seen, 60, 5)
+        ok, detail = self.gate_log_verdict(seen)
+        if not ok:
             lines = self.log_lines()
             detail += '; log now %d lines, first: %s' % (len(lines), lines[0] if lines else 'empty')
-        r.check(label + ': watcher log has the %r line' % GATE_LINE, bool(mounted), detail)
+        r.check(label + ': watcher log shows the watcher manages the gate (the %r line or any "home gate:" line)'
+                % GATE_LINE, ok, detail)
         r.note(label + ': home gate lines in the watcher log',
                '\n'.join(l for l in self.log_lines() if 'home gate' in l)[-1500:])
+
+    @staticmethod
+    def gate_log_sightings(lines, seen):
+        """Record in `seen` the first mount line ('mounted') and the first other 'home gate:' line
+        ('managed') of the watcher log lines; earlier sightings are kept."""
+        for l in lines:
+            if GATE_LINE in l:
+                seen.setdefault('mounted', l)
+            elif 'home gate:' in l:
+                seen.setdefault('managed', l)
+
+    @staticmethod
+    def gate_log_verdict(seen):
+        """(ok, detail) of the watcher-log check: the mount line, else any other 'home gate:' line."""
+        if seen.get('mounted'):
+            return True, seen['mounted']
+        if seen.get('managed'):
+            return True, 'no %r line (the gate was mounted before this watcher looked); managed: %s' % (
+                GATE_LINE, seen['managed'])
+        return False, 'no line containing %r or "home gate:"' % GATE_LINE
 
     def mark_log(self):
         """Remember how long the watcher log is now: /tmp/homechooser-home.log accumulates across the
@@ -3445,9 +3470,11 @@ class Scenario:
         self.shot('reopened')
         r.check('re-open after the apply: no error toast', not (again.get('toast') or '').startswith("Couldn't"),
                 'toast: %r' % again.get('toast'))
-        # One evaluate can fail while the page settles (None: no page, socket error); the DOM read above
-        # may still have worked. A bounded retry, only while nothing is ticked yet.
-        ticked = self.insp.evaluate(TICK_JS) if self.insp else None
+        # The tick is read in the same evaluate as the DOM (FOCUS_JS 'ticked'): on 6.5.2 and 9.2.1 a normal
+        # (full-screen) launcher takes the front and the Home Chooser page is gone from /json a moment after
+        # the DOM read, so a separate TICK_JS evaluate got None ("no page").  Only when that read did not
+        # carry the tick, a bounded retry of the separate evaluate.
+        ticked = self.ticked_after_reopen(info)
         for _ in range(5):
             if ticked == self.launcher or not self.insp:
                 break
@@ -3495,6 +3522,8 @@ class Scenario:
             else:
                 info['dom'] = True
                 info['again'] = u
+                if u.get('ticked'):
+                    info['ticked'] = u['ticked']
                 if u.get('toast'):
                     info['seen'].append(u['toast'])
                 if self.launcher in (u.get('rows') or []):
@@ -3507,7 +3536,15 @@ class Scenario:
         if last is not None:
             info['dom'] = True
             info['again'] = last
+            if last.get('ticked'):
+                info['ticked'] = last['ticked']
         return info
+
+    @staticmethod
+    def ticked_after_reopen(info):
+        """The ticked row id from the DOM reads of reopen_panel (the last read that carried one); None when
+        no read did."""
+        return (info.get('again') or {}).get('ticked') or info.get('ticked')
 
     def reopen_evidence(self, info, ticked, ok):
         """Evidence text of the re-open check.  On a miss it adds what tells the causes apart: the launch
