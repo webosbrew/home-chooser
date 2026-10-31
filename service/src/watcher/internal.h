@@ -35,6 +35,7 @@ struct HCWatch {
     GMainLoop *waiting;
     gboolean gate_active, gate_released, gate_pending; /* pending: stock Home close unconfirmed */
     unsigned gate_source, gate_attempts, gate_settle_source;
+    gint64 gate_closed_us; /* wall clock of the close that armed the settle check */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }

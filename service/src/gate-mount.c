@@ -40,6 +40,7 @@ HCGateOps hc_gate_ops(char *(*call)(const char *, const char *, int, void *), vo
     return o;
 }
 char *hc_gate_marker(const char *dir) { return g_build_filename(dir, "released", NULL); }
+char *hc_gate_decided(const char *dir) { return g_build_filename(dir, "decided", NULL); }
 static char *staged(const HCGateOps *o) { return g_build_filename(o->dir, HC_GATE_NAME, NULL); }
 
 /* mountinfo escapes space, tab, newline and backslash as \ooo. */

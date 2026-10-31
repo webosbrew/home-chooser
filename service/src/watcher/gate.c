@@ -2,6 +2,7 @@
 /* Home gate mount lifecycle on webOS 6-9 (docs/home-gate.md). */
 #include "internal.h"
 #include "gate-mount.h"
+#include <sys/stat.h>
 
 static HCGateOps gate_ops(HCWatch *w)
 {
@@ -24,6 +25,7 @@ static void gate_close(HCWatch *w)
     g_string_free(log, TRUE);
     /* A Home that was really running and is now closed: SAM may have nothing to put in front (6.5.2
      * boot). Look once after SAM's idle relaunch had its chance. */
+    if (closed && !w->gate_settle_source) w->gate_closed_us = g_get_real_time();
     if (closed && !w->gate_settle_source) w->gate_settle_source = g_timeout_add(w->c.gate_settle_ms, gate_settled, w);
     if (w->gate_pending && !w->gate_source && w->gate_attempts < w->c.preload_tries)
         w->gate_source = g_timeout_add(w->c.preload_retry_ms, gate_retry, w);
@@ -48,6 +50,13 @@ static gboolean gate_settled(gpointer context)
     HCWatch *w = context;
     w->gate_settle_source = 0;
     if (w->status >= 0 || !w->gate_active || w->gate_released) return G_SOURCE_REMOVE;
+    /* The gate already ran since the close (SAM's idle relaunch): getForegroundAppInfo can stay empty
+     * for 10+ s after a web launcher opens, so the empty answer is not evidence that nothing opened. */
+    char *decided = hc_gate_decided(w->c.gate_dir);
+    struct stat st;
+    gboolean ran = !stat(decided, &st) && (gint64)st.st_mtim.tv_sec * G_USEC_PER_SEC + st.st_mtim.tv_nsec / 1000 >= w->gate_closed_us;
+    g_free(decided);
+    if (ran) { watch_log(w, "home gate: the gate already ran since the stock Home close; nothing launched"); return G_SOURCE_REMOVE; }
     w->depth++;
     jvalue_ref r = watch_call(w, SAM "getForegroundAppInfo", "{}", 5);
     char *front = reply_ok(r) ? get_string(r, "appId") : NULL;

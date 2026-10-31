@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 static unsigned checks, failures;
 #define CHECK(item, expr) do { checks++; if (!(expr)) { failures++; fprintf(stderr, "FAIL %s line %d: %s\n", item, __LINE__, #expr); } } while (0)
@@ -570,6 +571,21 @@ static void test_gate_relaunch(void) {
     CHECK("G20 clean stop leaves no launch", !f->launches);
     HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
 }
+/* The gate's `decided` file, mtime `offset_s` from now: a gate run after (+) or before (-) the close. */
+static void gate_ran(Fixture *f, int offset_s) {
+    char *p = g_build_filename(f->c.gate_dir, "decided", NULL); file(p, "1");
+    time_t t = time(NULL) + offset_s; struct timeval tv[2] = {{t, 0}, {t, 0}};
+    CHECK("G21 set mtime", !utimes(p, tv)); g_free(p);
+}
+/* G21: SAM's idle relaunch already ran the gate after the close; an empty foreground then proves nothing. */
+static void test_gate_ran(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; gate_ran(f, 3600); start(f);
+    CHECK("G21 gate ran after the close: no launch", f->closes == 1 && !f->launches && !f->w->gate_settle_source); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; gate_ran(f, -3600); start(f);
+    CHECK("G21 gate ran before the close only: launch", f->closes == 1 && f->launches == 1); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; start(f);
+    CHECK("G21 gate did not run: launch", f->closes == 1 && f->launches == 1); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -582,6 +598,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

@@ -45,6 +45,8 @@ gboolean hc_gate_close_stock(const HCGateOps *ops, GString *log);
 void hc_gate_rearm(const HCGateOps *ops);
 /* The release marker inside dir; written by the gate before it unmounts itself. */
 char *hc_gate_marker(const char *dir);
+/* The gate touches this (mtime) whenever it acted on a launch of Home; the watcher's settle check reads it. */
+char *hc_gate_decided(const char *dir);
 /* The one-off --homekey path: flag present, a valid non-stock choice that getAppInfo knows.
  * Returns that choice (g_free) or NULL. */
 char *hc_gate_wanted(const char *state_dir, char *(*call)(const char *, const char *, int, void *), void *context);

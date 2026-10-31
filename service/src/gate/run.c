@@ -101,6 +101,12 @@ int hc_gate_main(const HCGateConfig *c, int argc, char **argv)
 {
     HCGateDecision d = hc_gate_decide(c, argc > 1 ? argv[1] : NULL);
     int rc = 0;
+    /* Tell the watcher this launch of Home was handled (a preload opens nothing and does not count). */
+    if (d.action != HC_GATE_NOTHING) {
+        char *decided = hc_gate_decided(c->dir);
+        if (mkdir_p(c->dir)) write_atomic(decided, "1", 1);
+        g_free(decided);
+    }
     if (d.action == HC_GATE_LAUNCH) {
         /* As com.webos.app.home, the caller SAM expects for a launch made by Home. */
         if (launch(c, HC_STOCK_HOME_ID, d.target, NULL)) gate_log(c, "%s: opened %s", d.why, d.target);

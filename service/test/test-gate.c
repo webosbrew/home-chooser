@@ -148,7 +148,8 @@ static void run_case(const Case *k)
 {
     char *home = g_build_filename(state_dir, "home", NULL), *flag = g_build_filename(state_dir, "homekey", NULL);
     char *calls = fixture("calls.jsonl"), *state = fixture("state.json"), *marker = g_build_filename(gate_dir, "released", NULL);
-    unlink(home); unlink(flag); unlink(calls); unlink(marker);
+    char *decided = g_build_filename(gate_dir, "decided", NULL);
+    unlink(home); unlink(flag); unlink(calls); unlink(marker); unlink(decided);
     if (k->choice) write_file(home, k->choice);
     if (!k->no_flag) write_file(flag, "");
     char *json = g_strdup_printf("{\"apps\":%s,%s}", k->apps, k->state);
@@ -189,6 +190,8 @@ static void run_case(const Case *k)
         g_free(text); g_free(valid);
     } else CHECK("G6 nothing", n == 0 && unmounts == 0);
     CHECK("G foreground only for an overlay", foreground == k->foreground_asked);
+    CHECK("G21 decided file written unless the run opened nothing", g_file_test(decided, G_FILE_TEST_EXISTS) == (k->expect != 'N'));
+    g_free(decided);
     g_free(first); j_release(&s); g_free(json); g_free(home); g_free(flag); g_free(calls); g_free(state); g_free(marker);
 }
 
