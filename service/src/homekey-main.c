@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "gate-mount.h"
 #include "homekey.h"
 #include "log.h"
 #include "luna.h"
@@ -18,6 +19,23 @@ static char *homekey_call(const char *uri, const char *payload, int timeout, voi
     return g_string_free(out, FALSE);
 }
 
+/* The 6-9 home gate follows a live filter change at once; a watcher may not see a disable. */
+static void gate_follow(const char *action, gboolean stock, int rc)
+{
+    gboolean redirect = !strcmp(action, "apply") || !strcmp(action, "refresh");
+    if (!redirect && strcmp(action, "stop") && strcmp(action, "clear")) return;
+    int major = hc_gate_major(HC_OSRELEASE);
+    if (major < 6 || major > 9) return;
+    char *choice = redirect && !stock && rc == 0 ? hc_gate_wanted(HC_STATE_DIR, homekey_call, NULL) : NULL;
+    HCGateOps ops = hc_gate_ops(homekey_call, NULL);
+    /* An explicit apply re-arms a gate that released itself. */
+    if (!strcmp(action, "apply")) hc_gate_rearm(&ops);
+    GString *log = g_string_new(NULL);
+    HCGateResult result = hc_gate_sync(&ops, choice, log);
+    if (result != HC_GATE_UNCHANGED && result != HC_GATE_RELEASED) LOGI("HOME_GATE", "%s: %s", action, log->str);
+    g_string_free(log, TRUE); g_free(choice);
+}
+
 /* Daemon boot/watch and one-off Home-key commands never register an LS2 client. */
 int hc_homekey_main(int argc, char **argv)
 {
@@ -30,8 +48,10 @@ int hc_homekey_main(int argc, char **argv)
     HCKeyOps ops = {HC_STATE_DIR, "/usr/lib/qt5/qml/KeyFilters/systemUi.js", HC_OSRELEASE,
         homekey_call, NULL, 30, 1000};
     GString *out = g_string_new(NULL);
-    int rc = hc_key_run(&ops, action, argc > 3 && !strcmp(argv[3], "stock"), out);
+    gboolean stock = argc > 3 && !strcmp(argv[3], "stock");
+    int rc = hc_key_run(&ops, action, stock, out);
     fputs(out->str, stdout); fflush(stdout); LOGI("HOMEKEY", "%s: %s", action, out->str);
     g_string_free(out, TRUE);
+    gate_follow(action, stock, rc);
     return rc;
 }

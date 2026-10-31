@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-// Stage the LS2 service and role-free daemon; only services.json registers a service.
+// Stage the LS2 service, the role-free daemon and the 6-9 home gate; only services.json registers a service.
 // (mode 755: elevation turns its Exec line into the bare binary path, so it has to run as is).
-// Both binaries are built by `make -C service` into build/service.
+// All three binaries are built by `make -C service` into build/service.
 const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..', '..');
 const out = path.resolve(process.argv[2] || path.join(root, 'build', 'service-pkg'));
-const binaries = ['homechooser-service', 'homechooser-daemon'];
+const binaries = ['homechooser-service', 'homechooser-daemon', 'homechooser-home-gate'];
 
 for (const name of binaries) {
 	const bin = path.join(root, 'build', 'service', name);

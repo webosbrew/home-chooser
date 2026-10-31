@@ -19,6 +19,7 @@ typedef struct {
     int sets, defaults, scans, alerts, toasts, closes, preload_on, preload_off;
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
     int silent, flap, wait_action, wait_count, title_gets;
+    int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
@@ -126,6 +127,13 @@ static int fake_access(const char *action, void *context) {
     if (eq(action, "apply")) f->applies++; else f->removes++;
     return f->access_fail;
 }
+static int fake_gate(const char *choice, void *context) {
+    Fixture *f = context;
+    if (choice) { f->gate_on++; char *id = watch_choice(f->w); CHECK("G11 gate for the stored choice", eq(choice, id)); g_free(id); }
+    else { f->gate_off++; if (g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS)) f->gate_off_with_choice++; }
+    f->gate_last = choice ? 1 : 0;
+    return f->gate_fail;
+}
 static gint64 now(void *context) { return ((Fixture *)context)->clock; }
 static void wait_ms(unsigned ms, void *context) {
     Fixture *f = context; f->wait_count++; f->clock += ms / 1000; g_array_append_val(f->waits, ms);
@@ -154,6 +162,8 @@ static Fixture *setup(int major, const char *id) {
     f->c.init_link = path(f, root, "init.d/homechooser"); f->c.log = path(f, root, "watch.log");
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
     f->c.preload_retry_ms = f->c.preload_settle_ms = 0; f->c.notify_retry_ms = 3000;
+    f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
+    f->gate_last = -1;
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
     char *os = g_strdup_printf("VERSION_ID=\"%d.0.0\"\n", major); file(f->c.osrelease, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
@@ -163,7 +173,7 @@ static Fixture *setup(int major, const char *id) {
     installed(f, HC_APP_ID, 1); installed(f, "my.home", 1); installed(f, "other.home", 1);
     installed(f, "gone.app", -1); installed(f, STOCK, 1); installed(f, FULLHOME, -1);
     record(f, "{\"home\":\"my.home\",\"kidsApp\":\"k.app\"}");
-    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .now = now, .wait = wait_ms, .context = f};
+    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .gate = fake_gate, .now = now, .wait = wait_ms, .context = f};
     f->w = hc_watch_new(&f->c, &ops);
     if (id) choice(f, id);
     return f;
@@ -454,6 +464,46 @@ static void test_preload_close(void) {
     f=setup(11,STOCK); start(f); CHECK("W14 stock on",f->preload_on==1 && !f->preload_off); choice(f,"my.home"); event(f,'A',"{}");
     CHECK("W14 change off immediate ready",f->preload_off==1 && f->w->preload_ready); teardown(f);
 }
+/* G11-G15: the 6-9 home gate follows the baked Home key redirect (docs/home-gate.md). */
+static void test_gate(void) {
+    for (int major = 5; major <= 12; major++) {
+        Fixture *f = setup(major, "my.home"); start(f);
+        gboolean ranged = major >= 6 && major <= 9;
+        CHECK("G11 mounted at start on 6-9 only", ranged ? f->gate_last == 1 && f->gate_on >= 1 : !f->gate_on && !f->gate_off);
+        installed(f, "my.home", -1); event(f, 'A', "{}");
+        CHECK("G12 missing launcher unmounts", ranged ? f->gate_last == 0 : !f->gate_on && !f->gate_off);
+        installed(f, "my.home", 1); event(f, 'A', "{}");
+        CHECK("G12 launcher back mounts", ranged ? f->gate_last == 1 : !f->gate_on);
+        choice(f, "other.home"); settings(f, "{\"home\":\"my.home\"}");
+        CHECK("G13 choice change keeps it mounted", ranged ? f->gate_last == 1 : !f->gate_on);
+        choice(f, STOCK); settings(f, "{}");
+        CHECK("G13 LG Home chosen unmounts", ranged ? f->gate_last == 0 : !f->gate_off);
+        teardown(f);
+    }
+    Fixture *f = setup(8, STOCK); start(f); CHECK("G13 LG Home at start", !f->gate_on && f->gate_last == 0); teardown(f);
+    f = setup(7, "my.home"); unlink(path(f, f->c.state_dir, "homekey")); start(f);
+    CHECK("G13 redirect disabled", !f->gate_on && f->gate_last == 0); teardown(f);
+    f = setup(7, "my.home"); f->key_fail = 1; start(f);
+    CHECK("G13 no baked filter, no gate", !f->gate_on); event(f, 'A', "{}"); CHECK("G13 filter retried, gate follows", f->gate_last == 1); teardown(f);
+    for (int failing = 0; failing <= 1; failing++) {
+        f = setup(8, "my.home"); start(f); f->gate_fail = failing;
+        installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+        CHECK("G14 uninstall unmounts before the state is removed", f->gate_off_with_choice >= 1);
+        CHECK("G14 unmount failure keeps the restore pending", failing ? hc_watch_status(f->w) == 1 && g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) : hc_watch_status(f->w) == 0);
+        teardown(f);
+    }
+    f = setup(8, "my.home"); start(f); int off = f->gate_off; hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 clean stop unmounts", f->gate_off == off + 1 && f->gate_last == 0);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+    f = setup(8, "my.home"); start(f); off = f->gate_off; event(f, 's', NULL);
+    CHECK("G15 settings loss fails", hc_watch_status(f->w) == 1);
+    hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 failed watcher keeps the gate for its restart", f->gate_off == off);
+    f->w = hc_watch_new(&f->c, &ops); teardown(f);
+    f = setup(9, NULL); start(f); hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 no choice at start clears leftovers", f->gate_last == 0 && !f->gate_on);
+    f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -466,6 +516,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

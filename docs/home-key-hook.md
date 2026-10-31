@@ -9,6 +9,9 @@ The native implementation is [homekey.c](../service/src/homekey.c), with the gua
 [homekey-generator.c](../service/src/homekey-generator.c). Both are compiled into the shared static archive and linked into
 `homechooser-daemon`. `scripts/homechooser-homekey` only dispatches its `--homekey` mode.
 
+On 6–9 the [home gate](home-gate.md) also replaces the stock Home binary SAM starts, through a
+bind mount, so stock Home does not stay resident while a launcher is chosen.
+
 ## Boot and watcher lifetime
 
 On 6–9, `/var/lib/webosbrew/init.d/homechooser` links to the installed `scripts/homechooser`.

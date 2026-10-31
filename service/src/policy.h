@@ -27,6 +27,12 @@
 #define HC_OSRELEASE "/etc/os-release"
 #define HC_OSRELEASE_REAL "/usr/lib/os-release"
 #define HC_WATCH_LOG "/tmp/homechooser-home.log"
+/* Home gate, webOS 6-9 (docs/home-gate.md). /tmp is tmpfs on every 6-9 rootfs, so the gate copy
+ * and its release marker are gone after a reboot. */
+#define HC_GATE_NAME "homechooser-home-gate"
+#define HC_GATE_BINARY HC_SERVICE_DIR "/" HC_GATE_NAME
+#define HC_GATE_TARGET "/usr/bin/" HC_STOCK_HOME_ID
+#define HC_GATE_DIR "/tmp/homechooser-runtime/home-gate"
 
 /* The launcher-facing API (docs/launcher-api.md). */
 #define HC_API_VERSION 1

@@ -1,5 +1,5 @@
 # Cross build for webOS (ARM) and the host-side test of the pure policy.
-#   make            cross build the service and daemon into ../build/service
+#   make            cross build the service, daemon and home gate into ../build/service
 #   make test       build and run test/test-policy natively
 #   make check-abi  GLIBC/GLIBCXX versions and SONAMEs the binary needs, against a rootfs
 #
@@ -24,17 +24,19 @@ CFLAGS ?= -O2 -g0
 CFLAGS += -std=gnu11 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 -DGLIB_VERSION_MIN_REQUIRED=GLIB_VERSION_2_40 -DGLIB_VERSION_MAX_ALLOWED=GLIB_VERSION_2_40 -DHC_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
 INC = -Isrc -I$(SYSROOT)/usr/include -I$(SYSROOT)/usr/include/glib-2.0 -I$(SYSROOT)/usr/lib/glib-2.0/include
 LIBS = -lluna-service2 -lpbnjson_c -lPmLogLib -lglib-2.0
-COMMON_SOURCES = src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c
+COMMON_SOURCES = src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c
 COMMON_OBJECTS = $(patsubst src/%.c,$(OUT)/obj/%.o,$(COMMON_SOURCES))
 SERVICE_SOURCES = src/main.c src/apps.c src/bootlink.c src/notify.c \
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c \
 	src/service/run.c src/service/launcher.c src/service/system.c
-WATCHER_SOURCES = src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c
+WATCHER_SOURCES = src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c
 DAEMON_SOURCES = src/daemon-main.c src/homekey-main.c src/luna-child.c src/watcher/main.c $(WATCHER_SOURCES)
 DAEMON_LIBS = -lpbnjson_c -lPmLogLib -lglib-2.0
-HEADERS = $(wildcard src/*.h src/service/*.h src/watcher/*.h) src/homekey-shapes.inc
+GATE_LIB_SOURCES = src/gate/decide.c src/gate/run.c
+GATE_SOURCES = src/gate/main.c $(GATE_LIB_SOURCES)
+HEADERS = $(wildcard src/*.h src/service/*.h src/watcher/*.h src/gate/*.h) src/homekey-shapes.inc
 
-all: $(OUT)/homechooser-service $(OUT)/homechooser-daemon
+all: $(OUT)/homechooser-service $(OUT)/homechooser-daemon $(OUT)/homechooser-home-gate
 
 check-build:
 	@test -n "$(VERSION)" || { echo 'no version in app/package.json' >&2; exit 1; }
@@ -56,6 +58,11 @@ $(OUT)/homechooser-daemon: $(DAEMON_SOURCES) $(HEADERS) $(OUT)/libhomechooser.a 
 	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ $(DAEMON_SOURCES) $(OUT)/libhomechooser.a $(DAEMON_LIBS) -Wl,-O1,--as-needed
 	$(CROSS)strip $@
 
+# SAM runs this as com.webos.app.home on 6-9 (docs/home-gate.md); luna-send children only.
+$(OUT)/homechooser-home-gate: $(GATE_SOURCES) $(HEADERS) $(OUT)/libhomechooser.a Makefile ../app/package.json
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ $(GATE_SOURCES) $(OUT)/libhomechooser.a $(DAEMON_LIBS) -Wl,-O1,--as-needed
+	$(CROSS)strip $@
+
 # Dev build: any luna sender may call it (for luna-send on a test TV). Never ship this one.
 dev:
 	$(MAKE) OUT=$(OUT)-dev EXTRA_CFLAGS=-DHC_ALLOW_ANY_SENDER
@@ -72,11 +79,13 @@ check-abi: all
 	CROSS=$(CROSS) sh test/check-abi.sh $(OUT)/homechooser-daemon $(ROOTFS)
 	@! $(CROSS)readelf -d $(OUT)/homechooser-daemon | grep -q libluna-service2
 	@! $(CROSS)nm -D --undefined-only $(OUT)/homechooser-daemon | grep -E ' LS(Register|Call|Gmain)'
+	CROSS=$(CROSS) sh test/check-abi.sh $(OUT)/homechooser-home-gate $(ROOTFS)
+	@! $(CROSS)readelf -d $(OUT)/homechooser-home-gate | grep -q libluna-service2
 
 clean:
 	rm -rf $(OUT) $(OUT)-dev test/test-policy
 
-.PHONY: all dev test test-homekey test-watcher check-abi check-build clean
+.PHONY: all dev test test-homekey test-watcher test-gate test-gate-mount check-abi check-build clean
 
 # Run the same native JSON/transaction code under qemu with a fake Luna transport.
 test-homekey: $(OUT)/test-homekey
@@ -93,10 +102,28 @@ test-watcher: $(OUT)/test-watcher $(OUT)/test-watcher-luna
 	cp $(OUT)/test-watcher-luna $(OUT)/watcher-test/runtime-image
 	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/watcher-test/runtime-image $(OUT)/watcher-test $(KEYFILTER_ROOTFS)/usr/lib/qml/KeyFilters/systemUi.js $(abspath test/fake-luna-send.py)
 
-$(OUT)/test-watcher: test/test-watcher.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c
+$(OUT)/test-watcher: test/test-watcher.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c
 	mkdir -p $(OUT)
-	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c -lpbnjson_c -lglib-2.0
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c -lpbnjson_c -lglib-2.0
 
-$(OUT)/test-watcher-luna: test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c
+$(OUT)/test-watcher-luna: test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c $(WATCHER_SOURCES) $(HEADERS) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c
 	mkdir -p $(OUT)
-	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c $(DAEMON_LIBS)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c $(WATCHER_SOURCES) src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c $(DAEMON_LIBS)
+
+# The gate's decision table through real luna-send children (the fake one) under qemu.
+test-gate: $(OUT)/test-gate
+	@mkdir -p $(OUT)/gate-test
+	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/test-gate $(OUT)/gate-test $(abspath test/fake-luna-send.py)
+
+$(OUT)/test-gate: test/test-gate.c $(GATE_LIB_SOURCES) $(HEADERS) src/json.c src/proc.c src/policy.c src/fs.c src/gate-mount.c
+	mkdir -p $(OUT)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-gate.c $(GATE_LIB_SOURCES) src/json.c src/proc.c src/policy.c src/fs.c src/gate-mount.c $(DAEMON_LIBS)
+
+# The daemon's mount/unmount decisions with the mount syscalls and mountinfo faked.
+test-gate-mount: $(OUT)/test-gate-mount
+	@mkdir -p $(OUT)/gate-mount-test
+	qemu-arm -L $(KEYFILTER_ROOTFS) $(OUT)/test-gate-mount $(OUT)/gate-mount-test
+
+$(OUT)/test-gate-mount: test/test-gate-mount.c src/gate-mount.c $(HEADERS) src/json.c src/fs.c src/policy.c
+	mkdir -p $(OUT)
+	$(CROSS)gcc --sysroot=$(SYSROOT) $(CFLAGS) $(INC) -o $@ test/test-gate-mount.c src/gate-mount.c src/json.c src/fs.c src/policy.c -lpbnjson_c -lglib-2.0
