@@ -1199,6 +1199,126 @@ def mock_sleep():
         yield
 
 
+
+class Audiooutputd183(unittest.TestCase):
+    """beanjar#183: the LG audiooutputd crash dialog is dismissed with NO; everything else still stops the run."""
+    MSG = '[crash] Fault Occured. Reason: RDXDErr3_%s__Linux Crash: %s crashes at location'
+
+    @staticmethod
+    def box(x, y, w=200, h=40):
+        return [x, y, x + w, y + h]
+
+    def frame(self, msg, focus='YES', buttons=('YES', 'NO'), tag='[crash]'):
+        els = [{'kind': 'text', 'text': msg, 'box': self.box(400, 355, 800, 40), 'group': 1}]
+        for i, b in enumerate(buttons):
+            x = 500 + i * 300
+            els.append({'kind': 'button', 'text': b, 'box': self.box(x, 400), 'centre': [x + 100, 420], 'group': 1,
+                        'style': {'disabled': b != focus, 'highlighted': b == focus, 'contrast': 9 if b == focus else 1}})
+        return {'width': 1920, 'height': 1080, 'elements': els}
+
+    def make(self, frames, click=False, probes=(False, True)):
+        s = scenario(10)
+        s.a = type('A', (), {'wait_popup': 0})()
+        s.pressed, s.clicked, s.frames, s.probes = [], [], list(frames), list(probes)
+        s.insp = object()
+        s.ui = lambda: {'row': 'a', 'rows': ['a', 'b']}
+        s.shot = lambda label: label + '.png'
+        s.dismiss_known_popup = lambda *a, **k: None
+        s.use_click = lambda: click
+        s.elements = lambda label: s.frames.pop(0) if len(s.frames) > 1 else s.frames[0]
+        s.probe_keys = lambda rows, ui: s.probes.pop(0)
+        s.press = lambda *k: s.pressed.extend(k)
+        s.dev.foreground = lambda: ('app', '')
+        s.dev.luna = lambda uri: '{}'
+
+        def click_element(text=None, role=None, frame=None, **kw):
+            e2e.match_element(frame, text, role)  # raises like the real helper when there is no unique NO
+            s.clicked.append(text)
+        s.click_element = click_element
+        return s
+
+    def run_ensure(self, s):
+        with mock_sleep():
+            return s.ensure_key_focus(['a', 'b'])
+
+    def test_keys_mode_moves_focus_to_no_then_ok_and_retries(self):
+        msg = self.MSG % ('audiooutputd', 'audiooutputd')
+        s = self.make([self.frame(msg, 'YES'), self.frame(msg, 'NO'), {'width': 1920, 'height': 1080, 'elements': []}])
+        self.assertTrue(self.run_ensure(s))
+        self.assertEqual(s.pressed, ['RIGHT', 'OK'])
+        self.assertNotIn('YES', s.clicked)
+        self.assertEqual([o[1] for o in s.rec.outcomes], ['RECOVERED'])
+        ev = json.loads(s.rec.outcomes[0][2])
+        self.assertIn('beanjar#183', ev['reference'])
+        self.assertIn('audiooutputd', ev['ocr_before'])
+        self.assertTrue(ev['screenshot_before'] and ev['screenshot_after'])
+        self.assertEqual(s.probes, [])  # probed once before, once after (the retry)
+
+    def test_click_mode_clicks_no_only(self):
+        msg = self.MSG % ('audiooutputd', 'audiooutputd')
+        s = self.make([self.frame(msg), {'width': 1920, 'height': 1080, 'elements': []}], click=True)
+        self.assertTrue(self.run_ensure(s))
+        self.assertEqual(s.clicked, ['NO'])
+        self.assertEqual(s.pressed, [])
+        self.assertEqual([o[1] for o in s.rec.outcomes], ['RECOVERED'])
+
+    def test_focus_already_on_no_presses_ok_only(self):
+        msg = self.MSG % ('audiooutputd', 'audiooutputd')
+        s = self.make([self.frame(msg, 'NO'), {'width': 1920, 'height': 1080, 'elements': []}])
+        self.assertTrue(self.run_ensure(s))
+        self.assertEqual(s.pressed, ['OK'])
+
+    def test_dialog_still_there_stops(self):
+        msg = self.MSG % ('audiooutputd', 'audiooutputd')
+        s = self.make([self.frame(msg, 'NO')], click=True)
+        with self.assertRaises(RuntimeError):
+            self.run_ensure(s)
+        self.assertEqual(s.rec.outcomes, [])
+
+    def test_other_process_crash_dialog_stops(self):
+        s = self.make([self.frame(self.MSG % ('WebAppMgr', 'WebAppMgr'), 'NO')], probes=(False,))
+        with self.assertRaises(RuntimeError):
+            self.run_ensure(s)
+        self.assertEqual(s.pressed, [])
+        self.assertEqual(s.clicked, [])
+        self.assertEqual(s.rec.outcomes, [])
+
+    def test_general_dialog_stops(self):
+        msg = '[general] audiooutputd Fault Occured'
+        s = self.make([self.frame(msg, 'NO')], probes=(False,), click=True)
+        with self.assertRaises(RuntimeError):
+            self.run_ensure(s)
+        self.assertEqual((s.pressed, s.clicked, s.rec.outcomes), ([], [], []))
+
+    def test_yes_never_pressed(self):
+        msg = self.MSG % ('audiooutputd', 'audiooutputd')
+        # focus never reaches NO after the move: no OK
+        s = self.make([self.frame(msg, 'YES'), self.frame(msg, 'YES')])
+        with self.assertRaises(RuntimeError):
+            self.run_ensure(s)
+        self.assertNotIn('OK', s.pressed)
+        # no NO button at all
+        s = self.make([self.frame(msg, 'YES', buttons=('YES', 'OK'))], click=True)
+        with self.assertRaises((RuntimeError, ValueError)):
+            self.run_ensure(s)
+        self.assertEqual(s.clicked, [])
+        self.assertNotIn('OK', s.pressed)
+
+    def test_fault_check_notes_audiooutputd_but_fails_other(self):
+        def reply(*contents):
+            return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': 1, 'detectedFaults': [
+                {'faultType': 'crash', 'faultContent': c, 'faultTime': '55.1'} for c in contents]}})
+        for contents, ok in ((('RDXDErr3_audiooutputd__Linux Crash: audiooutputd',), True),
+                             (('RDXDErr3_audiooutputd__Linux Crash: x', 'WebAppMgr'), False)):
+            s = scenario(10)
+            s.popup_mark = ('2026-10-24T01:00:00', 10.0)
+            s.priv_luna = lambda uri, payload='{}', r=reply(*contents): r
+            s.shot = lambda label: label
+            s.foreign_popup('x')
+            self.assertEqual([c for c in s.rec.checks if 'no LG [crash]' in c[0]][0][1], ok)
+            self.assertTrue(any('beanjar#183' in n for n in s.rec.notes))
+
+
 class WaitForDevice(unittest.TestCase):
     """2026-10-24: three VMs whose previous boot was cut at ~9 s came up in HBC failsafe mode (telnetd,
     no Dropbear): developer mode answered, root SSH never did.  The wait names that state."""
@@ -1291,7 +1411,13 @@ class FaultPopups(unittest.TestCase):
 
 class FakeRec:
     def __init__(self):
-        self.checks, self.notes = [], []
+        self.checks, self.notes, self.outcomes, self.said = [], [], [], []
+
+    def say(self, line):
+        self.said.append(line)
+
+    def outcome(self, name, status, evidence):
+        self.outcomes.append((name, status, evidence))
 
     def check(self, name, ok, evidence='', expected=None):
         self.checks.append((name, bool(ok)))

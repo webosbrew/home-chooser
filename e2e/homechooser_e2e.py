@@ -748,6 +748,35 @@ def known_fault_pids(reply):
     return found
 
 
+# Known environment fault (beanjar#183, closed as stock LG behaviour; Beanjar docs/research/
+# w22o-audiooutputd-gain-race.md): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse
+# threads race, and on about 7-9% of boots audiooutputd crashes 50-56 s after boot.  LG then shows a
+# "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." dialog with YES and NO that takes key
+# focus.  The guard is the dialog text naming audiooutputd, never the VM name, so it applies on any release.
+# The dialog is dismissed with NO only (never YES); any other dialog or crash process still stops the run.
+AUDIOOUTPUTD_REF = 'beanjar#183'
+AUDIOOUTPUTD_FAULT_RE = re.compile(r'^(?:RDXDErr\d+_)?audiooutputd(?:__|\.|$)')
+AUDIOOUTPUTD_CRASHD_RE = re.compile(r'crashd.*CRASHED.*"process":\s*"audiooutputd(?:\.\d+)?"')
+
+
+def audiooutputd_fault(fault):
+    return (isinstance(fault, dict) and fault.get('faultType') == 'crash'
+            and bool(AUDIOOUTPUTD_FAULT_RE.match(str(fault.get('faultContent') or ''))))
+
+
+def audiooutputd_dialog(frame):
+    """(message element text, joined screen text) when the OCR frame shows the LG "[crash] Fault Occured"
+    dialog for audiooutputd; (None, joined text) for anything else."""
+    rows = frame.get('elements') if isinstance(frame, dict) else None
+    rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    texts = [str(r.get('text') or '') for r in rows]
+    joined = ' '.join(texts)
+    if '[crash] Fault Occured' not in joined or 'audiooutputd' not in joined:
+        return None, joined
+    msgs = [t for t in texts if '[crash] Fault Occured' in t and 'audiooutputd' in t]
+    return (msgs[0] if len(msgs) == 1 else None), joined
+
+
 def split_known_crashes(lines, reply):
     """All crash lines fail acceptance, including previously documented firmware crashes."""
     return [], list(lines)
@@ -1989,6 +2018,13 @@ class Scenario:
                 return True
             if known is False:
                 raise RuntimeError('keys still blocked after dismissing the known LG crash popup; no more keys')
+            if first and self.dismiss_audiooutputd_popup('keys blocked'):
+                if self.probe_keys(rows, self.ui() or ui):  # retry the blocked step once
+                    r.say('key focus restored: the audiooutputd crash dialog was dismissed with NO (%s)' % AUDIOOUTPUTD_REF)
+                    return True
+                r.check('remote keys reach Home Chooser after dismissing the audiooutputd crash dialog', False,
+                        'focus did not move after a probe key; %s' % AUDIOOUTPUTD_REF)
+                raise RuntimeError('keys still blocked after dismissing the audiooutputd crash dialog; no more keys')
             if first:
                 fg = self.dev.foreground()
                 epl = self.dev.luna('luna://com.webos.service.oledepl/isPixelRefresherCondition')
@@ -2260,6 +2296,58 @@ class Scenario:
         self.rec.check('%s: key focus is back after dismissing the known LG crash popup' % label, ok, how)
         return ok
 
+    def dismiss_audiooutputd_popup(self, label):
+        """Keys are blocked: read the screen (beanjar elements OCR).  Only the LG "[crash] Fault Occured" dialog
+        that names audiooutputd (known on W22O 33.31.61/68, beanjar#183) is dismissed, by NO: a click on the
+        element "NO", or in keys mode a move of the focus to NO verified on screen before OK.  YES is never
+        pressed.  Returns True when the dialog was dismissed and the screen no longer shows it, None when the
+        screen shows anything else (nothing is pressed; the caller stops as before), and raises when the dialog
+        could not be dismissed safely."""
+        r = self.rec
+        try:
+            frame = self.elements(label + ' (system popup?)')
+        except Exception as exc:
+            r.say('%s: screen not readable, no popup handling: %r' % (label, exc))
+            return None
+        message, text = audiooutputd_dialog(frame)
+        if message is None:
+            if '[crash] Fault Occured' in text and 'audiooutputd' in text:
+                raise RuntimeError('audiooutputd crash dialog text is not a single element; not pressing keys')
+            return None
+        before = self.shot('audiooutputd-crash-dialog-before')
+        r.note('%s: LG audiooutputd crash dialog (%s, stock LG behaviour); dismissing it with NO' % (label, AUDIOOUTPUTD_REF),
+               'OCR text: %s' % text)
+        if self.use_click():
+            self.click_element('NO', 'button', label=label + ' NO', frame=frame, read_after=False)
+        else:
+            try:
+                focus, direction = alert_focus(frame, message, 'NO', 'YES', require_focus=True)
+            except ValueError as exc:
+                raise RuntimeError('audiooutputd crash dialog: focus not provable (%s); not pressing keys' % exc) from exc
+            if focus != 'NO':
+                self.press(direction)
+                frame = self.elements(label + ' focus on NO')
+                if audiooutputd_dialog(frame)[0] is None:
+                    raise RuntimeError('audiooutputd crash dialog not readable after moving focus; not pressing OK')
+                try:
+                    focus, _ = alert_focus(frame, message, 'NO', 'YES', require_focus=True)
+                except ValueError as exc:
+                    raise RuntimeError('audiooutputd crash dialog: focus not provable (%s); not pressing OK' % exc) from exc
+                if focus != 'NO':
+                    raise RuntimeError('focus did not move to NO (now %s); not pressing OK' % focus)
+            self.press('OK')
+        sleep(2)
+        after = self.shot('audiooutputd-crash-dialog-after')
+        gone = self.elements(label + ' after NO')
+        still, after_text = audiooutputd_dialog(gone)
+        if still is not None or '[crash] Fault Occured' in after_text:
+            r.check('audiooutputd crash dialog is gone after NO', False, 'OCR text after: %s' % after_text)
+            raise RuntimeError('audiooutputd crash dialog still on screen after NO; no more keys')
+        r.outcome('audiooutputd crash dialog dismissed with NO, %s' % AUDIOOUTPUTD_REF, 'RECOVERED',
+                  json.dumps({'ocr_before': text, 'ocr_after': after_text, 'screenshot_before': before,
+                              'screenshot_after': after, 'reference': AUDIOOUTPUTD_REF}))
+        return True
+
     def foreign_popup(self, label, dismiss=False):
         """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
         faultmanager (9.2.1 rootfs: /usr/sbin/faultmanager) raises the "[crash] Fault Occured" popup through
@@ -2280,14 +2368,19 @@ class Scenario:
         except (ValueError, TypeError, AttributeError):
             all_faults = real
         crashes = [f for f in all_faults if f.get('faultType') == 'crash']
+        expected = [f for f in crashes if audiooutputd_fault(f)]
+        crashes = [f for f in crashes if not audiooutputd_fault(f)]
+        if expected:
+            self.rec.note('%s: audiooutputd crash is an expected environment fault (%s, W22O 33.31.61/68), not counted'
+                          % (label, AUDIOOUTPUTD_REF), ' | '.join(json.dumps(f) for f in expected))
         self.rec.check(label + ': no LG [crash] fault dialog or crash fault this boot', not crashes,
                        ' | '.join(json.dumps(f) for f in crashes) or 'none')
-        real = list(real)
+        real = [f for f in real if not audiooutputd_fault(f)]
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
         rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
         lines = [l for l in out.splitlines() if l.strip()]
         known_lines = split_known_crashes(lines, reply)[0]
-        ev += [l for l in lines if l not in known_lines]
+        ev += [l for l in lines if l not in known_lines and not AUDIOOUTPUTD_CRASHD_RE.search(l)]
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
                           % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))
