@@ -115,6 +115,11 @@ closed.
   input, full-screen: the launcher). It happens at most once per close, never when something is in front, when
   the foreground did not answer, or once the gate is unmounted or released (those and a clean end cancel the
   timer), and the decision is logged (`home gate: nothing in front after the stock Home close; launched ...`).
+  It is also skipped when the gate has already run since the close. Every gate run that opens or releases something (not a preload) rewrites `/tmp/homechooser-runtime/home-gate/decided`; if its mtime is not
+  before the close, the watcher logs `home gate: the gate already ran since the stock Home close; nothing launched`
+  and skips, without asking the foreground. `getForegroundAppInfo` can answer empty for 10+ s after a web launcher
+  opened (7.6.0, and 8.x boots), so SAM's idle relaunch through the gate used to be followed by a second,
+  redundant launch about 8 s later. The foreground check stays as the second condition.
 - The attempt is made when the gate is first seen mounted (new mount, or already mounted at watcher
   start), again on `preload_retry_ms` (10 s) up to `preload_tries` (12) times, and at every later gate
   sync, until it is confirmed: `running` replied without Home, or `closeByAppId` returned
@@ -141,6 +146,10 @@ applied, with the `homekey` flag present. It unmounts:
 - on uninstall/restore, before the state files are removed. A failed unmount keeps the restore
   pending (watcher exit 1, unit restart), like a failed stock keyFilters restore;
 - on any clean watcher end (exit 0). A failed watcher keeps the mount for its restart.
+
+After an uninstall the state directory is gone, and a late `--homekey stop|clear|refresh` run finds
+nothing to restore (stock keyFilters are saved in that directory): it reports `active=no` and does not
+recreate the directory or `keyfilter.lock`. `apply` and `boot` still create it on a first install.
 
 After the gate releases itself, the next sync finds the marker naming the current choice and does
 not mount again: it only cleans up what the gate's own unmount left (below) and logs the release once.
