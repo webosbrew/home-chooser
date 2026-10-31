@@ -59,12 +59,26 @@ and 9.2.1. So the fallback is:
 If the unmount fails (other than "not mounted"), the gate launches nothing and exits 1: a launch
 would only start the gate again.
 
-Each decision is one line, through PmLog (`HOME_GATE`) and appended to the watcher log
-`/tmp/homechooser-home.log`, e.g. `home gate: overlay launcher, nothing in front: last input (reason
+Each decision is one line, appended to the watcher log `/tmp/homechooser-home.log` by the gate itself
+(see "Where the gate's log lines go" below), e.g. `home gate: overlay launcher, nothing in front: last input (reason
 undefined): opened com.webos.app.hdmi2` or `home gate: gate removed from /usr/bin/com.webos.app.home;
-asked SAM to start stock Home: accepted`. SAM's reply to that launch is only logged, not trusted:
-on 7.6.0 the real Home came up although the old wording said it could not launch it, so a reply
-that is not `returnValue` true reads `not confirmed, <reply or "no reply">`.
+asked SAM to start stock Home: accepted`. The release launch is fire and forget. SAM does not answer a launch of
+`com.webos.app.home` until the gate process, which is that app's current instance, has exited (measured on 7.6.0
+and 6.5.2: no reply within 3 s, real Home up only after the gate exited), so waiting only delayed the gate's
+exit. The gate starts `luna-send -n 1` from a grandchild in its own session (`setsid`, so a kill of the
+gate's process group does not reach it; `alarm(10)` bounds it, stdio on `/dev/null`) and exits at once. The log
+line says the request was sent, `request sent, no reply awaited`, and nothing confirms it; the launcher
+launch of a normal decision still waits (up to 3 s) for its reply.
+
+### Where the gate's log lines go
+
+The gate calls PmLog (`HOME_GATE`) and writes its own line to `/tmp/homechooser-home.log`, opened
+`O_APPEND` by the gate process itself, the same file the watcher appends to. That file is the
+record to read. On a 7.6.0 and a 6.5.2 device the `HOME_GATE` lines never reached `/var/log/messages` although
+the daemon's `START` line and a root-shell `PmLogCtl logkv` to the same context (`HomeChooser`) did. The cause
+is not established; one hypothesis is that SAM runs the gate through the jailer and the process cannot reach the PmLog
+socket from there. PmLog is therefore not reliable from the gate. The file write is not affected:
+it is a plain `open` of `/tmp`, and its lines are present. Behaviour is unchanged, only the documented place to look.
 
 ## Mount lifecycle (daemon)
 
@@ -93,6 +107,14 @@ mount is idempotent afterwards. The close is `running`, then `closeByAppId
 instance the preload manager started before the mount: it keeps running from the old inode until
 closed.
 
+- After a close that confirmed by `closeByAppId` (Home really was running), the watcher waits
+  `gate_settle_ms` (20 s) and asks `getForegroundAppInfo` once. On 6.5.2 at boot SAM logged
+  `LAUNCH_LASTAPP on_foreground_null triggered` about 10 s after the close and launched nothing, leaving a black
+  screen until HOME; 7.6.0 relaunched through the gate. If the foreground is still empty, the watcher launches
+  `com.webos.app.home` as `com.webos.applicationManager`, so the gate runs and applies its table (overlay: last
+  input, full-screen: the launcher). It happens at most once per close, never when something is in front, when
+  the foreground did not answer, or once the gate is unmounted or released (those and a clean end cancel the
+  timer), and the decision is logged (`home gate: nothing in front after the stock Home close; launched ...`).
 - The attempt is made when the gate is first seen mounted (new mount, or already mounted at watcher
   start), again on `preload_retry_ms` (10 s) up to `preload_tries` (12) times, and at every later gate
   sync, until it is confirmed: `running` replied without Home, or `closeByAppId` returned
