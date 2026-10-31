@@ -495,6 +495,51 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         self.assertIsNone(text)
         self.assertTrue(source.startswith('none'))
 
+    def _reopen_scenario(self, uis, launch_rc=0):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.vm, s.rec, s.launcher = 'vm', Mock(), 'org.x.launcher'
+        s.dev = Mock()
+        s.dev.close.return_value = (0, 'closed')
+        s.dev.launch.return_value = (launch_rc, 'Launched' if not launch_rc else 'Failed to launch')
+        s.dev.foreground.return_value = ('', '{}')
+        s.running_ids = Mock(return_value=[])
+        s.insp = Mock(last_error='websocket handshake/read: ConnectionResetError(104)')
+        it = iter(uis)
+        s.ui = Mock(side_effect=lambda: next(it, None))
+        s.close_insp = Mock(side_effect=lambda: setattr(s, 'insp', None))
+        return s
+
+    def test_reopen_recreates_inspector_and_passes(self):
+        from unittest.mock import Mock, patch
+        dom = {'rows': ['org.x.launcher'], 'toast': None}
+        s = self._reopen_scenario([None, None, dom, dom])
+        with patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(last_error=None)) as new, \
+                patch.object(e2e, 'sleep'):
+            info = s.reopen_panel(30)
+        self.assertEqual((info['failed'], info['recreated']), (2, 1))
+        self.assertEqual(new.call_count, 1)
+        self.assertTrue(info['dom'])
+        self.assertEqual(s.reopen_evidence(info, 'org.x.launcher', True), 'ticked rows: %r; DOM: %s' % (
+            'org.x.launcher', json.dumps(dom)))
+
+    def test_reopen_miss_evidence_without_dom(self):
+        from unittest.mock import Mock, patch
+        s = self._reopen_scenario([], launch_rc=1)
+        with patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(
+                last_error='no page for x; /json unreadable: ConnectionResetError')), \
+                patch.object(e2e, 'sleep'), patch.object(e2e, 'seconds', return_value=0):
+            info = s.reopen_panel(5)
+        self.assertFalse(info['dom'])
+        self.assertGreaterEqual(info['failed'], 1)
+        text = s.reopen_evidence(info, None, False)
+        self.assertIn('no DOM read', text)
+        self.assertNotIn('DOM: {', text)
+        for want in ('LAUNCH FAILED', 'ares-launch launch rc=1', 'ares-launch close rc=0', "SAM foreground: ''",
+                     'in SAM running: False', 'Inspector last_error: websocket', 'reads failed: %d of %d' % (
+                         info['failed'], info['reads'])):
+            self.assertIn(want, text)
+
     def _toast_scenario(self, ui, elements):
         from unittest.mock import Mock
         s = e2e.Scenario.__new__(e2e.Scenario)
