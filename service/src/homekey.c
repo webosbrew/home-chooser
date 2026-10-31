@@ -157,6 +157,12 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", generated ? "possible" : "refused");
         rc = 0; goto done;
     }
+    /* A restore with no state dir has nothing to restore (stock keyFilters are saved in it, and the
+     * uninstall removed it): do not recreate the dir and lock for a late run. apply/boot still create it. */
+    if (!g_file_test(o->state_dir, G_FILE_TEST_IS_DIR) &&
+        (!strcmp(action, "stop") || !strcmp(action, "clear") || !strcmp(action, "refresh"))) {
+        g_string_append(out, "active=no\nreboot=no\n"); rc = 0; goto done;
+    }
     if (g_mkdir_with_parents(o->state_dir, 0755)) goto done;
     char *lockpath = path(o, "keyfilter.lock");
     lock = open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600); g_free(lockpath);

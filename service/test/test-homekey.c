@@ -3,6 +3,7 @@
 #include <pbnjson.h>
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -105,6 +106,13 @@ int main(int argc, char **argv) {
     assert(run(&o,"prepare",FALSE)==2);
     starts=0; assert(run(&o,"boot",FALSE)==0);assert(jvalue_equal(current,original)); assert(starts==0);
     o.stock_js=argv[2];unlink(unknown);g_free(unknown);
+    /* A restore with no state dir (after the uninstall) must not bring the dir and lock back. */
+    char *gone=g_build_filename(argv[1],"absent-state",NULL); HCKeyOps late=o; late.state_dir=gone; late.osrelease=os;
+    const char *restores[]={"stop","clear","refresh"}; int writes=sets;
+    for(int i=0;i<3;i++){ assert(run(&late,restores[i],i==2)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); }
+    assert(run(&late,"refresh",FALSE)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); assert(sets==writes);
+    assert(run(&late,"apply",FALSE)==0); assert(g_file_test(gone,G_FILE_TEST_IS_DIR)); /* first install still creates it */
+    char *rm=g_strdup_printf("rm -rf '%s'",gone); assert(!system(rm)); g_free(rm); g_free(gone);
     j_release(&current); current=jarray_create(NULL); int before=sets; assert(run(&o,"apply",FALSE)==1); assert(sets==before);
     j_release(&current); j_release(&original); g_free(flag);g_free(home);g_free(os);
     puts("PASS native transaction: boot readiness, failed toast, exact list edits, live change, missing app, write/readback recovery, disable, empty-list refusal");
