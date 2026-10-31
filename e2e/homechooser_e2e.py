@@ -3235,21 +3235,8 @@ class Scenario:
         if not self.a.update_check:  # --update-check: step 1 installed the old build; checked in 3u
             self.check_device_texts()
         # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
-        if not self.insp:
-            self.insp = Inspector(self.vm)
-        d.close(APP_ID)
-        sleep(3)
-        d.launch(APP_ID)
-        seen = []
-
-        def listed():
-            u = self.ui()
-            if u and u.get('toast'):
-                seen.append(u['toast'])
-            return u if u and self.launcher in (u.get('rows') or []) else None
-        again = self.wait(listed, 120, every=1)
-        sleep(1)
-        again = self.ui() or again or {}
+        info = self.reopen_panel(120)
+        again, seen = info['again'], info['seen']
         r.note('toasts seen while re-opening', repr(seen + [again.get('toast')]))
         again['toast'] = again.get('toast') or next((t for t in seen if t.startswith("Couldn't")), None)
         self.shot('reopened')
@@ -3257,12 +3244,83 @@ class Scenario:
                 'toast: %r' % again.get('toast'))
         ticked = self.insp.evaluate(TICK_JS) if self.insp else None
         r.check('re-open after the apply: the chosen row is ticked', ticked == self.launcher,
-                'ticked rows: %r; DOM: %s' % (ticked, json.dumps(again)))
+                self.reopen_evidence(info, ticked, ticked == self.launcher))
         d.close(APP_ID)
         if self.insp:
             self.insp.close()
             self.insp = None
         self.check_preload_off('after the switch')
+
+    def reopen_panel(self, timeout):
+        """Close and relaunch Home Chooser, then read the panel until the launcher row is listed (within
+        `timeout`).  Records the rc and output of both ares-launch calls, and recreates the Inspector after
+        a connection-type read failure (as see_toast does).  Returns a dict: again (last DOM, {} when none
+        was read), dom (True when any read gave a DOM), seen (toasts), launch (notes), reads, failed,
+        recreated."""
+        info = {'again': {}, 'dom': False, 'seen': [], 'launch': [], 'reads': 0, 'failed': 0, 'recreated': 0}
+        if not self.insp:
+            self.insp = Inspector(self.vm)
+        for label, fn in (('close', self.dev.close), ('launch', self.dev.launch)):
+            rc, out = fn(APP_ID)
+            info['launch'].append('ares-launch %s rc=%s %r' % (label, rc, (out or '').strip()[-200:]))
+            if label == 'close':
+                sleep(3)
+        end = time.time() + seconds(timeout)
+        while True:
+            if self.insp is None:
+                self.insp = Inspector(self.vm)
+            try:
+                u = self.ui()
+            except Exception as exc:
+                u = None
+                self.insp.last_error = 'ui() raised %r' % (exc,)
+            info['reads'] += 1
+            if u is None:
+                info['failed'] += 1
+                err = getattr(self.insp, 'last_error', None)
+                if err and self.CONNECTION_ERROR.search(str(err)) and time.time() < end:
+                    self.close_insp()
+                    self.insp = Inspector(self.vm)
+                    info['recreated'] += 1
+            else:
+                info['dom'] = True
+                info['again'] = u
+                if u.get('toast'):
+                    info['seen'].append(u['toast'])
+                if self.launcher in (u.get('rows') or []):
+                    break
+            if time.time() >= end:
+                break
+            sleep(1)
+        sleep(1)
+        last = self.ui()
+        if last is not None:
+            info['dom'] = True
+            info['again'] = last
+        return info
+
+    def reopen_evidence(self, info, ticked, ok):
+        """Evidence text of the re-open check.  On a miss it adds what tells the causes apart: the launch
+        results, the SAM foreground app and running list, the Inspector error and the failed-read count;
+        'no DOM read' instead of a DOM when no read ever gave one."""
+        dom = json.dumps(info['again']) if info['dom'] else 'no DOM read'
+        text = 'ticked rows: %r; DOM: %s' % (ticked, dom)
+        launch_failed = any(' rc=0 ' not in n for n in info['launch'])
+        if ok and not launch_failed:
+            return text
+        try:
+            fg = self.dev.foreground()[0]
+        except Exception as exc:
+            fg = 'unreadable (%r)' % (exc,)
+        try:
+            running = APP_ID in self.running_ids()
+        except Exception as exc:
+            running = 'unreadable (%r)' % (exc,)
+        return '%s; %s%s; SAM foreground: %r; %s in SAM running: %s; Inspector last_error: %s; reads failed: %d of %d' \
+            '; Inspector recreated: %d' % (
+                text, '; '.join(info['launch']), ' (LAUNCH FAILED)' if launch_failed else '', fg, APP_ID, running,
+                getattr(self.insp, 'last_error', None) if self.insp else 'no inspector', info['failed'], info['reads'],
+                info['recreated'])
 
     def focus_button(self, label, first=True):
         """Move focus inside our dialog to the button `label` (buttons sit in a row: the confirm one
