@@ -5,8 +5,9 @@ webOS 5.x–12.x emulated matrix, run on 2026-10-31. This is a record of what
 was tested and measured. All numbers are taken from the `summary.md`,
 `summary.json`, per-VM `results.json` and `run.log` files of the matrices
 named below. Matrix directories are given as `matrix-20261031-HHMMSS`; those
-under `release-suite` and `release-suite-2` are in `e2e/results/` of the
-worktree of that name.
+under `release-suite` and `release-suite-2` (the two worktrees that ran
+them) are kept, untracked, in `e2e/results/release-suite/` and
+`e2e/results/release-suite-2/` of the main checkout.
 
 ## Summary
 

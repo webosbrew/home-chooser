@@ -6,6 +6,10 @@ Scope: issue webosbrew/home-chooser#5, on the module layout landed in #4
 `scripts/homechooser`, the Home-key worker, and the shell watcher suite.
 No TV, VM, SSH, ares command or beanjar is used in this phase.
 
+The device-phase evidence paths below (`build/device-*`, `w22p-*`) were
+produced in the `native-watcher-device` worktree and are kept, untracked, in
+`e2e/results/native-watcher-device/` of the main checkout (`build/` there).
+
 ## Behaviour inventory
 
 All rows below are **verified in source/tests**, unless explicitly marked inferred.
