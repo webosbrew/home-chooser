@@ -495,6 +495,87 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         self.assertIsNone(text)
         self.assertTrue(source.startswith('none'))
 
+    def _toast_scenario(self, ui, elements):
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.vm, s.rec, s.host = 'vm', Mock(), Mock()
+        s.host.remote_target.return_value = 'vm'
+        s.host.display_beanjar.side_effect = elements
+        s.insp = Mock(last_error='websocket handshake/read: ConnectionResetError(104)')
+        s.ui = ui
+        s.close_insp = Mock(side_effect=lambda: setattr(s, 'insp', None))
+        return s
+
+    def test_see_toast_recreates_inspector_every_connection_failure(self):
+        from unittest.mock import Mock, patch
+        errors = ['websocket handshake/read: ConnectionResetError(104)', 'no page for x in /json (forward alive)',
+                  'websocket gave no frame']
+        calls = []
+
+        def ui():
+            calls.append(1)
+            if len(calls) > 4:
+                return {'toast': 'X is already your Home.'}
+            s.insp.last_error = errors[(len(calls) - 1) % 3]
+            return None
+        s = self._toast_scenario(ui, lambda *a, **k: (124, '[timeout]'))
+
+        def fresh(vm):
+            return Mock(last_error=None)
+        with patch.object(e2e, 'Inspector', side_effect=fresh) as new, patch.object(e2e, 'sleep'):
+            self.assertEqual(s.see_toast('already your Home', 30), ('X is already your Home.', 'DOM'))
+        self.assertEqual(new.call_count, 4)  # not capped at two
+        self.assertEqual(s.close_insp.call_count, 4)
+
+    def test_see_toast_ocr_is_capped_interleaved_and_logs_rows(self):
+        from unittest.mock import Mock, patch
+        s = self._toast_scenario(Mock(return_value={'toast': None}), None)
+        s.insp.last_error = None
+        rows = json.dumps({'elements': [{'kind': 'text', 'text': 'Some other text'}, {'kind': 'button', 'text': 'B'}]})
+        s.host.display_beanjar.side_effect = lambda *a, **k: (0, rows)
+        clock = [1000.0]
+        with patch.object(e2e.time, 'time', side_effect=lambda: clock[0]), \
+                patch.object(e2e, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 1)):
+            text, source = s.see_toast('already your Home', 10)
+        self.assertIsNone(text)
+        ocr_calls = s.host.display_beanjar.call_args_list
+        self.assertTrue(0 < len(ocr_calls) < s.ui.call_count)  # OCR interleaved, DOM rounds dominate
+        for c in ocr_calls:
+            self.assertLessEqual(c.kwargs['timeout'], e2e.Scenario.TOAST_OCR_TIMEOUT)
+        self.assertIn('rows: Some other text', source)
+        self.assertIn('timeline:', source)
+        self.assertIn('OCR', source)
+        self.assertIn('DOM', source)
+
+    def test_see_toast_timeline_records_error_and_ocr_timeout(self):
+        from unittest.mock import Mock, patch
+        s = self._toast_scenario(Mock(return_value=None), lambda *a, **k: (124, '[timeout]'))
+        clock = [0.0]
+        with patch.object(e2e.time, 'time', side_effect=lambda: clock[0]), \
+                patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(last_error='no page for x in /json')), \
+                patch.object(e2e, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 2)):
+            text, source = s.see_toast('already your Home', 6)
+        self.assertIsNone(text)
+        self.assertIn('inspector-recreate', source)
+        self.assertIn('elements rc=124', source)
+        self.assertIn('err=', source)
+
+    def test_api_request_selected_replaces_inspector_not_app(self):
+        from unittest.mock import Mock, patch
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.rec, s.dev, s.vm, s.launcher = Mock(), Mock(), 'vm', 'l'
+        s.state = Mock(return_value={'choice': 'l'})
+        s.shot = Mock()
+        order = []
+        s.insp = Mock()
+        s.close_insp = Mock(side_effect=lambda: (order.append('close'), setattr(s, 'insp', None)))
+        s.see_toast = Mock(side_effect=lambda *a: (order.append('toast'), ('t', 'DOM'))[1])
+        s.dev.launch.side_effect = lambda *a: (order.append('launch'), (0, 'ok'))[1]
+        s.dev.close.side_effect = lambda *a: order.append('app-close')
+        with patch.object(e2e, 'Inspector', side_effect=lambda vm: order.append('new') or Mock()):
+            s.api_request(selected=True)
+        self.assertEqual(order[:4], ['close', 'new', 'launch', 'toast'])
+
     def test_foreground_probe_rules(self):
         from unittest.mock import Mock
         overlay_event = '{"event":"foreground","windowType":"_WEBOS_WINDOW_TYPE_OVERLAY"}'
