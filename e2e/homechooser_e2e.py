@@ -105,12 +105,16 @@ MATRIX = [
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
 # Stock-home preload policy (service/src/watcher/preload.c; docs/settings-app.md "The stock home is
-# not preloaded").  On 6.x to 10.x sam relaunches a closed stock home at once as the "last input" app,
-# whatever the launcher (measured on 9.2.1, 8.3.0 and 10.3.1, 75 to 89 MB), so since 8791f6e neither the
-# watcher nor the app closes it there: the expected result is the preload policy off, the skip line in
-# the watcher log, no closeByAppId for it, and the stock home possibly running until the next reboot.
+# not preloaded").  On 10.x sam relaunches a closed stock home at once as the "last input" app,
+# whatever the launcher (measured on 10.3.1, 75 to 89 MB), so since 8791f6e neither the watcher nor the
+# app closes it there: the expected result is the preload policy off, the skip line in the watcher log,
+# no closeByAppId for it, and the stock home possibly running until the next reboot.  On 6.x to 9.x the
+# home gate (docs/home-gate.md) takes its place: the gate is mounted, the watcher logs "home gate
+# mounted" and closes a stock home the boot started (a bounded retry), and none runs afterwards.
 # On 11.x and 12.x the watcher waits until the launcher has a safe foreground before closing it.
 SKIP_LINE = 'stock home left running'
+GATE_LINE = 'home gate mounted'
+GATE_TARGET = '/usr/bin/com.webos.app.home'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 FULLHOME = 'com.webos.app.fullhome'
@@ -152,6 +156,12 @@ def device_text_forms(text):
 
 
 def uses_home_key_hook(major):
+    return 6 <= major <= 9
+
+
+def uses_home_gate(major):
+    """6.x to 9.x with a launcher chosen: the daemon binds homechooser-home-gate over stock Home's
+    binary (docs/home-gate.md), so stock Home is not left running."""
     return 6 <= major <= 9
 
 
@@ -2468,8 +2478,33 @@ class Scenario:
         return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|%s' /tmp/homechooser-home.log 2>&1 | tail -n 6" % SKIP_LINE)[1].strip()
 
     def stock_left_running(self):
-        """6.x to 10.x, any launcher: the watcher leaves the stock home running (8791f6e)."""
-        return 6 <= self.major <= 10
+        """10.x, any launcher: the watcher leaves the stock home running (8791f6e).  6.x to 9.x use the
+        home gate instead (check_home_gate)."""
+        return self.major == 10
+
+    def gate_mount_count(self):
+        rc, out = self.dev.sh("awk '$2 == \"%s\" {n++} END {print n + 0}' /proc/mounts" % GATE_TARGET)
+        try:
+            return int(out.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    def check_home_gate(self, label):
+        """6.x to 9.x, launcher chosen: the gate is bound over stock Home's binary, the watcher logged the
+        mount, and stock Home is not running.  A Home the boot started before the mount is closed by the
+        watcher's retry (every 10 s, up to 12 times), so the wait for it is bounded."""
+        r = self.rec
+        count = self.gate_mount_count()
+        r.check(label + ': the home gate is mounted over ' + GATE_TARGET, count >= 1,
+                '%d mount(s) of %s in /proc/mounts' % (count, GATE_TARGET))
+        gone = self.wait(lambda: STOCK not in self.running_ids(), 150, 5)
+        r.check(label + ': stock Home (the real binary) is not running', bool(gone), repr(self.running_ids()))
+        self.wait(lambda: any(GATE_LINE in l for l in self.log_lines()), 60, 5)
+        mounted = [l for l in self.log_lines() if GATE_LINE in l]
+        r.check(label + ': watcher log has the %r line' % GATE_LINE, bool(mounted),
+                mounted[-1] if mounted else 'no line containing %r' % GATE_LINE)
+        r.note(label + ': home gate lines in the watcher log',
+               '\n'.join(l for l in self.log_lines() if 'home gate' in l)[-1500:])
 
     def mark_log(self):
         """Remember how long the watcher log is now: /tmp/homechooser-home.log accumulates across the
@@ -2543,6 +2578,9 @@ class Scenario:
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
         sleep(settle)
         samples = self.stock_running_samples()
+        if uses_home_gate(self.major):
+            self.check_home_gate(label)
+            return
         if self.stock_left_running():
             self.check_stock_left_running(label, samples)
             return
@@ -3794,6 +3832,20 @@ class Scenario:
             return
         self.verify_reboot_apply()
 
+    def check_gate_front(self, label):
+        """6.x to 9.x after a boot: the gate (mounted, stock Home not running: check_home_gate) put the
+        chosen full-screen launcher in front; for an overlay launcher the last input app is in front."""
+        r = self.rec
+        overlay = self.L.overlay
+        want = lambda fg: bool(fg) and fg != STOCK and (overlay or fg == self.launcher)
+        ok = self.wait(lambda: want(self.dev.foreground()[0]), 180, 5)
+        fg = self.dev.foreground()
+        r.check('%s: %s in front (the gate ran at boot)' % (
+                label, 'the last input app (overlay launcher)' if overlay else 'the chosen launcher ' + self.launcher),
+                bool(ok), fg[1])
+        r.check(label + ': the gate is mounted and the real stock Home is not running',
+                self.gate_mount_count() >= 1 and STOCK not in self.running_ids(), repr(self.running_ids()))
+
     def verify_reboot_apply(self):
         r, d = self.rec, self.dev
         if self.uses_home_key_hook():
@@ -3815,6 +3867,8 @@ class Scenario:
                     self.preload_log())
         self.log_mark = 0  # a new boot, a new /tmp log
         self.check_preload_off('after the reboot', settle=30)
+        if uses_home_gate(self.major):
+            self.check_gate_front('after the reboot')
         if self.uses_home_key_hook():
             self.check_hook_status('after reboot')
         self.residency('after the reboot')

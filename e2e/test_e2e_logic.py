@@ -1367,12 +1367,15 @@ class WaitForDevice(unittest.TestCase):
 
 
 class StockLeftRunning(unittest.TestCase):
-    """8791f6e: on 6-10 the stock home is left running for every launcher; 11/12 close it; 5 is not touched."""
+    """8791f6e: on 10 the stock home is left running for every launcher; 6-9 use the home gate instead;
+    11/12 close it; 5 is not touched."""
 
     def test_releases(self):
         import types
         got = {m: e2e.Scenario.stock_left_running(types.SimpleNamespace(major=m)) for m in range(5, 13)}
-        self.assertEqual(got, {5: False, 6: True, 7: True, 8: True, 9: True, 10: True, 11: False, 12: False})
+        self.assertEqual(got, {5: False, 6: False, 7: False, 8: False, 9: False, 10: True, 11: False, 12: False})
+        self.assertEqual({m: e2e.uses_home_gate(m) for m in range(5, 13)},
+                         {5: False, 6: True, 7: True, 8: True, 9: True, 10: False, 11: False, 12: False})
 
 
 class FaultPopups(unittest.TestCase):
