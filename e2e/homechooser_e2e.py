@@ -2494,15 +2494,29 @@ class Scenario:
         mount, and stock Home is not running.  A Home the boot started before the mount is closed by the
         watcher's retry (every 10 s, up to 12 times), so the wait for it is bounded."""
         r = self.rec
+        # The watcher trims its log to the last 200 lines once it passes 64 KB, so the mount line can
+        # leave the file while the run goes on (the file is read whole; it is the file that lost the
+        # line). Look as early as possible and remember the first sighting.
+        seen = []
+
+        def mount_line_seen():
+            lines = [l for l in self.log_lines() if GATE_LINE in l]
+            if lines:
+                seen[:] = lines[-1:]
+            return bool(seen)
+        mount_line_seen()
         count = self.gate_mount_count()
         r.check(label + ': the home gate is mounted over ' + GATE_TARGET, count >= 1,
                 '%d mount(s) of %s in /proc/mounts' % (count, GATE_TARGET))
         gone = self.wait(lambda: STOCK not in self.running_ids(), 150, 5)
         r.check(label + ': stock Home (the real binary) is not running', bool(gone), repr(self.running_ids()))
-        self.wait(lambda: any(GATE_LINE in l for l in self.log_lines()), 60, 5)
-        mounted = [l for l in self.log_lines() if GATE_LINE in l]
-        r.check(label + ': watcher log has the %r line' % GATE_LINE, bool(mounted),
-                mounted[-1] if mounted else 'no line containing %r' % GATE_LINE)
+        self.wait(mount_line_seen, 60, 5)
+        mounted = list(seen)
+        detail = mounted[-1] if mounted else 'no line containing %r' % GATE_LINE
+        if not mounted:
+            lines = self.log_lines()
+            detail += '; log now %d lines, first: %s' % (len(lines), lines[0] if lines else 'empty')
+        r.check(label + ': watcher log has the %r line' % GATE_LINE, bool(mounted), detail)
         r.note(label + ': home gate lines in the watcher log',
                '\n'.join(l for l in self.log_lines() if 'home gate' in l)[-1500:])
 
@@ -3431,7 +3445,14 @@ class Scenario:
         self.shot('reopened')
         r.check('re-open after the apply: no error toast', not (again.get('toast') or '').startswith("Couldn't"),
                 'toast: %r' % again.get('toast'))
+        # One evaluate can fail while the page settles (None: no page, socket error); the DOM read above
+        # may still have worked. A bounded retry, only while nothing is ticked yet.
         ticked = self.insp.evaluate(TICK_JS) if self.insp else None
+        for _ in range(5):
+            if ticked == self.launcher or not self.insp:
+                break
+            sleep(2)
+            ticked = self.insp.evaluate(TICK_JS)
         r.check('re-open after the apply: the chosen row is ticked', ticked == self.launcher,
                 self.reopen_evidence(info, ticked, ticked == self.launcher))
         d.close(APP_ID)
