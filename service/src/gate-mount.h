@@ -18,6 +18,8 @@ typedef struct {
     /* luna-send as HC_LUNA_IDENTITY; only after a new mount (running, closeByAppId). */
     char *(*call)(const char *uri, const char *payload, int timeout, void *context);
     void *context;
+    const char *proc;        /* /proc, for the processid -> exe check in hc_gate_close_stock */
+    gboolean skip_close;     /* the caller (the watcher) closes stock Home itself, with retries */
 } HCGateOps;
 
 typedef enum {
@@ -33,6 +35,11 @@ HCGateOps hc_gate_ops(char *(*call)(const char *, const char *, int, void *), vo
  * gate released itself for the same choice) and close a running stock Home. NULL, or no installed
  * gate binary: unmount it everywhere, propagated copies included. Messages go to log. */
 HCGateResult hc_gate_sync(const HCGateOps *ops, const char *choice, GString *log);
+/* Close a running stock Home that is the real binary, never the gate (told apart by /proc/<pid>/exe
+ * against the staged copy). TRUE once the answer is confirmed: `running` without Home, or
+ * closeByAppId returned true. FALSE while unconfirmed (no reply, a failure, the gate itself or an
+ * instance whose pid cannot be checked, which is never closed); the caller retries. Outcome to log. */
+gboolean hc_gate_close_stock(const HCGateOps *ops, GString *log);
 /* Forget a release, so the next sync mounts again (an explicit apply from the app). */
 void hc_gate_rearm(const HCGateOps *ops);
 /* The release marker inside dir; written by the gate before it unmounts itself. */

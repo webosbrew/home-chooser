@@ -62,7 +62,9 @@ would only start the gate again.
 Each decision is one line, through PmLog (`HOME_GATE`) and appended to the watcher log
 `/tmp/homechooser-home.log`, e.g. `home gate: overlay launcher, nothing in front: last input (reason
 undefined): opened com.webos.app.hdmi2` or `home gate: gate removed from /usr/bin/com.webos.app.home;
-launched stock Home`.
+asked SAM to start stock Home: accepted`. SAM's reply to that launch is only logged, not trusted:
+on 7.6.0 the real Home came up although the old wording said it could not launch it, so a reply
+that is not `returnValue` true reads `not confirmed, <reply or "no reply">`.
 
 ## Mount lifecycle (daemon)
 
@@ -82,11 +84,31 @@ mount is verified there after binding and a failed or invisible bind rolls back.
 already mounted by something else, nothing is mounted. A changed installed gate (package update) is
 swapped in.
 
-After a new mount, if `running` lists stock Home, the daemon closes it with
-`closeByAppId {"id":"com.webos.app.home","forceMode":true}` as `com.webos.applicationManager`. This
-includes an instance the preload manager started before the mount: it keeps running from the old
-inode until closed. The watcher's volatile preload-off for Home stays as it was. SAM's idle handling
-then goes through the gate.
+Closing a stock Home that runs while the gate is mounted: a one-off `--homekey` run tries once after
+a new mount. The watcher keeps trying until SAM has answered. At boot SAM starts Home (about 50 s)
+before the mount and the watcher's first calls can get no reply (on 7.6.0 `running` and
+`setPreloadPolicy` got none for about 25 s), so a single close at mount time can be lost, and the
+mount is idempotent afterwards. The close is `running`, then `closeByAppId
+{"id":"com.webos.app.home","forceMode":true}` as `com.webos.applicationManager`. This includes an
+instance the preload manager started before the mount: it keeps running from the old inode until
+closed.
+
+- The attempt is made when the gate is first seen mounted (new mount, or already mounted at watcher
+  start), again on `preload_retry_ms` (10 s) up to `preload_tries` (12) times, and at every later gate
+  sync, until it is confirmed: `running` replied without Home, or `closeByAppId` returned
+  `returnValue` true. A missing reply or a failed close stays unconfirmed. Every attempt is logged
+  (`home gate: ... no reply ...`, `close unconfirmed` or `stock Home close confirmed`); after
+  confirmation nothing more is logged or sent.
+- The gate's own process is never closed. For a short while it runs as `com.webos.app.home`, and
+  `closeByAppId` closes every instance of an id. The `running` entry's `processid` is checked: if
+  `/proc/<pid>/exe` is the staged gate copy (same device and inode, or an exe marked `(deleted)`
+  after a package update replaced the copy), Home is not closed. An entry without a usable pid, or
+  whose exe cannot be read, is treated the same way (conservative: not closed, stays unconfirmed).
+  If any instance in the list is the gate, nothing is closed in that attempt.
+- Unmounting, a release by the gate, and any clean watcher end cancel a pending retry.
+
+The watcher's volatile preload-off for Home stays as it was. SAM's idle handling then goes through the
+gate.
 
 The watcher mounts only for a valid, installed, non-stock choice whose live Home key filter was
 applied, with the `homekey` flag present. It unmounts:
@@ -160,7 +182,7 @@ Local, untracked probe notes (`scratch/stock-home-kill/`, 2026-10-31):
 ```sh
 make -C service test-gate        # decision table and self-release through real luna-send children (fake-luna-send.py)
 make -C service test-gate-mount  # mount/unmount, idempotence, rollback, foreign/stacked mounts, jail copies, release marker
-make -C service test-watcher     # G11-G15: when the watcher mounts and unmounts
+make -C service test-watcher     # G11-G19: when the watcher mounts and unmounts; the stock Home close and its retries
 ```
 
 ## Open device validation

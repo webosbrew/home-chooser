@@ -13,7 +13,7 @@ HCWatchConfig hc_watch_config(void)
         .override = HC_OVERRIDE_FILE, .init_link = HC_INIT_LINK,
         .runtime = "/tmp/homechooser-runtime", .access_script = "/tmp/homechooser-runtime/homechooser-access",
         .scripts_dir = HC_SERVICE_DIR "/scripts",
-        .gate_binary = HC_GATE_BINARY, .gate_dir = HC_GATE_DIR,
+        .gate_binary = HC_GATE_BINARY, .gate_dir = HC_GATE_DIR, .proc = "/proc",
         .log = HC_WATCH_LOG, .stock_js = "/usr/lib/qt5/qml/KeyFilters/systemUi.js",
         .app_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications",
         .install_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications /media/cryptofs/apps/usr/palm/applications",
@@ -242,6 +242,7 @@ void hc_watch_free(HCWatch *w)
     /* Any clean end leaves stock Home in place; a failed watcher keeps it for its restart. */
     if (w->status == 0) gate_apply(w, NULL);
     if (w->preload_source) g_source_remove(w->preload_source);
+    if (w->gate_source) g_source_remove(w->gate_source);
     g_free(w->choice_file); g_free(w->missing); g_free(w->baked);
     g_free(w->title_id); g_free(w->title); g_free(w->close_choice); g_free(w);
 }

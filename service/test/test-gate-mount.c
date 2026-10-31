@@ -21,11 +21,11 @@ static unsigned checks, failures;
 static const char *jails[] = {"user", "flash/data", "cmn_data"};
 
 typedef struct {
-    char *root, *mountinfo, *binary, *dir, *target, *dev;
+    char *root, *mountinfo, *binary, *dir, *target, *dev, *proc;
     GString *ops, *calls;
     const char *fail_bind, *fail_unbind; /* a path whose call fails */
     int fail_errno;
-    gboolean invisible, running, no_reply;
+    gboolean invisible, running, no_reply, close_fail;
     int app_installed;
     unsigned serial;
 } Fx;
@@ -105,7 +105,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         bool force = false; jboolean_get(jobject_get(p, key_buf("forceMode")), &force);
         CHECK("M close only stock Home, forced", !g_strcmp0(id, HC_STOCK_HOME_ID) && force);
         g_free(id); j_release(&p);
-        return g_strdup("{\"returnValue\":true}");
+        return g_strdup(fx->close_fail ? "{\"returnValue\":false}" : "{\"returnValue\":true}");
     }
     if (g_str_has_suffix(uri, "/getAppInfo")) return g_strdup(fx->app_installed ? "{\"returnValue\":true,\"appInfo\":{}}" : "{\"returnValue\":false}");
     CHECK("M known method", FALSE);
@@ -116,7 +116,7 @@ static HCGateOps ops(void)
 {
     HCGateOps o = hc_gate_ops(fake_call, NULL);
     o.gate_binary = fx->binary; o.dir = fx->dir; o.target = fx->target; o.mountinfo = fx->mountinfo;
-    o.bind = fake_bind; o.unbind = fake_unbind;
+    o.bind = fake_bind; o.unbind = fake_unbind; o.proc = fx->proc;
     return o;
 }
 static HCGateResult gsync(const char *choice)
@@ -159,6 +159,10 @@ static void setup(const char *base, const char *name)
     struct stat st; stat(rt, &st);
     fx->dev = g_strdup_printf("%u:%u", major(st.st_dev), minor(st.st_dev));
     g_free(pkg); g_free(bin); g_free(rt);
+    fx->proc = g_build_filename(dir, "proc", NULL);
+    char *exe = g_build_filename(fx->proc, "2469", "exe", NULL); /* the real binary, by default */
+    char *pd = g_path_get_dirname(exe); mkdir_p(pd); g_free(pd); g_file_set_contents(exe, "stock home", -1, NULL);
+    g_free(exe);
     g_file_set_contents(fx->binary, "gate v1", -1, NULL);
     g_file_set_contents(fx->target, "stock home", -1, NULL);
     g_file_set_contents(fx->mountinfo, "63 52 0:23 / / rw,relatime shared:1 - overlay webos rw\n25 63 0:20 / /tmp rw shared:5 - tmpfs tmpfs rw\n", -1, NULL);
@@ -167,7 +171,7 @@ static void setup(const char *base, const char *name)
 static void teardown(void)
 {
     char *rm = g_strdup_printf("rm -rf '%s'", fx->root); if (system(rm)) {} g_free(rm);
-    g_free(fx->root); g_free(fx->mountinfo); g_free(fx->binary); g_free(fx->dir); g_free(fx->target); g_free(fx->dev);
+    g_free(fx->root); g_free(fx->mountinfo); g_free(fx->binary); g_free(fx->dir); g_free(fx->target); g_free(fx->dev); g_free(fx->proc);
     g_string_free(fx->ops, TRUE); g_string_free(fx->calls, TRUE); g_free(fx); fx = NULL;
 }
 static char *staged(void) { return g_build_filename(fx->dir, HC_GATE_NAME, NULL); }
@@ -202,6 +206,40 @@ static void test_lifecycle(const char *base)
     CHECK("M7 package gone: unmount", gsync("my.home") == HC_GATE_UNMOUNTED && ops_are("unbind T;"));
     CHECK("M7 no binary, nothing mounted", gsync("my.home") == HC_GATE_UNCHANGED && ops_are(""));
     g_free(copy); teardown();
+}
+/* Make pid 2469 the gate (exe is the staged copy), the real binary, or unreadable. */
+static void set_exe(int kind)
+{
+    char *dir = g_build_filename(fx->proc, "2469", NULL), *exe = g_build_filename(dir, "exe", NULL), *copy = staged();
+    unlink(exe); mkdir_p(dir);
+    if (kind == 1) { char *abs = realpath(copy, NULL); if (symlink(abs, exe)) {} free(abs); }
+    else if (kind == 0) g_file_set_contents(exe, "stock home", -1, NULL);
+    g_free(dir); g_free(exe); g_free(copy);
+}
+static gboolean close_try(GString *log)
+{
+    g_string_truncate(fx->calls, 0); g_string_truncate(log, 0);
+    HCGateOps o = ops(); return hc_gate_close_stock(&o, log);
+}
+static void test_close(const char *base)
+{
+    setup(base, "close"); GString *log = g_string_new(NULL);
+    HCGateOps o = ops(); o.skip_close = TRUE; g_string_truncate(fx->calls, 0);
+    CHECK("M24 skip_close: mounted, no calls", hc_gate_sync(&o, "my.home", log) == HC_GATE_MOUNTED && !fx->calls->len);
+    fx->no_reply = TRUE;
+    CHECK("M24 no reply from running: unconfirmed", !close_try(log) && strstr(log->str, "no reply") && !strstr(fx->calls->str, "closeByAppId"));
+    fx->no_reply = FALSE;
+    CHECK("M24 retry closes the real binary", close_try(log) && strstr(fx->calls->str, "closeByAppId"));
+    fx->close_fail = TRUE;
+    CHECK("M25 close returnValue false: unconfirmed", !close_try(log) && strstr(log->str, "closeByAppId"));
+    fx->close_fail = FALSE;
+    set_exe(1);
+    CHECK("M26 the gate's own process is never closed", !close_try(log) && !strstr(fx->calls->str, "closeByAppId") && strstr(log->str, "the gate"));
+    set_exe(-1);
+    CHECK("M26 an unidentifiable instance is not closed", !close_try(log) && !strstr(fx->calls->str, "closeByAppId") && strstr(log->str, "not identifiable"));
+    set_exe(0); fx->running = FALSE;
+    CHECK("M27 no Home running: confirmed without a close", close_try(log) && !strstr(fx->calls->str, "closeByAppId"));
+    g_string_free(log, TRUE); teardown();
 }
 static void test_propagation(const char *base)
 {
@@ -320,7 +358,7 @@ int main(int argc, char **argv)
     setbuf(stdout, NULL);
     char *base = g_build_filename(argv[1], "cases", NULL);
     char *rm = g_strdup_printf("rm -rf '%s'", base); if (system(rm)) return 2; g_free(rm);
-    test_lifecycle(base); test_propagation(base); test_release(base); test_failures(base); test_wanted(base); test_constants();
+    test_lifecycle(base); test_propagation(base); test_close(base); test_release(base); test_failures(base); test_wanted(base); test_constants();
     g_free(base);
     printf("%u passed, %u failed (home gate mounts)\n", checks - failures, failures);
     return failures ? 1 : 0;

@@ -20,6 +20,8 @@ typedef struct {
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
     int silent, flap, wait_action, wait_count, title_gets;
     int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
+    int running_dead, close_dead, running_calls; /* calls left unanswered; `running` calls seen */
+    const char *home_pid; /* NULL: stock Home not running */
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
@@ -109,8 +111,16 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         r = response(!f->preload_fail); if (f->preload_fail > 0) f->preload_fail--;
     } else if (eq(method, "getForegroundAppInfo")) {
         if (f->foreground) { r = response(TRUE); put_str(r, "appId", f->foreground); }
+    } else if (eq(method, "running")) {
+        f->running_calls++;
+        if (f->running_dead) f->running_dead--;
+        else {
+            r = response(TRUE); jvalue_ref list = jarray_create(NULL);
+            if (f->home_pid) { jvalue_ref e = jobject_create(); put_str(e, "id", STOCK); put_str(e, "processid", f->home_pid); jarray_append(list, e); }
+            jobject_set(r, key_buf("running"), list);
+        }
     } else if (eq(method, "closeByAppId")) {
-        f->closes++; r = response(TRUE);
+        f->closes++; r = f->close_dead ? NULL : response(TRUE); if (f->close_dead) f->close_dead--;
         char *id = get_string(p, "id"); CHECK("W16 close only stock", eq(id, STOCK)); g_free(id);
         bool force = false; jboolean_get(member(p, "forceMode"), &force); CHECK("W16 force close", force);
     } else CHECK("known Luna method", FALSE);
@@ -163,7 +173,7 @@ static Fixture *setup(int major, const char *id) {
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
     f->c.preload_retry_ms = f->c.preload_settle_ms = 0; f->c.notify_retry_ms = 3000;
     f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
-    f->gate_last = -1;
+    f->gate_last = -1; f->c.proc = path(f, root, "proc");
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
     char *os = g_strdup_printf("VERSION_ID=\"%d.0.0\"\n", major); file(f->c.osrelease, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
@@ -504,6 +514,36 @@ static void test_gate(void) {
     CHECK("G15 no choice at start clears leftovers", f->gate_last == 0 && !f->gate_on);
     f->w = hc_watch_new(&f->c, &ops); teardown(f);
 }
+/* Pid 100 is the real binary, 200 the gate (its exe is the staged copy). */
+static void proc_setup(Fixture *f) {
+    char *copy = g_build_filename(f->c.gate_dir, HC_GATE_NAME, NULL), *real = g_build_filename(f->c.proc, "100", "exe", NULL), *gate = g_build_filename(f->c.proc, "200", "exe", NULL);
+    file(copy, "gate"); file(real, "stock"); file(gate, "x"); unlink(gate);
+    char *abs = realpath(copy, NULL); CHECK("G16 gate exe link", !symlink(abs, gate)); free(abs); g_free(copy); g_free(real); g_free(gate);
+}
+/* G16-G19: a stock Home that SAM started before the mount, or while SAM could not answer, is closed. */
+static void test_gate_close(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->running_dead = 1; start(f);
+    CHECK("G16 no reply at mount, a retry closes it", f->running_calls == 2 && f->closes == 1 && !f->w->gate_pending && !f->w->gate_source);
+    event(f, 'A', "{}"); event(f, 'A', "{}");
+    CHECK("G17 confirmed close stops the retries and later syncs", f->running_calls == 2 && f->closes == 1);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->close_dead = 1; start(f);
+    CHECK("G17 a close without reply is retried", f->closes == 2 && !f->w->gate_pending); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "200"; start(f);
+    CHECK("G18 the gate's own process is not closed", !f->closes && f->w->gate_pending);
+    CHECK("G18 retries are bounded", f->running_calls == 1 + (int)f->c.preload_tries && !f->w->gate_source);
+    f->home_pid = NULL; event(f, 'A', "{}");
+    CHECK("G18 a later sync confirms once the gate is gone", !f->closes && !f->w->gate_pending && f->running_calls == 2 + (int)f->c.preload_tries);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "200"; hc_watch_start(f->w);
+    CHECK("G19 retry pending", f->w->gate_pending && f->w->gate_source); int calls = f->running_calls;
+    installed(f, "my.home", -1); event(f, 'A', "{}");
+    CHECK("G19 unmount cancels the retry", !f->w->gate_pending && !f->w->gate_source && f->running_calls == calls);
+    installed(f, "my.home", 1); event(f, 'A', "{}"); CHECK("G19 re-mount starts it afresh", f->w->gate_pending || f->running_calls > calls);
+    hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL; calls = f->running_calls; pump();
+    CHECK("G19 clean stop leaves no retry", f->running_calls == calls);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -516,6 +556,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

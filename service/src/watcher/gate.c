@@ -3,24 +3,68 @@
 #include "internal.h"
 #include "gate-mount.h"
 
+static HCGateOps gate_ops(HCWatch *w)
+{
+    HCGateOps ops = hc_gate_ops(w->ops.call, w->ops.context);
+    ops.gate_binary = w->c.gate_binary; ops.dir = w->c.gate_dir; ops.proc = w->c.proc; ops.skip_close = TRUE;
+    return ops;
+}
+static gboolean gate_retry(gpointer context);
+/* One attempt to close a stock Home that is the real binary (docs/home-gate.md). Retried on the
+ * preload cadence, bounded, and at each gate sync, until `running` or closeByAppId confirms. */
+static void gate_close(HCWatch *w)
+{
+    HCGateOps ops = gate_ops(w);
+    GString *log = g_string_new(NULL);
+    if (hc_gate_close_stock(&ops, log)) w->gate_pending = FALSE;
+    watch_log(w, "home gate: %s%s", log->str, w->gate_pending ? "close unconfirmed" : "stock Home close confirmed");
+    g_string_free(log, TRUE);
+    if (w->gate_pending && !w->gate_source && w->gate_attempts < w->c.preload_tries)
+        w->gate_source = g_timeout_add(w->c.preload_retry_ms, gate_retry, w);
+}
+static gboolean gate_retry(gpointer context)
+{
+    HCWatch *w = context;
+    w->gate_source = 0; w->gate_attempts++;
+    if (!w->gate_pending || !w->gate_active) return G_SOURCE_REMOVE;
+    w->depth++;
+    gate_close(w);
+    w->depth--;
+    if (w->ops.wake) w->ops.wake(w->ops.context);
+    return G_SOURCE_REMOVE;
+}
+
 /* choice NULL unmounts. 0 ok or nothing to do, 1 failed. */
 int gate_apply(HCWatch *w, const char *choice)
 {
     if (w->major < 6 || w->major > 9) return 0;
-    if (w->ops.gate) return w->ops.gate(choice, w->ops.context);
-    HCGateOps ops = hc_gate_ops(w->ops.call, w->ops.context);
-    ops.gate_binary = w->c.gate_binary; ops.dir = w->c.gate_dir;
-    GString *log = g_string_new(NULL);
-    HCGateResult result = hc_gate_sync(&ops, choice, log);
-    /* A release is logged once, not on every later check. */
-    if (result != HC_GATE_UNCHANGED && (result != HC_GATE_RELEASED || !w->gate_released))
-        watch_log(w, "home gate: %s", result == HC_GATE_RELEASED && !log->len ?
-            "the gate restored stock Home itself; not mounted again until the choice changes or a reboot" : log->str);
-    w->gate_released = result == HC_GATE_RELEASED;
-    w->gate_active = result == HC_GATE_MOUNTED ||
-        (result == HC_GATE_UNCHANGED && choice && g_file_test(ops.gate_binary, G_FILE_TEST_IS_REGULAR));
-    g_string_free(log, TRUE);
-    return result == HC_GATE_FAILED;
+    gboolean was_active = w->gate_active;
+    int failed;
+    HCGateResult result = HC_GATE_UNCHANGED;
+    if (w->ops.gate) {
+        failed = w->ops.gate(choice, w->ops.context);
+        w->gate_active = choice && !failed;
+    } else {
+        HCGateOps ops = gate_ops(w);
+        GString *log = g_string_new(NULL);
+        result = hc_gate_sync(&ops, choice, log);
+        /* A release is logged once, not on every later check. */
+        if (result != HC_GATE_UNCHANGED && (result != HC_GATE_RELEASED || !w->gate_released))
+            watch_log(w, "home gate: %s", result == HC_GATE_RELEASED && !log->len ?
+                "the gate restored stock Home itself; not mounted again until the choice changes or a reboot" : log->str);
+        w->gate_released = result == HC_GATE_RELEASED;
+        w->gate_active = result == HC_GATE_MOUNTED ||
+            (result == HC_GATE_UNCHANGED && choice && g_file_test(ops.gate_binary, G_FILE_TEST_IS_REGULAR));
+        g_string_free(log, TRUE);
+        failed = result == HC_GATE_FAILED;
+    }
+    if (!w->gate_active || result == HC_GATE_RELEASED) {
+        /* Unmounted or released: nothing left to close, and a pending retry must not fire. */
+        w->gate_pending = FALSE;
+        if (w->gate_source) { g_source_remove(w->gate_source); w->gate_source = 0; }
+    } else if (!was_active || result == HC_GATE_MOUNTED) { w->gate_pending = TRUE; w->gate_attempts = 0; }
+    if (w->gate_pending) gate_close(w);
+    return failed;
 }
 
 /* Mounted only while the redirect is live for an installed, non-stock choice: the Home key

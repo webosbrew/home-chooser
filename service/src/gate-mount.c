@@ -36,7 +36,7 @@ static int real_unbind(const char *target, void *context)
 }
 HCGateOps hc_gate_ops(char *(*call)(const char *, const char *, int, void *), void *context)
 {
-    HCGateOps o = {HC_GATE_BINARY, HC_GATE_DIR, HC_GATE_TARGET, "/proc/self/mountinfo", NULL, NULL, call, context};
+    HCGateOps o = {HC_GATE_BINARY, HC_GATE_DIR, HC_GATE_TARGET, "/proc/self/mountinfo", NULL, NULL, call, context, "/proc", FALSE};
     return o;
 }
 char *hc_gate_marker(const char *dir) { return g_build_filename(dir, "released", NULL); }
@@ -124,24 +124,45 @@ static gboolean same_bytes(const char *a, const char *b)
         nx == ny && !memcmp(x, y, nx);
     g_free(x); g_free(y); return same;
 }
-static gboolean stock_running(const HCGateOps *o)
+/* 1 the gate (same inode as the staged copy, or a copy replaced since), 0 the real binary, -1 unknown. */
+static int is_gate(const HCGateOps *o, const char *pid)
+{
+    if (!pid || !*pid || strspn(pid, "0123456789") != strlen(pid)) return -1;
+    char *exe = g_build_filename(o->proc, pid, "exe", NULL), *copy = staged(o), *link = g_file_read_link(exe, NULL);
+    struct stat a, b;
+    int r = -1;
+    if (!stat(exe, &a)) r = !stat(copy, &b) && a.st_dev == b.st_dev && a.st_ino == b.st_ino ? 1 : 0;
+    if (r == 0 && link && g_str_has_suffix(link, " (deleted)")) r = 1;
+    g_free(exe); g_free(copy); g_free(link); return r;
+}
+/* Also an instance the preload manager started before the mount, or one SAM started early in boot
+ * while it could not answer yet. Unconfirmed until `running` shows no Home or the close succeeded. */
+gboolean hc_gate_close_stock(const HCGateOps *o, GString *log)
 {
     char *text = o->call ? o->call(SAM "running", "{}", 5, o->context) : NULL;
-    jvalue_ref r = parse_object(text), list = r ? jobject_get(r, key_buf("running")) : NULL;
-    gboolean found = FALSE;
-    for (ssize_t i = 0; list && jis_array(list) && i < jarray_size(list) && !found; i++) {
-        char *id = get_string(jarray_get(list, i), "id");
-        found = !g_strcmp0(id, HC_STOCK_HOME_ID); g_free(id);
+    jvalue_ref r = parse_object(text), list = r && reply_ok(r) ? jobject_get(r, key_buf("running")) : NULL;
+    gboolean found = FALSE, safe = TRUE, done = FALSE;
+    for (ssize_t i = 0; list && jis_array(list) && i < jarray_size(list); i++) {
+        jvalue_ref e = jarray_get(list, i);
+        char *id = get_string(e, "id"), *pid = get_string(e, "processid");
+        if (!g_strcmp0(id, HC_STOCK_HOME_ID)) {
+            if (!pid) pid = get_string(e, "processId");
+            int gate = is_gate(o, pid);
+            found = TRUE; safe = safe && gate == 0;
+            if (gate) g_string_append_printf(log, "%s pid %s is %s, not closed; ", HC_STOCK_HOME_ID, pid ? pid : "?", gate > 0 ? "the gate" : "not identifiable");
+        }
+        g_free(id); g_free(pid);
     }
-    j_release(&r); g_free(text); return found;
-}
-/* Also an instance the preload manager started before the mount. */
-static void close_stock(const HCGateOps *o, GString *log)
-{
-    if (!stock_running(o)) return;
-    char *text = o->call(SAM "closeByAppId", "{\"id\":\"" HC_STOCK_HOME_ID "\",\"forceMode\":true}", 5, o->context);
-    g_string_append_printf(log, "closeByAppId %s: %s; ", HC_STOCK_HOME_ID, text ? g_strstrip(text) : "no reply");
-    g_free(text);
+    if (!list) g_string_append_printf(log, "running: %s; ", text ? "unusable reply" : "no reply");
+    else if (!found) { g_string_append(log, "stock Home not running; "); done = TRUE; }
+    else if (safe) {
+        char *reply = o->call(SAM "closeByAppId", "{\"id\":\"" HC_STOCK_HOME_ID "\",\"forceMode\":true}", 5, o->context);
+        jvalue_ref c = parse_object(reply);
+        done = reply_ok(c);
+        g_string_append_printf(log, "closeByAppId %s: %s; ", HC_STOCK_HOME_ID, reply ? g_strstrip(reply) : "no reply");
+        j_release(&c); g_free(reply);
+    }
+    j_release(&r); g_free(text); return done;
 }
 
 /* The target first (while ours, stacked included), then every propagated copy. On a shared root
@@ -212,7 +233,7 @@ static HCGateResult mount_gate(const HCGateOps *o, GString *log)
         return HC_GATE_FAILED;
     }
     g_string_append_printf(log, "home gate mounted over %s; ", o->target);
-    close_stock(o, log);
+    if (!o->skip_close) hc_gate_close_stock(o, log);
     return HC_GATE_MOUNTED;
 }
 

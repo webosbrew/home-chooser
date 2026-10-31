@@ -33,7 +33,8 @@ struct HCWatch {
     gboolean preload_ready;
     unsigned preload_source, preload_attempts, preload_generation;
     GMainLoop *waiting;
-    gboolean gate_active, gate_released;
+    gboolean gate_active, gate_released, gate_pending; /* pending: stock Home close unconfirmed */
+    unsigned gate_source, gate_attempts;
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }

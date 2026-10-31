@@ -34,11 +34,13 @@ static void gate_log(const HCGateConfig *c, const char *format, ...)
     g_free(line); g_free(stamp); g_date_time_unref(now); g_free(message);
 }
 
-static gboolean launch(const HCGateConfig *c, const char *identity, const char *id)
+/* reply, when given, gets SAM's answer as text ("no reply" when luna-send gave none: timeout, error). */
+static gboolean launch(const HCGateConfig *c, const char *identity, const char *id, char **reply)
 {
     jvalue_ref p = jobject_create(); put_str(p, "id", id);
     jvalue_ref r = hc_gate_call(c, identity, "luna://com.webos.applicationManager/launch", jvalue_stringify(p), c->launch_timeout_s);
     gboolean ok = reply_ok(r);
+    if (reply) *reply = g_strdup(r ? jvalue_stringify(r) : "no reply");
     j_release(&r); j_release(&p); return ok;
 }
 
@@ -58,8 +60,12 @@ static int release(const HCGateConfig *c, const char *choice)
         gate_log(c, "cannot unmount %s: %s; stock Home not started", c->target, g_strerror(errno));
         return 1;
     }
-    gboolean ok = launch(c, HC_LUNA_IDENTITY, HC_STOCK_HOME_ID);
-    gate_log(c, "gate removed from %s%s; %s stock Home", c->target, rc ? " (was not mounted)" : "", ok ? "launched" : "could not launch");
+    char *reply = NULL;
+    gboolean ok = launch(c, HC_LUNA_IDENTITY, HC_STOCK_HOME_ID, &reply);
+    /* SAM's answer is not proof either way: the real Home has come up after a "no reply" or a false. */
+    gate_log(c, "gate removed from %s%s; asked SAM to start stock Home: %s%s", c->target, rc ? " (was not mounted)" : "",
+        ok ? "accepted" : "not confirmed, ", ok ? "" : reply);
+    g_free(reply);
     return 0;
 }
 
@@ -69,7 +75,7 @@ int hc_gate_main(const HCGateConfig *c, int argc, char **argv)
     int rc = 0;
     if (d.action == HC_GATE_LAUNCH) {
         /* As com.webos.app.home, the caller SAM expects for a launch made by Home. */
-        if (launch(c, HC_STOCK_HOME_ID, d.target)) gate_log(c, "%s: opened %s", d.why, d.target);
+        if (launch(c, HC_STOCK_HOME_ID, d.target, NULL)) gate_log(c, "%s: opened %s", d.why, d.target);
         else {
             gate_log(c, "%s: launch of %s failed, restoring stock Home", d.why, d.target);
             d.action = HC_GATE_RELEASE;

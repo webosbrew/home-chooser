@@ -8,7 +8,7 @@ typedef struct {
     const char *state_dir, *osrelease, *app_dir, *override, *init_link;
     const char *runtime, *scripts_dir, *access_script, *log, *stock_js;
     const char *app_dirs, *install_dirs, *luna_send;
-    const char *gate_binary, *gate_dir; /* 6-9 home gate: installed binary, tmpfs runtime dir */
+    const char *gate_binary, *gate_dir, *proc; /* 6-9 home gate: installed binary, tmpfs runtime dir, /proc */
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
     unsigned preload_retry_ms, preload_settle_ms, preload_tries;
     unsigned notify_retry_ms, notify_tries, log_max;
