@@ -151,6 +151,13 @@ After an uninstall the state directory is gone, and a late `--homekey stop|clear
 nothing to restore (stock keyFilters are saved in that directory): it reports `active=no` and does not
 recreate the directory or `keyfilter.lock`. `apply` and `boot` still create it on a first install.
 
+Choosing LG Home in the app does the same cleanup without an uninstall: once a restore with no choice has
+put the stock keyFilters list back and read it back, `keyfilters-stock.json` and `keyfilter.lock` are
+removed, and the state directory with them when nothing else is in it. The snapshot is never removed
+before that readback. Who logs the mount on a live switch is a race between the watcher and the
+`--homekey refresh` the app runs right after starting it; when the refresh mounts first it logs to syslog
+only and the watcher's own log has the later `home gate:` close and launch lines but no mount line.
+
 After the gate releases itself, the next sync finds the marker naming the current choice and does
 not mount again: it only cleans up what the gate's own unmount left (below) and logs the release once.
 A different choice, LG Home (which removes the marker), an explicit `--homekey apply` (the app's
