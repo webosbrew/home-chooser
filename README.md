@@ -1,6 +1,6 @@
 # Home Chooser
 
-*Choose the app your Home button opens.*
+*Choose which app opens when you press Home.*
 
 Home Chooser lets the owner of a rooted LG webOS TV choose which app the Home button opens. It is a
 homebrew app with three parts:

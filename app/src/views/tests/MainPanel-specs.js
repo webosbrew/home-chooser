@@ -163,7 +163,7 @@ describe('Home Chooser screen', () => {
 		const onExit = jest.fn();
 		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} onExit={onExit} />);
 		expect(await screen.findByText(text)).toBeTruthy();
-		expect(screen.getByText('Choose the app your Home button opens.')).toBeTruthy();
+		expect(screen.getByText('Choose which app opens when you press Home.')).toBeTruthy();
 		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
 		expect(row.getAttribute('aria-disabled')).toBe('true');
 		expect(row.querySelectorAll('[data-testid="icon-box"]')).toHaveLength(1);
@@ -457,25 +457,42 @@ describe('Home Chooser screen', () => {
 	});
 
 	describe('footer', () => {
-		const withStatus = (version, status) => makeEnv({
-			version,
+		const withStatus = (version, status, currentHome = null) => makeEnv({
+			version, currentHome,
 			homeKeyHook: status === undefined ? null : {status: jest.fn(async () => ok({status})), install: jest.fn(), remove: jest.fn()}
 		});
+		const NOT_SET_UP = "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again.";
+		const CANT_CHANGE = "The Home button can't be changed on this TV's software.";
+		const UNCHECKED = "Couldn't check whether the Home button opens your chosen app.";
 		test.each([
-			['active', {active: true, enabled: true}, 'Home key hook: active'],
-			['not active', {active: false, enabled: false, patch: 'possible'}, 'Home key hook: not active'],
-			['no match', {active: false, enabled: false, patch: 'refused'}, "Home key hook: not available for this TV's software"]
-		])('webOS 8: %s', async (name, status, text) => {
-			mountApp(withStatus([8, 3, 0], status));
-			expect((await screen.findByTestId('footer')).textContent).toBe(text);
-			expect(screen.getByTestId('footer').matches('button,a,[tabindex],[data-spotlight-id]')).toBe(false);
+			['active, app chosen', {active: true, enabled: true}, 'org.fancy.launcher', null],
+			['active, LG Home chosen', {active: true, enabled: true}, null, null],
+			['ready, LG Home chosen', {active: false, enabled: false, patch: 'possible'}, null, null],
+			['ready, app chosen', {active: false, enabled: false, patch: 'possible'}, 'org.fancy.launcher', NOT_SET_UP],
+			['stale, app chosen', {active: false, hook: 'stale', patch: 'refused'}, 'org.fancy.launcher', NOT_SET_UP],
+			['refused, LG Home chosen', {active: false, enabled: false, patch: 'refused'}, null, CANT_CHANGE],
+			['refused, app chosen', {active: false, enabled: false, patch: 'refused'}, 'org.fancy.launcher', CANT_CHANGE]
+		])('webOS 8: %s', async (name, status, currentHome, text) => {
+			mountApp(withStatus([8, 3, 0], status, currentHome));
+			await screen.findByText('Plain Launcher');
+			if (text === null) expect(screen.queryByTestId('footer')).toBeNull();
+			else {
+				expect((await screen.findByTestId('footer')).textContent).toBe(text);
+				expect(screen.getByTestId('footer').matches('button,a,[tabindex],[data-spotlight-id]')).toBe(false);
+			}
+		});
+		test('webOS 8: status unreadable, app chosen', async () => {
+			const env = withStatus([8, 3, 0], {active: false}, 'org.fancy.launcher');
+			env.homeKeyHook.status = jest.fn(async () => ({ok: false, status: null, steps: [], warnings: [], errors: ['x']}));
+			mountApp(env);
+			expect((await screen.findByTestId('footer')).textContent).toBe(UNCHECKED);
 		});
 		test.each([[[5, 6, 1]], [[10, 3, 1]], [[11, 0, 0]]])('webOS %j: no footer, no About', async (version) => {
 			mountApp(withStatus(version));
 			await screen.findByText('Plain Launcher');
 			expect(screen.queryByTestId('footer')).toBeNull();
 			expect(screen.queryByLabelText('About')).toBeNull();
-			expect(screen.queryByText(/Home key hook/)).toBeNull();
+			expect(screen.queryByText(/Home button (can't|isn't)/)).toBeNull();
 		});
 	});
 

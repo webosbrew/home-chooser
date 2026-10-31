@@ -16,7 +16,7 @@ Home Chooser is in English only.
   list, the dialogs, the spinner, the toast and the problem messages all draw inside the panel;
   the rest of the screen stays clear and shows what is underneath.
 
-* **The list.** Title "Home Chooser", subtitle "Choose the app your Home button opens". The first row is "LG Home
+* **The list.** Title "Home Chooser", subtitle "Choose which app opens when you press Home". The first row is "LG Home
   (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
   A check mark sits on the current home and the focus starts on it. Every row has the same height,
   icon box (one fixed size, before and after the icon loads) and reserved check slot; focus only
@@ -36,7 +36,7 @@ Home Chooser is in English only.
   prompt or “Restart now” row. Unknown firmware shapes are refused. The old pending-result marker
   is only read/cleared for compatibility. See [Live Home key filter](home-key-hook.md).
 
-* **Footer.** On webOS 6 to 9 only, one fixed line at the bottom of the panel (not focusable): "Home key hook: active", "Home key hook: not active", or "Home key hook: not available for this TV's software" when the structural hook refuses the firmware. Nothing on 5.x and 10.x or later, or when root is unavailable.
+* **Footer.** On webOS 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
   "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
   needs it."), or the service not coming up as root ("Home Chooser's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the

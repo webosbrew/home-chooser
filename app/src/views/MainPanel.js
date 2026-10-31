@@ -23,12 +23,15 @@ export const rootReason = (kind) => {
 	return title + '. ' + body;
 };
 
-// The Home key hook exists on webOS 6 to 9 only (patch is null elsewhere).
-export const patchFooter = (patch) => {
+// A line at the bottom only when the Home button is not working or cannot be set up; nothing when
+// all is fine. `patch` is null outside webOS 6 to 9, where the stock Home button follows the choice
+// and nothing can be missing. `chosen` is true when an app other than LG Home is the current Home.
+export const patchFooter = (patch, chosen) => {
 	if (patch === null) return null;
-	if (patch === 'active') return 'Home key hook: active';
-	if (patch === 'nomatch') return "Home key hook: not available for this TV's software";
-	return 'Home key hook: not active';
+	if (patch === 'nomatch') return "The Home button can't be changed on this TV's software.";
+	if (!chosen || patch === 'active') return null;
+	if (patch === 'unknown') return "Couldn't check whether the Home button opens your chosen app.";
+	return "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again.";
 };
 
 const MainPanel = ({model, launchParams, ...rest}) => {
@@ -97,14 +100,14 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		else model.choose(item);
 	}, [pending, model]);
 
-	const footer = patchFooter(patch);
+	const footer = patchFooter(patch, current !== STOCK_HOME);
 	const uninstall = pending && pending.uninstall;
 	const stock = pending && pending.id === STOCK_HOME;
 	const blocked = !uninstall && !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
 
 	return (
 		<Panel {...rest}>
-			<Header title="Home Chooser" titleBelow="Choose the app your Home button opens." />
+			<Header title="Home Chooser" titleBelow="Choose which app opens when you press Home." />
 			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
