@@ -20,7 +20,7 @@ typedef struct {
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
     int silent, flap, wait_action, wait_count, title_gets;
     int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
-    int running_dead, close_dead, running_calls; /* calls left unanswered; `running` calls seen */
+    int running_dead, close_dead, running_calls, launches; /* calls left unanswered; `running` calls seen */
     const char *home_pid; /* NULL: stock Home not running */
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
@@ -119,6 +119,9 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
             if (f->home_pid) { jvalue_ref e = jobject_create(); put_str(e, "id", STOCK); put_str(e, "processid", f->home_pid); jarray_append(list, e); }
             jobject_set(r, key_buf("running"), list);
         }
+    } else if (eq(method, "launch")) {
+        char *id = get_string(p, "id"); CHECK("G20 launch only stock Home", eq(id, STOCK)); g_free(id);
+        f->launches++; r = response(TRUE);
     } else if (eq(method, "closeByAppId")) {
         f->closes++; r = f->close_dead ? NULL : response(TRUE); if (f->close_dead) f->close_dead--;
         char *id = get_string(p, "id"); CHECK("W16 close only stock", eq(id, STOCK)); g_free(id);
@@ -171,7 +174,7 @@ static Fixture *setup(int major, const char *id) {
     f->c.app_dir = path(f, root, "hc"); f->c.override = path(f, root, "override/o.json");
     f->c.init_link = path(f, root, "init.d/homechooser"); f->c.log = path(f, root, "watch.log");
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
-    f->c.preload_retry_ms = f->c.preload_settle_ms = 0; f->c.notify_retry_ms = 3000;
+    f->c.preload_retry_ms = f->c.preload_settle_ms = f->c.gate_settle_ms = 0; f->c.notify_retry_ms = 3000;
     f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
     f->gate_last = -1; f->c.proc = path(f, root, "proc");
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
@@ -343,6 +346,7 @@ static void test_uninstall(void) {
         CHECK("W13 access removed", f->removes == 1);
         CHECK("W13 files removed", !g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
         CHECK("W13 boot/cache/flag removed", !g_file_test(path(f, f->c.state_dir, "boot"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "homekey"), G_FILE_TEST_EXISTS));
+        CHECK("W13 key filter snapshot and lock removed", !g_file_test(path(f, f->c.state_dir, "keyfilters-stock.json"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "keyfilter.lock"), G_FILE_TEST_EXISTS));
         CHECK("W18 one uninstall toast", f->toasts == 1 && !f->alerts);
         CHECK("W13 stock refresh", f->stock_calls == (major >= 6 && major <= 9));
         teardown(f);
@@ -544,6 +548,28 @@ static void test_gate_close(void) {
     CHECK("G19 clean stop leaves no retry", f->running_calls == calls);
     HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
 }
+/* G20: a close that really closed a running stock Home, and an empty foreground afterwards (6.5.2 boot). */
+static void test_gate_relaunch(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; start(f);
+    CHECK("G20 closed Home, empty foreground: stock Home launched once", f->closes == 1 && f->launches == 1 && !f->w->gate_settle_source);
+    event(f, 'A', "{}"); event(f, 'A', "{}");
+    CHECK("G20 no second launch for the same close", f->launches == 1); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "my.home"; start(f);
+    CHECK("G20 something in front: no launch", f->closes == 1 && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; start(f);
+    CHECK("G20 foreground unknown: no launch", f->closes == 1 && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->foreground = ""; start(f);
+    CHECK("G20 Home was not running: no launch", !f->closes && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; f->w->c.gate_settle_ms = 100000; hc_watch_start(f->w);
+    CHECK("G20 settle pending", f->w->gate_settle_source != 0 && !f->launches);
+    installed(f, "my.home", -1); event(f, 'A', "{}");
+    CHECK("G20 unmount cancels the launch", !f->w->gate_settle_source && !f->launches);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; f->w->c.gate_settle_ms = 100000; hc_watch_start(f->w);
+    hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL; pump();
+    CHECK("G20 clean stop leaves no launch", !f->launches);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -556,6 +582,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

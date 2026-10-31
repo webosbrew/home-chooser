@@ -20,6 +20,7 @@ typedef struct {
     void *context;
     const char *proc;        /* /proc, for the processid -> exe check in hc_gate_close_stock */
     gboolean skip_close;     /* the caller (the watcher) closes stock Home itself, with retries */
+    gboolean *closed;        /* optional: set TRUE when closeByAppId closed a running stock Home */
 } HCGateOps;
 
 typedef enum {

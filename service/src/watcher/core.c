@@ -18,7 +18,7 @@ HCWatchConfig hc_watch_config(void)
         .app_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications",
         .install_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications /media/cryptofs/apps/usr/palm/applications",
         .confirm_ms = 15000, .interval_s = 10, .backoff_s = 300, .recheck_s = 300,
-        .preload_retry_ms = 10000, .preload_settle_ms = 45000, .preload_tries = 12,
+        .preload_retry_ms = 10000, .preload_settle_ms = 45000, .preload_tries = 12, .gate_settle_ms = 20000,
         .notify_retry_ms = 3000, .notify_tries = 8, .log_max = 65536,
         .preload = TRUE, .notify = TRUE
     };
@@ -243,6 +243,7 @@ void hc_watch_free(HCWatch *w)
     if (w->status == 0) gate_apply(w, NULL);
     if (w->preload_source) g_source_remove(w->preload_source);
     if (w->gate_source) g_source_remove(w->gate_source);
+    if (w->gate_settle_source) g_source_remove(w->gate_settle_source);
     g_free(w->choice_file); g_free(w->missing); g_free(w->baked);
     g_free(w->title_id); g_free(w->title); g_free(w->close_choice); g_free(w);
 }

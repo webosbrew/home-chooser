@@ -10,15 +10,21 @@ static HCGateOps gate_ops(HCWatch *w)
     return ops;
 }
 static gboolean gate_retry(gpointer context);
+static gboolean gate_settled(gpointer context);
 /* One attempt to close a stock Home that is the real binary (docs/home-gate.md). Retried on the
  * preload cadence, bounded, and at each gate sync, until `running` or closeByAppId confirms. */
 static void gate_close(HCWatch *w)
 {
     HCGateOps ops = gate_ops(w);
     GString *log = g_string_new(NULL);
+    gboolean closed = FALSE;
+    ops.closed = &closed;
     if (hc_gate_close_stock(&ops, log)) w->gate_pending = FALSE;
     watch_log(w, "home gate: %s%s", log->str, w->gate_pending ? "close unconfirmed" : "stock Home close confirmed");
     g_string_free(log, TRUE);
+    /* A Home that was really running and is now closed: SAM may have nothing to put in front (6.5.2
+     * boot). Look once after SAM's idle relaunch had its chance. */
+    if (closed && !w->gate_settle_source) w->gate_settle_source = g_timeout_add(w->c.gate_settle_ms, gate_settled, w);
     if (w->gate_pending && !w->gate_source && w->gate_attempts < w->c.preload_tries)
         w->gate_source = g_timeout_add(w->c.preload_retry_ms, gate_retry, w);
 }
@@ -29,6 +35,30 @@ static gboolean gate_retry(gpointer context)
     if (!w->gate_pending || !w->gate_active) return G_SOURCE_REMOVE;
     w->depth++;
     gate_close(w);
+    w->depth--;
+    if (w->ops.wake) w->ops.wake(w->ops.context);
+    return G_SOURCE_REMOVE;
+}
+
+/* Once per close. Still no foreground app: launch stock Home's id, so the gate runs and decides
+ * (overlay: last input, full-screen: the launcher). Never when something is in front, or when the
+ * gate is no longer mounted. */
+static gboolean gate_settled(gpointer context)
+{
+    HCWatch *w = context;
+    w->gate_settle_source = 0;
+    if (w->status >= 0 || !w->gate_active || w->gate_released) return G_SOURCE_REMOVE;
+    w->depth++;
+    jvalue_ref r = watch_call(w, SAM "getForegroundAppInfo", "{}", 5);
+    char *front = reply_ok(r) ? get_string(r, "appId") : NULL;
+    if (!r || !reply_ok(r)) watch_log(w, "home gate: foreground unknown after the stock Home close; nothing launched");
+    else if (front && *front) watch_log(w, "home gate: %s in front after the stock Home close; nothing launched", front);
+    else {
+        jvalue_ref l = watch_id_call(w, SAM "launch", STOCK, 5);
+        watch_log(w, "home gate: nothing in front after the stock Home close; launched %s so the gate runs: %s", STOCK, l ? jvalue_stringify(l) : "no reply");
+        j_release(&l);
+    }
+    g_free(front); j_release(&r);
     w->depth--;
     if (w->ops.wake) w->ops.wake(w->ops.context);
     return G_SOURCE_REMOVE;
@@ -62,6 +92,7 @@ int gate_apply(HCWatch *w, const char *choice)
         /* Unmounted or released: nothing left to close, and a pending retry must not fire. */
         w->gate_pending = FALSE;
         if (w->gate_source) { g_source_remove(w->gate_source); w->gate_source = 0; }
+        if (w->gate_settle_source) { g_source_remove(w->gate_settle_source); w->gate_settle_source = 0; }
     } else if (!was_active || result == HC_GATE_MOUNTED) { w->gate_pending = TRUE; w->gate_attempts = 0; }
     if (w->gate_pending) gate_close(w);
     return failed;

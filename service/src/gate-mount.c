@@ -36,7 +36,7 @@ static int real_unbind(const char *target, void *context)
 }
 HCGateOps hc_gate_ops(char *(*call)(const char *, const char *, int, void *), void *context)
 {
-    HCGateOps o = {HC_GATE_BINARY, HC_GATE_DIR, HC_GATE_TARGET, "/proc/self/mountinfo", NULL, NULL, call, context, "/proc", FALSE};
+    HCGateOps o = {HC_GATE_BINARY, HC_GATE_DIR, HC_GATE_TARGET, "/proc/self/mountinfo", NULL, NULL, call, context, "/proc", FALSE, NULL};
     return o;
 }
 char *hc_gate_marker(const char *dir) { return g_build_filename(dir, "released", NULL); }
@@ -159,6 +159,7 @@ gboolean hc_gate_close_stock(const HCGateOps *o, GString *log)
         char *reply = o->call(SAM "closeByAppId", "{\"id\":\"" HC_STOCK_HOME_ID "\",\"forceMode\":true}", 5, o->context);
         jvalue_ref c = parse_object(reply);
         done = reply_ok(c);
+        if (done && o->closed) *o->closed = TRUE;
         g_string_append_printf(log, "closeByAppId %s: %s; ", HC_STOCK_HOME_ID, reply ? g_strstrip(reply) : "no reply");
         j_release(&c); g_free(reply);
     }
