@@ -3819,16 +3819,36 @@ class Scenario:
                 api_refused(rep), raw[:400])
         self.api_request(selected=False)
 
-    def see_toast(self, needle, timeout, max_recreates=2):
-        """Look for a toast (the app hides it after 6 s) in two independent places each round: the DOM
-        through the Inspector, then the screen through `beanjar elements` OCR.  A dead Inspector forward
-        (/json reset, no page, websocket error) is closed and recreated, at most max_recreates times.
-        Returns (text, source) with source 'DOM' or 'screen', or (None, <why not>) when it never showed."""
-        end = time.time() + seconds(timeout)
-        recreated, notes = 0, []
+    # `beanjar elements` OCR takes tens of seconds on the rk boards (matrix-20261031-082841/w20l-jhericurl-rk1:
+    # one call ran ~50 s), the app hides the toast after 6 s, so one OCR call must never eat the window:
+    # it gets a short subprocess timeout and runs only every OCR_EVERY-th round; the DOM read is the main
+    # source.  The values are unscaled seconds (run() applies SLOWDOWN).
+    TOAST_OCR_TIMEOUT = 4
+    TOAST_OCR_EVERY = 3
+    CONNECTION_ERROR = re.compile(r'reset|no page|websocket|exited|connection|refused|forward|no frame|raised', re.I)
+
+    def see_toast(self, needle, timeout):
+        """Look for a toast (the app hides it after 6 s) in two independent places: the DOM through the
+        Inspector every round, and the screen through `beanjar elements` OCR every TOAST_OCR_EVERY-th round
+        with a TOAST_OCR_TIMEOUT cap.  The Inspector is closed and recreated after every connection-type
+        failure (reset, no page, websocket), as often as the overall deadline allows.
+        Returns (text, source) with source 'DOM' or 'screen', or (None, <why not>) carrying the whole
+        timeline (each round's source, elapsed seconds and error) when it never showed."""
+        start = time.time()
+        end = start + seconds(timeout)
+        timeline, rnd = [], 0
+
+        def note(source, t0, error=None, extra=''):
+            entry = '#%d %s %.1fs%s%s' % (rnd, source, time.time() - t0, ' err=%s' % str(error)[:160] if error else '',
+                                          ' ' + extra if extra else '')
+            timeline.append('t+%.1fs %s' % (t0 - start, entry))
+            self.rec.say('toast check: ' + timeline[-1])
+
         while True:
+            rnd += 1
             if self.insp is None:
                 self.insp = Inspector(self.vm)
+            t0 = time.time()
             try:
                 ui = self.ui()
             except Exception as exc:
@@ -3838,26 +3858,36 @@ class Scenario:
             if text and needle in text:
                 return text, 'DOM'
             err = getattr(self.insp, 'last_error', None)
-            if ui is None and err and recreated < max_recreates and time.time() < end:
-                recreated += 1
-                notes.append('inspector recreated #%d after: %s' % (recreated, str(err)[:120]))
-                self.rec.say('toast check: ' + notes[-1])
+            note('DOM', t0, err if ui is None else None, '' if ui is None else 'toast=%r' % text)
+            if ui is None and err and self.CONNECTION_ERROR.search(str(err)) and time.time() < end:
+                t0 = time.time()
                 self.close_insp()
                 self.insp = Inspector(self.vm)
-            try:
-                rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
-                if not rc:
-                    for row in json.loads(raw).get('elements', []):
-                        t = row.get('text') or ''
-                        if row.get('kind') == 'text' and needle.lower() in t.lower():
-                            self.rec.say('toast check: screen OCR row %r box %s' % (t, row.get('box')))
-                            return t, 'screen'
-                else:
-                    notes.append('elements rc=%s' % rc)
-            except Exception as exc:
-                notes.append('elements failed: %r' % (exc,))
+                note('inspector-recreate', t0, err)
+            remaining = end - time.time()
+            if remaining > 1 and (rnd - 1) % self.TOAST_OCR_EVERY == 0:
+                t0 = time.time()
+                cap = min(self.TOAST_OCR_TIMEOUT, remaining / SLOWDOWN)
+                error, rows = None, []
+                try:
+                    rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json',
+                                                        timeout=cap)
+                    if rc:
+                        error = 'elements rc=%s%s' % (rc, ' (cut at %.1fs)' % seconds(cap) if rc == 124 else '')
+                    else:
+                        for row in json.loads(raw).get('elements', []):
+                            t = row.get('text') or ''
+                            if row.get('kind') == 'text':
+                                rows.append(t)
+                            if row.get('kind') == 'text' and needle.lower() in t.lower():
+                                note('OCR', t0, extra='match %r box %s' % (t, row.get('box')))
+                                return t, 'screen'
+                except Exception as exc:
+                    error = 'elements failed: %r' % (exc,)
+                note('OCR', t0, error, '' if error else 'no match; rows: %s' % ' | '.join(rows)[:300])
             if time.time() >= end:
-                return None, 'none (DOM last_error=%s; %s)' % (getattr(self.insp, 'last_error', None), '; '.join(notes[-4:]))
+                return None, 'none (DOM last_error=%s; timeline: %s)' % (getattr(self.insp, 'last_error', None),
+                                                                        '; '.join(timeline))
             sleep(0.5)
 
     def api_request(self, selected):
@@ -3865,6 +3895,11 @@ class Scenario:
         launcher (cancelled with Back, on our own dialog); once it is Home, the "already your Home" toast."""
         r, d = self.rec, self.dev
         choice0 = self.state()['choice']
+        if selected:
+            # Warm relaunch: Home Chooser still runs from an earlier step (the manual alert-uninstall path
+            # closes neither it nor the Inspector), so the old forward may be stale.  Replace the Inspector,
+            # never the app: the warm relaunch is a real user path.
+            self.close_insp()
         if not self.insp:
             self.insp = Inspector(self.vm)
         rc, out = d.launch(APP_ID, {'request': self.launcher})
