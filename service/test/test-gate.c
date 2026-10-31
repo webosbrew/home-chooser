@@ -122,6 +122,21 @@ static char *launched_at(jvalue_ref launched, int i, int field)
     raw_buffer b = jstring_get_fast(jarray_get(jarray_get(launched, i), field));
     return g_strndup(b.m_str, b.m_len);
 }
+/* The release launch is sent by a detached child: wait until its call is logged, then a moment for it
+ * to finish, so it cannot rewrite state.json under the next case. */
+static void settle_release(int want)
+{
+    char *p = fixture("calls.jsonl");
+    for (int i = 0; i < 60; i++) {
+        char *text = NULL; int seen = 0;
+        if (g_file_get_contents(p, &text, NULL, NULL))
+            for (char **l = g_strsplit(text, "\n", -1), **it = l; *it; it++) seen += strstr(*it, "/launch") && strstr(*it, "\"id\": \"com.webos.app.home\"");
+        g_free(text);
+        if (seen >= want) break;
+        g_usleep(50000);
+    }
+    g_usleep(400000); g_free(p);
+}
 static HCGateConfig config(void)
 {
     HCGateConfig c = hc_gate_config();
@@ -144,6 +159,7 @@ static void run_case(const Case *k)
     gint64 start = g_get_monotonic_time();
     int rc = hc_gate_main(&c, k->envelope ? 2 : 1, argv);
     gint64 elapsed = g_get_monotonic_time() - start;
+    if (k->expect == 'S') settle_release(1);
     jvalue_ref s = state_read(), launched = jobject_get(s, key_buf("launched"));
     int n = jis_array(launched) ? jarray_size(launched) : 0;
     gboolean foreground;
@@ -151,6 +167,8 @@ static void run_case(const Case *k)
     if (rc != 0) fprintf(stderr, "  %s: rc %d\n", k->name, rc);
     CHECK("G8 exit 0", rc == 0);
     CHECK("G8 bounded", elapsed < 10 * G_USEC_PER_SEC);
+    /* The release never waits for SAM; only a hanging first launch (3 s) or query (2 s) may take time. */
+    if (k->expect == 'S' && !strstr(k->state, "hang")) CHECK("G10 release does not wait for a reply", elapsed < G_USEC_PER_SEC);
     CHECK("G8 children reaped", no_children());
     char *first = n ? launched_at(launched, 0, 1) : NULL;
     if (k->expect == 'L') {
@@ -186,7 +204,23 @@ static void test_release_guards(void)
     CHECK("G9 no relaunch while still mounted", !jis_array(jobject_get(s, key_buf("launched"))));
     j_release(&s);
     unmounts = 0; unmount_errno = EINVAL;
+    gint64 start = g_get_monotonic_time();
     CHECK("G9 not mounted: stock Home launched", hc_gate_main(&c, 2, argv) == 0 && unmounts == 1);
+    CHECK("G10 returns without waiting", g_get_monotonic_time() - start < G_USEC_PER_SEC);
+    settle_release(1);
+    /* The request comes from a child in its own session, so a kill of the gate's group misses it. */
+    char *text = NULL; gboolean apart = FALSE;
+    if (g_file_get_contents(calls, &text, NULL, NULL))
+        for (char **l = g_strsplit(text, "\n", -1), **it = l; *it; it++) {
+            jvalue_ref e = parse_object(*it);
+            if (e && g_str_has_suffix(get_string(e, "uri"), "/launch")) {
+                int64_t group = 0; jnumber_get_i64(jobject_get(e, key_buf("group")), &group);
+                apart = group != getpgrp();
+            }
+            j_release(&e);
+        }
+    g_free(text);
+    CHECK("G10 release request leaves the gate's process group", apart);
     s = state_read();
     CHECK("G9 launched once", jarray_size(jobject_get(s, key_buf("launched"))) == 1);
     j_release(&s); g_free(home); g_free(calls); g_free(state);
@@ -209,7 +243,7 @@ int main(int argc, char **argv)
     char *log = NULL;
     g_file_get_contents(log_path, &log, NULL, NULL);
     CHECK("G10 decisions logged", log && strstr(log, "home gate: Home key") && strstr(log, "opened my.home") &&
-        strstr(log, "LG Home chosen") && strstr(log, "restoring stock Home") && strstr(log, "gate removed from"));
+        strstr(log, "LG Home chosen") && strstr(log, "restoring stock Home") && strstr(log, "gate removed from") && strstr(log, "no reply awaited") && !strstr(log, "not confirmed"));
     g_free(log);
     printf("%u passed, %u failed (home gate)\n", checks - failures, failures);
     return failures ? 1 : 0;
