@@ -10,11 +10,11 @@
 static raw_buffer kb(const char *s) { return j_str_to_buffer(s, strlen(s)); }
 static jvalue_ref parse(const char *s) { return jdom_create(kb(s), jschema_all(), NULL); }
 static jvalue_ref current;
-static int sets, gets, fails, corrupt_reads, corrupt_after_set, toasts, app_installed = 1, ready = 1;
+static int sets, gets, fails, corrupt_reads, corrupt_after_set, toasts, starts, app_installed = 1, ready = 1;
 static char *fake(const char *uri, const char *payload, int timeout, void *context) {
     (void)context; assert(timeout > 0 && timeout <= 5);
     if (strstr(uri, "getCurrentState")) return g_strdup(ready ? "{\"returnValue\":true,\"currentState\":\"launcher\"}" : "{}");
-    if (strstr(uri, "createToast")) { toasts++; return g_strdup("{\"returnValue\":false}"); }
+    if (strstr(uri, "createToast")) { toasts++; if (strstr(payload, "will start shortly")) starts++; return g_strdup("{\"returnValue\":false}"); }
     if (strstr(uri, "getAppInfo")) return g_strdup(app_installed ? "{\"returnValue\":true}" : "{\"returnValue\":false}");
     if (strstr(uri, "setConfigs")) {
         sets++;
@@ -56,9 +56,9 @@ int main(int argc, char **argv) {
     g_file_set_contents(flag, "", -1, NULL); g_file_set_contents(home, "test.home\n", -1, NULL);
     current = parse("[{\"file\":\"/other.js\",\"handler\":\"first\",\"extra\":[1,true]}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"second\",\"extra\":{\"a\":2}}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"third\"}]");
     jvalue_ref original = jvalue_duplicate(current);
-    ready = 0; assert(run(&o, "boot", FALSE) == 1); assert(sets == 0 && gets == 3); ready = 1;
+    ready = 0; assert(run(&o, "boot", FALSE) == 1); assert(sets == 0 && gets == 3 && starts == 0); ready = 1;
     status(&o, "active=no\n");
-    assert(run(&o, "boot", FALSE) == 0); assert(sets == 1); assert(toasts >= 2);
+    assert(run(&o, "boot", FALSE) == 0); assert(sets == 1); assert(toasts >= 2 && starts == 1);
     status(&o, "active=yes\n");
     assert(jarray_size(current) == jarray_size(original));
     jvalue_ref normalized = jvalue_duplicate(current);
@@ -81,6 +81,15 @@ int main(int argc, char **argv) {
     assert(run(&o,"apply",FALSE)==0);
     corrupt_after_set=1; g_file_set_contents(home,"other.home",-1,NULL); assert(run(&o,"refresh",FALSE)==1); assert(jvalue_equal(current,original));
     assert(run(&o,"apply",FALSE)==0);
+    /* No toast when boot restores stock: missing app, no flag, no choice; and a failed write announces first, then reports the error. */
+    starts=0; app_installed=0; assert(run(&o,"boot",FALSE)==0); assert(starts==0); app_installed=1;
+    assert(run(&o,"apply",FALSE)==0);
+    g_file_set_contents(home,"test.home",-1,NULL); fails=1; assert(run(&o,"boot",FALSE)==1); assert(starts==1); starts=0; fails=0; /* announced before the write; the error toast follows */
+    assert(run(&o,"apply",FALSE)==0);
+    unlink(flag); assert(run(&o,"boot",FALSE)==0); assert(starts==0); g_file_set_contents(flag,"",-1,NULL);
+    g_file_set_contents(home,"",-1,NULL); assert(run(&o,"boot",FALSE)==0); assert(starts==0);
+    g_file_set_contents(home,"other.home",-1,NULL);
+    assert(run(&o,"boot",FALSE)==0); assert(starts==1); starts=0;
     fails=-1; assert(run(&o,"stop",FALSE)==1); /* retain selected file during failed restore */
     jvalue_ref item=jarray_get(current,1); raw_buffer b=jstring_get_fast(jobject_get(item,kb("file")));
     char *p=g_strndup(b.m_str,b.m_len); assert(g_file_test(p,G_FILE_TEST_EXISTS)); g_free(p);
@@ -94,7 +103,7 @@ int main(int argc, char **argv) {
     g_file_set_contents(unknown,bytes,-1,NULL);g_free(bytes);
     o.stock_js=unknown;
     assert(run(&o,"prepare",FALSE)==2);
-    assert(run(&o,"boot",FALSE)==0);assert(jvalue_equal(current,original));
+    starts=0; assert(run(&o,"boot",FALSE)==0);assert(jvalue_equal(current,original)); assert(starts==0);
     o.stock_js=argv[2];unlink(unknown);g_free(unknown);
     j_release(&current); current=jarray_create(NULL); int before=sets; assert(run(&o,"apply",FALSE)==1); assert(sets==before);
     j_release(&current); j_release(&original); g_free(flag);g_free(home);g_free(os);

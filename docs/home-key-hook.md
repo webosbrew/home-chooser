@@ -17,8 +17,8 @@ and returns immediately. It contains no readiness sleeps. The unit runs `homecho
 
 Inside the unit, bounded calls wait for both `surfacemanager/getCurrentState` (a successful reply with
 `currentState`) and configd's valid, nonempty keyFilters list. There are at most 30 attempts, with
-one second between attempts and a timeout on every call. A best-effort `createToast` says
-“Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
+one second between attempts and a timeout on every call. Once a launcher redirect is certain (flag present, valid choice, generation succeeded, app installed), a
+best-effort `createToast` says “Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
 the privileged `com.webos.applicationManager` identity. Toast failure does not block apply.
 
 After the attempt, the daemon runs the native watcher in `service/src/watcher/`.

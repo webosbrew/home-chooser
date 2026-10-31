@@ -148,7 +148,6 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     g_match_info_free(match); g_regex_unref(release); g_free(os);
     if (major < 6 || major > 9) { g_string_append(out, "active=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
     if (boot && !ready(o)) { reason = g_strdup("boot readiness timed out; stock Home retained"); goto done; }
-    if (boot) toast(o, "Your new home will start shortly");
     source = readfile(o->stock_js);
     generated = source ? hc_key_generate(source, "org.webosbrew.homechooser.probe", &reason) : NULL;
     if (!generated && !reason) reason = g_strdup("stock systemUi.js is unreadable");
@@ -216,6 +215,8 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         gboolean equal = actual && !strcmp(expected, actual);
         g_free(bytes); g_free(expected); g_free(actual);
         if (!equal) { reason = g_strdup("generated file checksum mismatch"); goto done; }
+        /* Only a boot that really redirects Home announces it; stock and error boots stay silent. */
+        if (boot) toast(o, "Your new home will start shortly");
         /* An unchanged choice and stock bytes need no loader churn. */
         gboolean unchanged = has_ours(o, current);
         for (ssize_t i = 0; i < jarray_size(next); i++) {
