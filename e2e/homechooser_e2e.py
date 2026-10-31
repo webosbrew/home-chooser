@@ -2809,22 +2809,49 @@ class Scenario:
     def screensaver_active(self, power):
         return self.screensaver_state(power, shown=False)
 
-    def screensaver_start(self):
-        if self.major < 6:
-            raise ScreensaverOutcome('SKIPPED', 'No evidenced screensaver endpoint for webOS <6')
+    def power_settled(self, power):
+        """tvpowerd is idle: ACTIVE / active (6.x: Active) and no 'sub processing' (6.x: 'processing')."""
+        route = 'power' if self.major == 6 else 'power2'
+        reply = power[route][1]
+        if not (reply and reply.get('returnValue') is True):
+            return False
+        if self.major == 6:
+            return power_field(reply, 'state') == 'Active' and not power_field(reply, 'processing')
+        return (power_field(reply, 'state') == 'ACTIVE' and power_field(reply, 'sub state') == 'active'
+                and not power_field(reply, 'sub processing'))
+
+    def screensaver_settle(self, label):
+        """Bounded wait (60 s, scaled by SLOWDOWN) for a settled power state before a start request.
+
+        tvpowerd accepts turnOnScreenSaver during its own boot Screen On step and then silently
+        cancels it (beanjar#184, firmware behaviour). Returns (settled, evidence)."""
+        polls, last = [], [None]
+        def settled():
+            last[0] = self.screensaver_power()
+            polls.append(self.power_settled(last[0]))
+            return polls[-1]
+        t0 = time.time()
+        ok = bool(self.wait(settled, 60, 2))
+        evidence = 'power %s after %.1fs, %d poll(s); last seen: %s' % (
+            'settled' if ok else 'NEVER settled within 60s (x%s slowdown)' % SLOWDOWN,
+            time.time() - t0, len(polls), json.dumps(last[0]))
+        self.rec.note('screensaver start %s: power settle wait' % label, evidence)
+        return ok, evidence
+
+    def screensaver_request(self):
+        """One start request. Returns None when the request was accepted, or a string describing
+        a refusal during a power transition (the only refusal worth a retry)."""
         if getattr(self.a, 'saver_start', 'tvpower') == 'beanjar':
             helper = self.beanjar_screensaver('start')
             if helper is None:
                 raise ScreensaverOutcome('SKIPPED', '--saver-start beanjar requires the beanjar screensaver subcommand')
             rc, raw, reply = helper
+            if rc and re.search(r'power transition', raw, re.I):
+                return 'beanjar screensaver start refused during a power transition: ' + raw
             if rc or not reply or reply.get('action') != 'start':
                 self.screensaver_diagnostics('beanjar screensaver start failed')
                 raise ScreensaverOutcome('BLOCKED', 'beanjar screensaver start failed: ' + raw)
-            if not self.wait(lambda: self.screensaver_shown(self.screensaver_power()), 45, 2):
-                self.screensaver_diagnostics('beanjar screensaver start state not confirmed')
-                raise ScreensaverOutcome('BLOCKED', 'beanjar screensaver start did not reach screen saver: ' + raw)
-            self.rec.note('screensaver confirmed after beanjar start', json.dumps(self.screensaver_power()))
-            return
+            return None
         route = 'power' if self.major == 6 else 'power2'
         rc, raw, reply = self.dev.luna_as(None, TVPOWER + route + '/turnOnScreenSaver')
         self.rec.note('screensaver start reply (root, no -a)', raw)
@@ -2836,13 +2863,44 @@ class Scenario:
                 r'first[ -]?use|sub[ -]?state', reason))
             raise ScreensaverOutcome('SKIPPED' if precondition and reply and
                                      reply.get('returnValue') is False else 'FAIL', raw)
-        if not self.wait(lambda: self.screensaver_shown(self.screensaver_power()), 45, 2):
+        return None
+
+    def screensaver_start(self):
+        if self.major < 6:
+            raise ScreensaverOutcome('SKIPPED', 'No evidenced screensaver endpoint for webOS <6')
+        beanjar = getattr(self.a, 'saver_start', 'tvpower') == 'beanjar'
+        attempts = []
+        for attempt in (1, 2):
+            label = 'attempt %d' % attempt
+            ok, settle = self.screensaver_settle(label)
+            if not ok:
+                self.screensaver_diagnostics('screensaver start %s: power never settled' % label)
+                raise ScreensaverOutcome('BLOCKED', 'power state never settled before the start request; '
+                                         'request not sent. ' + ' | '.join(attempts + [label + ': ' + settle]))
+            refused = self.screensaver_request()
+            if refused:
+                attempts.append('%s: %s (%s)' % (label, refused, settle))
+                self.rec.note('screensaver start %s refused during power transition' % label, refused)
+                continue
+            if self.wait(lambda: self.screensaver_shown(self.screensaver_power()), 45, 2):
+                self.rec.note('screensaver confirmed after beanjar start' if beanjar
+                              else 'screensaver confirmed: native shown state',
+                              json.dumps(self.screensaver_power()))
+                if attempts:
+                    self.rec.note('screensaver start succeeded on retry', ' | '.join(attempts))
+                return
             power = self.screensaver_power()
-            self.screensaver_diagnostics('screensaver start timeout')
-            raise ScreensaverOutcome('BLOCKED' if self.screensaver_ready(power) else 'FAIL',
-                                     'beanjar#56: Screen Saver Ready' if self.screensaver_ready(power)
-                                     else 'Screensaver did not reach the native shown state')
-        self.rec.note('screensaver confirmed: native shown state', json.dumps(self.screensaver_power()))
+            self.screensaver_diagnostics('screensaver start %s: state not confirmed' % label)
+            if self.screensaver_ready(power):
+                raise ScreensaverOutcome('BLOCKED', 'beanjar#56: Screen Saver Ready')
+            if not self.screensaver_active(power):
+                raise ScreensaverOutcome('FAIL', 'Screensaver did not reach the native shown state; power: ' +
+                                         json.dumps(power))
+            attempts.append('%s: dropped by firmware (power back to plain Active, no screen saver; %s)' %
+                            (label, settle))
+            self.rec.note('screensaver start %s dropped by firmware' % label, json.dumps(power))
+        raise ScreensaverOutcome('FAIL', 'Screensaver start dropped by firmware twice or refused during '
+                                 'power transitions: ' + ' | '.join(attempts))
 
     def screensaver_button(self, key, expected=None):
         # This path deliberately uses Beanjar's IR remote, never turnOnScreen or a dialog action.

@@ -1736,15 +1736,100 @@ class HomeAndScreensaver(unittest.TestCase):
                                ('Invalid sub state', 'SKIPPED'),
                                ('Unknown service error', 'FAIL')):
             s = self.make()
-            s.dev.luna_as = Mock(return_value=(0, text, {'returnValue': False, 'errorText': text}))
+            real = s.dev.luna_as
+            s.dev.luna_as = lambda app, uri, *a, **k: (
+                (0, text, {'returnValue': False, 'errorText': text}) if uri.endswith('/turnOnScreenSaver')
+                else real(app, uri, *a, **k))
             with self.assertRaises(e2e.ScreensaverOutcome) as cm:
                 s.screensaver_start()
             self.assertEqual(cm.exception.status, expected)
         s = self.make()
-        s.dev.luna_as = Mock(return_value=(124, 'first use timeout', None))
+        real = s.dev.luna_as
+        s.dev.luna_as = lambda app, uri, *a, **k: (
+            (124, 'first use timeout', None) if uri.endswith('/turnOnScreenSaver') else real(app, uri, *a, **k))
         with self.assertRaises(e2e.ScreensaverOutcome) as cm:
             s.screensaver_start()
         self.assertEqual(cm.exception.status, 'FAIL')
+
+    def _start_with(self, s, drops=0, refuse_transition=0, stuck_busy=False, busy_polls=0):
+        """Fake tvpowerd for screensaver_start: the first `drops` requests are accepted and then
+        silently cancelled; `refuse_transition` helper calls are refused; stuck_busy never settles;
+        the first `busy_polls` power polls report a boot 'screen on' sub processing."""
+        s.rec.step = 'S1'
+        d, state = s.dev, {'drops': drops, 'refuse': refuse_transition, 'polls': 0}
+        real_luna, real_helper = d.luna_as, d.screensaver
+        def luna(app, uri, *a, **k):
+            if uri.endswith('/power2/getPowerState') or uri.endswith('/power/getPowerState'):
+                state['polls'] += 1
+                if stuck_busy or state['polls'] <= busy_polls:
+                    d.subprocessing, d.processing = 'screen on', 'Screen On'
+                else:
+                    d.subprocessing = d.processing = ''
+            if uri.endswith('/turnOnScreenSaver') and state['drops']:
+                state['drops'] -= 1
+                return 0, '{ "returnValue": true }', {'returnValue': True}
+            return real_luna(app, uri, *a, **k)
+        def helper(verb, vm):
+            d.calls.append(('beanjar', verb, vm))
+            if state['refuse']:
+                state['refuse'] -= 1
+                return 1, json.dumps({'error': 'screensaver: unrelated native power transition: {}'})
+            if state['drops']:
+                state['drops'] -= 1
+                return 0, json.dumps({'action': 'start'})
+            d.calls.pop()
+            return real_helper(verb, vm)
+        d.luna_as, d.screensaver, s.host.screensaver = luna, helper, helper
+        d.helper_mode = 'success'
+        return state
+
+    def test_start_waits_for_settled_power_and_records_evidence(self):
+        s = self.make()
+        self._start_with(s, busy_polls=4)  # two power+power2 reads busy: sub processing "screen on"
+        s.screensaver_start()
+        notes = [c.args for c in s.rec.note.call_args_list]
+        settle = [n for n in notes if n[0].endswith('power settle wait')]
+        self.assertEqual(len(settle), 1)
+        self.assertIn('settled after', settle[0][1])
+        self.assertIn('3 poll(s)', settle[0][1])
+        self.assertTrue(any(isinstance(c, tuple) and c[1].endswith('/turnOnScreenSaver') for c in s.dev.calls))
+
+    def test_start_never_settling_is_blocked_and_sends_nothing(self):
+        for mode in ('tvpower', 'beanjar'):
+            s = self.make()
+            s.a.saver_start = mode
+            self._start_with(s, stuck_busy=True)
+            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                s.screensaver_start()
+            self.assertEqual(cm.exception.status, 'BLOCKED')
+            self.assertIn('NEVER settled', str(cm.exception))
+            self.assertIn('screen on', str(cm.exception))
+            self.assertFalse(any(isinstance(c, tuple) and (c[1].endswith('/turnOnScreenSaver') or c[:2] == ('beanjar', 'start'))
+                                 for c in s.dev.calls))
+
+    def test_start_dropped_once_is_retried_after_settling(self):
+        for mode in ('tvpower', 'beanjar', 'refused'):
+            s = self.make()
+            s.a.saver_start = 'tvpower' if mode == 'tvpower' else 'beanjar'
+            self._start_with(s, drops=0 if mode == 'refused' else 1, refuse_transition=1 if mode == 'refused' else 0)
+            s.screensaver_start()
+            notes = [c.args for c in s.rec.note.call_args_list]
+            self.assertEqual(len([n for n in notes if n[0].endswith('power settle wait')]), 2)
+            self.assertTrue(any('succeeded on retry' in n[0] for n in notes))
+            if mode != 'refused':
+                self.assertTrue(any('dropped by firmware' in n[0] for n in notes))
+            self.assertTrue(s.screensaver_shown(s.screensaver_power()))
+
+    def test_start_dropped_twice_fails_with_both_attempts(self):
+        for mode in ('tvpower', 'beanjar'):
+            s = self.make()
+            s.a.saver_start = mode
+            self._start_with(s, drops=2)
+            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                s.screensaver_start()
+            self.assertEqual(cm.exception.status, 'FAIL')
+            self.assertIn('attempt 1: dropped by firmware', str(cm.exception))
+            self.assertIn('attempt 2: dropped by firmware', str(cm.exception))
 
     def test_reboot_timeout_captures_state_and_distinguishes_ready(self):
         for ready, expected in ((False, 'FAIL'), (True, 'BLOCKED')):
@@ -1847,7 +1932,7 @@ class HomeAndScreensaver(unittest.TestCase):
 
     def test_opt_in_beanjar_start_missing_or_failing_is_reported(self):
         for mode, expected in (('missing', 'SKIPPED'), ('fail', 'BLOCKED'), ('invalid_json', 'BLOCKED'),
-                               ('stays_ready', 'BLOCKED')):
+                               ('stays_ready', 'FAIL')):  # accepted but never shown, twice: dropped by firmware
             s = self.make()
             s.a.saver_start, s.dev.helper_mode = 'beanjar', mode
             with self.assertRaises(e2e.ScreensaverOutcome) as cm:
