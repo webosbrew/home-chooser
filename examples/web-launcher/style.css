@@ -49,6 +49,27 @@ body {
 	border-color: #ffd34d;
 }
 
+#recent {
+	padding: 24px 48px 0;
+}
+
+#recent h2 {
+	margin: 0 0 12px;
+	font-size: 24px;
+	font-weight: normal;
+	opacity: 0.75;
+}
+
+#recent-row {
+	display: flex;
+}
+
+#recent-row .tile {
+	width: 220px;
+	height: 200px;
+	margin-right: 24px;
+}
+
 #grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, 220px);
