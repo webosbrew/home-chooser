@@ -526,5 +526,7 @@ parameter are the v1 contract. Reply fields and methods may be added within v1. 
 or method, or changing a documented meaning, raises `apiVersion`. Check `apiVersion` at start and
 ignore unknown fields and error codes.
 
+A machine-readable description of v1 is [`api/launcher-v1.openrpc.json`](../api/launcher-v1.openrpc.json).
+
 Settings-only and confirmation methods, files, status output and log ids are internal and are not
 frozen by this contract.
