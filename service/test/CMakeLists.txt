@@ -9,6 +9,7 @@
 #   test-gate-mount    the daemon's gate mount/unmount decisions                    } and run under qemu-arm
 #   test-launcher-contract  the real launcher API handlers on a fake hub, against api/launcher-v1.openrpc.json
 #                      (ARM program test-launcher-contract, driven by launcher-spec.py)
+#   test-launcher-subscribe  the launcher list subscriptions: real upstream children, fake luna-send, fake hub
 #   test-launcher-spec the launcher API description against the OpenRPC meta-schema (python3 only)
 #   test-launcher-doc  docs/launcher-api.md's methods and errorCode lists against the spec (python3 only)
 #   test-launcher-client     api/client is what api/tools/gen-client.py makes from the spec (python3 only)
@@ -35,7 +36,7 @@ set_tests_properties(test-policy PROPERTIES FIXTURES_REQUIRED scratch)
 # Scratch directories the programs write into (kept between runs, as before).
 add_test(NAME scratch-dirs COMMAND "${CMAKE_COMMAND}" -E make_directory "${work}/policy-test/test"
 	"${work}/keyfilter-test" "${work}/watcher-test" "${work}/gate-test" "${work}/gate-mount-test"
-	"${work}/launcher-contract-test")
+	"${work}/launcher-contract-test" "${work}/launcher-subscribe-test")
 set_tests_properties(scratch-dirs PROPERTIES FIXTURES_SETUP scratch)
 
 # The launcher API description (api/README.md): checked here, and against the real handlers below.
@@ -76,7 +77,8 @@ endif()
 # The ARM programs: ../CMakeLists.txt configured with the webOS toolchain in a build directory of its own.
 include(ExternalProject)
 set(arm "${CMAKE_CURRENT_BINARY_DIR}/arm")
-set(programs test-homekey test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract)
+set(programs test-homekey test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract
+	test-launcher-subscribe)
 set(cache_args -DSDK:PATH=${SDK} -DSYSROOT:PATH=${SYSROOT} -DCROSS:STRING=${CROSS})
 foreach(name VERSION EXTRA_CFLAGS)
 	if(NOT "${${name}}" STREQUAL "")
@@ -110,7 +112,8 @@ add_test(NAME test-gate-mount COMMAND ${qemu} "${arm}/test-gate-mount" "${work}/
 # qemu-arm -L KEYFILTER_ROOTFS test-launcher-contract.
 add_test(NAME test-launcher-contract COMMAND ${launcher_spec} contract "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
 	"${arm}/test-launcher-contract" "${work}/launcher-contract-test" ${qemu})
-set_tests_properties(test-homekey test-watcher test-gate test-gate-mount test-launcher-contract PROPERTIES FIXTURES_REQUIRED scratch)
+add_test(NAME test-launcher-subscribe COMMAND ${qemu} "${arm}/test-launcher-subscribe" "${work}/launcher-subscribe-test" "${fake_luna_send}")
+set_tests_properties(test-homekey test-watcher test-gate test-gate-mount test-launcher-contract test-launcher-subscribe PROPERTIES FIXTURES_REQUIRED scratch)
 set_tests_properties(test-watcher-luna PROPERTIES FIXTURES_REQUIRED "scratch;runtime-image")
 # The two watcher programs share watcher-test; never run them at once.
 set_tests_properties(test-watcher test-watcher-luna watcher-runtime-image PROPERTIES RESOURCE_LOCK watcher-test)
