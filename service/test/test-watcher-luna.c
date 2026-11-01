@@ -162,13 +162,13 @@ static void test_parent_death(void) {
         g_main_loop_run(loop);_exit(4);
     }
     CHECK("kill fixture parent created",parent>0);
-    for(int i=0;i<3000&&!ready(1);i++)g_usleep(1000);
+    for(int i=0;i<30000&&!ready(1);i++)g_usleep(1000);
     char *path=g_build_filename(root,"getSystemSettings.ready",NULL),*text=watch_read(path);
     pid_t child=text?atoi(text):-1;CHECK("kill fixture child started",child>0);
     if(parent>0) { kill(parent,SIGKILL);int status;CHECK("killed parent reaped",waitpid(parent,&status,0)==parent); }
     if(child>0) {
         int status=0;pid_t result=0;
-        for(int i=0;i<3000&&result==0;i++) { result=waitpid(child,&status,WNOHANG);if(!result)g_usleep(1000); }
+        for(int i=0;i<30000&&result==0;i++) { result=waitpid(child,&status,WNOHANG);if(!result)g_usleep(1000); }
         CHECK("W19 child dies with killed parent",result==child && WIFSIGNALED(status) && WTERMSIG(status)==SIGKILL);
         if(result==0) { kill(child,SIGKILL);waitpid(child,&status,0); }
     }

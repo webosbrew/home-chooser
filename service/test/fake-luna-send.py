@@ -27,8 +27,10 @@ os.close(fd)
 if stream:
     if payload.get('subscribe') is not True:
         sys.exit(93)
-    with open(root + '/' + method + '.ready', 'w', encoding='ascii') as ready:
+    # Publish atomically: a reader that sees the file must see the pid in it.
+    with open(root + '/' + method + '.ready.new', 'w', encoding='ascii') as ready:
         ready.write(str(os.getpid()))
+    os.replace(root + '/' + method + '.ready.new', root + '/' + method + '.ready')
     with open(root + '/' + method + '.fifo', encoding='utf-8') as incoming:
         for line in incoming:
             if line == '!exit\n':
