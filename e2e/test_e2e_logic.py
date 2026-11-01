@@ -844,6 +844,32 @@ class LogMark(unittest.TestCase):
         self.assertEqual(e2e.lines_after(['x', 'y'], 50), ['x', 'y'])
 
 
+class BootInput(unittest.TestCase):
+    LAUNCHED = '2026-11-01 01:31:00 last input: launched com.webos.app.hdmi2 over an empty foreground: {"returnValue":true}'
+    FAILED = '2026-11-01 01:31:00 last input: launch of com.webos.app.livetv failed: no reply; not retried this boot'
+
+    def test_launches_are_read_from_the_log(self):
+        lines = ['2026-11-01 01:30:43 setPreloadPolicy com.webos.app.home isEnabled=false: no reply',
+                 '2026-11-01 01:31:00 last input: eim did not answer, using com.webos.app.livetv', self.LAUNCHED, self.FAILED]
+        self.assertEqual(e2e.boot_input_launches(lines),
+                         [('com.webos.app.hdmi2', True), ('com.webos.app.livetv', False)])
+        self.assertEqual(e2e.boot_input_launches(['x last input: netflix in front; nothing launched this boot']), [])
+
+    def test_one_accepted_launch_in_front(self):
+        self.assertEqual(e2e.boot_input_verdict([self.LAUNCHED], 'com.webos.app.hdmi2'),
+                         (True, 'com.webos.app.hdmi2 launched once and in front'))
+
+    def test_not_in_front_yet(self):
+        for fg in ('', None, 'org.webosbrew.hcfixture.web.overlay', 'com.webos.app.livetv'):
+            self.assertFalse(e2e.boot_input_verdict([self.LAUNCHED], fg)[0], fg)
+
+    def test_none_two_or_failed(self):
+        self.assertIn('0 last-input launches', e2e.boot_input_verdict([], 'com.webos.app.hdmi2')[1])
+        self.assertIn('2 last-input launches', e2e.boot_input_verdict([self.LAUNCHED, self.LAUNCHED], 'com.webos.app.hdmi2')[1])
+        self.assertEqual(e2e.boot_input_verdict([self.FAILED], 'com.webos.app.livetv'),
+                         (False, 'the launch of com.webos.app.livetv failed'))
+
+
 class StockRecord(unittest.TestCase):
     def test_uninstall_checks_every_owned_cache_and_access_path(self):
         paths = e2e.uninstall_remnant_paths()
