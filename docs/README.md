@@ -6,7 +6,8 @@ These pages are for people working on Home Chooser or writing a launcher for it.
 | Page | What it covers |
 | --- | --- |
 | [Architecture](architecture.md) | The programs, the firmware pieces they touch, the HOME key per webOS family, the home gate decision and the daemon lifecycle, with diagrams |
-| [Writing a launcher](launcher-api.md) | The launcher contract and API version 1: appinfo, selection requests, methods, errors, per-release notes, testing |
+| [Writing a launcher](launcher-api.md) | The launcher contract and API version 1: checklist, appinfo, selection requests, methods, errors, platform calls, per-release notes, testing |
+| [Launcher API description](../api/README.md) and [example launcher](../examples/web-launcher/README.md) | The OpenRPC file, the generated JS client and browser mock, and a small web launcher using them |
 | [The settings app](settings-app.md) | The UI, root access, what is written on each release, persistence, removal handling, the stock home's preload policy |
 | [The root service](service.md) | `homechooser-service` and `homechooser-daemon`: package, source layout, elevation, methods, caller checks, access files, allow-lists, logs |
 | [Live Home key filter, webOS 6–9](home-key-hook.md) | The generated key filter, the configd transaction and restoration |
