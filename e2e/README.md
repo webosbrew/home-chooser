@@ -343,6 +343,13 @@ Fixed waits were replaced by polls of what they waited for, with the same upper 
   Home; the 60 s sample after it stays, since it is the verdict ("not running over 60 s").
 * The Home press: the 6 s after the key and the 3 s after closing the app to be launched are polls (26 s for the
   result, 3 s for the close); the same for closing Home Chooser before it is opened again.
+* Opening Home Chooser for a later launcher's switch and for the post-update check (`3u-app`), right after a Home
+  press: the runner first polls up to 20 s for SAM to name a foreground app, then launches Home Chooser and polls
+  up to 30 s for its page to be listed by the inspector and to stay listed for 4 s; on a miss it closes it and
+  launches it once more. Home Chooser is an overlay, and surface-manager closes an overlay (`windowPolicy`) when a
+  card maps beneath it: on the slower pi VMs the launcher's card from the Home press mapped about 8 s after the
+  press, after Home Chooser had opened. Each `ares-launch` rc and the verdict are logged. The foreground alone
+  is not the test: on 9.x SAM names the card beneath our overlay while the list is on screen.
 
 Kept, because nothing observable ends them: the 45 s after the update install (the check is that no restore happens
 within the watcher's confirmation window), the short settles before a negative check (no toast, the app still

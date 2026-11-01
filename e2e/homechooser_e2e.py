@@ -126,6 +126,9 @@ PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
 BOOT_INPUT_LAUNCHED = 'last input: launched '
 BOOT_INPUT_FAILED = 'last input: launch of '
 BOOT_INPUT_WAIT = 240  # seconds after the boot checks start
+PANEL_FRONT_WAIT = 30  # seconds one Home Chooser open may take to reach the front before the one retry
+PANEL_HOLD = 4  # seconds Home Chooser must stay in front after it got there (a card mapping beneath closes it)
+FOREGROUND_SETTLE = 20  # seconds to wait for an app just launched (Home key) to be SAM's foreground app
 FULLHOME = 'com.webos.app.fullhome'
 
 
@@ -1365,6 +1368,62 @@ def preload_settled(major, gate_mounts, stock_running, close_logged):
     if uses_home_gate(major):
         return gate_mounts >= 1 and not stock_running
     return bool(close_logged)
+
+
+def panel_in_front(foreground, page_listed):
+    """Home Chooser counts as in front once SAM's getForegroundAppInfo names it or once its page is in the
+    inspector's /json.  The foreground alone cannot say no: on 9.x it names the card beneath our overlay
+    (seen: org.webosbrew.hcfixture.web.normal for 30 s with our list on screen and readable), or "" right
+    after a web launch.  What makes an open fail is our page going away (panel_front_verdict)."""
+    return foreground == APP_ID or bool(page_listed)
+
+
+def panel_front_verdict(samples, hold):
+    """Whether Home Chooser reached the front and stayed there.  samples: [(seconds since the launch,
+    foreground, page listed)] in time order.  (True, why) once it was in front (panel_in_front) and still
+    is `hold` s later; (False, why) when a sample after the first in-front one is not in front (it was
+    closed under us: surface-manager closes an overlay by windowPolicy when a card maps beneath it);
+    (None, why) while undecided."""
+    first = None
+    for t, fg, page in samples:
+        if panel_in_front(fg, page):
+            if first is None:
+                first = t
+            if t - first >= hold:
+                return True, 'in front at %.0f s and still at %.0f s (foreground %r, page listed %s)' % (first, t, fg, page)
+        elif first is not None:
+            return False, 'in front at %.0f s, gone at %.0f s (foreground %r, page listed %s)' % (first, t, fg, page)
+    if not samples:
+        return None, 'no sample yet'
+    t, fg, page = samples[-1]
+    if first is None:
+        return None, 'not in front after %.0f s (foreground %r, page listed %s)' % (t, fg, page)
+    return None, 'in front at %.0f s, held %.0f of %.0f s' % (first, t - first, hold)
+
+
+def open_in_front(launch, close, front, say, attempts=2):
+    """Open an app and confirm it reached the front.  launch() -> (rc, output); front() -> (ok, evidence),
+    a poll that returns once the app is in front or its wait is over; close() runs before a retry.  The rc
+    of every launch is said; a miss is said, the app closed and the open retried, `attempts` launches at
+    most.  Returns (ok, the lines said)."""
+    notes = []
+
+    def note(text):
+        notes.append(text)
+        say(text)
+    for n in range(1, attempts + 1):
+        rc, out = launch()
+        note('open %d of %d: ares-launch rc=%s %r' % (n, attempts, rc, (out or '').strip()[-200:]))
+        ok, evidence = front()
+        if ok:
+            note('open %d of %d: in front (%s)' % (n, attempts, evidence))
+            return True, notes
+        retry = n < attempts
+        note('open %d of %d: NOT in front (%s)%s' % (n, attempts, evidence,
+                                                     '; closing it and retrying the open once' if retry else ''))
+        if retry:
+            close()
+    return False, notes
 
 
 def default_update_ref():
@@ -4076,7 +4135,9 @@ class Scenario:
             toast = next((t for t in toasts if t), None)
             self.shot('after-confirm')
             r.note('toasts after confirming', repr(toasts))
-            r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast))
+            r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast) if toast == DONE_TEXT else
+                    '%r; why our page went away since the click (none: it stayed): %s' % (
+                        toast, self.page_gone_evidence(self.ask_mark)))
             if self.uses_home_key_hook():
                 # the patch was mounted already (an earlier choice in this boot): a live switch
                 self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
@@ -4134,14 +4195,57 @@ class Scenario:
         self.close_insp()
         self.insp = Inspector(self.dev)
         self.launch_mark = self.messages_mark()
-        d.launch(APP_ID)
+        front = self.open_panel('2s open')
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
-        r.check('the list shows the launcher row (data-app-id)', bool(ui), 'DOM: %s' % json.dumps(ui))
+        r.check('the list shows the launcher row (data-app-id)', bool(ui),
+                'DOM: %s; Home Chooser in front: %s' % (json.dumps(ui), front))
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
         self.choose_in_ui(ui, full=False)
         d.close(APP_ID)
         self.close_insp()
+
+    def settle_foreground(self, label, timeout=FOREGROUND_SETTLE):
+        """Before Home Chooser opens over an app the Home key just launched: poll until SAM names a
+        foreground app (at most `timeout` s).  An overlay opened before that card has mapped is closed by
+        surface-manager (windowPolicy) when the card maps: on the pi VMs the launcher's card mapped about
+        8 s after the Home press, while getForegroundAppInfo answered appId "".  The foreground is logged."""
+        t0 = time.time()
+        fg = self.wait(lambda: self.dev.foreground()[0], timeout, 1)
+        self.rec.say('%s: foreground before opening Home Chooser: %r after %.0f s%s' % (
+            label, fg, time.time() - t0, '' if fg else ' (none named; opening anyway)'))
+        return fg
+
+    def open_panel(self, label, front_wait=PANEL_FRONT_WAIT, hold=PANEL_HOLD):
+        """Launch Home Chooser and poll until it is in front and stays there for `hold` s
+        (panel_front_verdict) before any DOM read; on a miss close it and launch once more
+        (open_in_front).  Every launch rc and the verdict are logged and, on a miss, the running list and
+        sam's lines about closing the app (page_gone_evidence).  True when in front."""
+        self.settle_foreground(label)
+        if not self.insp:
+            self.insp = Inspector(self.dev)
+        mark = self.messages_mark()
+
+        def front():
+            samples, t0 = [], time.time()
+            while True:
+                fg = self.dev.foreground()[0]
+                page = self.insp._page() is not None if self.insp else False
+                samples.append((time.time() - t0, fg, page))
+                ok, why = panel_front_verdict(samples, hold)
+                if ok is not None or time.time() - t0 >= seconds(front_wait):
+                    break
+                sleep(1)
+            if not ok:
+                why += '; running: %s; %s' % (self.running_ids(), self.page_gone_evidence(mark).replace('\n', ' | '))
+            return bool(ok), why
+
+        def close():
+            self.dev.close(APP_ID)
+            self.wait_closed(APP_ID, 5)
+        ok, _ = open_in_front(lambda: self.dev.launch(APP_ID), close, front,
+                              lambda t: self.rec.say('%s: %s' % (label, t)))
+        return ok
 
     def qml_note(self):
         if launcher_shape(self.L)[0] == 'qml':
@@ -5352,7 +5456,7 @@ class Scenario:
         """Open Home Chooser, no error toast, the chosen row ticked; close it."""
         r, d = self.rec, self.dev
         self.insp = Inspector(self.dev)
-        d.launch(APP_ID)
+        front = self.open_panel(label)
         seen = []
 
         def listed():
@@ -5366,7 +5470,8 @@ class Scenario:
         if ui.get('toast'):
             seen.append(ui['toast'])
         self.shot(label)
-        r.check('%s: the app opens and lists the launcher' % label, bool(ui) and self.launcher in (ui.get('rows') or []), json.dumps(ui))
+        r.check('%s: the app opens and lists the launcher' % label, bool(ui) and self.launcher in (ui.get('rows') or []),
+                '%s; Home Chooser in front: %s' % (json.dumps(ui), front))
         r.check('%s: no error toast after opening' % label, not any(t.startswith("Couldn't") for t in seen), 'toasts: %r' % seen)
         ticked = self.insp.evaluate(TICK_JS)
         r.check('%s: the chosen row is still ticked' % label, ticked == self.launcher, 'ticked: %r' % ticked)

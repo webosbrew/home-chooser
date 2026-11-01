@@ -3158,5 +3158,78 @@ class ApiModes(unittest.TestCase):
             self.assertEqual(seen['api'], api)
 
 
+class PanelOpen(unittest.TestCase):
+    """Opening Home Chooser for the switch and 3u-app: in front, held, one retry, every rc logged."""
+    APP = e2e.APP_ID
+
+    def test_in_front(self):
+        self.assertTrue(e2e.panel_in_front(self.APP, False))
+        self.assertTrue(e2e.panel_in_front('', True))
+        self.assertTrue(e2e.panel_in_front(e2e.STOCK, True))
+        self.assertFalse(e2e.panel_in_front('', False))
+        self.assertFalse(e2e.panel_in_front(None, False))
+        self.assertFalse(e2e.panel_in_front('org.webosbrew.hcfixture.web.normal', False))
+        # 9.x: SAM names the card beneath our overlay while our list is on screen
+        self.assertTrue(e2e.panel_in_front('org.webosbrew.hcfixture.web.normal', True))
+
+    def test_verdict_holds(self):
+        ok, why = e2e.panel_front_verdict([(0, '', False), (1, '', True), (3, self.APP, True), (5, '', True)], 4)
+        self.assertTrue(ok)
+        self.assertIn('in front at 1 s and still at 5 s', why)
+
+    def test_verdict_closed_under_us(self):
+        # pi 9.2.4: our overlay in front at once, then the launcher's card mapped and closed it (windowPolicy)
+        ok, why = e2e.panel_front_verdict([(0, '', True), (1, '', True), (2, 'org.webosbrew.hcfixture.web.normal', False)], 4)
+        self.assertIs(ok, False)
+        self.assertIn('gone at 2 s', why)
+
+    def test_verdict_undecided(self):
+        self.assertIsNone(e2e.panel_front_verdict([], 4)[0])
+        ok, why = e2e.panel_front_verdict([(0, '', False), (2, 'x.card', False)], 4)
+        self.assertIsNone(ok)
+        self.assertIn('not in front after 2 s', why)
+        ok, why = e2e.panel_front_verdict([(0, self.APP, True), (2, self.APP, True)], 4)
+        self.assertIsNone(ok)
+        self.assertIn('held 2 of 4 s', why)
+
+    def run_open(self, fronts, attempts=2):
+        calls, said = [], []
+        fronts = list(fronts)
+
+        def launch():
+            calls.append('launch')
+            return 0, 'Launched application %s\n' % self.APP
+
+        def close():
+            calls.append('close')
+
+        def front():
+            calls.append('front')
+            return fronts.pop(0)
+        ok, notes = e2e.open_in_front(launch, close, front, said.append, attempts)
+        self.assertEqual(notes, said)
+        return ok, calls, said
+
+    def test_first_open(self):
+        ok, calls, said = self.run_open([(True, 'held')])
+        self.assertTrue(ok)
+        self.assertEqual(calls, ['launch', 'front'])
+        self.assertIn("ares-launch rc=0 'Launched application %s'" % self.APP, said[0])
+        self.assertIn('in front (held)', said[1])
+
+    def test_one_retry(self):
+        ok, calls, said = self.run_open([(False, 'gone at 2 s'), (True, 'held')])
+        self.assertTrue(ok)
+        self.assertEqual(calls, ['launch', 'front', 'close', 'launch', 'front'])
+        self.assertIn('NOT in front (gone at 2 s); closing it and retrying the open once', said[1])
+        self.assertTrue(said[2].startswith('open 2 of 2: ares-launch rc=0'))
+
+    def test_gives_up_after_the_retry(self):
+        ok, calls, said = self.run_open([(False, 'a'), (False, 'b')])
+        self.assertFalse(ok)
+        self.assertEqual(calls, ['launch', 'front', 'close', 'launch', 'front'])
+        self.assertTrue(said[-1].endswith('NOT in front (b)'))
+
+
 if __name__ == '__main__':
     unittest.main()
