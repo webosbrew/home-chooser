@@ -6,18 +6,27 @@ set -eu
 . "$(dirname "$0")/lib/common.sh"
 ROOTS=${HOMECHOOSER_LUNA_ROOTS:-'/var/luna-service2-dev /var/luna-service2'}
 CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
+PIDOF=${HOMECHOOSER_PIDOF:-pidof}
+# Who runs this: Home Chooser's service (the settings app's accessApply) or the boot entry/watcher.
+PARENT_EXE=${HOMECHOOSER_PARENT_EXE:-$(readlink "/proc/$PPID/exe" 2>/dev/null || :)}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 changed=0
 major=$(major_version)
-# The launcher API methods the group grants: the one list, here. It is the spec's x-permission.grants
-# plus getInfo (api/launcher-v1.openrpc.json; tests/test-homechooser-access.sh checks the two agree).
-LAUNCHER_METHODS='getInfo listApps listRunning getForegroundApp getAppInfo getAppIcon closeApp uninstallApp listLaunchPoints listInputs getIcons'
+# The launcher API methods, each with the LG access group that admits apps to it on 11+ (query: the
+# reads, launcher: closeApp and uninstallApp): the one list, here. Its names are the spec's
+# x-permission.grants plus getInfo (api/launcher-v1.openrpc.json; tests/test-homechooser-access.sh
+# checks the two agree). Every grant below is built from it.
+LAUNCHER_METHODS='getInfo:query listApps:query listRunning:query getForegroundApp:query getAppInfo:query
+getAppIcon:query listLaunchPoints:query listInputs:query getIcons:query closeApp:launcher uninstallApp:launcher'
 SERVICE_ID=org.webosbrew.homechooser.service
 
-# The methods as a JSON array of "<service>/<method>".
+# The methods (of one LG group, or all) as a JSON array of "<service>/<method>".
 method_array() {
     out=
-    for m in $LAUNCHER_METHODS; do out="$out${out:+,}\"$SERVICE_ID/$m\""; done
+    for entry in $LAUNCHER_METHODS; do
+        [ -z "${1:-}" ] || [ "${entry#*:}" = "$1" ] || continue
+        out="$out${out:+,}\"$SERVICE_ID/${entry%%:*}\""
+    done
     printf '[%s]' "$out"
 }
 
@@ -85,8 +94,13 @@ for root in $ROOTS; do
             mkdir -p "$root/api-permissions.d"
             methods=$(method_array)
             permissions="{\"org.webosbrew.homechooser.applications\":$methods"
-            [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods"
+            # 11+: a developer app holds only the public LG groups (requiredPermissions is ignored), so
+            # the methods are also provided under two of them; the service checks the caller itself.
+            [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods,\"application.query\":$(method_array query),\"application.launcher\":$(method_array launcher)"
+            before=$(cat "$api" 2>/dev/null || :)
             write_changed "$api" "$permissions}"
+            # A service registered before the change keeps its old groups: tell the caller to restart it.
+            [ "$major" -lt 11 ] || [ "$(cat "$api")" = "$before" ] || restart=1
             add_entry apiPermissionFiles "$api"
         else
             drop_entry apiPermissionFiles "$api"
@@ -97,3 +111,13 @@ for root in $ROOTS; do
     if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi
+# 11+: Home Chooser's service takes its access groups when it registers. After a change, a running
+# instance must register again. Run by that service (accessApply), tell the settings app, which
+# quits it and waits for the new instance; run by the boot entry or the watcher, stop it here (only
+# Home Chooser's own service); the hub starts it again on the next call.
+if [ "${restart:-0}" = 1 ]; then
+    case "$PARENT_EXE" in
+        */homechooser-service) echo restart-service ;;
+        *) for pid in $("$PIDOF" homechooser-service 2>/dev/null); do kill "$pid" 2>/dev/null || :; done ;;
+    esac
+fi
