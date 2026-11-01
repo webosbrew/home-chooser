@@ -4182,7 +4182,7 @@ class Scenario:
         self.wait(lambda: verdict()[0], BOOT_INPUT_WAIT, 5)
         ok, why = verdict()
         lines = [l for l in self.log_lines() if 'last input:' in l]
-        r.check(label + ': the watcher launched the last input once and it is in front (overlay launcher)', ok,
+        r.check(label + ': the watcher launched the last input once and the input is in front (overlay launcher; the launch closes the overlay)', ok,
                 why + '\n' + '\n'.join(lines))
         r.note(label + ': the overlay launcher over the input', '%s running=%s' % (
             self.launcher, self.launcher in self.running_ids()))

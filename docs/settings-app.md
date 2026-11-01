@@ -245,6 +245,9 @@ overlay launcher with nothing in front:
   does not answer or refuses, or the id is empty, invalid or a stock Home. The fallback is logged.
 * **The launch.** `applicationManager/launch {"id": <input>}` as `com.webos.applicationManager`, with
   a 5 s bound. A refusal or no reply is logged and never retried.
+* **What the owner sees.** Surface-manager closes the overlay as the input comes up, so a boot ends
+  on the last input (Live TV or HDMI) without the launcher on screen; Home opens the launcher over
+  it. That is what a boot shows on 6–9 too.
 
 The log lines start with `last input:`, for example `last input: launched com.webos.app.livetv over
 an empty foreground: {"returnValue":true}`, `last input: launch of <id> failed: no reply; not retried
