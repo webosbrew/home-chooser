@@ -78,7 +78,7 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--removal-race` (after step 3, step 3r, below, then the cleanup); `--reboot-via later|alert`
 (accepted for compatibility but not used: no release asks for a restart any more, `expects_reboot_dialog()` is always false, so
 `reboot_after_choice()` is never reached; see "webOS 6-9: nothing restarts");
 `--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
@@ -490,6 +490,15 @@ and Home key hook docs.
    again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
    reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
+With `--removal-race` step 3 is followed by 3r and the cleanup instead of steps 4 and 5:
+
+* 3r. `ares-install --remove` the launcher and then Home Chooser at once, as an owner uninstalling both. The
+  record's `home` (and on 10+ the override, and `getProfiles` `idleApp`) must be stock within 15 s plus 8 s (the
+  8 s times the host slowdown) of the launcher's removal: one confirmation, not one per app. Then the step 5 checks (toast,
+  watcher finished, `assert_stock`, preload policy enabled), Homebrew Channel opened and closed as the only app
+  with screenshot `3r-last-app-closed` (LG Home or the last input in front, never the removed launcher), and Home
+  opens stock.
+
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
    removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
