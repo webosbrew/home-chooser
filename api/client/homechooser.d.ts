@@ -60,7 +60,7 @@ declare namespace HomeChooser {
 	}
 	/** One external input as the input manager (eim getAllInputStatus) reports it. Live TV is not an input here; it is the app com.webos.app.livetv. */
 	interface Input {
-		/** The input's app, for example com.webos.app.hdmi1: launch it to switch to the input. */
+		/** The input's app, for example com.webos.app.hdmi1: launch it, with params, to switch to the input. */
 		id: AppId;
 		/** The input manager's id, for example HDMI_1; getIcons reads its icon. */
 		inputId: string;
@@ -70,6 +70,11 @@ declare namespace HomeChooser {
 		connected?: boolean;
 		/** As the input manager reports it: the input is the one in use. */
 		activate?: boolean;
+		/** The input manager's hdmiSignalExist: a signal is present. Only where the input manager reports it (webOS 7 and later); absent otherwise. */
+		signal?: boolean;
+		/** Pass to applicationManager/launch with id to switch to the input, as LG's input picker does: {} for a plain input, {"id": "uniqueId", "value": <the device's uniqueId as a string>} for a device with a uniqueId. */
+		params: {
+		};
 		/** Absolute path of the input manager's icon (iconPrefix + icon). */
 		icon?: string;
 	}

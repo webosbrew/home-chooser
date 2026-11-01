@@ -461,14 +461,22 @@ Lists the TV's external inputs, as the input manager (`com.webos.service.eim`,
 call.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
+{"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
 ```
 
 Each input carries `id`, the input's app (`com.webos.app.hdmi1`): launch it with
-`applicationManager/launch {"id": <id>}` to switch to that input. `inputId` is the input manager's
+`applicationManager/launch {"id": <id>, "params": <params>}` to switch to that input. `inputId` is the input manager's
 own id (`HDMI_1`), `label` its name, and `port`, `connected` (a device is plugged in) and `activate`
 (the input in use) are passed through when the platform gives them. `icon` is the input manager's icon
-path; read it with `getIcons {inputId}`. Live TV is not an input here: it is the app
+path; read it with `getIcons {inputId}`.
+
+`params` is always there: the launch parameters LG's input picker sends with that input. It is `{}` for
+a plain input, and `{"id": "uniqueId", "value": "<uniqueId>"}` for a device the input manager gives a
+`uniqueId` (the value is that number as a string). `signal` is the input manager's `hdmiSignalExist`
+(a signal is present); it is there only where the input manager reports it (webOS 7 and later; 5.6.1
+and 6.5.2 do not) and is left out otherwise, so a missing `signal` means unknown, not false. The
+picker also lists the CEC devices behind an HDMI input (`subList`) as inputs of their own, each
+launched with its own `uniqueId`; `listInputs` leaves them out and gives the HDMI input itself. Live TV is not an input here: it is the app
 `com.webos.app.livetv`, which LG's input picker adds to its list itself.
 
 `{"subscribe": true}` sends the whole list again after every change (a device plugged in, an input
@@ -623,8 +631,10 @@ provides nor freezes them. They are here because every launcher needs them.
   Home Chooser's id.
 * **Launch a launch point** (an app tile or a bookmark from `listLaunchPoints`). The same call with
   `{"id": <id>, "launchPointId": <launchPointId>, "params": <params>}`, as LG Home sends it.
-* **Switch to an input.** The same call with the input's `id` from `listInputs`
-  (`{"id": "com.webos.app.hdmi1"}`); Live TV is `{"id": "com.webos.app.livetv"}`.
+* **Switch to an input.** The same call that launch points use, with the input's `id` and `params`
+  from `listInputs` (`{"id": "com.webos.app.hdmi1", "params": {}}`), which is what LG's input picker
+  sends. It works from a third-party app id (verified on webOS 5.6.1, 6.5.2 and 7.6.0). Live TV is
+  `{"id": "com.webos.app.livetv"}`.
 * **Back.** Back arrives as a `keydown` with `keyCode` 461 when `appinfo.json` sets
   `"disableBackHistoryAPI": true`; otherwise the web runtime uses it for the page's history. A
   Home app is the root of navigation: on Back, move the focus to a start position or do nothing;

@@ -495,7 +495,7 @@
     {
       "name": "listInputs",
       "summary": "Lists the TV's external inputs.",
-      "description": "The input manager's inputs (com.webos.service.eim getAllInputStatus), in its order: id (the input's app, which a launcher launches to switch to the input), inputId, label, port, connected, activate and icon, when the platform has them. Live TV is not an input here: it is the app com.webos.app.livetv. Read the icons with getIcons {inputId}. With subscribe true the list comes again after every change (a device plugged in, an input switched).",
+      "description": "The input manager's inputs (com.webos.service.eim getAllInputStatus), in its order: id (the input's app), inputId, label, port, connected, activate, signal, params and icon, when the platform has them (params always). To switch to an input, call applicationManager/launch with {\"id\": id, \"params\": params}. signal is the input manager's hdmiSignalExist (webOS 7 and later; absent where the input manager does not report it). params is what LG's input picker passes: {} for a plain input, {\"id\": \"uniqueId\", \"value\": ...} for a device with a uniqueId. Sub-list entries (CEC devices behind an HDMI input) are not listed. Live TV is not an input here: it is the app com.webos.app.livetv. Read the icons with getIcons {inputId}. With subscribe true the list comes again after every change (a device plugged in, an input switched).",
       "paramStructure": "by-name",
       "params": [
         {
@@ -516,7 +516,7 @@
           "name": "av-and-hdmi",
           "description": "The input manager's reply on webOS 5.6.1, cut to the published fields.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -528,10 +528,25 @@
           }
         },
         {
+          "name": "signal-and-unique-id",
+          "description": "The input manager's reply on webOS 7.6.0 with a device that has a uniqueId: signal is hdmiSignalExist (webOS 7 and later only), and params is what to launch the input with.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}, {"id": "com.webos.app.hdmi2", "inputId": "HDMI_2", "label": "HDMI 2", "port": 2, "connected": false, "activate": false, "signal": false, "params": {"id": "uniqueId", "value": "3"}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_2.png"}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.service.eim/getAllInputStatus", "request": {}, "reply": {"returnValue": true, "devices": [{"id": "HDMI_1", "label": "HDMI 1", "port": 1, "activate": true, "connected": true, "appId": "com.webos.app.hdmi1", "icon": "HDMI_1.png", "iconPrefix": "/usr/palm/plugins/inputapps/assets/small/", "forceIcon": false, "chosen": false, "modified": false, "lastUniqueId": -1, "hdmiPlugIn": true, "hdmiSignalExist": true, "subList": [], "subCount": 0}, {"id": "HDMI_2", "label": "HDMI 2", "port": 2, "activate": false, "connected": false, "appId": "com.webos.app.hdmi2", "icon": "HDMI_2.png", "iconPrefix": "/usr/palm/plugins/inputapps/assets/small/", "forceIcon": false, "chosen": false, "modified": false, "uniqueId": 3, "lastUniqueId": 3, "hdmiPlugIn": true, "hdmiSignalExist": false, "subList": [], "subCount": 0}], "atmosDevice": false, "arcDevice": false, "arcDevicePower": 0, "unknownCECPNumber": 0, "blockedAllInput": false, "totalCount": 2}}
+            ]
+          }
+        },
+        {
           "name": "subscribe",
           "description": "The first reply of a subscription is a fresh read.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "subscribed": true, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "subscribed": true, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -953,17 +968,19 @@
         "title": "Input",
         "description": "One external input as the input manager (eim getAllInputStatus) reports it. Live TV is not an input here; it is the app com.webos.app.livetv.",
         "type": "object",
-        "required": ["id", "inputId"],
+        "required": ["id", "inputId", "params"],
         "properties": {
           "id": {
             "$ref": "#/components/schemas/AppId",
-            "description": "The input's app, for example com.webos.app.hdmi1: launch it to switch to the input."
+            "description": "The input's app, for example com.webos.app.hdmi1: launch it, with params, to switch to the input."
           },
           "inputId": {"type": "string", "description": "The input manager's id, for example HDMI_1; getIcons reads its icon."},
           "label": {"type": "string"},
           "port": {"type": "number"},
           "connected": {"type": "boolean", "description": "As the input manager reports it: a device is connected."},
           "activate": {"type": "boolean", "description": "As the input manager reports it: the input is the one in use."},
+          "signal": {"type": "boolean", "description": "The input manager's hdmiSignalExist: a signal is present. Only where the input manager reports it (webOS 7 and later); absent otherwise."},
+          "params": {"type": "object", "description": "Pass to applicationManager/launch with id to switch to the input, as LG's input picker does: {} for a plain input, {\"id\": \"uniqueId\", \"value\": <the device's uniqueId as a string>} for a device with a uniqueId."},
           "icon": {"type": "string", "description": "Absolute path of the input manager's icon (iconPrefix + icon)."}
         }
       },

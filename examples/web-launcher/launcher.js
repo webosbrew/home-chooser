@@ -3,7 +3,7 @@
 // Plain ES5, no build step, so it runs as it is in the web runtime of webOS 5 (Chromium 68) and later.
 //
 // PENDING DEVICE CONFIRMATION: two choices here are not yet confirmed on a TV. Apps and inputs are
-// started with luna://com.webos.applicationManager/launch {id} (launchApp below), and icons are read
+// started with luna://com.webos.applicationManager/launch {id} and, for an input, its params (launchApp below), and icons are read
 // with Home Chooser's getIcons rather than as file:// paths from listApps (loadIcons below).
 (function () {
 	'use strict';
@@ -82,8 +82,10 @@
 		});
 	}
 
-	function launchApp(id) {
-		HC.lunaCall('luna://com.webos.applicationManager/launch', {id: id}).then(function (reply) {
+	function launchApp(app) {
+		var id = app.id, request = {id: id};
+		if (app.inputId) request.params = app.params || {};   // an input: listInputs' params, as LG's input picker sends
+		HC.lunaCall('luna://com.webos.applicationManager/launch', request).then(function (reply) {
 			if (reply.returnValue !== true) {
 				console.error('launch', id, reply);
 				toast('Could not open ' + id + '.');
@@ -210,7 +212,7 @@
 			return Promise.all([HC.listApps(), inputs]).then(function (results) {
 				if (gen !== generation) return;
 				apps = orderApps(results[0].apps, selfId).concat(results[1].map(function (input) {
-					return {id: input.id, title: input.label || input.inputId, inputId: input.inputId, icon: input.icon};
+					return {id: input.id, title: input.label || input.inputId, inputId: input.inputId, icon: input.icon, params: input.params};
 				}));
 				render();
 				loadIcons(gen);
@@ -255,7 +257,7 @@
 			break;
 		case KEY.OK:
 			if (focus < 0) requestHome();
-			else if (apps[focus]) launchApp(apps[focus].id);
+			else if (apps[focus]) launchApp(apps[focus]);
 			break;
 		case KEY.BACK:
 			// The Home app is the root: there is nothing to go back to and it must not close itself.

@@ -74,6 +74,28 @@ static void copy_typed(jvalue_ref out, const char *dest, jvalue_ref in, const ch
 	if (v && jis_valid(v) && is(v)) jobject_set(out, key_buf(dest), jvalue_duplicate(v));
 }
 
+/* The launch parameters LG's InputPicker sends with an input (ConnectionsInterfaces/Interfaces.qml
+ * createInputObj, onClick.launchParam): {"id":"uniqueId","value":<uniqueId + "">} when the eim device has
+ * a uniqueId of its own, else {}. The picker sets that field itself from a SIMPLINK entry of subList; the
+ * subList entries are not listed here, so only a uniqueId eim reports counts. */
+static jvalue_ref input_params(jvalue_ref d)
+{
+	jvalue_ref o = jobject_create();
+	jvalue_ref u = jobject_get(d, key_buf("uniqueId"));
+	int64_t n;
+	char *text = NULL;
+	if (u && jis_valid(u) && jis_number(u) && jnumber_get_i64(u, &n) == CONV_OK)
+		text = g_strdup_printf("%" G_GINT64_FORMAT, (gint64)n);
+	else if (u && jis_valid(u) && jis_string(u))
+		text = get_string(d, "uniqueId");
+	if (text) {
+		put_str(o, "id", "uniqueId");
+		put_str(o, "value", text);
+		g_free(text);
+	}
+	return o;
+}
+
 /* eim devices -> inputs: id is the input app (what a launcher launches), inputId eim's own id. */
 static jvalue_ref pick_inputs(jvalue_ref arr)
 {
@@ -90,6 +112,8 @@ static jvalue_ref pick_inputs(jvalue_ref arr)
 			copy_typed(o, "port", d, "port", jis_number);
 			copy_typed(o, "connected", d, "connected", jis_boolean);
 			copy_typed(o, "activate", d, "activate", jis_boolean);
+			copy_typed(o, "signal", d, "hdmiSignalExist", jis_boolean);
+			jobject_set(o, key_buf("params"), input_params(d));
 			char *prefix = get_string(d, "iconPrefix");
 			char *icon = get_string(d, "icon");
 			if (prefix && icon && icon[0]) {

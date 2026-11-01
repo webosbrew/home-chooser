@@ -27,7 +27,7 @@ What it does:
   by its `inputId` and icon path), so a refresh asks only for new tiles. A tile without a readable
   icon (`noIcon`, `iconTooLarge`) gets a letter placeholder.
 * Arrow keys move the focus. OK opens the focused app or switches to the focused input with
-  `luna://com.webos.applicationManager/launch {"id": ...}`. Back returns the focus to the first app
+  `luna://com.webos.applicationManager/launch {"id": ...}` (for an input, with the `params` that `listInputs` gives). Back returns the focus to the first app
   and never closes the launcher (`disableBackHistoryAPI` in `appinfo.json` hands the key to the
   page).
 * It refreshes the list when the Home button is pressed while it runs (`webOSRelaunch`, which also

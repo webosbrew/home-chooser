@@ -137,7 +137,7 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `getAppInfo` | `{id}` | `{returnValue, apiVersion, app:{…}}`; one `listApps` item |
 | `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
 | `listLaunchPoints` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, launchPoints:[…]}`; SAM's launch points, selected fields |
-| `listInputs` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, inputs:[…]}`; eim `getAllInputStatus`, selected fields |
+| `listInputs` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, inputs:[…]}`; eim `getAllInputStatus`, selected fields, plus `params` (the picker's launch params) and `signal` (`hdmiSignalExist`, where present) |
 | `getIcons` | `{items}` | `{returnValue, apiVersion, icons:[…]}`; one entry per item, at most 64 items and 1 MiB of icons |
 | `closeApp` | `{id, force?}` | `{returnValue, apiVersion, id}`; selected Home only |
 | `uninstallApp` | `{id}` | `{returnValue, apiVersion, pending:true, id, confirmation}` (`alert` or `screen`); selected Home only |

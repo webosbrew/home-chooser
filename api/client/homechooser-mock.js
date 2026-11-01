@@ -159,6 +159,7 @@
 				"port": 1,
 				"connected": false,
 				"activate": false,
+				"params": {},
 				"icon": "/usr/palm/plugins/inputapps/assets/small/av.png"
 			},
 			{
@@ -168,6 +169,7 @@
 				"port": 1,
 				"connected": true,
 				"activate": true,
+				"params": {},
 				"icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"
 			}
 		],
