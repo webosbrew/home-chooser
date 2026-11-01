@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Policy regression tests use real firmware pbnjson/GLib under qemu-arm.
- * W identifiers map every old shell scenario in native-watcher-port.md. */
+ * W identifiers map every old shell scenario in docs/research/native-watcher-port.md
+ * (removed from the tree; see git history). */
 #include "watcher/internal.h"
 #include <stdio.h>
 #include <stdlib.h>

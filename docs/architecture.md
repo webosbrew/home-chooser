@@ -90,7 +90,7 @@ flowchart LR
 flowchart LR
     subgraph w5["webOS 5.x"]
         k5["HOME"] --> f5["stock key filter launches<br/>the record's home"] --> l5["chosen launcher"]
-        i5["foreground empty"] --> s5["SAM's own handling,<br/>unchanged"]
+        i5["foreground empty"] --> s5["Live TV"]
     end
     subgraph w69["webOS 6-9"]
         k69["HOME"] --> f69["generated systemUi-*.js<br/>selected through configd"] --> l69["chosen launcher"]
@@ -111,7 +111,7 @@ flowchart LR
 
 | Family | HOME follows the choice through | Stock LG Home while a launcher is chosen |
 | --- | --- | --- |
-| 5.x | `general/defaultApps.home`, which the stock key filter launches directly | Not touched |
+| 5.x | `general/defaultApps.home`, which the stock key filter launches directly | Not touched: the visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6–9 | A generated key filter that launches the chosen id ([home-key-hook.md](home-key-hook.md)) | Replaced by the home gate; the running instance is closed once |
 | 10.x | The settings record and a system profile override ([settings-app.md](settings-app.md#what-is-written)) | Preload off; never closed, because SAM starts it again at once |
 | 11+ | Same as 10.x | Preload off; closed once after the launcher is safely in front |

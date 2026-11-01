@@ -359,7 +359,7 @@ What happens to a stock home that is already running depends on the release:
 
 | Release | Stock home while a launcher is chosen |
 | --- | --- |
-| 5.x | Left alone: no preload call, no close |
+| 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted |
 | 10.x | Preload off, never closed: it stays resident until the next reboot |
 | 11.x, 12.x | Preload off, closed once after the chosen launcher is safely in front |
@@ -383,8 +383,10 @@ What happens to a stock home that is already running depends on the release:
   on. The defaults are in `hc_watch_config()` ([watcher/core.c](../service/src/watcher/core.c)).
 * **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
   `com.webos.app.home` is not the visible home; the preload lists of 5.6.1 name both homes, and the
-  5.x restore path hands the Home key either of them, so a policy change would have risk and no
-  gain.
+  5.x restore path hands the Home key either of them, so a policy change would carry risk. A
+  `fullhome` that was running when another launcher is chosen stays loaded (about 45 MB) until the
+  next restart; when the last app closes, webOS 5 goes back to Live TV, not to the home, so nothing
+  starts it again.
 * **Why a plain close does not work on 6.x to 10.x.** `sam` relaunches the stock home as the
   idle/last-input app whenever the foreground empties: `closeByAppId` is followed by `APP_CLOSED`,
   `LAUNCH_LASTAPP {"status":"run_to_launch_last_app"} on_foreground_null` and

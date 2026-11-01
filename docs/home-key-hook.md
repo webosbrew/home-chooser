@@ -120,3 +120,13 @@ verified restoration, retained files on recovery failure and empty-list refusal.
 
 The E2E runner expects the first apply to be live and verifies Home after boot; see
 [`e2e/README.md`](../e2e/README.md).
+
+## Known LG crash on 9.2.4
+
+On webOS 9.2.4, LG's `legacy-broadcast-dvb` process intermittently crashes at
+`API_SI_GetLinkageUriInfo+0x197` early in a boot (about 1 boot in 10 on a VM), and LG shows a
+"[crash] Fault Occured" popup. It was first seen with the compositor restart that earlier Home
+Chooser builds made at boot, which the live reload replaced. It is LG's fault and an accepted
+limitation: the E2E runner records exactly that crash (crashd's `legacy-broadcas.<pid>` line confirmed
+by a faultmanager entry of the same pid at that location) as a note, not a failure, and dismisses its
+popup with BACK at most once. Any other crash still fails the run.

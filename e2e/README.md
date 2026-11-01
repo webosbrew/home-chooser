@@ -446,8 +446,8 @@ and Home key hook docs.
    boot, seen on passing steps; only `faultmanager FAULT_RESPONSE` lines, no crashd line) and faults raised
    before the mark are noted, never counted. It never presses keys at a popup, with one exception: the known
    9.2.4 `legacy-broadcast-dvb` crash (`API_SI_GetLinkageUriInfo+0x197`, a crashd line for `legacy-broadcas.<pid>`
-   confirmed by the fault entry of the same pid; accepted limitation, see docs/home-key-hook.md "Known limitations"
-   and `docs/research/home-key-hook-early-mount-study.md`). That crash is recorded as a note, not a `FAIL`, in the
+   confirmed by the fault entry of the same pid; accepted limitation, see
+   [Known LG crash on 9.2.4](../docs/home-key-hook.md#known-lg-crash-on-924)). That crash is recorded as a note, not a `FAIL`, in the
    end-of-step crash check and the popup check; any other crash, a WebAppMgr crash, or a legacy-broadcast crash at
    another location still fails. If its popup holds key focus (before a Home proof, or when the probe key is
    blocked) the runner sends BACK at most once per fault (pid and faultTime; YES and NO do the same there), then
