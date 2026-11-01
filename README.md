@@ -2,117 +2,100 @@
 
 *Choose which app opens when you press Home.*
 
-Home Chooser lets the owner of a rooted LG webOS TV choose which app the Home button opens. It is a
-homebrew app with three parts:
+Home Chooser is a homebrew app for rooted LG webOS TVs. It lets you pick which app the Home button on
+the remote opens: LG's own Home, or a launcher you have installed, such as a dock or an alternative
+home screen. Your choice stays in place after the TV restarts, and Home Chooser puts LG Home back by
+itself if the launcher or Home Chooser is removed.
 
-* a small settings app that lists the installed launchers and applies the choice;
-* a Home key hook for webOS 6 to 9 (webOS 22 to 24), whose Home key path names the stock
-  launcher, so that the Home key follows the platform's default app as webOS 25 and later do;
-* one launcher contract across releases: a launcher declares `appCategory: ["home"]` and needs no
-  per-release variant.
+## Requirements
 
-## Decisions
+* An LG TV running webOS 5 to 12. The version is the first number of the webOS TV version shown in
+  the TV's settings (for example 7.6.0 is webOS 7, sold as webOS 22).
+* The TV must be **rooted**, with [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)
+  installed and running with root access. Home Chooser asks Homebrew Channel to give its own
+  background service root the first time you open it.
+* On webOS 11 and later, this depends on a Homebrew Channel update: the current Homebrew Channel
+  refuses the request, and Home Chooser says so. This is a known limitation.
+* At least one launcher app. Home Chooser lists every installed app that declares itself a Home
+  app; it does not include a launcher of its own.
 
-* The platform's own default-app mechanism decides the home app: the `general/defaultApps`
-  settings record, which `sam` reads on every release from webOS 5 and prefers over the system
-  profile on webOS 25 and 26. The stock launcher id stays the fallback when no default is set.
-* The settings app does not call the settings and application manager services under its own
-  identity. It calls Home Chooser's own native service, `org.webosbrew.homechooser.service`, which
-  Homebrew Channel elevates to root once (`luna://org.webosbrew.hbchannel.service/elevateService`)
-  and which makes the privileged calls itself. The service offers narrow settings operations to Home Chooser and a versioned
-  application API to launchers that declare its permission group. Closing and uninstalling apps
-  also require the caller to be the selected Home; uninstall asks the owner to confirm. A rooted TV with Homebrew Channel is a
-  requirement. On webOS 11.x and 12.x (webOS 26 and later) the current Homebrew Channel refuses
-  calls from ordinary apps (`Denied method call`); Homebrew Channel will be updated to allow them
-  again.
-* On webOS 6–9, the native service generates a guarded copy of this device's stock systemUi.js
-  and reloads it through configd with `volatile:true`. First apply, launcher changes, boot and
-  disable leave the GUI running. No QML mounts or reboot prompt. See [The live Home key filter](docs/home-key-hook.md).
-* Home Chooser does not change other services: no edits to their environment files
-  (`/var/systemd/system/env/*.env`), units or binaries. Its boot-time work runs only from
-  Homebrew Channel's `/var/lib/webosbrew/init.d`.
-* The choice persists through Home Chooser's own file, `/var/lib/webosbrew/homechooser/home` (the app
-  id alone), which the native watcher in `homechooser-daemon` (a transient systemd unit started from the init.d entry) enforces
-  against the settings record, because the record can lose `home` at boot on 11.2.0. The init.d
-  entry links to the installed service scripts on 6–9 and to the legacy persistent watcher restore copy on 5/10–12. See
-  [Persistence](docs/settings-app.md#persistence).
-* The stock launcher keeps working when apps are removed. The watcher notices that the chosen app
-  is uninstalled and puts the platform back to stock until it returns; when Home Chooser itself is
-  uninstalled it undoes everything it wrote (record, override, choice, boot entry, Home key hook
-  flag) from a copy of its scripts in `/tmp`. Each of the two tells the user once, with an alert
-  (the chosen app) or a toast (Home Chooser), that the Home button opens LG Home again. See
-  [When apps are removed](docs/settings-app.md#when-apps-are-removed), including what is left if
-  the watcher was not running at the time; opening a reinstalled Home Chooser repairs a Home that
-  still names a removed app ([A leftover Home](docs/settings-app.md#a-leftover-home)).
-* While a third-party home is chosen (webOS 6 and later), the watcher keeps LG's stock home,
-  `com.webos.app.home`, from being preloaded with `preloadmanager/setPreloadPolicy`
-  `isEnabled:false`. On 11.x and 12.x it closes LG Home after the chosen launcher has a safe
-  foreground; it skips a close when an overlay is over LG Home or a blank card. On 6.x to 10.x
-  `sam` relaunches LG Home after a close, so the watcher leaves it running until a reboot. The
-  policy call is made once per boot and once per change, never with `permanent` (the
-  preload manager keeps it in memory only and a reboot starts stock), and it is set back to enabled
-  when the choice is stock, the chosen app is uninstalled, or Home Chooser is uninstalled. The
-  memory manager is not touched. This is an accepted exception to "does not change other
-  services": it is a runtime policy call that persists nothing. webOS 5 is left alone. See
-  [The stock home is not preloaded](docs/settings-app.md#the-stock-home-is-not-preloaded).
-* The UI is built with Enact.
+## Installing
 
-## Launchers
+Install the Home Chooser package (`.ipk`) like any other homebrew app, for example with webOS Dev
+Manager or `ares-install`. Then open Home Chooser once from the app list. If the panel opens with a
+dimmed list and a message at the top, see [Troubleshooting](#troubleshooting).
 
-Authors: see the [launcher developer guide](docs/launcher-api.md). Home Chooser supports a launcher through its appinfo: an app that declares `appCategory: ["home"]` is listed and can be chosen.
-An overlay launcher may use `defaultWindowType: "overlay"` for its window; Home Chooser does not read that field. Apps that patch the system themselves
-(AltHome style) are out of scope. The end-to-end test checks this with six fixture launchers
-([`e2e/fixtures`](e2e/fixtures/README.md)) besides Dock:
+## Choosing a launcher
 
-| | normal window | overlay window |
-| --- | --- | --- |
-| native (C, SDL2) | `org.webosbrew.hcfixture.native.normal` | `org.webosbrew.hcfixture.native.overlay` |
-| QML | `org.webosbrew.hcfixture.qml.normal` | `org.webosbrew.hcfixture.qml.overlay` |
-| web | `org.webosbrew.hcfixture.web.normal` | `org.webosbrew.hcfixture.web.overlay` |
+1. Install the launcher you want to use.
+2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (stock)" and every
+   launcher on the TV; a check mark shows the current one.
+3. Move to your launcher and press OK, then confirm "Use *name* as Home?".
+4. When "Done. Press Home to try it." appears, press Home.
 
-The fixtures have not run on a device yet; whether `type: "qml"` apps run on each release is recorded, with the
-firmware evidence, in `e2e/fixtures/qml/support.json`.
+The change takes effect at once; no restart is needed. A launcher can also ask to become your Home
+app: Home Chooser then opens and asks you the same question. Nothing changes unless you confirm.
 
-## Building
+## Going back to LG Home
 
-On Linux, this tree has been built with Node.js 24.20.0, npm 11.19.0 and GNU Make. Install the
-[webOS Homebrew native toolchain](https://github.com/webosbrew/native-toolchain) for the C service;
-the tested SDK reports Buildroot 2025.02.1 and GCC 14.2.0. Download its
-`arm-webos-linux-gnueabi_sdk-buildroot` archive for your host, extract it, and run the included
-`relocate-sdk.sh`. The [webOS Homebrew setup guide](https://www.webosbrew.org/develop/guides/env-setup/#setup-for-native-app-development)
-has the host-specific downloads. Install the [webOS CLI](https://webostv.developer.lge.com/develop/tools/sdk-installation)
-so `ares-package` is on `PATH`; it packages the app and service. The official webOS TV web SDK
-alone does not supply this native compiler.
+Open Home Chooser, choose "LG Home (stock)" and confirm. The Home button opens LG Home again
+straight away.
 
-```sh
-cd app
-npm ci
-SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot npm run package
-```
+## Uninstalling
 
-`service/Makefile` defaults `SDK` to `/opt/arm-webos-linux-gnueabi_sdk-buildroot` and gives a
-clear error if the compiler or sysroot is missing. Override `SDK`, or `SYSROOT` (default
-`$(SDK)/arm-webos-linux-gnueabi/sysroot`) and `CROSS` (default
-`$(SDK)/bin/arm-webos-linux-gnueabi-`) separately for another layout. `FIRMWARES` points to
-unpacked firmware images for `make -C service check-abi` only; its default is
-`$OPENHOUSE_FIRMWARES`, then `~/Projects/webos-firmwares`. Set `ROOTFS` directly to use one
-particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
+Uninstall Home Chooser like any other app. It puts LG Home back on the Home button by itself and
+shows "Home Chooser was removed. The Home button opens LG Home again." If the TV is switched off
+right after the uninstall, LG Home is back after the next start at the latest.
 
-For offline checks, use `make -C service test`, `cd app && npm run lint && CI=true npm test`,
-the shell suites in `service/scripts/tests/`, and
-`python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
+If you uninstall the launcher you chose, the Home button opens LG Home again and a message tells you
+so. Your choice is remembered: install the launcher again and it becomes your Home app again.
 
-## Documents
+## What happens when you press Home
 
-* [Writing a launcher, API version 1](docs/launcher-api.md): the developer guide for launcher authors:
-  appinfo, selection requests, the application methods, errors, per-release notes and testing.
+* **Home** opens your chosen launcher, from any app.
+* **After a restart**, the Home button opens your launcher once the TV has finished starting. On
+  webOS 6 to 9 a short message, "Your new home will start shortly", may appear while it gets ready.
+* **When the last app closes** and nothing is left on screen, webOS 6 to 9 open your launcher if it
+  is a full-screen launcher. If it is an overlay launcher (one that draws over the TV picture, like
+  a dock), you go back to the last TV input (Live TV or HDMI) instead. Other webOS versions keep
+  their own behaviour.
+* Holding Home, the other remote shortcuts and voice commands keep working as LG made them.
 
-* [The Home key and the home app, webOS 5 to 26](docs/research/home-key-and-home-app.md): how
-  each release picks and launches the home app, verified against the firmware and on emulator
-  VMs, with the mod map and the remaining tests.
-* [The root service](docs/service.md): `org.webosbrew.homechooser.service`, its methods, allow-lists, sender check, elevation and logs.
-* [The Home key hook, webOS 6 to 9](docs/home-key-hook.md): the home id the
-  compositor shares, the structural guards and verification, the boot script and the install sequence.
+## Known limitations
+
+* **webOS 11 and later** need a Homebrew Channel update for root (see [Requirements](#requirements)).
+* **LG Home in memory.** On webOS 6 to 9, Home Chooser keeps LG Home from running while another
+  launcher is chosen, which frees its memory. On webOS 10, LG Home stays loaded in the background
+  while another launcher is chosen; the TV starts it again whenever it is closed. On webOS 5 it
+  stays loaded until the next restart. On webOS 11 and later Home Chooser closes it once your
+  launcher is on screen.
+* **Unrecognised TV software (webOS 6 to 9).** Home Chooser changes the Home button only on TV
+  software it recognises. If it does not, the Home button keeps opening LG Home and Home Chooser
+  says "The Home button can't be changed on this TV's software."
+* Only apps that declare themselves Home apps are listed. Home Chooser does not combine with tools
+  that change the Home button by patching the system themselves; remove those first.
+* Home Chooser is in English only.
+
+## Troubleshooting
+
+* **"Homebrew Channel is needed"** or **"Home Chooser has no root access"**: the TV is not rooted,
+  or Homebrew Channel is not installed, not running or has no root access. Fix that, then open Home
+  Chooser again.
+* **"Homebrew Channel can't set up root access yet"**: your Homebrew Channel refuses the request
+  (webOS 11 and later). Update Homebrew Channel when an update that allows it is available.
+* **"The Home button isn't set up yet."** at the bottom of the panel (webOS 6 to 9): restart the TV,
+  or choose LG Home and then your launcher again.
+* **Your launcher is not in the list**: it does not declare itself a Home app. Ask its author.
+* **"The Home app you chose was removed; using LG Home."**: the launcher was uninstalled. Install it
+  again, or choose another one.
+* **Reporting a problem**: say which TV model and webOS version you have, which launcher you chose,
+  and what you pressed. If you can open a root shell on the TV, include the file
+  `/tmp/homechooser-home.log`.
+
+## For developers
+
+Launcher authors: see [Writing a launcher for Home Chooser](docs/launcher-api.md). How Home Chooser
+works, how to build it and how it is tested: see the [developer documentation](docs/README.md).
 
 ## Licence
 
