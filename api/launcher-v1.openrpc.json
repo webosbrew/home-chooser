@@ -1,0 +1,772 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "Home Chooser launcher API",
+    "version": "1",
+    "description": "The launcher API of Home Chooser's root service, API version 1, as frozen in docs/launcher-api.md (tag api-v1). This file describes the contract; docs/launcher-api.md is the prose and wins where the two differ. Every method takes one JSON object of named parameters and gives one JSON reply: no method subscribes. Replies are luna replies, not JSON-RPC responses: success and failure are both a result object, told apart by returnValue (see x-replyModel).",
+    "license": {"name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
+    "x-apiVersion": 1,
+    "x-stability": "API version 1 is frozen. The eight launcher methods, the permission, the appCategory [\"home\"] and requiredPermissions appinfo declarations and the request launch parameter are the v1 contract. Reply fields and methods may be added within v1. Removing a field or method, or changing a documented meaning, raises apiVersion. Clients check apiVersion at start and ignore unknown fields and error codes. Settings-only and confirmation methods (uninstallConfirmed, call, readFile and the rest), files, status output and log ids are internal and not part of this contract.",
+    "x-doc": "docs/launcher-api.md"
+  },
+  "servers": [
+    {
+      "name": "luna",
+      "url": "luna://org.webosbrew.homechooser.service",
+      "description": "Calls go to luna://org.webosbrew.homechooser.service/<method> (root category) with a JSON object."
+    }
+  ],
+  "x-luna": {
+    "service": "org.webosbrew.homechooser.service",
+    "category": "/",
+    "uriTemplate": "luna://org.webosbrew.homechooser.service/{method}",
+    "subscriptions": false,
+    "repliesPerCall": 1,
+    "paramStructure": "by-name",
+    "caller": "The service takes the caller from the application id the hub reports for the message (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
+    "clientTimeoutSeconds": 70,
+    "clientTimeoutReason": "uninstallApp can make two 20 second appinfo calls, an 8 second alert call and a 15 second screen launch, about 63 seconds in the worst case."
+  },
+  "x-permission": {
+    "group": "org.webosbrew.homechooser.applications",
+    "declaredIn": "requiredPermissions of the launcher's appinfo.json",
+    "readFrom": "the appinfo the app was installed with (reinstall after a change)",
+    "grants": ["listApps", "listRunning", "getForegroundApp", "getAppInfo", "getAppIcon", "closeApp", "uninstallApp"],
+    "notNeededFor": ["getInfo"]
+  },
+  "x-appinfo": {
+    "description": "What a launcher declares in its appinfo.json. Both entries are merged with the app's other categories and permissions.",
+    "declarations": {
+      "appCategory": {
+        "value": ["home"],
+        "meaning": "Makes the app eligible: Home Chooser lists every installed app that has it. This is the whole contract for being chosen as Home. Works for type web, native and qml, with no variant per webOS release."
+      },
+      "requiredPermissions": {
+        "value": ["org.webosbrew.homechooser.applications"],
+        "meaning": "Opts into the API methods that need the permission. Leave it out to be selectable only."
+      }
+    },
+    "minimalExample": {
+      "id": "org.example.launcher",
+      "version": "1.0.0",
+      "vendor": "Example",
+      "type": "web",
+      "main": "index.html",
+      "title": "Example Launcher",
+      "icon": "icon.png",
+      "appCategory": ["home"],
+      "requiredPermissions": ["org.webosbrew.homechooser.applications"]
+    }
+  },
+  "x-requestLaunch": {
+    "description": "Asking the owner to make an app the Home app. A request only: there is no reply that tells the result; call getInfo later and read isSelectedHome.",
+    "uri": "luna://com.webos.applicationManager/launch",
+    "payload": {"id": "org.webosbrew.homechooser", "params": {"request": "org.example.launcher"}},
+    "parameter": {
+      "name": "request",
+      "schema": {"$ref": "#/components/schemas/AppId"},
+      "meaning": "The requesting app's own id."
+    },
+    "outcomes": [
+      "Home Chooser opens and shows the dialog Use <title> as Home?; the owner decides.",
+      "If the app is already the selected Home, Home Chooser shows an already-your-Home toast.",
+      "Dropped without a message when the id is the stock home, unknown, not in the Home category or malformed, when Home Chooser still shows a setup problem (for example the service is not elevated) or is busy.",
+      "On webOS 6 to 9 the dialog changes nothing if the Home key filter refuses the firmware."
+    ],
+    "readAt": "start (PalmSystem.launchParams) and webOSRelaunch (on document; window is listened to as well)"
+  },
+  "x-replyModel": {
+    "description": "Every reply of a launcher method is one JSON object with returnValue and apiVersion. returnValue true is success. returnValue false is a Home Chooser failure with a string errorCode and a free errorText; it is modelled as the error branch (oneOf) of each method's result, because the reply is not a JSON-RPC error object and its errorCode is a string, which OpenRPC error objects (integer code) cannot carry. Each method's error branch lists, as an enum, exactly the errorCode values that method can send in v1.",
+    "callerRefusalOrder": ["forbidden", "notRoot", "notHome", "badRequest", "noPermission"],
+    "callerRefusalOrderMeaning": "When several caller checks fail, the first of these is reported.",
+    "platformErrors": "The luna bus itself answers when the service is unknown, a method is unknown, or the bus denies delivery: returnValue false, the platform's own errorText (for example Denied method call) and often a numeric errorCode, and no apiVersion. Those replies do not come from Home Chooser and are not described by the result schemas here. Treat them as: Home Chooser absent or too old, or the permission was not installed with the app."
+  },
+  "x-errors": {
+    "forbidden": {"cause": "The caller has no valid application id.", "action": "Call from the app. A shell luna-send needs -a <app id>."},
+    "notRoot": {"cause": "The service is not elevated.", "action": "Ask the owner to open Home Chooser."},
+    "noPermission": {"cause": "The installed appinfo lacks org.webosbrew.homechooser.applications.", "action": "Fix requiredPermissions, reinstall."},
+    "lookupFailed": {"cause": "The service could not read the caller's installed appinfo, from SAM or its file fallback.", "action": "Retry later; log errorText."},
+    "notHome": {"cause": "The app is not the selected Home.", "action": "Send the request launch, wait for the owner."},
+    "badRequest": {"cause": "id is missing or not an app id, or getAppIcon.size is invalid.", "action": "A bug in the launcher."},
+    "notFound": {"cause": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.", "action": "Refresh the list."},
+    "noIcon": {"cause": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.", "action": "Show a placeholder."},
+    "iconTooLarge": {"cause": "getAppIcon: the icon exceeds 262144 bytes.", "action": "Show a placeholder."},
+    "protected": {"cause": "uninstallApp: target is Home Chooser, Homebrew Channel or the caller.", "action": "Do not offer uninstall for this app."},
+    "notRemovable": {"cause": "uninstallApp: target is a system app, marked removable:false or outside the user app folders.", "action": "Do not offer uninstall for this app."},
+    "confirmFailed": {"cause": "uninstallApp: the owner could not be asked.", "action": "Try again later; tell the user."},
+    "timeout": {"cause": "A bounded application manager call reached its time limit.", "action": "Retry once; log errorText."},
+    "refused": {"cause": "The application manager explicitly refused an operation or target lookup for a reason other than absence.", "action": "Log errorText; do not loop."},
+    "badReply": {"cause": "The application manager did not provide usable JSON, or its successful list reply lacked the expected array.", "action": "Log it; report it."},
+    "internal": {"cause": "The service could not make a confirmation token.", "action": "Retry once."}
+  },
+  "x-outgoingCalls": {
+    "description": "The calls the service itself makes while answering, each a bounded luna-send -n 1 as com.webos.applicationManager, with its time limit in seconds. Not part of the client contract; the contract test checks the handlers against it and the client timeout above is derived from it.",
+    "timeoutSeconds": {
+      "luna://com.webos.applicationManager/getAppInfo": 20,
+      "luna://com.webos.applicationManager/listApps": 20,
+      "luna://com.webos.applicationManager/running": 20,
+      "luna://com.webos.applicationManager/getForegroundAppInfo": 20,
+      "luna://com.webos.applicationManager/closeByAppId": 20,
+      "luna://com.webos.notification/createAlert": 8,
+      "luna://com.webos.applicationManager/launch": 15
+    }
+  },
+  "x-fixtureFormat": {
+    "description": "Each example pairing carries x-fixture: the platform state the contract test (service/test/launcher-spec.py) gives the real handlers. Strings may contain {root}, replaced by a scratch directory of the test.",
+    "caller": "Application id the hub reports for the message, or null for none.",
+    "senderService": "Optional sender service name.",
+    "root": "Whether the service runs as root (geteuid() == 0).",
+    "selectedHome": "Text of the stored Home choice, or null when there is none.",
+    "entropy": "Optional, default true. false: /dev/urandom cannot be opened.",
+    "files": "Optional. Path -> {base64} | {text} | {zeroBytes: n} | {symlink: target}.",
+    "calls": "The outgoing calls the handler must make, in order: uri, request (the payload, compared as JSON) and the scripted answer: reply (a JSON object luna-send prints), or stdout (raw text), and exit (luna-send's exit status, default 0; -2 is a timeout). match maps JSON pointers in request to regular expressions for values that are not deterministic.",
+    "x-match": "On the pairing: JSON pointers in the result value -> regular expressions, for values that depend on the build (getInfo.version).",
+    "x-knownDisagreement": "On the pairing: the example follows docs/launcher-api.md but the code does otherwise. The contract test expects it to fail and reports it; an unexpected pass fails the test so that the marker is removed."
+  },
+  "methods": [
+    {
+      "name": "getInfo",
+      "summary": "Feature detection and status.",
+      "description": "Works for any app with an application id, before elevation and without the permission. Reports the API version, the package version, whether the service is root, the permission name, whether the caller's installed appinfo lists it and whether the caller is the stored Home choice. There is no capability list.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetInfoReply"}},
+      "x-needsRoot": false,
+      "x-needsPermission": false,
+      "x-needsSelectedHome": false,
+      "x-reportsPermission": true,
+      "x-reportsSelectedHome": true,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#getinfo-",
+      "x-notes": [
+        "permitted is also false when the service could not read the caller's appinfo, which can happen while root is false; look at root first.",
+        "isSelectedHome compares with the stored choice, not with what the Home key opens at this moment: while the chosen app is missing, LG Home is put back but the choice is kept."
+      ],
+      "examples": [
+        {
+          "name": "selected-home",
+          "description": "An elevated service and a permitted launcher that is the selected Home.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}},
+          "x-match": {"/version": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.+-]*)?$"},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher\n",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}}
+            ]
+          }
+        },
+        {
+          "name": "before-elevation",
+          "description": "The service is not root yet and the caller's appinfo could not be read: getInfo still answers, with root and permitted false.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "version": "0.1.0", "root": false, "permission": "org.webosbrew.homechooser.applications", "permitted": false, "isSelectedHome": false}},
+          "x-match": {"/version": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.+-]*)?$"},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": false,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "stdout": "", "exit": 1}
+            ]
+          }
+        },
+        {
+          "name": "no-application-id",
+          "description": "A shell luna-send without -a has no application id.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "forbidden", "errorText": "This method is for apps; the caller has no application id"}},
+          "x-fixture": {"caller": null, "senderService": "com.webos.lunasend-1234", "root": true, "selectedHome": null, "calls": []}
+        }
+      ]
+    },
+    {
+      "name": "listApps",
+      "summary": "Lists the installed apps.",
+      "description": "Each app carries id, title, icon, largeIcon, folderPath, version, vendor, type, removable, visible and appCategory, when the platform has them; absent fields are omitted. Within an apiVersion this field list only grows. icon and largeIcon are appinfo paths, usually relative to folderPath; use getAppIcon to read them from a jailed launcher.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/ListAppsReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#listapps-",
+      "examples": [
+        {
+          "name": "two-apps",
+          "description": "SAM's list is cut to the published fields.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true, "systemApp": false}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true, "requiredPermissions": ["org.webosbrew.homechooser.applications"]}]}}
+            ]
+          }
+        },
+        {
+          "name": "no-permission",
+          "description": "The caller's installed appinfo does not list the permission.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "noPermission", "errorText": "The app's appinfo.json must list \"org.webosbrew.homechooser.applications\" in requiredPermissions"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": []}}}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "listRunning",
+      "summary": "Lists running apps.",
+      "description": "Each item carries id, instanceId, processId and webProcessId, when present. The service renames the platform's lowercase PID keys and includes PID values only when they are numeric.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/ListRunningReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#listrunning-",
+      "examples": [
+        {
+          "name": "one-app",
+          "description": "SAM's lowercase processid and webprocessid become numeric processId and webProcessId.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/running", "request": {}, "reply": {"returnValue": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processid": "123", "webprocessid": "456", "defaultWindowType": "card"}]}}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "getForegroundApp",
+      "summary": "One lookup of the platform's current foreground app.",
+      "description": "Does not subscribe to changes. appId is an empty string if the platform reports no foreground app. windowId is included when the platform gives it. processId is included only when the platform gives a numeric PID, normalized to a JSON number.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetForegroundAppReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#getforegroundapp-",
+      "x-notes": [
+        "A launcher overlay may not become the platform's foreground app: the app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of an overlay."
+      ],
+      "examples": [
+        {
+          "name": "an-app-in-front",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "appId": "org.example.app", "windowId": "window", "processId": 123}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getForegroundAppInfo", "request": {}, "reply": {"returnValue": true, "appId": "org.example.app", "windowId": "window", "processId": "123"}}
+            ]
+          }
+        },
+        {
+          "name": "nothing-in-front",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "appId": ""}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getForegroundAppInfo", "request": {}, "reply": {"returnValue": true, "appId": ""}}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "getAppInfo",
+      "summary": "Fetches one installed app without refreshing the full list.",
+      "description": "app has the same documented fields and types as one listApps item, including appCategory when the platform supplies it. When SAM gives its combined missing-id/unsupported-type error, Home Chooser checks the installed app list before choosing notFound or refused.",
+      "paramStructure": "by-name",
+      "params": [
+        {"name": "id", "required": true, "description": "The app id to look up.", "schema": {"$ref": "#/components/schemas/AppId"}}
+      ],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetAppInfoReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#getappinfo-id",
+      "examples": [
+        {
+          "name": "an-app",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.app"}, "reply": {"returnValue": true, "appId": "org.example.app", "appInfo": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"], "main": "index.html", "requiredPermissions": []}}}
+            ]
+          }
+        },
+        {
+          "name": "absent-id",
+          "description": "SAM's combined missing-id/unsupported-type error, resolved against the installed app list: the id is absent.",
+          "params": [{"name": "id", "value": "org.example.gone"}],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "notFound", "errorText": "No such app: Invalid appId specified OR Unsupported Application Type: org.example.gone"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.gone"}, "reply": {"returnValue": false, "errorCode": -101, "errorText": "Invalid appId specified OR Unsupported Application Type: org.example.gone"}},
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app"}, {"id": "org.example.launcher"}]}}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "getAppIcon",
+      "summary": "Reads an app's icon for a jailed launcher.",
+      "description": "Reads the icon referenced in that app's appinfo inside that app's folder. Paths that leave the app folder, including symlink escapes, are rejected. There is no fallback to the other icon field. data is base64; byteLength counts the decoded bytes. An icon may be at most 262144 bytes, so data is at most 349528 characters. mimeType comes from the file name's extension (png, jpg, jpeg, gif, svg, webp).",
+      "paramStructure": "by-name",
+      "params": [
+        {"name": "id", "required": true, "description": "The app whose icon to read.", "schema": {"$ref": "#/components/schemas/AppId"}},
+        {"name": "size", "required": false, "description": "Which appinfo field to read; icon when absent.", "schema": {"type": "string", "enum": ["icon", "largeIcon"], "default": "icon"}}
+      ],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetAppIconReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": false,
+      "x-forJailedLauncher": true,
+      "x-iconMaxBytes": 262144,
+      "x-doc": "docs/launcher-api.md#getappicon-id-size",
+      "x-notes": [
+        "On 11.x, LG Home's appinfo advertises icon.png but has no file at that path; getAppIcon reports noIcon for it. Show a placeholder."
+      ],
+      "examples": [
+        {
+          "name": "png-icon",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "files": {"{root}/media/developer/apps/usr/palm/applications/org.example.app/icon.png": {"base64": "iVBORw0KGgo="}},
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.app"}, "reply": {"returnValue": true, "appId": "org.example.app", "appInfo": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "{root}/media/developer/apps/usr/palm/applications/org.example.app"}}}
+            ]
+          }
+        },
+        {
+          "name": "advertised-icon-missing",
+          "description": "LG Home on 11.x: the appinfo names icon.png, the folder has no such file.",
+          "params": [{"name": "id", "value": "com.webos.app.home"}],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "noIcon", "errorText": "The app has no readable icon of the requested size"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "files": {"{root}/usr/palm/applications/com.webos.app.home/appinfo.json": {"text": "{\"id\":\"com.webos.app.home\",\"icon\":\"icon.png\"}"}},
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "com.webos.app.home"}, "reply": {"returnValue": true, "appId": "com.webos.app.home", "appInfo": {"id": "com.webos.app.home", "title": "Home", "icon": "icon.png", "folderPath": "{root}/usr/palm/applications/com.webos.app.home"}}}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "closeApp",
+      "summary": "Closes an app. Only the selected Home may call it.",
+      "description": "force: true (a JSON boolean) asks the platform for a forced close. There is no restriction on the target: the Home app may close any app, including Home Chooser, Homebrew Channel, LG Home and itself.",
+      "paramStructure": "by-name",
+      "params": [
+        {"name": "id", "required": true, "description": "The app to close.", "schema": {"$ref": "#/components/schemas/AppId"}},
+        {"name": "force", "required": false, "description": "true asks for a forced close; any other value is a normal close.", "schema": {"type": "boolean", "default": false}}
+      ],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/CloseAppReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": true,
+      "x-subscribes": false,
+      "x-doc": "docs/launcher-api.md#closeapp-id-force",
+      "examples": [
+        {
+          "name": "forced-close",
+          "params": [{"name": "id", "value": "org.example.app"}, {"name": "force", "value": true}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "id": "org.example.app"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/closeByAppId", "request": {"id": "org.example.app", "forceMode": true}, "reply": {"returnValue": true, "appId": "org.example.app"}}
+            ]
+          }
+        },
+        {
+          "name": "not-the-selected-home",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}},
+          "x-fixture": {"caller": "org.example.launcher", "root": true, "selectedHome": "org.example.other", "calls": []}
+        }
+      ]
+    },
+    {
+      "name": "uninstallApp",
+      "summary": "Asks the owner to uninstall an app. Only the selected Home may call it.",
+      "description": "Refuses Home Chooser itself, Homebrew Channel and the calling launcher with protected; a system app, an app marked removable:false, or one outside /media/developer/apps/usr/palm/applications/ and /media/cryptofs/apps/usr/palm/applications/ with notRemovable. An unknown id is notFound (SAM's combined missing-id/unsupported-type error is resolved against the installed app list); other lookup refusals are refused. The owner always confirms: an alert Uninstall <title>? with Uninstall and Cancel, or, if the alert is refused, Home Chooser's own confirmation screen. A pending uninstall is not a completed removal: there is no second reply; the owner may cancel, ignore it (the question expires after 120 seconds) or confirm. Call listApps again to see whether the app is gone.",
+      "paramStructure": "by-name",
+      "params": [
+        {"name": "id", "required": true, "description": "The app to uninstall.", "schema": {"$ref": "#/components/schemas/AppId"}}
+      ],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/UninstallAppReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": true,
+      "x-subscribes": false,
+      "x-ownerConfirms": true,
+      "x-confirmationExpiresSeconds": 120,
+      "x-ignoredParams": ["force"],
+      "x-doc": "docs/launcher-api.md#uninstallapp-id",
+      "examples": [
+        {
+          "name": "asked-by-alert",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "pending": true, "id": "org.example.app", "confirmation": "alert"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.app"}, "reply": {"returnValue": true, "appId": "org.example.app", "appInfo": {"id": "org.example.app", "title": "Example", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}}},
+              {"uri": "luna://com.webos.notification/createAlert", "request": {"sourceId": "org.webosbrew.homechooser", "title": "Home Chooser", "message": "Uninstall Example?", "buttons": [{"label": "Uninstall", "onclick": "luna://com.webos.appInstallService/dev/remove", "params": {"id": "org.example.app", "subscribe": true}}, {"label": "Cancel", "focus": true}]}, "reply": {"returnValue": true, "alertId": "org.webosbrew.homechooser-1"}}
+            ]
+          }
+        },
+        {
+          "name": "asked-on-screen",
+          "description": "The alert is refused, so Home Chooser opens its own confirmation screen with a one-shot token.",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 1, "pending": true, "id": "org.example.app", "confirmation": "screen"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.app"}, "reply": {"returnValue": true, "appId": "org.example.app", "appInfo": {"id": "org.example.app", "title": "Example", "folderPath": "/media/cryptofs/apps/usr/palm/applications/org.example.app", "removable": true}}},
+              {"uri": "luna://com.webos.notification/createAlert", "request": {"sourceId": "org.webosbrew.homechooser", "title": "Home Chooser", "message": "Uninstall Example?", "buttons": [{"label": "Uninstall", "onclick": "luna://com.webos.appInstallService/remove", "params": {"id": "org.example.app", "subscribe": true}}, {"label": "Cancel", "focus": true}]}, "reply": {"returnValue": false, "errorCode": -1, "errorText": "Denied method call"}},
+              {"uri": "luna://com.webos.applicationManager/launch", "request": {"id": "org.webosbrew.homechooser", "params": {"confirmUninstall": "org.example.app", "token": "0123456789abcdef0123456789abcdef"}}, "match": {"/params/token": "^[0-9a-f]{32}$"}, "reply": {"returnValue": true, "processId": "", "instanceId": "x"}}
+            ]
+          }
+        },
+        {
+          "name": "homebrew-channel-is-protected",
+          "params": [{"name": "id", "value": "org.webosbrew.hbchannel"}],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "protected", "errorText": "Homebrew Channel cannot be uninstalled through this API"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.webosbrew.hbchannel"}, "reply": {"returnValue": true, "appId": "org.webosbrew.hbchannel", "appInfo": {"id": "org.webosbrew.hbchannel", "title": "Homebrew Channel", "folderPath": "/media/developer/apps/usr/palm/applications/org.webosbrew.hbchannel", "removable": true}}}
+            ]
+          }
+        },
+        {
+          "name": "marked-not-removable",
+          "params": [{"name": "id", "value": "org.example.app"}],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 1, "errorCode": "notRemovable", "errorText": "this is a system app or is not removable"}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": "org.example.launcher",
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.app"}, "reply": {"returnValue": true, "appId": "org.example.app", "appInfo": {"id": "org.example.app", "title": "Example", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": false}}}
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "components": {
+    "schemas": {
+      "AppId": {
+        "title": "AppId",
+        "description": "An application id: 1 to 128 characters of letters, digits, '.', '-' and '_'.",
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]{1,128}$"
+      },
+      "ApiVersion": {
+        "title": "ApiVersion",
+        "description": "The version of this contract, independent of the package version.",
+        "const": 1
+      },
+      "Success": {
+        "title": "Success",
+        "description": "Common members of every successful reply. More members may be added within v1; ignore unknown ones.",
+        "type": "object",
+        "required": ["returnValue", "apiVersion"],
+        "properties": {
+          "returnValue": {"const": true},
+          "apiVersion": {"$ref": "#/components/schemas/ApiVersion"}
+        }
+      },
+      "Failure": {
+        "title": "Failure",
+        "description": "A failure reply from Home Chooser. errorCode is one of the method's codes; errorText is free text for logs, not a stable value.",
+        "type": "object",
+        "required": ["returnValue", "apiVersion", "errorCode", "errorText"],
+        "properties": {
+          "returnValue": {"const": false},
+          "apiVersion": {"$ref": "#/components/schemas/ApiVersion"},
+          "errorCode": {"type": "string"},
+          "errorText": {"type": "string"}
+        }
+      },
+      "App": {
+        "title": "App",
+        "description": "One installed app as the platform reports it, cut to the published fields. A field the platform does not give is omitted. Within an apiVersion this field list only grows.",
+        "type": "object",
+        "properties": {
+          "id": {"$ref": "#/components/schemas/AppId"},
+          "title": {"type": "string"},
+          "icon": {"type": "string", "description": "Appinfo path, usually relative to folderPath."},
+          "largeIcon": {"type": "string", "description": "Appinfo path, usually relative to folderPath."},
+          "folderPath": {"type": "string"},
+          "version": {"type": "string"},
+          "vendor": {"type": "string"},
+          "type": {"type": "string"},
+          "removable": {"type": "boolean"},
+          "visible": {"type": "boolean"},
+          "appCategory": {"type": "array", "items": {"type": "string"}, "description": "The category array as SAM reports it, for example [\"home\"]."}
+        }
+      },
+      "RunningApp": {
+        "title": "RunningApp",
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "instanceId": {"type": "string"},
+          "processId": {"type": "integer", "minimum": 0},
+          "webProcessId": {"type": "integer", "minimum": 0}
+        }
+      },
+      "GetInfoReply": {
+        "title": "GetInfoReply",
+        "oneOf": [
+          {
+            "title": "GetInfoSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {
+                "required": ["version", "root", "permission", "permitted", "isSelectedHome"],
+                "properties": {
+                  "version": {"type": "string", "description": "The Home Chooser package version."},
+                  "root": {"type": "boolean", "description": "false: the owner has not finished setup (open Home Chooser)."},
+                  "permission": {"const": "org.webosbrew.homechooser.applications"},
+                  "permitted": {"type": "boolean", "description": "The caller's installed appinfo lists the permission. Also false when the service could not read it."},
+                  "isSelectedHome": {"type": "boolean", "description": "The caller's id equals the choice Home Chooser has stored."}
+                }
+              }
+            ]
+          },
+          {
+            "title": "GetInfoFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden"]}}}
+            ]
+          }
+        ]
+      },
+      "ListAppsReply": {
+        "title": "ListAppsReply",
+        "oneOf": [
+          {
+            "title": "ListAppsSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {"required": ["apps"], "properties": {"apps": {"type": "array", "items": {"$ref": "#/components/schemas/App"}}}}
+            ]
+          },
+          {
+            "title": "ListAppsFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply"]}}}
+            ]
+          }
+        ]
+      },
+      "ListRunningReply": {
+        "title": "ListRunningReply",
+        "oneOf": [
+          {
+            "title": "ListRunningSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {"required": ["running"], "properties": {"running": {"type": "array", "items": {"$ref": "#/components/schemas/RunningApp"}}}}
+            ]
+          },
+          {
+            "title": "ListRunningFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply"]}}}
+            ]
+          }
+        ]
+      },
+      "GetForegroundAppReply": {
+        "title": "GetForegroundAppReply",
+        "oneOf": [
+          {
+            "title": "GetForegroundAppSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {
+                "required": ["appId"],
+                "properties": {
+                  "appId": {"type": "string", "description": "Empty when the platform reports no foreground app."},
+                  "windowId": {"type": "string"},
+                  "processId": {"type": "integer", "minimum": 0}
+                }
+              }
+            ]
+          },
+          {
+            "title": "GetForegroundAppFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply"]}}}
+            ]
+          }
+        ]
+      },
+      "GetAppInfoReply": {
+        "title": "GetAppInfoReply",
+        "oneOf": [
+          {
+            "title": "GetAppInfoSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {"required": ["app"], "properties": {"app": {"allOf": [{"$ref": "#/components/schemas/App"}, {"required": ["id"]}]}}}
+            ]
+          },
+          {
+            "title": "GetAppInfoFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "badRequest", "noPermission", "lookupFailed", "notFound", "refused", "badReply", "timeout"]}}}
+            ]
+          }
+        ]
+      },
+      "GetAppIconReply": {
+        "title": "GetAppIconReply",
+        "oneOf": [
+          {
+            "title": "GetAppIconSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {
+                "required": ["mimeType", "data", "byteLength"],
+                "properties": {
+                  "mimeType": {"type": "string", "enum": ["image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"]},
+                  "data": {"type": "string", "maxLength": 349528, "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "description": "Standard base64 of the icon file."},
+                  "byteLength": {"type": "integer", "minimum": 0, "maximum": 262144, "description": "Decoded byte count."}
+                }
+              }
+            ]
+          },
+          {
+            "title": "GetAppIconFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "badRequest", "noPermission", "lookupFailed", "notFound", "refused", "badReply", "timeout", "noIcon", "iconTooLarge"]}}}
+            ]
+          }
+        ]
+      },
+      "CloseAppReply": {
+        "title": "CloseAppReply",
+        "oneOf": [
+          {
+            "title": "CloseAppSuccess",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {"required": ["id"], "properties": {"id": {"$ref": "#/components/schemas/AppId"}}}
+            ]
+          },
+          {
+            "title": "CloseAppFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "notHome", "badRequest", "noPermission", "lookupFailed", "refused", "badReply", "timeout"]}}}
+            ]
+          }
+        ]
+      },
+      "UninstallAppReply": {
+        "title": "UninstallAppReply",
+        "oneOf": [
+          {
+            "title": "UninstallAppPending",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {
+                "required": ["pending", "id", "confirmation"],
+                "properties": {
+                  "pending": {"const": true, "description": "The owner has been asked. Not a completed removal."},
+                  "id": {"$ref": "#/components/schemas/AppId"},
+                  "confirmation": {"type": "string", "enum": ["alert", "screen"]}
+                }
+              }
+            ]
+          },
+          {
+            "title": "UninstallAppFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "notHome", "badRequest", "noPermission", "lookupFailed", "notFound", "protected", "notRemovable", "refused", "badReply", "timeout", "confirmFailed", "internal"]}}}
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
