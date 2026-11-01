@@ -100,7 +100,7 @@ static void test_commands(void)
 	c = hc_command_lookup("profileGet");
 	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
 		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/getProfiles") == 0
-		&& strcmp(c->argv[6], "{\"names\":[\"defaultApps\"]}") == 0 && !c->argv[7]);
+		&& strcmp(c->argv[6], "{\"names\":[\"defaultApps\",\"idleApp\"]}") == 0 && !c->argv[7]);
 	c = hc_command_lookup("profileRescan");
 	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
 		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/debug/rescan") == 0

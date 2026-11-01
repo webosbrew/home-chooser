@@ -152,21 +152,24 @@ static gboolean leftover_gone(HCWatch *w, const char *id)
 }
 void repair_leftover(HCWatch *w)
 {
-    char *record = current_home(w), *override = NULL;
+    char *record = current_home(w), *override = NULL, *idle = NULL;
     if (w->major >= 10) {
-        char *text = watch_read(w->c.override);
-        jvalue_ref r = parse_object(text);
-        override = get_string(member(member(r, "defaultApps"), "categories"), "home");
-        j_release(&r); g_free(text);
+        jvalue_ref idle_app = NULL;
+        override_read(w, &override, &idle_app);
+        idle = idle_app_of(idle_app); j_release(&idle_app);
     }
+    /* Each distinct id is confirmed once: the record's home, the override's home, its idleApp. */
     gboolean gone_record = leftover_gone(w, record);
-    gboolean gone_override = override && ((eq(record, override) && gone_record) ||
-        (!eq(record, override) && leftover_gone(w, override)));
+    gboolean gone_home = override && (eq(record, override) ? gone_record : leftover_gone(w, override));
+    gboolean gone_idle = idle && (eq(idle, record) ? gone_record : eq(idle, override) ? gone_home : leftover_gone(w, idle));
+    gboolean gone_override = gone_home || gone_idle;
     if (w->status >= 0) goto done;
     if (!gone_record && !gone_override) { watch_log(w, "no stored choice and nothing to repair"); goto done; }
     char *choice = watch_choice(w);
     if (choice) { g_free(choice); watch_log(w, "a choice was stored meanwhile, not repairing"); goto done; }
-    watch_log(w, "no stored choice, but the home names %s, which is not installed: a leftover", gone_record ? record : override);
+    watch_log(w, "no stored choice, but the %s names %s, which is not installed: a leftover",
+        gone_record ? "home" : gone_home ? "profile override's home" : "profile override's idleApp",
+        gone_record ? record : gone_home ? override : idle);
     if (gone_override && w->major >= 10) drop_override(w);
     if (gone_record) {
         char *found = current_home(w);
@@ -178,5 +181,5 @@ void repair_leftover(HCWatch *w)
     }
     key_refresh(w, TRUE);
 done:
-    g_free(record); g_free(override);
+    g_free(record); g_free(override); g_free(idle);
 }

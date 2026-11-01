@@ -100,21 +100,31 @@ flowchart LR
     end
     subgraph w10["webOS 10.x"]
         k10["HOME"] --> f10["launchDefaultApp:<br/>record, profile override"] --> l10["chosen launcher"]
-        i10["foreground empty"] --> s10["SAM relaunches stock LG Home;<br/>it stays resident"]
+        i10["foreground empty"] --> s10["SAM launches the profile's idleApp"]
+        s10 -- "full-screen launcher" --> l10b["chosen launcher"]
+        s10 -- "overlay launcher<br/>(support false)" --> t10["last input<br/>Live TV or HDMI"]
+        w10c["watcher"] -- "closes the LG Home the boot started,<br/>once, after the launcher is in front" --> h10["stock LG Home"]
     end
     subgraph w11["webOS 11 and later"]
         k11["HOME"] --> f11["C++ key filter,<br/>launchDefaultApp"] --> l11["chosen launcher"]
-        i11["foreground empty"] --> s11["SAM relaunches stock LG Home"]
-        w11c["watcher"] -- "closes LG Home once,<br/>after the launcher is in front" --> s11
+        i11["foreground empty"] --> s11["SAM launches the profile's idleApp"]
+        s11 -- "full-screen launcher" --> l11b["chosen launcher"]
+        s11 -- "overlay launcher<br/>(support false)" --> t11["last input<br/>Live TV or HDMI"]
+        w11c["watcher"] -- "closes LG Home once,<br/>after the launcher is in front" --> h11["stock LG Home"]
     end
 ```
+
+On 10.x and later SAM takes the idle app live from the system profile's `idleApp`, so the same
+override that names the home also names the idle app ([settings-app.md](settings-app.md#what-is-written)).
+An `idleApp` that names a missing app leaves a black screen when the last app closes, so the
+override goes whenever the chosen launcher does.
 
 | Family | HOME follows the choice through | Stock LG Home while a launcher is chosen |
 | --- | --- | --- |
 | 5.x | `general/defaultApps.home`, which the stock key filter launches directly | Not touched: the visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6–9 | A generated key filter that launches the chosen id ([home-key-hook.md](home-key-hook.md)) | Replaced by the home gate; the running instance is closed once |
-| 10.x | The settings record and a system profile override ([settings-app.md](settings-app.md#what-is-written)) | Preload off; never closed, because SAM starts it again at once |
-| 11+ | Same as 10.x | Preload off; closed once after the launcher is safely in front |
+| 10.x | The settings record and a system profile override with `home` and `idleApp` ([settings-app.md](settings-app.md#what-is-written)) | Preload off; closed once per boot and per choice after the launcher is safely in front; `idleApp` keeps SAM from starting it again |
+| 11+ | Same as 10.x | Same as 10.x |
 
 ## The home gate decision
 
@@ -199,7 +209,7 @@ flowchart TD
     fg -- "yes" --> launch["launch com.webos.app.home,<br/>so the gate decides"] --> confirmed
 ```
 
-* **Stock Home close on 11+.** The watcher subscribes to SAM's foreground and life events and closes
+* **Stock Home close on 10 and later.** The watcher subscribes to SAM's foreground and life events and closes
   LG Home once per boot or choice change: for a full-screen launcher when it is in front, for an
   overlay launcher only on its own launch with a nonstock full-screen app beneath it.
 * **Restoring LG Home from the app** stops the unit first (SIGTERM: preload back on, gate

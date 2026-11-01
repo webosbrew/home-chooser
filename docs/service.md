@@ -90,7 +90,7 @@ and continues. JSON false replies alone are not EOF. Children inherit the daemon
 are killed/reaped on cancellation and clean shutdown, and receive SIGKILL through
 `PR_SET_PDEATHSIG` if their parent is killed. The systemd unit cgroup remains the outer cleanup
 boundary. SIGCHLD uses a self-pipe, avoiding GLib child-watch worker threads.
-Idle residency is the daemon plus two subscription children (settings and app list), four on 11+
+Idle residency is the daemon plus two subscription children (settings and app list), four on 10+
 with preload enabled (also foreground and life events).
 
 The internal Home-key worker status uses `active=yes/no` for whether configd selects a generated
@@ -335,7 +335,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 | `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
 | `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
 | `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
-| `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
+| `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps","idleApp"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
 | `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
 | `accessApply` | `/bin/sh <service>/scripts/homechooser-access apply` | 30 s |
 | `accessRemove` | same with `remove` | 30 s |

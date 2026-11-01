@@ -84,7 +84,7 @@ static const hc_command COMMANDS[] = {
 	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
 	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
 	/* Exact profile calls use the same identity as every other privileged luna call. */
-	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\"]}", NULL}, 20, false, false},
+	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\",\"idleApp\"]}", NULL}, 20, false, false},
 	{"profileRescan", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},
 	{"watchLog", {NULL}, 0, true, true},
 	{NULL, {NULL}, 0, false, false}

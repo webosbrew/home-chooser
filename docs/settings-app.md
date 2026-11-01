@@ -82,7 +82,7 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 | 5.x | `setSystemSettings` with the existing entries and `home` | - | close previous custom home |
 | 6.x to 8.x | same | - | close previous custom home; reload the volatile JS filter |
 | 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | close previous custom home |
-| 10.x to 12.x | `setDefaultApp` as on 9.x | override file, `debug/rescan`, read back | close previous custom home |
+| 10.x to 12.x | `setDefaultApp` as on 9.x | override file with `home` and `idleApp`, `debug/rescan`, read back | close previous custom home |
 
 * `setSystemSettings` replaces the whole `defaultApps` object, so the other entries (11.2.0 ships
   `kidsApp` in it) are read first and written back. `setDefaultApp` changes only `home`
@@ -95,10 +95,27 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   releases ([10.3.1 and 11.2.0](research/home-key-and-home-app.md#1031-and-1120)). After the
   rescan the app reads `getProfiles` again and reports an error if `categories.home` is not the
   chosen id.
+* The same override also carries `idleApp`, the app SAM launches when the foreground becomes
+  empty (SAM reads it live from the system profile on 10.3.1 and 11.2.0):
+  * a full-screen launcher: `{"support": true, "appId": "<launcher id>"}`;
+  * an overlay launcher (`defaultWindowType` `overlay` in `getAppInfo`, the test the watcher and
+    the home gate use): `{"support": false}`, which makes SAM bring back the last input instead;
+  * LG Home: no override at all.
+
+  The other keys of the current `idleApp` profile are kept, without the `_` keys and without the
+  old `support` and `appId`; on 10.3.1 a key the override leaves out keeps the stock layer's value.
+  Both writers (the app's `buildOverride` and the watcher's `check_override`) build the same
+  content, and the app asks `getAppInfo` first: an empty id, or one `getAppInfo` does not know,
+  stops the apply before anything is written, and the watcher then writes no `idleApp` at all. An
+  `idleApp` that names a missing app (never installed, uninstalled, or an empty `appId`) leaves a
+  black screen when the last app closes, with no fallback to LG Home, so the override, `idleApp`
+  included, is removed and the profile rescanned whenever the launcher goes missing, LG Home is
+  chosen, Home Chooser is uninstalled or a leftover is repaired. After the rescan the app warns if
+  `getProfiles` shows another `idleApp`.
 * The previous home is the record's `home`, else the profile's, else `com.webos.app.home`. If it
   is a custom launcher, the app closes it with `closeByAppId {"forceMode": true}` and reports a
   failure as a warning. The app never closes a stock home (`home`, `fullhome`, `kidshome`,
-  `seniorhome`, and the other stock ids), on any release. On 11.x and 12.x the watcher can close
+  `seniorhome`, and the other stock ids), on any release. On 10.x and later the watcher can close
   `com.webos.app.home` later, after the chosen launcher is in front; see
   [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
 * On 6.x–9.x, the filter launches an explicit chosen app ID. This avoids SAM's first-write
@@ -153,8 +170,10 @@ Home Chooser keeps its own copy of the choice and enforces it.
     before writing.
   * On 10.x and later it checks at start and after each write that
     `/var/webos-profile/override/org.webosbrew.homechooser.json` names the choice as
-    `categories.home`, and rewrites it from `getProfiles` (same rules as the app) with a
-    `debug/rescan` if not.
+    `categories.home` and carries the `idleApp` the choice's window type asks for, and rewrites it
+    from `getProfiles` (same rules as the app) with a `debug/rescan` if not. When `getAppInfo` does
+    not know the choice, it accepts an override with no `idleApp`, with `support` false or naming the
+    choice, and writes none.
   * It also watches the apps it depends on; see [When apps are removed](#when-apps-are-removed).
     It subscribes to `applicationManager/listApps {"subscribe":true}` as a trigger only, checks the
     chosen app and `org.webosbrew.homechooser` with `getAppInfo` on every message and every 5 min,
@@ -312,9 +331,10 @@ state was removed outside the normal flow; once the named launcher is gone, Home
 The rule, applied when the watcher starts without a usable stored choice (that is, when the app is
 opened after a reinstall, through `homechooser watch`):
 
-* The ids looked at are the record's `home` and, on 10.x and later, the `categories.home` of
+* The ids looked at are the record's `home` and, on 10.x and later, the `categories.home` and the
+  `idleApp.appId` (unless `idleApp.support` is false) of
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. Before 10.x the override file is not
-  read. `null`, `""` and a missing key are no id.
+  read. `null`, `""` and a missing key are no id. Each distinct id is confirmed once.
 * An id counts as not installed only if `getAppInfo` answers `returnValue:false` twice,
   15 s apart (`confirm_ms`), and its `appinfo.json` is in none of the install
   directories above. `com.webos.app.home` and `com.webos.app.fullhome` are never acted on, and an
@@ -325,7 +345,7 @@ opened after a reinstall, through `homechooser watch`):
   a removal the user just made): 5.x to 9.x write `home` as the stock launcher by the merged write
   (`com.webos.app.fullhome` if installed, else `com.webos.app.home`); 6.x to 9.x also run
   `homechooser-homekey refresh stock`; 10.x and later remove the override and rescan when the
-  override names the gone id, and write `home` as `null` when the record does. On 10.x the two are
+  override names the gone id (as `home` or as `idleApp`), and write `home` as `null` when the record does. On 10.x the two are
   separate: a stale override with a record naming an installed app removes only the override, and
   the other way round.
 * The record is read again right before the write, and nothing is written if it changed during the
@@ -361,8 +381,7 @@ What happens to a stock home that is already running depends on the release:
 | --- | --- |
 | 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted |
-| 10.x | Preload off, never closed: it stays resident until the next reboot |
-| 11.x, 12.x | Preload off, closed once after the chosen launcher is safely in front |
+| 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot |
 
 * **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
   (so once per boot, and once more after a restart of the unit), when the choice changes between a
@@ -375,7 +394,7 @@ What happens to a stock home that is already running depends on the release:
   applies it again.
 * **At boot.** The preload manager may not answer when the boot entry starts. The policy call is
   retried every 10 s (`preload_retry_ms`), up to 12 times (`preload_tries`), until it answers
-  `returnValue:true`. A 45 s settle delay (`preload_settle_ms`) then passes before an 11+ close is
+  `returnValue:true`. A 45 s settle delay (`preload_settle_ms`) then passes before a 10+ close is
   eligible.
 * **Best effort.** Each call has a 5 s bound and its reply goes to `/tmp/homechooser-home.log`. A
   refusal (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied
@@ -387,27 +406,26 @@ What happens to a stock home that is already running depends on the release:
   `fullhome` that was running when another launcher is chosen stays loaded (about 45 MB) until the
   next restart; when the last app closes, webOS 5 goes back to Live TV, not to the home, so nothing
   starts it again.
-* **Why a plain close does not work on 6.x to 10.x.** `sam` relaunches the stock home as the
-  idle/last-input app whenever the foreground empties: `closeByAppId` is followed by `APP_CLOSED`,
+* **Why a plain close does not work without an idle app of our own.** With the stock profile, `sam`
+  relaunches the stock home as the idle/last-input app whenever the foreground empties:
+  `closeByAppId` is followed by `APP_CLOSED`,
   `LAUNCH_LASTAPP {"status":"run_to_launch_last_app"} on_foreground_null` and
   `NL_APP_LAUNCH_BEGIN {"app_id":"com.webos.app.home","caller_app_id":"last_input_handler","mode":"last_input"}`
   within about 2 s, with `getPreloadPolicy` still reading `isEnabled:false`, so it is not the preload
   manager. A close frees nothing and only makes it restart. On 6–9 the home gate answers that
-  relaunch instead of the stock binary. On 10.x Home is a Flutter app folder with no binary to
-  replace, so the watcher never closes it and logs `webOS 10: stock home left running until the next
-  reboot (sam relaunches it as the last-input app)`. After a reboot it can be gone, because its
-  preload is off from boot. The app never closes any stock home during selection on any release.
-* **11.x and 12.x: close after the launcher is in front.** The watcher subscribes to SAM's
+  relaunch instead of the stock binary. On 10.x and later the app `sam` launches there is the system
+  profile's `idleApp`, which the override sets to the launcher (or turns off for an overlay
+  launcher, so the last input comes back), so once LG Home is closed nothing starts it again until
+  the next boot. The app never closes any stock home during selection on any release.
+* **10.x and later: close after the launcher is in front.** The watcher subscribes to SAM's
   `getForegroundAppInfo` and `getAppLifeEvents`. A normal launcher qualifies when SAM reports it
   as foreground. An overlay qualifies only on its own launch event and only if SAM reports a
   nonstock full-screen card beneath it. With LG Home or a blank foreground beneath an overlay,
   the close is skipped. The watcher makes at most one close attempt per boot or choice change.
   If SAM relaunches LG Home, it logs that event and does not close it again in that boot.
 
-  The close has to wait because of the same idle fallback. Closing LG Home while nothing else is
-  full-screen makes SAM relaunch it from `last_input_handler` about a second later
-  (`LAUNCH_LASTAPP ... on_foreground_null`), and closing it beneath an overlay also closes the
-  overlay. Closing it during selection would let the compositor close Home Chooser's own panel
+  The close has to wait because of the idle fallback: the foreground must not empty because of
+  it, and closing LG Home beneath an overlay also closes the overlay. Closing it during selection would let the compositor close Home Chooser's own panel
   before its completion toast. With a nonstock full-screen app in front, or beneath the overlay,
   the close sticks.
 
@@ -428,7 +446,7 @@ What happens to a stock home that is already running depends on the release:
   release (elsewhere it is simply "stock"); other stock homes such as `seniorhome` stay ordinary
   choices.
 * 10.x and later: the record is written with `"home": null` (same function), the override file is removed and the
-  profile rescanned; the profile's `home` is the fallback.
+  profile rescanned; the profile's `home` is the fallback, and its `idleApp` is the stock one again.
 
 The custom home is then closed; a stock home is never closed.
 

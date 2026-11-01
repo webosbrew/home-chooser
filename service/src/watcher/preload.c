@@ -3,7 +3,7 @@
 
 static void log_stock(HCWatch *w)
 {
-    if (w->major == 10 || (w->major >= 6 && w->major <= 9 && !w->gate_active))
+    if (w->major >= 6 && w->major <= 9 && !w->gate_active)
         watch_log(w, "webOS %d: stock home left running until the next reboot (sam relaunches it as the last-input app)", w->major);
 }
 static gboolean preload_set(HCWatch *w, gboolean on)
@@ -71,7 +71,7 @@ void preload_follow(HCWatch *w, const char *id, char why)
 
 static gboolean close_choice(HCWatch *w)
 {
-    if (w->major < 11 || !w->c.preload) return FALSE;
+    if (w->major < 10 || !w->c.preload) return FALSE;
     char *id = watch_choice(w);
     if (!id) return FALSE;
     if (!eq(w->close_choice, id)) {
