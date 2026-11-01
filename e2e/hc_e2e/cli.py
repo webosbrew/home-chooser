@@ -137,7 +137,8 @@ class VmSession:
         rec.say('artefacts: ' + outdir)
         rec.say('host timing slowdown: %g' % host.slowdown)
         rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
-        # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
+        # the scheduler stops a run with SIGTERM or SIGINT; both unwind through main()'s finally (or the pytest
+        # session's teardown), whose tear_down() stops the VM
         signal.signal(signal.SIGTERM, interrupted)
         self.args, self.ap, self.row, self.vm, self.launchers = args, ap, row, vm, launchers
         self.host, self.outdir, self.rec = host, outdir, rec
