@@ -1,0 +1,261 @@
+// SPDX-License-Identifier: Apache-2.0
+// Example full-screen launcher for Home Chooser: a grid of the installed apps. Plain ES5, no build
+// step, so it runs as it is in the web runtime of webOS 5 (Chromium 68) and later.
+//
+// PENDING DEVICE CONFIRMATION: two choices here are not yet confirmed on a TV. Apps are started with
+// luna://com.webos.applicationManager/launch {id} (launchApp below), and icons are read with
+// Home Chooser's getAppIcon rather than as file:// paths from listApps (loadIcons below).
+(function () {
+	'use strict';
+
+	var KEY = {LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13, BACK: 461};
+
+	// The order of the grid: by title, ignoring ASCII case, then by id; strings compare by UTF-16 code
+	// unit. The end-to-end runner (demo_order in e2e/homechooser_e2e.py) repeats this to know which
+	// app has the focus after a Home press. Change both together.
+	function asciiLower(s) {
+		return s.replace(/[A-Z]/g, function (c) { return c.toLowerCase(); });
+	}
+
+	function titleOf(app) {
+		return app.title || app.id;
+	}
+
+	function orderApps(apps, selfId) {
+		var shown = apps.filter(function (app) {
+			return app.id && app.id !== selfId && app.visible !== false;
+		});
+		return shown.sort(function (a, b) {
+			var ta = asciiLower(titleOf(a)), tb = asciiLower(titleOf(b));
+			if (ta !== tb) return ta < tb ? -1 : 1;
+			return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+		});
+	}
+
+	if (typeof module === 'object' && module.exports) {
+		module.exports = {orderApps: orderApps};  // for the order test in e2e/test_e2e_logic.py
+		return;
+	}
+
+	var HC = window.HomeChooser;
+	var selfId = HC.ownAppId();
+	var apps = [];
+	var focus = 0;            // index into apps; -1 is the banner button
+	var iconCache = {};       // id@version -> data: URL, or null for "use the placeholder"
+	var generation = 0;       // bumped on every refresh; an older icon queue stops
+	var refreshTimer = null;
+	var toastTimer = null;
+
+	function $(id) {
+		return document.getElementById(id);
+	}
+
+	function toast(text) {
+		$('toast').textContent = text;
+		$('toast').hidden = false;
+		clearTimeout(toastTimer);
+		toastTimer = setTimeout(function () { $('toast').hidden = true; }, 4000);
+	}
+
+	// A message above the grid; withAction adds the button that asks Home Chooser to make this app Home.
+	function banner(text, withAction) {
+		$('banner').hidden = !text;
+		$('banner-text').textContent = text || '';
+		$('banner-action').hidden = !withAction;
+		if (!withAction && focus < 0) focus = 0;
+	}
+
+	function requestHome() {
+		HC.requestHome().then(null, function (e) {
+			console.error('requestHome', e);
+			toast('Could not open Home Chooser.');
+		});
+	}
+
+	function launchApp(id) {
+		HC.lunaCall('luna://com.webos.applicationManager/launch', {id: id}).then(function (reply) {
+			if (reply.returnValue !== true) {
+				console.error('launch', id, reply);
+				toast('Could not open ' + id + '.');
+			}
+		}, function (e) {
+			console.error('launch', id, e);
+			toast('Could not open ' + id + '.');
+		});
+	}
+
+	// ---- the grid ----
+
+	function tile(app) {
+		var el = document.createElement('div');
+		el.className = 'tile';
+		el.setAttribute('data-id', app.id);
+		var icon = document.createElement('div');
+		icon.className = 'placeholder';
+		icon.textContent = titleOf(app).charAt(0).toUpperCase();
+		var label = document.createElement('span');
+		label.textContent = titleOf(app);
+		el.appendChild(icon);
+		el.appendChild(label);
+		return el;
+	}
+
+	function showIcon(index, url) {
+		var el = $('grid').children[index];
+		if (!el || !url) return;
+		var img = document.createElement('img');
+		img.alt = '';
+		img.onerror = function () {  // data the browser cannot decode: back to the placeholder
+			if (img.parentNode && apps[index]) img.parentNode.replaceChild(tile(apps[index]).firstChild, img);
+		};
+		img.src = url;
+		el.replaceChild(img, el.firstChild);
+	}
+
+	function render() {
+		var grid = $('grid');
+		grid.textContent = '';
+		for (var i = 0; i < apps.length; i++) grid.appendChild(tile(apps[i]));
+		if (focus >= apps.length) focus = apps.length - 1;
+		if (focus < 0 && $('banner-action').hidden) focus = 0;
+		paintFocus();
+	}
+
+	function paintFocus() {
+		var tiles = $('grid').children;
+		for (var i = 0; i < tiles.length; i++) {
+			tiles[i].className = i === focus ? 'tile focused' : 'tile';
+		}
+		$('banner-action').className = focus < 0 ? 'focused' : '';
+		if (tiles[focus]) tiles[focus].scrollIntoView({block: 'nearest'});
+	}
+
+	function columns() {
+		var tiles = $('grid').children;
+		var n = 0;
+		while (n < tiles.length && tiles[n].offsetTop === tiles[0].offsetTop) n++;
+		return Math.max(n, 1);
+	}
+
+	// Icons one call at a time, in grid order. getAppIcon reads the file as root, so it works for a
+	// jailed launcher too; noIcon, iconTooLarge and any other failure keep the placeholder.
+	function loadIcons(gen) {
+		var i = 0;
+		function next() {
+			if (gen !== generation || i >= apps.length) return;
+			var index = i++;
+			var app = apps[index];
+			var key = app.id + '@' + (app.version || '');
+			if (Object.prototype.hasOwnProperty.call(iconCache, key)) {
+				showIcon(index, iconCache[key]);
+				next();
+				return;
+			}
+			HC.getAppIcon({id: app.id}).then(function (r) {
+				iconCache[key] = 'data:' + r.mimeType + ';base64,' + r.data;
+			}, function (e) {
+				iconCache[key] = null;
+				if (e.source !== 'homechooser' || (e.errorCode !== 'noIcon' && e.errorCode !== 'iconTooLarge')) {
+					console.warn('getAppIcon', app.id, e.errorCode, e.errorText);
+				}
+			}).then(function () {
+				if (gen === generation) showIcon(index, iconCache[key]);
+				next();
+			});
+		}
+		next();
+	}
+
+	// ---- start and refresh ----
+
+	// docs/launcher-api.md "Check where you stand": getInfo first, then branch.
+	function refresh() {
+		var gen = ++generation;
+		HC.getInfo().then(function (info) {
+			if (gen !== generation) return;
+			if (info.apiVersion !== HC.API_VERSION) {
+				banner('This launcher needs Home Chooser API version ' + HC.API_VERSION + '. Update Home Chooser.', false);
+				return;
+			}
+			if (!info.root) {
+				banner('Home Chooser has not finished its setup. Open it once.', true);
+				return;
+			}
+			if (!info.permitted) {
+				banner('Open Home Chooser once, then reinstall this launcher so it may list your apps.', true);
+				return;
+			}
+			banner(info.isSelectedHome ? null : 'Make this launcher the app the Home button opens?', !info.isSelectedHome);
+			return HC.listApps().then(function (r) {
+				if (gen !== generation) return;
+				apps = orderApps(r.apps, selfId);
+				render();
+				loadIcons(gen);
+			});
+		}).then(null, function (e) {
+			if (gen !== generation) return;
+			console.error('Home Chooser', e.source, e.errorCode, e.errorText);
+			if (e.source === 'homechooser') {
+				banner('Home Chooser refused the app list (' + e.errorCode + ').', e.errorCode === 'notRoot');
+			} else {
+				banner('Home Chooser is not installed or is too old. Install it from Homebrew Channel.', false);
+			}
+		});
+	}
+
+	// webOSRelaunch and visibilitychange can arrive together; refresh once.
+	function scheduleRefresh() {
+		clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(refresh, 100);
+	}
+
+	// ---- keys ----
+
+	function onKey(event) {
+		var n = apps.length;
+		var cols = columns();
+		switch (event.keyCode) {
+		case KEY.LEFT:
+			if (focus > 0) focus--;
+			break;
+		case KEY.RIGHT:
+			if (focus >= 0 && focus < n - 1) focus++;
+			break;
+		case KEY.UP:
+			if (focus >= cols) focus -= cols;
+			else if (focus >= 0 && !$('banner-action').hidden) focus = -1;
+			break;
+		case KEY.DOWN:
+			if (focus < 0) focus = 0;
+			else if (focus + cols < n) focus += cols;
+			break;
+		case KEY.OK:
+			if (focus < 0) requestHome();
+			else if (apps[focus]) launchApp(apps[focus].id);
+			break;
+		case KEY.BACK:
+			// The Home app is the root: there is nothing to go back to and it must not close itself.
+			// appinfo.json sets disableBackHistoryAPI so the key arrives here; Back returns to the first app.
+			focus = 0;
+			break;
+		default:
+			return;
+		}
+		event.preventDefault();
+		paintFocus();
+	}
+
+	document.addEventListener('DOMContentLoaded', function () {
+		document.addEventListener('keydown', onKey);
+		$('banner-action').addEventListener('click', requestHome);
+		// Home pressed while this app runs: start again from the first app with a fresh list.
+		document.addEventListener('webOSRelaunch', function () {
+			focus = 0;
+			scheduleRefresh();
+		});
+		document.addEventListener('visibilitychange', function () {
+			if (!document.hidden) scheduleRefresh();
+		});
+		refresh();
+	});
+}());
