@@ -4,7 +4,7 @@
 # Lists the SONAMEs the binary needs and the highest GLIBC / GLIBCXX / GLIB version it asks of
 # each, then checks that the rootfs (the oldest supported release) has the libraries and offers
 # those versions. Exits non-zero on a miss.
-# The tools: READELF and NM, else CROSS (the Makefile's tool prefix) followed by the tool name.
+# The tools: READELF and NM, else CROSS (the build's tool prefix, service/cmake/settings.cmake) followed by the tool name.
 set -eu
 TASK_TMP=$(mktemp -d "${TMPDIR:-/tmp}/hc-abi.XXXXXX")
 trap 'rm -rf "$TASK_TMP"' EXIT HUP INT TERM

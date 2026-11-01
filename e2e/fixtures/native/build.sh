@@ -4,7 +4,7 @@
 # Builds both native fixture launchers and packages them with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.native.normal_1.0.0_arm.ipk
 #   <outdir>/org.webosbrew.hcfixture.native.overlay_1.0.0_arm.ipk
-# Same cross SDK as service/Makefile. Offline: contacts no device.
+# Same cross SDK as the service build (service/cmake/settings.cmake). Offline: contacts no device.
 set -eu
 [ $# -eq 1 ] || { echo "usage: $0 <outdir>" >&2; exit 2; }
 HERE=$(cd "$(dirname "$0")" && pwd)

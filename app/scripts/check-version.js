@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // The version has one source, app/package.json. appinfo.json (what ares-package and the TV read)
-// has to carry the same one; the service gets it from service/Makefile (-DHC_VERSION).
+// has to carry the same one; the service gets it from service/CMakeLists.txt (-DHC_VERSION).
 //   node scripts/check-version.js           exit 1 when appinfo.json differs from package.json
 //   node scripts/check-version.js --write   set appinfo.json's version to package.json's
 // `npm run package` runs the check first; `npm version` runs --write (the "version" script).
