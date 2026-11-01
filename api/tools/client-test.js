@@ -201,9 +201,25 @@ async function mockTests() {
 	}
 }
 
+// ?hcmock-apps=<n>: that many apps, the example apps first; a made-up app has no icon.
+async function mockAppCountTests() {
+	const replies = {};
+	let icon = null;
+	for (const n of [0, 1, 20, 45]) {
+		const ctx = context({location: {search: '?hcmock-apps=' + n}});
+		vm.runInContext(clientSource, ctx);
+		vm.runInContext(mockSource, ctx);
+		ctx.HomeChooser.mock.delayMs = 0;
+		replies[n] = await ctx.HomeChooser.listApps();
+		if (n === 45) icon = (await ctx.HomeChooser.getIcons({items: [{id: 'org.example.mock40'}]})).icons[0];
+	}
+	out({test: 'mock-app-count', replies, icon});
+}
+
 (async () => {
 	await bridgeTests();
 	await subscribeTests();
 	await mockTests();
+	await mockAppCountTests();
 	out({test: 'done'});
 })().catch((e) => { console.error(e); process.exit(1); });

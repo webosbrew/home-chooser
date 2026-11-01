@@ -75,7 +75,9 @@ a package changes nothing. It never takes over silently in the other direction: 
 a missing bridge is a `transport` error. In the browser it replaces the client's transport, so the
 real client code runs on fake replies: every method answers from `HomeChooser.mock` (the spec's
 examples: the `listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`,
-`getAppIcon` and `getIcons` success examples, the caller `org.example.launcher`), applies the caller
+`getAppIcon` and `getIcons` success examples, the caller `org.example.launcher`; `listApps` adds
+made-up apps to the example's, 20 apps in all, one of them `visible: false` and some with
+`iconColor` or `bgColor`, and `?hcmock-apps=<n>` makes it `n`), applies the caller
 checks in the order of `x-replyModel`, and validates `id`, `size` and `items` as the param schemas
 do. Subscriptions answer at once, again on `HomeChooser.mock.notify(method)`, and refuse the 17th
 subscriber of a method; `?hcmock-changes=<ms>` flips the last input's `connected` every `<ms>`,

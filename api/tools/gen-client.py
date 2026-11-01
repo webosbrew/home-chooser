@@ -547,6 +547,7 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 // Chooser methods answer from HomeChooser.mock (edit it in the console), with the caller checks in
 // the service's order, and luna://com.webos.applicationManager/launch is logged and succeeds.
 // ?hcmock=<scenario> in the page URL picks the getInfo state: %(scenarios)s.
+// ?hcmock-apps=<n> lists n apps (default %(app_count)d: the spec's example apps, then made-up ones).
 // Subscriptions answer at once and again on HomeChooser.mock.notify(method); ?hcmock-changes=<ms> also
 // flips the last input's connected state every <ms>, brings the next app to the foreground (and into the
 // running list), and notifies the listInputs, getForegroundApp and listRunning subscribers.
@@ -579,11 +580,21 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		scenario = 'selected-home';
 	}
 
+	// n apps: the example apps, the made-up ones, then numbered ones.
+	function mockApps(n) {
+		var apps = DATA.apps.concat(DATA.moreApps);
+		for (var i = apps.length + 1; apps.length < n; i++) {
+			apps.push({id: 'org.example.mock' + i, title: 'Mock App ' + i, icon: 'icon.png', removable: true});
+		}
+		return copy(apps.slice(0, n));
+	}
+	var count = /[?&]hcmock-apps=(\\d+)/.exec((root.location && root.location.search) || '');
+
 	var mock = {
 		scenario: scenario,
 		callerId: DATA.callerId,
 		info: copy(DATA.scenarios[scenario] || DATA.scenarios['selected-home']),
-		apps: copy(DATA.apps),
+		apps: mockApps(count ? Number(count[1]) : DATA.appCount),
 		running: copy(DATA.running),
 		foreground: copy(DATA.foreground),
 		launchPoints: copy(DATA.launchPoints),
@@ -685,7 +696,9 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 			for (var i = 0; i < items.length; i++) {
 				var key = iconItemKey(items[i]);
 				if (!key) return fail('badRequest');
-				icons.push(copy(mock.batchIcons[key] || {errorCode: 'notFound', errorText: 'No such item (mock)'}));
+				var known = key.indexOf('id:') === 0 && findApp(key.slice(3).split('#')[0]);
+				icons.push(copy(mock.batchIcons[key] || (known ? {errorCode: 'noIcon', errorText: 'No icon (mock)'} :
+					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
 			}
 			return success({icons: icons});
 		},
@@ -802,6 +815,43 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 '''
 
 
+# The mock's apps after the listApps example's: plausible apps of a TV, so that a launcher's grid,
+# focus movement and placeholders can be tried in a browser. One is visible:false, some carry the
+# appinfo colours. ?hcmock-apps=<n> picks how many apps the mock lists (default MOCK_APP_COUNT).
+MOCK_APP_COUNT = 20
+MOCK_MORE_APPS = [
+    ('weather', 'Weather', {'iconColor': '#2a7fd4'}),
+    ('photos', 'Photos', {'iconColor': '#e2584a', 'bgColor': '#ffffff'}),
+    ('music', 'Music', {}),
+    ('podcasts', 'Podcasts', {'iconColor': '#8a3fc7'}),
+    ('news', 'News Today', {}),
+    ('recipes', 'Recipes', {'bgColor': '#f4e7d3'}),
+    ('fitness', 'Fitness at Home', {'iconColor': '#1c9c6b'}),
+    ('cartoons', 'Kids Cartoons', {'iconColor': '#f2b705', 'bgColor': '#202020'}),
+    ('moviestore', 'Movie Store', {}),
+    ('radio', 'Internet Radio', {'iconColor': '#d43f6a'}),
+    ('chess', 'Chess', {}),
+    ('sports', 'Sports Live', {'iconColor': '#0e5aa7', 'bgColor': '#0e5aa7'}),
+    ('travel', 'Travel Guide', {}),
+    ('karaoke', 'Karaoke Night', {'iconColor': '#c2185b'}),
+    ('browser', 'Web Browser', {}),
+    ('gallery', 'Art Gallery', {'bgColor': '#111111'}),
+    ('yoga', 'Yoga', {'iconColor': '#6d757f'}),
+    ('helper', 'Background Helper', {'visible': False, 'removable': False}),
+]
+
+
+def mock_more_apps():
+    out = []
+    for name, title, extra in MOCK_MORE_APPS:
+        app_id = 'org.example.' + name
+        app = {'id': app_id, 'title': title, 'icon': 'icon.png', 'version': '1.0.0',
+               'folderPath': '/media/developer/apps/usr/palm/applications/' + app_id, 'removable': True}
+        app.update(extra)
+        out.append(app)
+    return out
+
+
 def first_success(spec, method):
     m = next(x for x in spec['methods'] if x['name'] == method)
     for ex in m['examples']:
@@ -860,6 +910,8 @@ def mock(spec):
         'errors': {code: e['cause'] for code, e in spec['x-errors'].items()},
         'scenarios': info_examples,
         'apps': first_success(spec, 'listApps')['apps'],
+        'moreApps': mock_more_apps(),
+        'appCount': MOCK_APP_COUNT,
         'running': first_success(spec, 'listRunning')['running'],
         'foreground': strip(first_success(spec, 'getForegroundApp')),
         'icons': icons,
@@ -873,7 +925,7 @@ def mock(spec):
         'methods': methods,
     }
     names = ', '.join(sorted(info_examples) + ['absent'])
-    return MOCK % {'generated': GENERATED, 'scenarios': names, 'data': js(data, 1)}
+    return MOCK % {'generated': GENERATED, 'scenarios': names, 'data': js(data, 1), 'app_count': MOCK_APP_COUNT}
 
 
 def outputs(spec):

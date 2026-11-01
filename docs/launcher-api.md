@@ -784,9 +784,11 @@ never closes a stock home while you select a launcher. Details are in
 **In a desktop browser.** Load
 [`api/client/homechooser-mock.js`](../api/client/homechooser-mock.js) after `homechooser.js`. Where
 there is no webOS service bridge it answers every method from the API description's examples, with
-the caller checks in the service's order; on a TV it does nothing. Subscriptions answer at once;
+the caller checks in the service's order; on a TV it does nothing. It lists 20 apps (one of them
+`visible: false`), so a grid and its focus movement can be tried; `?hcmock-apps=<n>` lists `n`.
+Subscriptions answer at once;
 `HomeChooser.mock.notify('listInputs')` sends a change, and `?hcmock-changes=<ms>` flips an input's
-`connected` every `<ms>` milliseconds. `?hcmock=before-elevation`,
+`connected` and brings another app to the foreground every `<ms>` milliseconds. `?hcmock=before-elevation`,
 `not-permitted`, `not-home` or `absent` in the page URL selects another start state. See
 [`api/README.md`](../api/README.md#client-and-mock).
 

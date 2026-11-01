@@ -109,6 +109,14 @@ def main(argv):
             check(problems, [x.get('appId') for x in r['replies']] == [
                 next(x for x in spec['methods'] if x['name'] == 'getForegroundApp')['examples'][0]['result']['value']['appId'],
                 'org.example.other'] and not r['errors'], 'mock foreground subscription: %s' % r)
+        elif t == 'mock-app-count':
+            for n, reply in r['replies'].items():
+                found = reply_problems(spec, 'listApps', reply, sv)
+                replies += 1
+                ids = [a['id'] for a in reply.get('apps', [])]
+                check(problems, found == [] and len(ids) == int(n) and len(set(ids)) == len(ids),
+                      'mock ?hcmock-apps=%s: %d apps, %s' % (n, len(ids), found))
+            check(problems, r['icon'].get('errorCode') == 'noIcon', 'mock getIcons of a made-up app: %s' % r['icon'])
         elif t == 'commonjs':
             check(problems, set(r['methods']) == {'function'}, 'CommonJS export: %s' % r['methods'])
         elif t == 'mock-inert':
@@ -139,7 +147,11 @@ def main(argv):
                         check(problems, not res['ok'] and res['error']['errorCode'] == 'noPermission', label + ': not noPermission')
                     if sc == 'selected-home' and method == 'listApps' and 'subscribe' not in c['params']:
                         want = next(x for x in spec['methods'] if x['name'] == 'listApps')['examples'][0]['result']['value']
-                        check(problems, res['ok'] and res['value'] == want, label + ': not the spec example')
+                        got = res['value'].get('apps', []) if res['ok'] else []
+                        check(problems, res['ok'] and got[:len(want['apps'])] == want['apps'] and len(got) == 20
+                              and sum(1 for a in got if a.get('visible') is False) == 1
+                              and any('iconColor' in a for a in got) and any('bgColor' in a for a in got),
+                              label + ': not the spec example\'s apps first, 20 in all, one invisible, some with colours')
                     if sc == 'selected-home' and methods[method].get('x-subscribes'):
                         check(problems, res['ok'] and res['value'].get('subscribed') is (True if c['params'].get('subscribe') is True else None),
                               label + ': subscribed does not follow the subscribe param')
