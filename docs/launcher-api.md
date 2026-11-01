@@ -1,4 +1,4 @@
-# Writing a launcher for Home Chooser (API version 1)
+# Writing a launcher for Home Chooser (API level 2)
 
 Home Chooser (`org.webosbrew.homechooser`) lets the owner of a rooted LG webOS TV choose which app
 the Home button opens. This guide is for the authors of such apps (launchers, docks, alternative
@@ -150,7 +150,7 @@ At start, call `getInfo`, then branch:
 
 1. The call fails (platform error such as `ServiceUnknown`, or an unknown-method error): Home
    Chooser is missing or too old. Offer to install or open it.
-2. `apiVersion` is not `1`: this guide does not describe that service.
+2. `apiVersion` is below `1` or missing: this guide does not describe that service. Higher is fine: levels only add (see [Stability](#stability)). Check `apiVersion >= N` for the level a feature needs (`listLaunchPoints`, `listInputs`, `getIcons` and `subscribe` need 2), never `== 1`.
 3. `root` is false: the owner has not finished setup; ask them to open Home Chooser.
 4. `permitted` is false: check the installed appinfo for the permission and reinstall after a change;
    an appinfo lookup failure can also make this false.
@@ -210,7 +210,8 @@ async function start() {
   } catch (e) {
     return showInstallHomeChooser(e);        // absent, incompatible, or the hub denied delivery
   }
-  if (info.apiVersion !== 1) return showUpdateHomeChooser(info);
+  if (!(info.apiVersion >= 1)) return showUpdateHomeChooser(info);
+  const hasLevel2 = info.apiVersion >= 2;   // listLaunchPoints, listInputs, getIcons, subscribe
   if (!info.root) return showOpenHomeChooser();
   if (!info.permitted) return showReinstallLauncher();
   const {apps} = await homeChooser('listApps');
@@ -241,7 +242,7 @@ Successful replies have `returnValue: true`. Every reply produced by a launcher 
 `apiVersion`. Failures from Home Chooser look like this:
 
 ```json
-{"returnValue": false, "apiVersion": 1, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
+{"returnValue": false, "apiVersion": 2, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
 ```
 
 Show your own plain failure message to the user and keep `errorText` in your logs. Allow 70 seconds
@@ -282,10 +283,10 @@ the page becomes visible again.
 
 ## Methods
 
-All methods are on the service's root category, and all are API version 1: `listLaunchPoints`,
-`listInputs`, `getIcons`, the `subscribe` parameter and the `iconColor` and `bgColor` fields were added
-within version 1 ([Stability](#stability)). Check for them as for any addition: an older service
-answers an unknown method with the platform's error, and omits the new fields.
+All methods are on the service's root category. `listLaunchPoints`, `listInputs`, `getIcons`, the
+`subscribe` parameter and the `iconColor` and `bgColor` fields are level 2 (`apiVersion >= 2`;
+[Stability](#stability)); the rest is level 1. Check `apiVersion` before using a level 2 addition: a
+level 1 service answers an unknown method with the platform's error, and omits the new fields.
 
 | Method | Needs root | Needs the permission | Only the selected Home | Reply carries `apiVersion` |
 | --- | --- | --- | --- | --- |
@@ -313,11 +314,11 @@ the owner's choice; this is not the same as what the Home key opens at this mome
 Feature detection and status. Works for any app, before elevation and without the permission.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
+{"returnValue": true, "apiVersion": 2, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
 ```
 
-* `apiVersion`: the version of this contract, independent of the package version. Check it before
-  relying on this guide.
+* `apiVersion`: the feature level of this contract, independent of the package version; it only
+  grows. Check `apiVersion >= N` before relying on a level N feature, never `== 1`.
 * `version`: the Home Chooser package version.
 * `root`: false means the owner has not finished setup (open Home Chooser).
 * `permission`: the permission name to list in `requiredPermissions`.
@@ -335,10 +336,10 @@ prove Home Chooser is absent: it can also mean the permission is missing from yo
 
 ### `listApps {subscribe?}`
 
-Lists the installed apps.
+Lists the installed apps. Level 1; `subscribe`, `iconColor` and `bgColor` are level 2.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}
+{"returnValue": true, "apiVersion": 2, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}
 ```
 
 Each app carries `id`, `title`, `icon`, `largeIcon`, `folderPath`, `version`, `vendor`, `type`,
@@ -364,7 +365,7 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 Lists running apps.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
+{"returnValue": true, "apiVersion": 2, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
 ```
 
 Each item carries `id`, `instanceId`, `processId` and `webProcessId`, when present. The service
@@ -378,7 +379,7 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 One lookup of the platform's current foreground app. This call does not subscribe to changes.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "appId": "org.example.app", "windowId": "window", "processId": 123}
+{"returnValue": true, "apiVersion": 2, "appId": "org.example.app", "windowId": "window", "processId": 123}
 ```
 
 `appId` is an empty string if the platform reports no foreground app. `windowId` is included when
@@ -394,7 +395,7 @@ Fetches one installed app without refreshing the full list. `app` has exactly th
 fields and types as one `listApps` item, including `appCategory` when the platform supplies it.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}
+{"returnValue": true, "apiVersion": 2, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}
 ```
 
 Errors: `forbidden`, `notRoot`, `badRequest`, `noPermission`, `lookupFailed`, `notFound` for an
@@ -409,7 +410,7 @@ Reads the icon referenced in that app's appinfo inside that app's folder, for a 
 symlink escapes, are rejected. There is no fallback to the other icon field.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
+{"returnValue": true, "apiVersion": 2, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
 ```
 
 `data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 262144 bytes, so
@@ -424,12 +425,12 @@ icon is referenced and `iconTooLarge` when the icon exceeds the byte limit. Any 
 
 ### `listLaunchPoints {subscribe?}`
 
-Lists SAM's launch points: what LG Home shows as its app row, in SAM's order, browser bookmarks
+*Level 2.* Lists SAM's launch points: what LG Home shows as its app row, in SAM's order, browser bookmarks
 pinned to Home included. This is the list LG Home reads (`applicationManager/listLaunchPoints`), not
 the installed apps.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}
+{"returnValue": true, "apiVersion": 2, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}
 ```
 
 Each launch point carries `launchPointId`, `id` (the app it launches), `title`, `lptype`, `icon`,
@@ -456,12 +457,12 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 
 ### `listInputs {subscribe?}`
 
-Lists the TV's external inputs, as the input manager (`com.webos.service.eim`,
+*Level 2.* Lists the TV's external inputs, as the input manager (`com.webos.service.eim`,
 `getAllInputStatus`) reports them, in its order. LG's own input picker and LG Home read the same
 call.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
+{"returnValue": true, "apiVersion": 2, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
 ```
 
 Each input carries `id`, the input's app (`com.webos.app.hdmi1`): launch it with
@@ -487,14 +488,14 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 
 ### `getIcons {items}`
 
-Reads up to 64 icons in one call. `items` is an array of 1 to 64 objects, each one of:
+*Level 2.* Reads up to 64 icons in one call. `items` is an array of 1 to 64 objects, each one of:
 
 * `{"id": <app id>, "size"?: "icon" | "largeIcon"}`: the app's appinfo icon, exactly as `getAppIcon`;
 * `{"launchPointId": <id>, "size"?: "icon" | "largeIcon"}`: a launch point's icon;
 * `{"inputId": <id>}`: an input's icon.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}]}
+{"returnValue": true, "apiVersion": 2, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}]}
 ```
 
 `icons` has one entry per item, in request order: `{mimeType, dataUrl, byteLength}`, where
@@ -520,7 +521,7 @@ Errors: `forbidden`, `notRoot`, `badRequest`, `noPermission`, `lookupFailed`, `t
 
 Closes an app. Only the selected Home may call it. `id` is an application id; `force: true` (a JSON
 boolean) asks the platform for a forced close. Reply
-`{"returnValue": true, "apiVersion": 1, "id": "<id>"}`.
+`{"returnValue": true, "apiVersion": 2, "id": "<id>"}`.
 
 There is no restriction on the target: the Home app may close any app, including Home Chooser,
 Homebrew Channel, LG Home and itself. Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`
@@ -543,7 +544,7 @@ and Cancel; if the alert is refused it opens its own confirmation screen with th
 Your launcher cannot confirm for the owner and cannot call the confirmation method.
 
 ```json
-{"returnValue": true, "apiVersion": 1, "pending": true, "id": "org.example.app", "confirmation": "alert"}
+{"returnValue": true, "apiVersion": 2, "pending": true, "id": "org.example.app", "confirmation": "alert"}
 ```
 
 `confirmation` is `alert` or `screen`. **A pending uninstall is not a completed removal.** There is no
@@ -622,7 +623,7 @@ answers as before.
 
 ## Platform calls you'll need
 
-These are webOS platform behaviour, not part of Home Chooser's API v1: Home Chooser neither
+These are webOS platform behaviour, not part of Home Chooser's API: Home Chooser neither
 provides nor freezes them. They are here because every launcher needs them.
 
 * **Launch an app.** `luna://com.webos.applicationManager/launch` with `{"id": "<app id>"}`, and
@@ -796,7 +797,7 @@ Without the variable you get a launcher with no permission, which is the control
 **On your own TV.** Use a rooted webOS TV with Homebrew Channel installed and an ares device
 configured for root access. Install Home Chooser first, or pass its ipk with `--hc-ipk`. The
 ares-only compatibility kit installs a permission-declaring web fixture and a disposable control
-app, checks the v1 API before and after choosing the fixture, then restores LG Home and removes
+app, checks the launcher API before and after choosing the fixture, then restores LG Home and removes
 the test apps. It does not reboot the TV. It requires LG Home to be the
 starting choice so cleanup can restore it.
 
@@ -837,14 +838,14 @@ a full partition makes an installation fail for an unrelated-looking reason.
 
 ## Stability
 
-**API version 1: frozen.** The launcher methods (eight at the freeze; `listLaunchPoints`,
-`listInputs`, `getIcons` and the lists' `subscribe` were added since, as the policy below allows), permission,
-`appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch
-parameter are the v1 contract. Reply fields and methods may be added within v1. Removing a field
-or method, or changing a documented meaning, raises `apiVersion`. Check `apiVersion` at start and
-ignore unknown fields and error codes.
+`apiVersion` is the feature level of the API, and it only grows. A higher level keeps everything the earlier levels documented: no method or field is removed and no meaning changes. Launchers check `apiVersion >= N` for the level they need, never `== 1`, and ignore unknown fields and error codes. If a backward-incompatible change ever becomes unavoidable, it will be handled separately and announced.
 
-A machine-readable description of v1 is [`api/launcher-v1.openrpc.json`](../api/launcher-v1.openrpc.json).
+What each level added:
+
+* Level 1: the eight methods as frozen at tag `api-v1` (`getInfo`, `listApps`, `listRunning`, `getAppInfo`, `getAppIcon`, `getForegroundApp`, `closeApp`, `uninstallApp`), the permission, the `appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch parameter.
+* Level 2: `listLaunchPoints`, `listInputs` (with each input's `params` and, where the input manager has it, `signal`), `getIcons`, the `subscribe` parameter of `listApps`, `listLaunchPoints` and `listInputs`, and the `iconColor` and `bgColor` fields of `listApps` and `getAppInfo`.
+
+A machine-readable description of every level is [`api/launcher-v1.openrpc.json`](../api/launcher-v1.openrpc.json); `x-since` marks what a level added. The file name keeps `v1` as the name of the API family.
 
 Settings-only and confirmation methods, files, status output and log ids are internal and are not
 frozen by this contract.

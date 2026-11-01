@@ -8,7 +8,7 @@ small luna API to launchers.
 
 Read these, in this order:
 
-1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, version 1 (frozen).
+1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, `apiVersion` 2 (a feature level that only grows; check `apiVersion >= N`, never `== 1`).
    Methods, parameters, every reply and every `errorCode` as JSON Schema, with examples. The
    top-level `x-` fields hold the appinfo declarations, the permission and the request launch.
 2. [`api/client/`](api/client): `homechooser.js`, a one-file client to copy into a web launcher
@@ -30,7 +30,7 @@ Self-test:
   `?hcmock=before-elevation|not-permitted|not-home|absent` selects other start states.
 * On a rooted TV with Home Chooser installed and an ares device configured:
   `python3 -I e2e/homechooser_e2e.py --device <device> --api-check --launcher <your id> --launcher-ipk <your ipk>`
-  checks the v1 methods as your launcher, every reply against the API description
+  checks the launcher methods as your launcher, every reply against the API description
   ([Testing your launcher](docs/launcher-api.md#testing-your-launcher)).
 
 ## Working on Home Chooser itself

@@ -1,16 +1,16 @@
 # Launcher API description
 
 [`launcher-v1.openrpc.json`](launcher-v1.openrpc.json) is a machine-readable description of the
-launcher API, version 1, in [OpenRPC](https://spec.open-rpc.org/) 1.3.2. Version 1 is frozen (see
-[Stability](../docs/launcher-api.md#stability), tag `api-v1`), and this file describes it: the eight
-methods of the freeze and the methods and fields added within version 1 since, their parameters and
+launcher API, `apiVersion` 2, in [OpenRPC](https://spec.open-rpc.org/) 1.3.2. `apiVersion` is a feature
+level that only grows (see [Stability](../docs/launcher-api.md#stability), tag `api-v1` for level 1), and this file
+describes every level: the eight methods of level 1 and what level 2 added, marked `x-since: 2`, their parameters and
 replies as JSON Schema, every `errorCode` each method can send, and examples. [`docs/launcher-api.md`](../docs/launcher-api.md) is the prose contract and wins
 where the two differ; a change to either must keep them in step.
 
 ## What is in it
 
 * **Methods.** `getInfo`, `listApps`, `listRunning`, `getForegroundApp`, `getAppInfo`, `getAppIcon`,
-  `closeApp` and `uninstallApp`, and, added within v1, `listLaunchPoints`, `listInputs` and
+  `closeApp` and `uninstallApp`, and, added at level 2, `listLaunchPoints`, `listInputs` and
   `getIcons`, with named parameters (`paramStructure: by-name`). Facts the guide
   states about a method are `x-` fields on it: `x-needsRoot`, `x-needsPermission`,
   `x-needsSelectedHome`, `x-subscribes`, `x-forJailedLauncher`, `x-ignoredParams`, `x-notes` and so
@@ -29,7 +29,7 @@ where the two differ; a change to either must keep them in step.
   Replies from the luna bus itself (unknown service or method, `Denied method call`) do not come
   from Home Chooser and are described in `x-replyModel.platformErrors`, not in the schemas.
 * **Objects are open.** Success objects do not set `additionalProperties: false`, because fields
-  may be added within v1. The `errorCode` enums are closed: they are what v1 sends today. A client
+  may be added at a later level. The `errorCode` enums are closed: they are what the service sends today. A client
   still treats an unknown `errorCode` as a failure, as the guide says.
 * **Examples with fixtures.** Each example pairing carries `x-fixture`, the platform state the
   contract test needs: the caller's application id, root state, the stored Home choice, files on

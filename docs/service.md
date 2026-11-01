@@ -196,7 +196,7 @@ uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that 
 still Home, and first tries `removeLaunchPoint` before the appropriate `appInstallService` route.
 The settings app allows 120 seconds for screen confirmation.
 
-See [Launcher API version 1](launcher-api.md) for the contract, fields, errors, caller rules,
+See [Launcher API level 2](launcher-api.md) for the contract, fields, errors, caller rules,
 selection requests and absence detection. Plain shell callers have no application id and are
 refused by launcher gates.
 
