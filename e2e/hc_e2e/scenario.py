@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Scenario: one VM run, its launchers on one boot, and the steps it is made of (hc_e2e.steps)."""
-from .beanjar import ScreensaverOutcome
 from .device import Device, ELEVATIONS
-from .plan import PER_RELEASE, PHASE, describe_plan, launcher_shape, plan_groups, run_plan
+from .plan import PER_RELEASE, PlanRun, describe_plan, launcher_shape, run_plan
 from .steps.api import ApiSteps
 from .steps.baseline import BaselineSteps
 from .steps.choose import ChooseSteps
@@ -65,7 +64,9 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         plan = getattr(self, 'plan', None)
         return not plan or getattr(self, 'index', 0) == plan[0][0]
 
-    def run(self):
+    def begin_run(self):
+        """What a run does before its first phase: the head of the run log, the release, the plan.  Returns
+        the phase runners for PlanRun (None: the phase is made inside another one)."""
         r, d = self.rec, self.dev
         self.launchers = getattr(self, 'launchers', None) or [self.L]
         strat = ELEVATIONS[self.a.elevation or self.strategy_name]()
@@ -77,8 +78,7 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         self.osr = osr
         self.plan = run_plan([launcher_shape(L) for L in self.launchers], self.major, self.plan_options())
         r.say('plan, one boot (e2e/README.md "Scopes"):\n    ' + '\n    '.join(describe_plan(self.plan, self.launchers)))
-        owner = self.plan[0][0]
-        runners = {
+        return {
             'baseline': self.step0, 'install': lambda: self.step1(strat), 'choose': self.step2,
             'api-before': None,  # made by step2 while Home Chooser is open
             'screensaver': lambda: self.screensaver_selected(self.saver_baseline),
@@ -88,41 +88,27 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
             'update': self.step_update, 'launcher-update': self.step_launcher_update,
             'restore-repair': self.step_restore_repair, 'removal': self.step4, 'uninstall': self.step5,
         }
-        failed = set()
+
+    def end_run(self):
+        """What a run does after its last phase, whatever happened: the alert monitor closed, then the
+        cleanup (step 6) unless --until left the apps installed."""
+        r = self.rec
+        if getattr(self, 'ask_monitor', None):
+            self.ask_monitor.close()
+            self.ask_monitor = None
+        owner = self.plan[0][0]
+        if (owner, 'cleanup') in self.plan:
+            self.use_launcher(owner)
+            r.tag, r.scope = '', PER_RELEASE
+            self.step6()
+        else:
+            r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+
+    def run(self):
+        """The whole plan in order, then the cleanup (PlanRun)."""
+        run = PlanRun(self)
+        run.start()
         try:
-            for group in plan_groups([x for x in self.plan if x[1] != 'cleanup']):
-                index = group[0][0]
-                if index in failed:
-                    continue
-                self.use_launcher(index)
-                guard = PHASE[group[0][1]]['guard']
-                try:
-                    # 6.x to 9.x: no crash of WebAppMgr (or anything crashd reports) during the step
-                    snap = self.compositor_snapshot() if guard and self.uses_home_key_hook() else None
-                    for _, phase in group:
-                        r.scope = PHASE[phase]['scope']
-                        if runners[phase]:
-                            runners[phase]()
-                    if guard:
-                        self.check_no_crash('end of step', snap)
-                except ScreensaverOutcome:
-                    raise
-                except Exception as e:  # a later launcher: its failure is recorded and the next one runs
-                    if index == owner:
-                        raise
-                    import traceback
-                    r.say('runner error in %s:\n%s' % (self.L.spec, traceback.format_exc()))
-                    r.check('scenario ran to the end', False, repr(e))
-                    failed.add(index)
-        except ScreensaverOutcome as exc:
-            r.outcome('tvpower reboot readiness', exc.status, str(exc))
+            run.run_all()
         finally:
-            if getattr(self, 'ask_monitor', None):
-                self.ask_monitor.close()
-                self.ask_monitor = None
-            if (owner, 'cleanup') in self.plan:
-                self.use_launcher(owner)
-                r.tag, r.scope = '', PER_RELEASE
-                self.step6()
-            else:
-                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+            run.finish()

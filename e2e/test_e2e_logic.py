@@ -2940,9 +2940,11 @@ class Scopes(unittest.TestCase):
                          dict(RELEASE_OPTS, restore_repair=True)):
                 seen |= {p for _, p in hc_e2e.plan.run_plan(ALL6 + [('web', 'normal', True)], major, opts)}
         self.assertEqual(seen, set(hc_e2e.plan.PHASE))
-        source = __import__('inspect').getsource(hc_e2e.scenario.Scenario.run)
+        inspect = __import__('inspect')
+        runners = inspect.getsource(hc_e2e.scenario.Scenario.begin_run)  # the phase runners
         for phase in hc_e2e.plan.PHASE:
-            self.assertIn("'%s'" % phase, source, phase)
+            self.assertIn("'%s'" % phase, inspect.getsource(hc_e2e.scenario.Scenario.end_run)
+                          if phase == 'cleanup' else runners, phase)
 
     def test_release_tier_plan_per_release_once_overlay_only_its_scopes(self):
         for major in (5, 6, 9, 10, 11, 12):

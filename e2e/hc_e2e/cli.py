@@ -25,7 +25,7 @@ def interrupted(*_):
     raise KeyboardInterrupt
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description='Home Chooser E2E on a Beanjar VM or API contract on an ares TV')
     ap.add_argument('--scenario', choices=['lifecycle', 'screensaver', 'all'], default='lifecycle',
                     help='Home-key lifecycle (default), home and screensaver alone, or both')
@@ -93,56 +93,62 @@ def main():
                          'fall back to a 240 s MANUAL wait if proof fails; default closes the alert')
     ap.add_argument('--no-stop', action='store_true', help='leave the VM running at the end')
     ap.add_argument('--list', action='store_true', help='print the matrix and exit')
-    args = ap.parse_args()
-    if args.list:
-        for m in MATRIX:
-            print('%-5s %-18s %-10s %-9s %s' % (m[0], ' | '.join(candidates(m[1])), *m[2:]))
-        print('launchers: %s' % ', '.join(fixture_specs() + [DEMO_SPEC]))
-        return 0
-    if args.device:
-        if args.scenario != 'lifecycle' or args.saver_start != 'tvpower':
-            ap.error('--scenario screensaver/all and --saver-start beanjar require VM mode')
-        return run_device_api(args, ap)
-    if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
-        ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
-    if not args.vm:
-        ap.error('--vm or --device is required')
-    row = entry(args.vm)
-    vm = row[1]
-    if args.launchers:
-        specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
-    else:
-        specs = [args.launcher or 'fixture:web.normal']
-    args.multi = len(specs) > 1
-    if args.launcher_update_check and not args.launcher_update_ipk and not specs[0].startswith('fixture:web.'):
-        ap.error('--launcher-update-check needs --launcher-update-ipk unless the first launcher is a web fixture')
-    if args.multi and vm in KEEP_LAUNCHER_VMS:
-        ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
-    cfg = load_hosts(args.hosts_file)
-    launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
-                               lambda t: print(t, flush=True), api=api_build(sp, i, args.api_check))
-                 for i, sp in enumerate(specs)]
-    if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
-        ap.error('--scenario screensaver/all requires a normal fixture launcher')
-    args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
-    args.demo_target_ipk = demo_target_ipk(lambda t: print(t, flush=True)) \
-        if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
-    host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
-    timing.SLOWDOWN = host.slowdown
-    args.new_ipk, args.old_ref = args.hc_ipk, None
-    outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
-    os.makedirs(outdir)
-    rec = Recorder(outdir)
-    host.input_rec = rec if args.input == 'beanjar' or args.input_mode == 'click' else None
-    rec.say('artefacts: ' + outdir)
-    rec.say('host timing slowdown: %g' % host.slowdown)
-    rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
-    # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
-    signal.signal(signal.SIGTERM, interrupted)
-    started = False
-    scenario = None
-    old_tmp = None
-    try:
+    return ap
+
+
+class VmSession:
+    """One VM run around its Scenario: the options checked and the launchers built (__init__), the VM
+    prepared, started and cleaned of foreign launchers (bring_up), and the VNC and the VM stopped
+    whatever happened (tear_down).  main() runs the Scenario between them; so does the pytest session
+    fixture (e2e/device), one phase per test."""
+
+    def __init__(self, args, ap):
+        if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
+            ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
+        if not args.vm:
+            ap.error('--vm or --device is required')
+        row = entry(args.vm)
+        vm = row[1]
+        if args.launchers:
+            specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
+        else:
+            specs = [args.launcher or 'fixture:web.normal']
+        args.multi = len(specs) > 1
+        if args.launcher_update_check and not args.launcher_update_ipk and not specs[0].startswith('fixture:web.'):
+            ap.error('--launcher-update-check needs --launcher-update-ipk unless the first launcher is a web fixture')
+        if args.multi and vm in KEEP_LAUNCHER_VMS:
+            ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
+        cfg = load_hosts(args.hosts_file)
+        launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
+                                   lambda t: print(t, flush=True), api=api_build(sp, i, args.api_check))
+                     for i, sp in enumerate(specs)]
+        if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
+            ap.error('--scenario screensaver/all requires a normal fixture launcher')
+        args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
+        args.demo_target_ipk = demo_target_ipk(lambda t: print(t, flush=True)) \
+            if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
+        host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
+        timing.SLOWDOWN = host.slowdown
+        args.new_ipk, args.old_ref = args.hc_ipk, None
+        outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
+        os.makedirs(outdir)
+        rec = Recorder(outdir)
+        host.input_rec = rec if args.input == 'beanjar' or args.input_mode == 'click' else None
+        rec.say('artefacts: ' + outdir)
+        rec.say('host timing slowdown: %g' % host.slowdown)
+        rec.say('Beanjar host: %s (%s%s)' % (host.name, host.mode, ', ssh ' + host.device if host.mode == 'remote' else ''))
+        # the scheduler stops a run with SIGTERM or SIGINT; both unwind through the finally below, which stops the VM
+        signal.signal(signal.SIGTERM, interrupted)
+        self.args, self.ap, self.row, self.vm, self.launchers = args, ap, row, vm, launchers
+        self.host, self.outdir, self.rec = host, outdir, rec
+        self.started = False
+        self.scenario = None
+        self.old_tmp = None
+
+    def bring_up(self):
+        """Before the first phase: the old build (--update-check), the VM's settings, its start and root SSH,
+        the foreign launchers removed; then self.scenario."""
+        args, host, vm, rec, row, launchers = self.args, self.host, self.vm, self.rec, self.row, self.launchers
         if not shutil.which('beanjar'):
             raise SystemExit('beanjar not on PATH (VMs are reached with beanjar ares-TOOL)')
         if not (shutil.which('ares-do') or os.path.exists(os.path.expanduser('~/.cargo/bin/ares-do'))):
@@ -153,11 +159,11 @@ def main():
             rec.say('--update-check: old build from git ref %s (%s)' % (args.old_ref, full.strip()))
             args.new_ipk = args.new_ipk or current_home_chooser_ipk(rec, args.build)
             if not args.old_ipk:
-                args.old_ipk, old_tmp = build_old_home_chooser(args.old_ref, rec)
+                args.old_ipk, self.old_tmp = build_old_home_chooser(args.old_ref, rec)
             for label, f in (('old', args.old_ipk), ('current', args.new_ipk)):
                 rec.say('%s Home Chooser ipk %s version %s' % (label, f, ipk_appinfo(f).get('version')))
         prepare_vm(host, vm, rec)
-        started = True  # before the start, so a start interrupted half-way is stopped too
+        self.started = True  # before the start, so a start interrupted half-way is stopped too
         rc, out = host.start(vm)
         rec.say('beanjar start: %s' % out.strip()[-200:])
         rec.say('waiting for the VM to answer on its LAN address')
@@ -182,10 +188,49 @@ def main():
         removed_launchers = clean_launchers(dev, rec)
         # every launcher on this one boot: the first makes the whole lifecycle, the later ones switch in
         # through Home Chooser and make only their scopes (run_plan; e2e/README.md "Scopes")
-        scenario = Scenario(args, host, rec, row, launchers[0], launchers)
+        self.scenario = scenario = Scenario(args, host, rec, row, launchers[0], launchers)
         rec.on_fail = scenario.fail_shot
         restart_after_launcher_cleanup(scenario, removed_launchers)
-        scenario.run()
+
+    def tear_down(self):
+        """After the run, whatever happened: the inspector closed, VNC and the VM stopped (not with --no-stop
+        or on a VM that keeps its launcher), the old build's temporary tree removed.  The caller finishes
+        the Recorder."""
+        args, host, vm, rec = self.args, self.host, self.vm, self.rec
+        rec.on_fail = None
+        if self.scenario and self.scenario.insp:
+            self.scenario.insp.close()
+        if self.started:
+            host.vnc_stop(vm)
+        if self.started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
+            if self.scenario and self.scenario.viewer_opened:
+                host.viewer_close(vm)
+            host.input_rec = None  # VNC cleanup above also covers --no-stop
+            rc, out = host.stop(vm)
+            rec.say('beanjar stop: %s' % out.strip()[-200:])
+        elif self.started and vm in KEEP_LAUNCHER_VMS:
+            rec.say('%s is left running for the manual restore of its end state' % vm)
+        if self.old_tmp:
+            shutil.rmtree(self.old_tmp, ignore_errors=True)
+
+
+def main(argv=None):
+    ap = build_parser()
+    args = ap.parse_args(argv)
+    if args.list:
+        for m in MATRIX:
+            print('%-5s %-18s %-10s %-9s %s' % (m[0], ' | '.join(candidates(m[1])), *m[2:]))
+        print('launchers: %s' % ', '.join(fixture_specs() + [DEMO_SPEC]))
+        return 0
+    if args.device:
+        if args.scenario != 'lifecycle' or args.saver_start != 'tvpower':
+            ap.error('--scenario screensaver/all and --saver-start beanjar require VM mode')
+        return run_device_api(args, ap)
+    session = VmSession(args, ap)
+    rec = session.rec
+    try:
+        session.bring_up()
+        session.scenario.run()
     except SystemExit as e:
         rec.say('abort: %s' % e)
         rec.on_fail = None
@@ -196,20 +241,6 @@ def main():
         rec.on_fail = None
         rec.check('scenario ran to the end', False, repr(e))
     finally:
-        rec.on_fail = None
-        if scenario and scenario.insp:
-            scenario.insp.close()
-        if started:
-            host.vnc_stop(vm)
-        if started and not args.no_stop and vm not in KEEP_LAUNCHER_VMS:
-            if scenario and scenario.viewer_opened:
-                host.viewer_close(vm)
-            host.input_rec = None  # VNC cleanup above also covers --no-stop
-            rc, out = host.stop(vm)
-            rec.say('beanjar stop: %s' % out.strip()[-200:])
-        elif started and vm in KEEP_LAUNCHER_VMS:
-            rec.say('%s is left running for the manual restore of its end state' % vm)
-        if old_tmp:
-            shutil.rmtree(old_tmp, ignore_errors=True)
+        session.tear_down()
         counts = rec.finish()
     return 1 if counts.get('FAIL') else 0
