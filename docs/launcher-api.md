@@ -416,7 +416,7 @@ answers with a string `errorCode` from the table.
 
 | `errorCode` | Cause | What to do |
 | --- | --- | --- |
-| platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old, or the bus denied delivery because the permission was not installed with your app | Call `getInfo`; offer to install or open Home Chooser; ask for a reinstall if `permitted` was false |
+| platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old, or the bus denied delivery because the permission was not installed with your app (on 11.2.0 a page's calls are always denied, see [Permission on 5.x to 10.x and on 11.x and 12.x](#permission-on-5x-to-10x-and-on-11x-and-12x)) | Call `getInfo`; offer to install or open Home Chooser; ask for a reinstall if `permitted` was false |
 | `forbidden` | The caller has no valid application id | Call from the app. A shell `luna-send` needs `-a <app id>` |
 | `notRoot` | The service is not elevated | Ask the owner to open Home Chooser |
 | `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
@@ -522,12 +522,16 @@ the profile's own stock launcher.
 On 5.x to 10.x a developer app's declared permission becomes one of its client permissions, and
 Home Chooser's access file maps the group `org.webosbrew.homechooser.applications` to the eight launcher methods.
 
-On 11.x and 12.x a developer app keeps only the groups `ares.webos.cli` and `public` in its own
-client-permissions file, whatever its `requiredPermissions` says, so the permission is not listed
-there. Access comes through Home Chooser's API file instead, which on these releases also grants
-the eight methods to `ares.webos.cli`. The service still demands the declared permission in the
-installed appinfo, so nothing changes for your appinfo: declare the permission, and `getInfo`
-reports `permitted`. Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate
+On 11.x and 12.x the declared permission is not listed in a developer app's client-permissions
+file, whatever its `requiredPermissions` says. On 11.2.0 that file holds exactly the `public` list
+of the system's `allowed_groups.json` (`application.query`, `application.launcher` and 31 more),
+and neither `ares.webos.cli` nor `public`. Home Chooser's API file also grants the eight methods to
+`ares.webos.cli`, but that group reaches only `luna-send` and the ares tools, not a page. So on
+11.2.0 a web launcher's own calls are refused by the bus: `getInfo` from the page replies
+`{"returnValue":false,"errorCode":-1,"errorText":"Denied method call \"getInfo\" for category \"/\""}`,
+which the client reports with `source` `platform`, while the same call through
+`luna-send -a <your id>` succeeds. Declare the permission all the same: the service demands it in
+the installed appinfo, and `getInfo` reports `permitted` from it. Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate
 Home Chooser's service from an ordinary app (`Denied method call`), so `root` stays false until the
 owner elevates it by other means or a newer Homebrew Channel allows it. The layout of the access
 files is in [the service reference](service.md#luna-access-files).
