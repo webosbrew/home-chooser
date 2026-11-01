@@ -11,6 +11,11 @@
       Runs every example and case through the real handlers (DRIVER, test-launcher-contract, started
       as RUNNER... DRIVER, for example under qemu-arm) and compares each reply with the expected
       result and each luna-send run with the expected calls.
+  launcher-spec.py doc SPEC GUIDE
+      GUIDE (docs/launcher-api.md) against SPEC: the "## Methods" section has one heading per
+      method; each method's "Errors:" paragraph names exactly the method's errorCode values; the
+      methods table agrees with x-needsRoot, x-needsPermission and x-needsSelectedHome; and the
+      "Error handling" table lists exactly x-errors.
 
 Standard library only. The JSON Schema checks are the draft-07 subset in api/tools/launcher_schema.py;
 it refuses a keyword it does not implement, so a schema cannot silently pass on an unchecked
@@ -375,9 +380,98 @@ def contract(spec_path, cases_path, driver, workdir, runner):
     return 1 if failed else 0
 
 
+# ---- the prose guide ----
+
+def guide_section(text, heading):
+    """The lines of a '## heading' section of a Markdown file, up to the next '## '."""
+    lines = text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip() == '## ' + heading), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('## ')), len(lines))
+    return lines[start + 1:end]
+
+
+def guide_errors(paragraph, codes, per_method):
+    """errorCode values an "Errors:" paragraph names: backticked known codes, and "as `method`"."""
+    text = paragraph[paragraph.index('Errors:'):]
+    found = set()
+    for m in re.finditer(r'\bas `(\w+)`', text):
+        found |= per_method.get(m.group(1), set())
+    found |= {c for c in re.findall(r'`(\w+)`', text) if c in codes}
+    return found
+
+
+def doc(spec_path, guide_path):
+    spec = load(spec_path)
+    with open(guide_path, encoding='utf-8') as f:
+        text = f.read()
+    sv = Validator([])
+    methods = {m['name']: m for m in spec['methods']}
+    want = {n: error_codes(m['result']['schema'], sv, spec) for n, m in methods.items()}
+    codes = set(spec['x-errors'])
+    problems = []
+    section = guide_section(text, 'Methods')
+    if section is None:
+        problems.append('no "## Methods" section')
+        section = []
+    # One "### `name {...}`" heading per method, then its paragraphs.
+    blocks, current = {}, None
+    for line in section:
+        m = re.match(r'### `(\w+)', line)
+        if m:
+            current = m.group(1)
+            blocks[current] = []
+        elif current:
+            blocks[current].append(line)
+    if sorted(blocks) != sorted(methods):
+        problems.append('method headings %s, the spec has %s' % (sorted(blocks), sorted(methods)))
+    found = {}
+    for name in [n for n in methods if n in blocks]:  # spec order, so "as `listApps`" is resolved first
+        paragraphs = [p for p in '\n'.join(blocks[name]).split('\n\n') if 'Errors:' in p]
+        if len(paragraphs) != 1:
+            problems.append('%s: %d "Errors:" paragraphs, not 1' % (name, len(paragraphs)))
+            continue
+        found[name] = guide_errors(' '.join(paragraphs[0].split()), codes, found)
+        if found[name] != want[name]:
+            problems.append('%s: the guide names %s, the spec has %s (missing %s, extra %s)' % (
+                name, sorted(found[name]), sorted(want[name]), sorted(want[name] - found[name]) or '-',
+                sorted(found[name] - want[name]) or '-'))
+    # The methods table: | `name` | root | permission | selected Home | apiVersion |
+    rows = {}
+    for line in section:
+        m = re.match(r'\| `(\w+)` \|(.*)\|\s*$', line)
+        if m:
+            rows[m.group(1)] = [c.strip() for c in m.group(2).split('|')]
+    if sorted(rows) != sorted(methods):
+        problems.append('methods table rows %s, the spec has %s' % (sorted(rows), sorted(methods)))
+    for name, cells in rows.items():
+        if name not in methods or len(cells) < 3:
+            continue
+        for cell, key in zip(cells, ('x-needsRoot', 'x-needsPermission', 'x-needsSelectedHome')):
+            if cell.split()[0] not in ('yes', 'no') or (cell.split()[0] == 'yes') != bool(methods[name].get(key)):
+                problems.append('methods table: %s says %r, the spec has %s %s' % (name, cell, key, methods[name].get(key)))
+    # The "Error handling" table.
+    table = set()
+    lines = guide_section(text, 'Error handling') or []
+    for i, line in enumerate(lines):
+        m = re.match(r'\| `(\w+)` \|', line)
+        if m and not (i + 1 < len(lines) and lines[i + 1].startswith('| ---')):  # not the header row
+            table.add(m.group(1))
+    if table != codes:
+        problems.append('"Error handling" table lists %s, x-errors has %s' % (sorted(table), sorted(codes)))
+    for p in problems:
+        print('FAIL ' + p)
+    print('doc: %d methods, %d error codes in %s: %s' % (
+        len(found), len(table), os.path.basename(guide_path), 'ok' if not problems else '%d problem(s)' % len(problems)))
+    return 1 if problems else 0
+
+
 def main(argv):
     if len(argv) >= 4 and argv[0] == 'lint':
         return lint(argv[1], argv[2], argv[3:])
+    if len(argv) == 3 and argv[0] == 'doc':
+        return doc(argv[1], argv[2])
     if len(argv) >= 5 and argv[0] == 'contract':
         return contract(argv[1], argv[2], argv[3], argv[4], argv[5:])
     print(__doc__, file=sys.stderr)

@@ -10,6 +10,7 @@
 #   test-launcher-contract  the real launcher API handlers on a fake hub, against api/launcher-v1.openrpc.json
 #                      (ARM program test-launcher-contract, driven by launcher-spec.py)
 #   test-launcher-spec the launcher API description against the OpenRPC meta-schema (python3 only)
+#   test-launcher-doc  docs/launcher-api.md's methods and errorCode lists against the spec (python3 only)
 #   test-launcher-client     api/client is what api/tools/gen-client.py makes from the spec (python3 only)
 #   test-launcher-client-js  the client and mock in node against a fake bridge (when node is found)
 # The ARM programs run against KEYFILTER_ROOTFS's libraries (and its systemUi.js); the paths are in
@@ -44,6 +45,9 @@ set(launcher_spec "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/launcher-spec.py"
 set(launcher_cases "${CMAKE_CURRENT_SOURCE_DIR}/launcher-contract-cases.json")
 add_test(NAME test-launcher-spec COMMAND ${launcher_spec} lint "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
 	"${api}/vendor/openrpc-meta-schema-1.14.9.json" "${api}/vendor/json-schema-tools-meta-schema-1.8.3.json")
+# docs/launcher-api.md names the same methods, per-method errorCode lists and error table as the spec.
+add_test(NAME test-launcher-doc COMMAND ${launcher_spec} doc "${api}/launcher-v1.openrpc.json"
+	"${CMAKE_CURRENT_SOURCE_DIR}/../../docs/launcher-api.md")
 # The generated client (api/client) and its copies in examples/web-launcher match the spec; with node,
 # the client and the mock run against a fake bridge and every mock reply validates against the spec.
 add_test(NAME test-launcher-client COMMAND "${PYTHON3}" -I "${api}/tools/gen-client.py" --check)
