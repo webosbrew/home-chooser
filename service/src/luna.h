@@ -22,5 +22,9 @@ void hc_luna_close(HCLuna *client);
 char *hc_luna_call(const char *uri, const char *payload, int timeout_s, void *client);
 HCSubscription *hc_luna_subscribe(HCLuna *client, const char *uri, const char *payload,
     HCSubscriptionReply reply, void *context);
+/* One reply (-n 1) without blocking: reply(text) for the reply, then reply(NULL, TRUE) at the end.
+ * The caller bounds it and frees it with hc_luna_cancel, never from inside reply. */
+HCSubscription *hc_luna_once(HCLuna *client, const char *uri, const char *payload,
+    HCSubscriptionReply reply, void *context);
 void hc_luna_cancel(HCSubscription *subscription);
 #endif

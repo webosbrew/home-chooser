@@ -185,6 +185,51 @@ static void test_icon_confinement(void)
 	rmdir(app); rmdir(outside); rmdir(root);
 }
 
+/* Launch point and input icons: fixed directories under a prefix, real paths, no "..", images only. */
+static void test_fixed_icon_dirs(void)
+{
+	char root[] = "test/iconXXXXXX", prefix[1024], path[1200], resolved[1200];
+	CHECK(mkdtemp(root) != NULL);
+	CHECK(realpath(root, prefix) != NULL);
+	const char *const dirs[] = {"/mnt/otncabi/usr/palm/applications/netflix", "/mnt/otncabi/usr/palm/applications/other",
+		"/usr/palm/plugins/inputapps/assets/small", "/tmp", NULL};
+	for (int i = 0; dirs[i]; i++) {
+		char d[1200], *slash;
+		snprintf(d, sizeof d, "%s%s", prefix, dirs[i]);
+		for (slash = d + strlen(prefix) + 1; (slash = strchr(slash, '/')); slash++) { *slash = 0; mkdir(d, 0700); *slash = '/'; }
+		CHECK(mkdir(d, 0700) == 0);
+	}
+	const char *const files[] = {"/mnt/otncabi/usr/palm/applications/netflix/icon.png", "/mnt/otncabi/usr/palm/applications/netflix/notes.txt",
+		"/mnt/otncabi/usr/palm/applications/other/icon.png", "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png", "/tmp/x.png", NULL};
+	for (int i = 0; files[i]; i++) {
+		snprintf(path, sizeof path, "%s%s", prefix, files[i]);
+		FILE *f = fopen(path, "w");
+		CHECK(f != NULL);
+		if (f) { fputs("x", f); fclose(f); }
+	}
+	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/escape.png", prefix);
+	CHECK(symlink("../../../../../../tmp/x.png", path) == 0);
+	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/icon.png", prefix);
+	CHECK(hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved) && strcmp(resolved, path) == 0);
+	CHECK(!hc_launch_point_icon_resolve(prefix, "other", path, resolved, sizeof resolved));      /* another app's folder */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "../x", path, resolved, sizeof resolved));       /* not an app id */
+	CHECK(!hc_launch_point_icon_resolve("", "netflix", path, resolved, sizeof resolved));       /* not under the real root */
+	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/notes.txt", prefix);
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* not an image */
+	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/escape.png", prefix);
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* symlink escape */
+	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/../other/icon.png", prefix);
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* ".." */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", "icon.png", resolved, sizeof resolved)); /* relative */
+	snprintf(path, sizeof path, "%s/usr/palm/plugins/inputapps/assets/small/HDMI_1.png", prefix);
+	CHECK(hc_input_icon_resolve(prefix, path, resolved, sizeof resolved) && strcmp(resolved, path) == 0);
+	snprintf(path, sizeof path, "%s/tmp/x.png", prefix);
+	CHECK(!hc_input_icon_resolve(prefix, path, resolved, sizeof resolved));
+	char cleanup[1200];
+	snprintf(cleanup, sizeof cleanup, "rm -rf '%s'", root);
+	CHECK(system(cleanup) == 0);
+}
+
 static void test_base64_and_lines(void)
 {
 	char out[32];
@@ -303,6 +348,8 @@ static void test_luna_run(void)
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/removeLaunchPoint"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/launch"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.service.eim/getLastInput"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.eim/getAllInputStatus"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/listLaunchPoints"));
     CHECK(hc_luna_argv("luna://com.webos.service.config/getConfigs", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.service.config/setConfigs", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.surfacemanager/getCurrentState", "{}", 1, argv));
@@ -338,7 +385,8 @@ static int list_field_index(const char *name)
 static void test_list_fields(void)
 {
 	/* the apiVersion 1 fields stay; appCategory is added so a launcher can find the other launchers */
-	static const char *const v1[] = {"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory"};
+	static const char *const v1[] = {"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory",
+		"iconColor", "bgColor"};
 	int n = 0;
 	while (hc_launcher_list_fields[n]) n++;
 	CHECK(n == (int)(sizeof v1 / sizeof v1[0]));
@@ -426,6 +474,7 @@ int main(void)
 	test_luna_run();
 	test_reboot();
 	test_list_fields();
+	test_fixed_icon_dirs();
 	test_api_v1();
 	printf("%d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

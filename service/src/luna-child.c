@@ -238,6 +238,11 @@ HCSubscription *hc_luna_subscribe(HCLuna *c, const char *uri, const char *payloa
 {
     return start_child(c, uri, payload, reply, context, FALSE);
 }
+HCSubscription *hc_luna_once(HCLuna *c, const char *uri, const char *payload,
+    HCSubscriptionReply reply, void *context)
+{
+    return start_child(c, uri, payload, reply, context, TRUE);
+}
 typedef struct { GMainLoop *loop; char *text; gboolean timed_out; } OneReply;
 static void one_reply(const char *text, gboolean ended, void *context)
 {
