@@ -21,10 +21,12 @@ What it does:
   type under the message gives the error as the client reports it: `source`, `errorCode` and
   `errorText`.
 * It lists the apps with `listApps`, without itself and without apps marked `visible: false`,
-  sorted by title (ignoring case), then by id. The first app has the focus.
-* Icons come from `getAppIcon`, one call at a time, cached in memory by app id and version. An app
-  without a readable icon (`noIcon`, `iconTooLarge`) gets a letter placeholder.
-* Arrow keys move the focus. OK opens the focused app with
+  sorted by title (ignoring case), then by id, and after them the TV's inputs from `listInputs`
+  (HDMI 1, ...). The first app has the focus.
+* Icons come from `getIcons`, up to 64 in one call, cached in memory by app id and version (an input
+  by its `inputId` and icon path), so a refresh asks only for new tiles. A tile without a readable
+  icon (`noIcon`, `iconTooLarge`) gets a letter placeholder.
+* Arrow keys move the focus. OK opens the focused app or switches to the focused input with
   `luna://com.webos.applicationManager/launch {"id": ...}`. Back returns the focus to the first app
   and never closes the launcher (`disableBackHistoryAPI` in `appinfo.json` hands the key to the
   page).
@@ -32,7 +34,7 @@ What it does:
   moves the focus back to the first app) and when the page becomes visible again.
 
 **Pending device confirmation.** Two choices are not yet confirmed on a TV: starting apps with
-`applicationManager/launch` from this app, and reading icons with `getAppIcon` instead of loading
+`applicationManager/launch` from this app, and reading icons with `getIcons` instead of loading
 `folderPath` + `icon` as a `file://` URL.
 
 ## Try it in a browser

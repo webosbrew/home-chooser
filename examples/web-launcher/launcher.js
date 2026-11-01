@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-// Example full-screen launcher for Home Chooser: a grid of the installed apps. Plain ES5, no build
-// step, so it runs as it is in the web runtime of webOS 5 (Chromium 68) and later.
+// Example full-screen launcher for Home Chooser: a grid of the installed apps, then the TV's inputs.
+// Plain ES5, no build step, so it runs as it is in the web runtime of webOS 5 (Chromium 68) and later.
 //
-// PENDING DEVICE CONFIRMATION: two choices here are not yet confirmed on a TV. Apps are started with
-// luna://com.webos.applicationManager/launch {id} (launchApp below), and icons are read with
-// Home Chooser's getAppIcon rather than as file:// paths from listApps (loadIcons below).
+// PENDING DEVICE CONFIRMATION: two choices here are not yet confirmed on a TV. Apps and inputs are
+// started with luna://com.webos.applicationManager/launch {id} (launchApp below), and icons are read
+// with Home Chooser's getIcons rather than as file:// paths from listApps (loadIcons below).
 (function () {
 	'use strict';
 
@@ -39,9 +39,9 @@
 
 	var HC = window.HomeChooser;
 	var selfId = HC.ownAppId();
-	var apps = [];
+	var apps = [];            // the tiles: the ordered apps, then the inputs ({id, title, inputId})
 	var focus = 0;            // index into apps; -1 is the banner button
-	var iconCache = {};       // id@version -> data: URL, or null for "use the placeholder"
+	var iconCache = {};       // app id@version or input:inputId@icon -> data: URL, or null for the placeholder
 	var generation = 0;       // bumped on every refresh; an older icon queue stops
 	var refreshTimer = null;
 	var toastTimer = null;
@@ -147,33 +147,42 @@
 		return Math.max(n, 1);
 	}
 
-	// Icons one call at a time, in grid order. getAppIcon reads the file as root, so it works for a
-	// jailed launcher too; noIcon, iconTooLarge and any other failure keep the placeholder.
+	// The icon cache key and the getIcons item of a tile.
+	function iconKey(app) {
+		return app.inputId ? 'input:' + app.inputId + '@' + (app.icon || '') : app.id + '@' + (app.version || '');
+	}
+
+	function iconItem(app) {
+		return app.inputId ? {inputId: app.inputId} : {id: app.id};
+	}
+
+	// Icons in batches of up to 64 per getIcons call, in grid order, only for tiles not cached yet.
+	// getIcons reads the files as root, so it works for a jailed launcher too; an entry with an
+	// errorCode keeps the placeholder (overBudget is asked again by the next batch).
 	function loadIcons(gen) {
-		var i = 0;
-		function next() {
-			if (gen !== generation || i >= apps.length) return;
-			var index = i++;
-			var app = apps[index];
-			var key = app.id + '@' + (app.version || '');
-			if (Object.prototype.hasOwnProperty.call(iconCache, key)) {
-				showIcon(index, iconCache[key]);
-				next();
-				return;
-			}
-			HC.getAppIcon({id: app.id}).then(function (r) {
-				iconCache[key] = 'data:' + r.mimeType + ';base64,' + r.data;
+		var pending = [];
+		for (var i = 0; i < apps.length; i++) {
+			if (Object.prototype.hasOwnProperty.call(iconCache, iconKey(apps[i]))) showIcon(i, iconCache[iconKey(apps[i])]);
+			else pending.push(i);
+		}
+		function next(retries) {
+			if (gen !== generation || !pending.length || retries > 3) return;
+			var batch = pending.splice(0, 64);
+			HC.getIcons({items: batch.map(function (index) { return iconItem(apps[index]); })}).then(function (r) {
+				r.icons.forEach(function (icon, n) {
+					if (icon.errorCode === 'overBudget') {
+						pending.push(batch[n]);
+						return;
+					}
+					iconCache[iconKey(apps[batch[n]])] = icon.dataUrl || null;
+					if (gen === generation) showIcon(batch[n], icon.dataUrl);
+				});
+				next(r.icons.length && pending.length && r.icons.every(function (i) { return i.errorCode === 'overBudget'; }) ? retries + 1 : 0);
 			}, function (e) {
-				iconCache[key] = null;
-				if (e.source !== 'homechooser' || (e.errorCode !== 'noIcon' && e.errorCode !== 'iconTooLarge')) {
-					console.warn('getAppIcon', app.id, e.errorCode, e.errorText);
-				}
-			}).then(function () {
-				if (gen === generation) showIcon(index, iconCache[key]);
-				next();
+				console.warn('getIcons', e.source, e.errorCode, e.errorText);
 			});
 		}
-		next();
+		next(0);
 	}
 
 	// ---- start and refresh ----
@@ -196,9 +205,13 @@
 				return;
 			}
 			banner(info.isSelectedHome ? null : 'Make this launcher the app the Home button opens?', !info.isSelectedHome);
-			return HC.listApps().then(function (r) {
+			// The inputs are optional: an older Home Chooser has no listInputs.
+			var inputs = HC.listInputs().then(function (r) { return r.inputs; }, function () { return []; });
+			return Promise.all([HC.listApps(), inputs]).then(function (results) {
 				if (gen !== generation) return;
-				apps = orderApps(r.apps, selfId);
+				apps = orderApps(results[0].apps, selfId).concat(results[1].map(function (input) {
+					return {id: input.id, title: input.label || input.inputId, inputId: input.inputId, icon: input.icon};
+				}));
 				render();
 				loadIcons(gen);
 			});
