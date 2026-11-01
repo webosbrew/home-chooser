@@ -231,6 +231,19 @@ def idle_app_stock(idle):
     return isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == STOCK
 
 
+# --removal-race: the platform must be stock within this many seconds (times the host slowdown) of the
+# launcher's removal, one confirmation (15 s) and the removal calls, not two confirmations (about 30 s).
+REMOVAL_RACE_REVERT_S = 25
+
+
+def platform_stock(major, record_home, stock_id, override, idle):
+    """Nothing Home Chooser writes names a launcher any more: the record's home is stock (5-9: the stock id,
+    10+: null or unset) and, on 10+, the override file is gone and getProfiles' idleApp is LG Home again."""
+    if not stock_record_ok(major, record_home, stock_id):
+        return False
+    return major < 10 or (override == 'no' and idle_app_stock(idle))
+
+
 def stock_home_id(major, fullhome_installed):
     """The id restore/removal/uninstall write as `home` on 5.x to 9.x (docs/settings-app.md): fullhome
     if it is installed, else com.webos.app.home.  10+ write null: None."""
@@ -3212,6 +3225,9 @@ class Scenario:
                 if i == 3 and self.a.restore_repair_check:
                     guarded(self.step_restore_repair)
                     break
+                if i == 3 and getattr(self.a, 'removal_race', False):
+                    guarded(self.step_removal_race)
+                    break
         except ScreensaverOutcome as exc:
             r.outcome('tvpower reboot readiness', exc.status, str(exc))
         finally:
@@ -5248,6 +5264,60 @@ class Scenario:
                     after_boot['override'] == 'no', after_boot['override'])
         self.check_preload_on('after the cleanup boot')
 
+    def platform_stock_now(self):
+        d = self.dev
+        override = d.sh('test -e %s && echo yes || echo no' % OVERRIDE)[1].strip() if self.uses_override() else 'no'
+        idle = self.idle_app()[0] if self.uses_override() else None
+        return platform_stock(self.major, d.record_home()[0], self.stock_id, override, idle)
+
+    def step_removal_race(self):
+        """--removal-race: the owner removes the chosen launcher and then Home Chooser at once, without waiting
+        (docs/settings-app.md "Both removed").  The platform is stock one confirmation after the launcher's
+        removal, the restore finishes, and closing the last app shows LG Home or the last input, never the
+        black screen of an idleApp or record naming the removed launcher."""
+        r, d = self.rec, self.dev
+        r.begin('3r launcher and Home Chooser removed back to back')
+        toasts_before = len(self.notif_lines('createToast'))
+        alerts_before = len(self.notif_lines('createAlert'))
+        t0 = time.time()
+        rc, out = d.remove(self.launcher)
+        r.check('ares-install --remove launcher', rc == 0, out.strip()[-400:])
+        t1 = time.time()
+        rc, out = d.remove(APP_ID)
+        r.check('ares-install --remove Home Chooser right after the launcher', rc == 0, out.strip()[-400:])
+        r.note('removal calls', 'launcher %.1f s, then Home Chooser %.1f s' % (t1 - t0, time.time() - t1))
+        stock_at = self.wait(lambda: self.platform_stock_now() and time.time(), 120, 1)
+        elapsed = (stock_at - t0) if stock_at else None
+        bound = seconds(REMOVAL_RACE_REVERT_S)
+        r.check('platform stock again (record home%s) within %.0f s of the launcher removal'
+                % (', no override, idleApp LG Home' if self.uses_override() else '', bound),
+                elapsed is not None and elapsed <= bound,
+                'stock after %s' % ('%.1f s' % elapsed if elapsed is not None else 'never (120 s)'))
+        self.check_toast(toasts_before)
+        done = self.wait(lambda: self.watcher_active() != 'active'
+                         and 'No such file' in d.sh('cat %s 2>&1' % CHOICE)[1], 150, 5)
+        s = self.state()
+        r.note('state after both removals', json.dumps(s))
+        r.check('the watcher finished the restore: choice file and init.d entry gone, watcher stopped',
+                bool(done) and ('No such file' in s['initd'] or s['initd'] == ''), json.dumps(s))
+        self.assert_stock('after the back-to-back removal', s, baked_emptied=False)
+        self.check_preload_on('after the back-to-back removal')
+        alerts = self.notif_lines('createAlert')[alerts_before:]
+        r.note('launcher-removed alerts after the back-to-back removal (none expected when Home Chooser went '
+               'within the launcher\'s confirmation)', '\n'.join(alerts) or 'none')
+        r.note('watcher log', d.sh('tail -n 20 /tmp/homechooser-home.log')[1])
+        # The last app closes: SAM opens idleApp (10+) or the stock home; a removed launcher would leave it black.
+        self.front_app()
+        rc, out = d.close('org.webosbrew.hbchannel')
+        r.check('close Homebrew Channel, the only app in front', rc == 0, out.strip()[-300:])
+        fg = self.wait(lambda: (lambda x: x if x[0] and x[0] != 'org.webosbrew.hbchannel' else None)(d.foreground()), 30, 2)
+        sleep(3)
+        self.shot('3r-last-app-closed')
+        fg = d.foreground()
+        r.check('after the last app closed: LG Home or the last input is in front, not the removed launcher',
+                bool(fg[0]) and fg[0] not in (self.launcher, 'org.webosbrew.hbchannel'), fg[1][:400])
+        self.home_press(STOCK, '3r-home-stock')
+
     def step5(self):
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
@@ -5604,6 +5674,8 @@ def main():
                     help='updated launcher ipk for --launcher-update-check (web fixture builds version 1.0.1 automatically)')
     ap.add_argument('--restore-repair-check', action='store_true',
                     help='after selection stop the watcher, uninstall, model a partial restore, and verify reinstall repairs Home')
+    ap.add_argument('--removal-race', action='store_true',
+                    help='after step 3 remove the launcher and Home Chooser back to back (step 3r), check stock, then clean up')
     ap.add_argument('--update-check', action='store_true',
                     help='install an older Home Chooser first, choose the launcher, then install the current build over it '
                          '(step 3u) and check that everything survives')
@@ -5658,6 +5730,8 @@ def main():
         return run_device_api(args, ap)
     if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
         ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
+    if args.removal_race and (args.restore_repair_check or args.scenario != 'lifecycle' or args.until < 3):
+        ap.error('--removal-race runs after step 3 of the lifecycle scenario, alone')
     if not args.vm:
         ap.error('--vm or --device is required')
     row = entry(args.vm)
