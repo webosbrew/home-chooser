@@ -155,6 +155,15 @@ static void finish(HCWatch *w)
     if (!w->only_close || ids_count(w)) return;
     /* Only here to close: with nothing left, no hold is needed either. */
     if (w->prev_hold) { hold_end(w); ids_save(w); }
+    /* No choice and no Home key hook: the boot entry has nothing left to do, and would dangle once Home
+     * Chooser is uninstalled (no watcher is left to remove it then). */
+    char *choice = watch_choice(w), *flag = g_build_filename(w->c.state_dir, "homekey", NULL);
+    struct stat st;
+    if (!choice && !g_file_test(flag, G_FILE_TEST_EXISTS) && !lstat(w->c.init_link, &st) && S_ISLNK(st.st_mode)) {
+        unlink(w->c.init_link);
+        watch_log(w, "previous launcher: no choice and no Home key hook; boot entry removed");
+    }
+    g_free(choice); g_free(flag);
     hc_watch_stop(w, 0, "previous launcher: nothing left to close, exiting");
 }
 /* Close what can be closed now: a full-screen app other than the launcher and Home Chooser is in front. */

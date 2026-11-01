@@ -869,16 +869,23 @@ static void test_previous(void) {
     front(f, "my.home"); CHECK("P08 both once", count_of(f->closed, "older.home") == 1 && count_of(f->closed, "old.home") == 1); teardown(f);
     /* P09: LG Home chosen again (no choice): the watcher stays only to close, then exits. */
     for (int major = 5; major <= 12; major++) {
-        f = switch_setup(major, NULL, "old.home\n", "old.home"); record(f, "{\"home\":\"com.webos.app.home\"}"); start(f);
+        f = switch_setup(major, NULL, "old.home\n", "old.home"); record(f, "{\"home\":\"com.webos.app.home\"}");
+        unlink(path(f, f->c.state_dir, "homekey")); /* the fixture enables the Home key hook */
+        start(f);
         CHECK("P09 no choice, a launcher to close: running", hc_watch_status(f->w) == -1 && f->w->only_close && f->w->prev_hold);
         life(f, HC_APP_ID, "close"); event(f, 'A', "{}"); event(f, 'T', NULL); settings(f, "{\"home\":\"com.webos.app.home\"}");
         CHECK("P09 old launcher still in front: running", hc_watch_status(f->w) == -1 && !count_of(f->closed, "old.home"));
         front(f, STOCK); /* the owner pressed Home: LG Home, full-screen, in front */
         CHECK("P09 closed once, then exit 0", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && !pending_file(f));
+        CHECK("P09 boot entry removed with no choice and no hook", !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
         CHECK("P09 no write while only closing", !f->sets && !f->defaults && !f->gate_on && !f->preload_off);
         CHECK("P09 never a stock home", !count_of(f->closed, STOCK));
         teardown(f);
     }
+    /* P09h: the Home key hook is enabled: the boot entry stays. */
+    f = switch_setup(8, NULL, "old.home\n", "old.home"); file(path(f, f->c.state_dir, "homekey"), "");
+    record(f, "{\"home\":\"com.webos.app.home\"}"); start(f); front(f, STOCK);
+    CHECK("P09h closed, exit 0, entry kept for the hook", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK)); teardown(f);
     f = switch_setup(8, NULL, "", LIVETV); start(f);
     CHECK("P09 no choice, nothing to close: exits as before", hc_watch_status(f->w) == 0 && !pending_file(f)); teardown(f);
     f = switch_setup(8, NULL, "old.home\n", "old.home"); start(f); installed(f, "old.home", -1); event(f, 'A', "{}");
