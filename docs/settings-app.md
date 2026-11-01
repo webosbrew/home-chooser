@@ -181,9 +181,10 @@ Home Chooser keeps its own copy of the choice and enforces it.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
   (`/tmp/homechooser-home.log`).
 
-Tests: `make -C service test-watcher` runs the C policy and child-transport/runtime tests under
-qemu-arm with firmware libraries and a fake transport. It covers record merging, backoff,
-per-version restore, package removal, notifications, preload retry/settle and foreground safety.
+Tests: `ctest --test-dir build/service-host -R '^test-watcher'` runs the C policy and
+child-transport/runtime tests under qemu-arm with firmware libraries and a fake transport. It
+covers record merging, backoff, per-version restore, package removal, notifications, preload
+retry/settle and foreground safety.
 The [port inventory](research/native-watcher-port.md) maps the removed shell checks to these tests.
 `service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
 
@@ -481,27 +482,29 @@ npm run package         # ares-package into build/ipk (git-ignored)
 ```
 
 The paths of the build machine are variables. Their defaults are one developer's layout; set them on
-the `make` command line (`make -C service SDK=/opt/sdk`) or in the environment, which `npm run
-package` passes through to `make -C service`:
+the `cmake` command line (`cmake -S service -B build/service -DSDK=/opt/sdk`) or in the environment,
+which `npm run package` passes through to CMake (read when CMake configures; a `-D` value stays in
+the build directory's cache):
 
 | Variable | Default | Used by |
 | --- | --- | --- |
-| `SDK` | `/opt/arm-webos-linux-gnueabi_sdk-buildroot` | `service/Makefile`: the webOS buildroot SDK |
-| `SYSROOT` | `$(SDK)/arm-webos-linux-gnueabi/sysroot` | `service/Makefile` |
-| `CROSS` | `$(SDK)/bin/arm-webos-linux-gnueabi-` | `service/Makefile` (gcc, strip) and `service/test/check-abi.sh` (readelf, nm; `READELF` and `NM` override one tool) |
-| `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
-| `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
-| `OUT` | `../build/service` | `service/Makefile`: where both binaries go |
+| `SDK` | `/opt/arm-webos-linux-gnueabi_sdk-buildroot` | `service/cmake/webos-toolchain.cmake`: the webOS buildroot SDK |
+| `SYSROOT` | `$SDK/arm-webos-linux-gnueabi/sysroot` | `service/cmake/webos-toolchain.cmake` |
+| `CROSS` | `$SDK/bin/arm-webos-linux-gnueabi-` | `service/cmake/webos-toolchain.cmake` (gcc; CMake takes ar and strip from beside it) and `service/test/check-abi.sh` (readelf, nm; `READELF` and `NM` override one tool) |
+| `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/cmake/settings.cmake`: where `ROOTFS` and `KEYFILTER_ROOTFS` are |
+| `ROOTFS` | `$FIRMWARES/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `cmake --build build/service --target check-abi` |
+| `KEYFILTER_ROOTFS` | `$FIRMWARES/04.60.90.01-HE_DTV_W22P_AFADATAA/rootfs` (7.x) | the qemu tests in `build/service-host` |
 | `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `service/scripts/tests/test-real-roundtrip.sh` and `service/scripts/tests/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
 | `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
 
-`make -C service test` and the Jest specs need none of them.
+`test-policy` (configured with `-DQEMU_TESTS=OFF`) and the Jest specs need none of them. The cross
+build goes to `build/service`, where `app/scripts/stage-service.js` takes the three binaries from.
 
 The version has one source, `"version"` in `app/package.json`. `app/appinfo.json` (what
 `ares-package` and the TV read) must carry the same: `npm run check-version`
 (`app/scripts/check-version.js`) fails on a mismatch, `npm run package` runs it first, a Jest spec
 checks it with the other tests, and `npm version <x.y.z>` rewrites `appinfo.json` through the
-`version` script. Both native binaries get it from `service/Makefile` (`VERSION`, read from
+`version` script. Both native binaries get it from `service/CMakeLists.txt` (`VERSION`, read from
 `package.json`, compiled in as `HC_VERSION`; `service/src/version.h` requires it and an empty
 version fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
 version. The ipk's control file is written by `ares-package`, which fills in

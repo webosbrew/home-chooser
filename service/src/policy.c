@@ -10,7 +10,7 @@
 
 bool hc_sender_ok(const char *app_id)
 {
-#ifdef HC_ALLOW_ANY_SENDER /* dev build only, see the Makefile */
+#ifdef HC_ALLOW_ANY_SENDER /* dev build only, see service/CMakeLists.txt */
 	(void)app_id;
 	return true;
 #endif

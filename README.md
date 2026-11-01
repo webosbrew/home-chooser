@@ -90,15 +90,18 @@ npm ci
 SDK=/path/to/arm-webos-linux-gnueabi_sdk-buildroot npm run package
 ```
 
-`service/Makefile` defaults `SDK` to `/opt/arm-webos-linux-gnueabi_sdk-buildroot` and gives a
-clear error if the compiler or sysroot is missing. Override `SDK`, or `SYSROOT` (default
-`$(SDK)/arm-webos-linux-gnueabi/sysroot`) and `CROSS` (default
-`$(SDK)/bin/arm-webos-linux-gnueabi-`) separately for another layout. `FIRMWARES` points to
-unpacked firmware images for `make -C service check-abi` only; its default is
+The CMake project in `service/` (`service/cmake/settings.cmake`) defaults `SDK` to
+`/opt/arm-webos-linux-gnueabi_sdk-buildroot` and gives a clear error if the compiler or sysroot is
+missing. Override `SDK`, or `SYSROOT` (default `$SDK/arm-webos-linux-gnueabi/sysroot`) and `CROSS`
+(default `$SDK/bin/arm-webos-linux-gnueabi-`) separately for another layout, in the environment or
+as `-D` options to `cmake`. `FIRMWARES` points to unpacked firmware images for
+`cmake --build build/service --target check-abi` and the qemu tests only; its default is
 `$OPENHOUSE_FIRMWARES`, then `~/Projects/webos-firmwares`. Set `ROOTFS` directly to use one
 particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
 
-For offline checks, use `make -C service test`, `cd app && npm run lint && CI=true npm test`,
+For offline checks, use the native tests (`cmake -S service/test -B build/service-host`,
+`cmake --build build/service-host`, `ctest --test-dir build/service-host`; `-DQEMU_TESTS=OFF` on the
+first for the policy test alone, without the SDK or firmware), `cd app && npm run lint && CI=true npm test`,
 the shell suites in `service/scripts/tests/`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Stage the LS2 service, the role-free daemon and the 6-9 home gate; only services.json registers a service.
 // (mode 755: elevation turns its Exec line into the bare binary path, so it has to run as is).
-// All three binaries are built by `make -C service` into build/service.
+// All three binaries are built into build/service by the CMake project in service/ (see service/CMakeLists.txt).
 const fs = require('fs');
 const path = require('path');
 
@@ -12,7 +12,7 @@ const binaries = ['homechooser-service', 'homechooser-daemon', 'homechooser-home
 for (const name of binaries) {
 	const bin = path.join(root, 'build', 'service', name);
 	if (!fs.existsSync(bin)) {
-		console.error('stage-service: ' + bin + ' is missing; run `make -C service` first');
+		console.error('stage-service: ' + bin + ' is missing; run `cmake -S service -B build/service && cmake --build build/service` first');
 		process.exit(1);
 	}
 }
