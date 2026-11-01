@@ -96,6 +96,15 @@ hc_test_program(test-watcher-luna
 hc_test_program(test-gate SOURCES test/test-gate.c ${GATE_LIB_SOURCES} src/json.c src/proc.c src/policy.c src/fs.c src/gate-mount.c LIBS ${DAEMON_LIBS})
 # The daemon's mount/unmount decisions with the mount syscalls and mountinfo faked.
 hc_test_program(test-gate-mount SOURCES test/test-gate-mount.c src/gate-mount.c src/json.c src/fs.c src/policy.c LIBS pbnjson_c glib-2.0)
+# The real launcher API handlers on a fake hub (test/fake-ls2.c), for the contract test of
+# api/launcher-v1.openrpc.json. Link-time seams only: luna-send runs, the euid, the stored Home choice
+# and /dev/urandom are the case's (see test/test-launcher-contract.c).
+hc_test_program(test-launcher-contract
+	SOURCES test/test-launcher-contract.c test/fake-ls2.c src/service/launcher.c src/service/reply.c
+		src/apps.c src/luna.c src/json.c src/fs.c src/policy.c
+	LIBS ${DAEMON_LIBS})
+target_link_options(test-launcher-contract PRIVATE
+	"LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice,--wrap=open64")
 
 set(check_abi sh "${CMAKE_CURRENT_SOURCE_DIR}/test/check-abi.sh")
 set(service "$<TARGET_FILE:homechooser-service>")
