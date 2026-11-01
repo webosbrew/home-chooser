@@ -2,22 +2,24 @@
 
 [`launcher-v1.openrpc.json`](launcher-v1.openrpc.json) is a machine-readable description of the
 launcher API, version 1, in [OpenRPC](https://spec.open-rpc.org/) 1.3.2. Version 1 is frozen (see
-[Stability](../docs/launcher-api.md#stability), tag `api-v1`), and this file describes it as frozen:
-the eight methods, their parameters and replies as JSON Schema, every `errorCode` each method can
-send, and examples. [`docs/launcher-api.md`](../docs/launcher-api.md) is the prose contract and wins
+[Stability](../docs/launcher-api.md#stability), tag `api-v1`), and this file describes it: the eight
+methods of the freeze and the methods and fields added within version 1 since, their parameters and
+replies as JSON Schema, every `errorCode` each method can send, and examples. [`docs/launcher-api.md`](../docs/launcher-api.md) is the prose contract and wins
 where the two differ; a change to either must keep them in step.
 
 ## What is in it
 
 * **Methods.** `getInfo`, `listApps`, `listRunning`, `getForegroundApp`, `getAppInfo`, `getAppIcon`,
-  `closeApp` and `uninstallApp`, with named parameters (`paramStructure: by-name`). Facts the guide
+  `closeApp` and `uninstallApp`, and, added within v1, `listLaunchPoints`, `listInputs` and
+  `getIcons`, with named parameters (`paramStructure: by-name`). Facts the guide
   states about a method are `x-` fields on it: `x-needsRoot`, `x-needsPermission`,
   `x-needsSelectedHome`, `x-subscribes`, `x-forJailedLauncher`, `x-ignoredParams`, `x-notes` and so
   on.
 * **What is not a method** is in top-level `x-` fields: the luna service name and URI (`x-luna`),
   the permission (`x-permission`), the `appCategory: ["home"]` and `requiredPermissions` appinfo
   declarations (`x-appinfo`), the `request` launch parameter (`x-requestLaunch`), the error table
-  (`x-errors`) and the order of the caller checks (`x-replyModel`).
+  (`x-errors`) and the order of the caller checks (`x-replyModel`). `x-luna.subscriptionModel` says
+  how the lists' `subscribe: true` works; `x-subscribes` marks the methods that take it.
 * **Errors are part of the result.** A reply is a luna reply, not a JSON-RPC response: success and
   failure are both one JSON object, told apart by `returnValue`. Each method's result schema is a
   `oneOf` of the success object and the failure object (`returnValue: false`, `apiVersion`,
@@ -52,7 +54,10 @@ only). Do not edit the files by hand.
   `transport` (no bridge, no reply within 70 seconds, or not JSON). `requestHome(appId?)` sends the
   request launch, `ownAppId()` reads the app's id from the web runtime, and `lunaCall(uri, payload)`
   makes any other luna call, such as `applicationManager/launch`. `ERROR_CODES` lists each method's
-  codes.
+  codes. `subscribe(method, params, onReply, onError)` opens a subscription of `listApps`,
+  `listLaunchPoints` or `listInputs`: `onReply` gets every successful reply (the whole list, again
+  after each change), `onError` the `HomeChooserError` that ended it, and the returned object's
+  `cancel()` ends it.
 * [`homechooser.d.ts`](client/homechooser.d.ts): its types.
 * [`homechooser-mock.js`](client/homechooser-mock.js): the same API on fake data, for opening a
   launcher in a desktop browser.
@@ -69,9 +74,12 @@ It switches itself on only where the page has no webOS service bridge (`WebOSSer
 a package changes nothing. It never takes over silently in the other direction: without the include,
 a missing bridge is a `transport` error. In the browser it replaces the client's transport, so the
 real client code runs on fake replies: every method answers from `HomeChooser.mock` (the spec's
-examples: the `listApps`, `listRunning`, `getForegroundApp` and `getAppIcon` success examples, the
-caller `org.example.launcher`), applies the caller checks in the order of `x-replyModel`, and
-validates `id` and `size` as the param schemas do. `applicationManager/launch` is logged and
+examples: the `listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`,
+`getAppIcon` and `getIcons` success examples, the caller `org.example.launcher`), applies the caller
+checks in the order of `x-replyModel`, and validates `id`, `size` and `items` as the param schemas
+do. Subscriptions answer at once, again on `HomeChooser.mock.notify(method)`, and refuse the 17th
+subscriber of a list; `?hcmock-changes=<ms>` flips the last input's `connected` every `<ms>` and
+notifies the `listInputs` subscribers. `applicationManager/launch` is logged and
 succeeds. `?hcmock=<state>` in the page URL picks the `getInfo` state: `selected-home` (default),
 `before-elevation`, `not-permitted`, `not-home`, or `absent` (every call gets a platform error, as
 when Home Chooser is not installed). `HomeChooser.mock` can be changed in the console.
@@ -103,21 +111,31 @@ ctest --test-dir build/service-host --output-on-failure -R launcher
   what `gen-client.py` makes from the file now. `test-launcher-client-js`, run when CMake finds
   `node`, loads the client and the mock in node with a fake bridge
   ([`tools/client-test.js`](tools/client-test.js), checked by [`tools/test-client.py`](tools/test-client.py)):
-  replies, rejections and their `source`, the request launch payload, and every mock reply
+  replies, rejections and their `source`, the request launch payload, subscriptions (several
+  replies, a refusal or a transport failure ending one, one bridge cancel) and every mock reply
   validated against its method's result schema.
 * `test-launcher-contract` runs every example, and the further cases in
   [`launcher-contract-cases.json`](../service/test/launcher-contract-cases.json), through the real
-  handlers of `service/src/service/launcher.c` (with the real `reply.c`, `luna.c`, `apps.c`,
-  `json.c`, `fs.c` and `policy.c`, cross built and run under qemu-arm with the firmware's pbnjson
+  handlers of `service/src/service/launcher.c` and `catalog.c` (with the real `subscribe.c`,
+  `reply.c`, `luna.c`, `apps.c`, `json.c`, `fs.c` and `policy.c`, cross built and run under qemu-arm with the firmware's pbnjson
   and GLib). It checks that each reply validates against the result schema and equals the expected
   one, and that the handler made exactly the expected luna-send calls, as
   `com.webos.applicationManager`, with the expected payloads and time limits
-  (`x-outgoingCalls`).
+  (`x-outgoingCalls`). A first reply with `subscribed: true` must leave the message in the fake
+  hub's subscription catalog, and every other reply must not; `subscribers` in a fixture fills the
+  catalog first, for the cap.
+* `test-launcher-subscribe` runs the subscriptions themselves: the real upstream `luna-send -i`
+  children of `luna-child.c`, with `service/test/fake-luna-send.py` as luna-send, on the fake hub. It
+  checks the first reply, one shared upstream for two subscribers, a change sent to every subscriber
+  as a fresh full read, a burst of changes read once, an upstream that dies and comes back after the
+  backoff, the subscriber cap, and that cancelling the last subscriber kills and reaps the upstream.
 
 The driver, [`test-launcher-contract.c`](../service/test/test-launcher-contract.c), replaces the
-luna hub with [`fake-ls2.c`](../service/test/fake-ls2.c) and four functions at link time
-(`--wrap`): `run_argv` (the luna-send child), `geteuid`, `read_choice` (the stored Home choice) and
-`open64` (to make `/dev/urandom` unavailable). The production code has no test hooks.
+luna hub with [`fake-ls2.c`](../service/test/fake-ls2.c) and five functions at link time
+(`--wrap`): `run_argv` (the luna-send child), `geteuid`, `read_choice` (the stored Home choice),
+`open64` (to make `/dev/urandom` unavailable) and `hc_fs_prefix` (the fixed icon directories of
+launch points and inputs lie under the case's scratch directory). The upstream subscription children
+are stubbed there. The production code has no test hooks.
 
 A case that follows the guide where the code does otherwise carries `x-knownDisagreement` (in a
 case file, `knownDisagreement`) with the reason and both locations. The contract test reports it as
