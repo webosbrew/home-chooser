@@ -11,9 +11,15 @@
       Runs every example and case through the real handlers (DRIVER, test-launcher-contract, started
       as RUNNER... DRIVER, for example under qemu-arm) and compares each reply with the expected
       result and each luna-send run with the expected calls.
+  launcher-spec.py doc SPEC GUIDE
+      GUIDE (docs/launcher-api.md) against SPEC: the "## Methods" section has one heading per
+      method; each method's "Errors:" paragraph names exactly the method's errorCode values; the
+      methods table agrees with x-needsRoot, x-needsPermission and x-needsSelectedHome; and the
+      "Error handling" table lists exactly x-errors.
 
-Standard library only. The JSON Schema checks are the draft-07 subset below; it refuses a keyword it
-does not implement, so a schema cannot silently pass on an unchecked keyword. format is not checked.
+Standard library only. The JSON Schema checks are the draft-07 subset in api/tools/launcher_schema.py;
+it refuses a keyword it does not implement, so a schema cannot silently pass on an unchecked
+keyword. format is not checked.
 """
 import base64
 import copy
@@ -24,193 +30,9 @@ import shutil
 import subprocess
 import sys
 
-# ---- a draft-07 subset ----
-
-ANNOTATIONS = {'title', 'description', 'default', 'examples', '$comment', '$schema', '$id',
-               'definitions', 'readOnly', 'writeOnly', 'format', 'contentMediaType', 'contentEncoding'}
-APPLIED = {'$ref', 'type', 'enum', 'const', 'properties', 'patternProperties', 'additionalProperties',
-           'required', 'propertyNames', 'minProperties', 'maxProperties', 'items', 'additionalItems',
-           'minItems', 'maxItems', 'uniqueItems', 'contains', 'minLength', 'maxLength', 'pattern',
-           'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'allOf', 'anyOf',
-           'oneOf', 'not', 'if', 'then', 'else', 'dependencies'}
-
-
-class SchemaError(Exception):
-    pass
-
-
-def is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-
-def json_equal(a, b):
-    if isinstance(a, bool) or isinstance(b, bool):
-        return isinstance(a, bool) and isinstance(b, bool) and a == b
-    if is_number(a) and is_number(b):
-        return a == b
-    if isinstance(a, dict) and isinstance(b, dict):
-        return a.keys() == b.keys() and all(json_equal(a[k], b[k]) for k in a)
-    if isinstance(a, list) and isinstance(b, list):
-        return len(a) == len(b) and all(json_equal(x, y) for x, y in zip(a, b))
-    return type(a) is type(b) and a == b
-
-
-def has_type(v, t):
-    if t not in ('object', 'array', 'string', 'boolean', 'null', 'number', 'integer'):
-        raise SchemaError('unknown type %r' % (t,))
-    return {
-        'object': lambda: isinstance(v, dict),
-        'array': lambda: isinstance(v, list),
-        'string': lambda: isinstance(v, str),
-        'boolean': lambda: isinstance(v, bool),
-        'null': lambda: v is None,
-        'number': lambda: is_number(v),
-        'integer': lambda: (isinstance(v, int) and not isinstance(v, bool)) or (isinstance(v, float) and v.is_integer()),
-    }[t]()
-
-
-class Validator:
-    def __init__(self, documents):
-        self.registry = {}
-        for doc in documents:
-            if '$id' in doc:
-                self.registry[doc['$id'].rstrip('/')] = doc
-
-    def resolve(self, ref, doc):
-        url, _, fragment = ref.partition('#')
-        if url:
-            if url.rstrip('/') not in self.registry:
-                raise SchemaError('unresolved $ref ' + ref)
-            doc = self.registry[url.rstrip('/')]
-        node = doc
-        for part in fragment.split('/')[1:] if fragment else []:
-            part = part.replace('~1', '/').replace('~0', '~')
-            node = node[int(part)] if isinstance(node, list) else node[part]
-        return node, doc
-
-    def errors(self, inst, schema, doc, path=''):
-        if schema is True:
-            return []
-        if schema is False:
-            return [path + ': no value is allowed here']
-        if not isinstance(schema, dict):
-            raise SchemaError('not a schema at ' + path)
-        unknown = [k for k in schema if k not in ANNOTATIONS and k not in APPLIED and not k.startswith('x-')]
-        if unknown:
-            raise SchemaError('unsupported keyword(s) %s at %s' % (unknown, path or '/'))
-        if '$ref' in schema:  # draft-07: siblings of $ref are ignored
-            target, target_doc = self.resolve(schema['$ref'], doc)
-            return self.errors(inst, target, target_doc, path)
-        out = []
-        sub = lambda i, s, p=path: self.errors(i, s, doc, p)  # noqa: E731
-        if 'type' in schema:
-            types = schema['type'] if isinstance(schema['type'], list) else [schema['type']]
-            if not any(has_type(inst, t) for t in types):
-                return [path + ': not of type ' + '/'.join(types)]
-        if 'enum' in schema and not any(json_equal(inst, e) for e in schema['enum']):
-            out.append('%s: %s is not one of %s' % (path, json.dumps(inst), json.dumps(schema['enum'])))
-        if 'const' in schema and not json_equal(inst, schema['const']):
-            out.append('%s: %s is not %s' % (path, json.dumps(inst), json.dumps(schema['const'])))
-        if isinstance(inst, dict):
-            props = schema.get('properties', {})
-            patterns = schema.get('patternProperties', {})
-            for key, value in inst.items():
-                matched = False
-                if key in props:
-                    matched = True
-                    out += sub(value, props[key], path + '/' + key)
-                for pattern, s in patterns.items():
-                    if re.search(pattern, key):
-                        matched = True
-                        out += sub(value, s, path + '/' + key)
-                if not matched and 'additionalProperties' in schema:
-                    out += sub(value, schema['additionalProperties'], path + '/' + key)
-                if 'propertyNames' in schema:
-                    out += sub(key, schema['propertyNames'], path + '/' + key)
-            for key in schema.get('required', []):
-                if key not in inst:
-                    out.append('%s: %s is required' % (path, key))
-            if len(inst) < schema.get('minProperties', 0) or len(inst) > schema.get('maxProperties', len(inst)):
-                out.append(path + ': wrong number of members')
-            for key, dep in schema.get('dependencies', {}).items():
-                if key in inst:
-                    if isinstance(dep, list):
-                        out += ['%s: %s needs %s' % (path, key, d) for d in dep if d not in inst]
-                    else:
-                        out += sub(inst, dep)
-        if isinstance(inst, list):
-            items = schema.get('items', True)
-            if isinstance(items, list):
-                for i, value in enumerate(inst):
-                    s = items[i] if i < len(items) else schema.get('additionalItems', True)
-                    out += sub(value, s, '%s/%d' % (path, i))
-            else:
-                for i, value in enumerate(inst):
-                    out += sub(value, items, '%s/%d' % (path, i))
-            if len(inst) < schema.get('minItems', 0) or len(inst) > schema.get('maxItems', len(inst)):
-                out.append(path + ': wrong number of items')
-            if schema.get('uniqueItems'):
-                if any(json_equal(a, b) for i, a in enumerate(inst) for b in inst[i + 1:]):
-                    out.append(path + ': items are not unique')
-            if 'contains' in schema and not any(not sub(v, schema['contains']) for v in inst):
-                out.append(path + ': no item matches contains')
-        if isinstance(inst, str):
-            if len(inst) < schema.get('minLength', 0) or len(inst) > schema.get('maxLength', len(inst)):
-                out.append(path + ': wrong length')
-            if 'pattern' in schema and not re.search(schema['pattern'], inst):
-                out.append('%s: does not match %s' % (path, schema['pattern']))
-        if is_number(inst):
-            if 'minimum' in schema and inst < schema['minimum']:
-                out.append(path + ': below minimum')
-            if 'maximum' in schema and inst > schema['maximum']:
-                out.append(path + ': above maximum')
-            if 'exclusiveMinimum' in schema and inst <= schema['exclusiveMinimum']:
-                out.append(path + ': not above exclusiveMinimum')
-            if 'exclusiveMaximum' in schema and inst >= schema['exclusiveMaximum']:
-                out.append(path + ': not below exclusiveMaximum')
-            if 'multipleOf' in schema and (inst / schema['multipleOf']) % 1:
-                out.append(path + ': not a multiple')
-        for s in schema.get('allOf', []):
-            out += sub(inst, s)
-        if 'anyOf' in schema and all(sub(inst, s) for s in schema['anyOf']):
-            out.append(path + ': matches none of anyOf')
-        if 'oneOf' in schema:
-            results = [sub(inst, s) for s in schema['oneOf']]
-            passing = sum(1 for r in results if not r)
-            if passing != 1:
-                detail = '; '.join(e for r in results for e in r[:2])
-                out.append('%s: matches %d of oneOf, not 1 (%s)' % (path, passing, detail))
-        if 'not' in schema and not sub(inst, schema['not']):
-            out.append(path + ': matches not')
-        if 'if' in schema:
-            branch = 'then' if not sub(inst, schema['if']) else 'else'
-            if branch in schema:
-                out += sub(inst, schema[branch])
-        return out
-
-
-def unsupported(schema, path=''):
-    """Keywords anywhere in schema that the subset does not implement."""
-    if isinstance(schema, bool):
-        return []
-    if not isinstance(schema, dict):
-        return [path + ': not a schema']
-    out = ['%s/%s' % (path, k) for k in schema if k not in ANNOTATIONS and k not in APPLIED and not k.startswith('x-')]
-    for key in ('properties', 'patternProperties', 'definitions', 'dependencies'):
-        for name, s in schema.get(key, {}).items():
-            if not isinstance(s, list):
-                out += unsupported(s, '%s/%s/%s' % (path, key, name))
-    for key in ('additionalProperties', 'propertyNames', 'additionalItems', 'contains', 'not', 'if', 'then', 'else'):
-        if key in schema:
-            out += unsupported(schema[key], path + '/' + key)
-    items = schema.get('items')
-    for i, s in enumerate(items if isinstance(items, list) else [items] if items is not None else []):
-        out += unsupported(s, '%s/items/%d' % (path, i))
-    for key in ('allOf', 'anyOf', 'oneOf'):
-        for i, s in enumerate(schema.get(key, [])):
-            out += unsupported(s, '%s/%s/%d' % (path, key, i))
-    return out
-
+# The checker is shared with the client generator and the e2e runner (api/tools/launcher_schema.py).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'api', 'tools'))
+from launcher_schema import SchemaError, Validator, json_equal, unsupported  # noqa: E402
 
 # ---- the fixture format (api/launcher-v1.openrpc.json, x-fixtureFormat) ----
 
@@ -234,6 +56,7 @@ FIXTURE = {
         'root': {'type': 'boolean'},
         'selectedHome': {'type': ['string', 'null']},
         'entropy': {'type': 'boolean'},
+        'subscribers': {'type': 'integer', 'minimum': 0},
         'files': {'type': 'object', 'additionalProperties': {
             'type': 'object', 'minProperties': 1, 'maxProperties': 1, 'additionalProperties': False,
             'properties': {'base64': {'type': 'string'}, 'text': {'type': 'string'},
@@ -326,7 +149,8 @@ def lint(spec_path, cases_path, meta_paths):
 
     sv = Validator([])
     methods, records = collect(spec, cases_doc)
-    want = ['getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo', 'getAppIcon', 'closeApp', 'uninstallApp']
+    want = ['getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo', 'getAppIcon', 'closeApp', 'uninstallApp',
+            'listLaunchPoints', 'listInputs', 'getIcons']
     if sorted(methods) != sorted(want):
         problems.append('methods are %s, v1 has %s' % (sorted(methods), sorted(want)))
     # Every schema in the document, against the subset (an unsupported keyword is a problem too).
@@ -457,6 +281,10 @@ def check_case(r, out, spec, sv, timeouts):
         problems.append('%d replies, not 1: %s' % (len(replies), replies))
     if out.get('refs') != 1:
         problems.append('message references at the end: %s, not 1' % out.get('refs'))
+    # A first reply with subscribed true leaves the message in the subscription catalog, nothing else does.
+    want_subs = 1 if r['result'].get('subscribed') is True else 0
+    if out.get('subscribers', 0) != want_subs:
+        problems.append('subscribers after the reply: %s, not %d' % (out.get('subscribers'), want_subs))
     if replies:
         try:
             reply = json.loads(replies[0])
@@ -519,6 +347,7 @@ def contract(spec_path, cases_path, driver, workdir, runner):
             'name': '%s/%s' % (r['method'], r['name']), 'method': r['method'],
             'payload': json.dumps(r['params']), 'app': f['caller'], 'service': f.get('senderService'),
             'root': f['root'], 'choice': f['selectedHome'], 'entropy': f.get('entropy', True), 'calls': script,
+            'fsRoot': root, 'subscribers': f.get('subscribers', 0),
         }))
     input_path = os.path.join(cases_dir, 'input.jsonl')
     with open(input_path, 'w', encoding='utf-8') as f:
@@ -558,9 +387,98 @@ def contract(spec_path, cases_path, driver, workdir, runner):
     return 1 if failed else 0
 
 
+# ---- the prose guide ----
+
+def guide_section(text, heading):
+    """The lines of a '## heading' section of a Markdown file, up to the next '## '."""
+    lines = text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip() == '## ' + heading), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith('## ')), len(lines))
+    return lines[start + 1:end]
+
+
+def guide_errors(paragraph, codes, per_method):
+    """errorCode values an "Errors:" paragraph names: backticked known codes, and "as `method`"."""
+    text = paragraph[paragraph.index('Errors:'):]
+    found = set()
+    for m in re.finditer(r'\bas `(\w+)`', text):
+        found |= per_method.get(m.group(1), set())
+    found |= {c for c in re.findall(r'`(\w+)`', text) if c in codes}
+    return found
+
+
+def doc(spec_path, guide_path):
+    spec = load(spec_path)
+    with open(guide_path, encoding='utf-8') as f:
+        text = f.read()
+    sv = Validator([])
+    methods = {m['name']: m for m in spec['methods']}
+    want = {n: error_codes(m['result']['schema'], sv, spec) for n, m in methods.items()}
+    codes = set(spec['x-errors'])
+    problems = []
+    section = guide_section(text, 'Methods')
+    if section is None:
+        problems.append('no "## Methods" section')
+        section = []
+    # One "### `name {...}`" heading per method, then its paragraphs.
+    blocks, current = {}, None
+    for line in section:
+        m = re.match(r'### `(\w+)', line)
+        if m:
+            current = m.group(1)
+            blocks[current] = []
+        elif current:
+            blocks[current].append(line)
+    if sorted(blocks) != sorted(methods):
+        problems.append('method headings %s, the spec has %s' % (sorted(blocks), sorted(methods)))
+    found = {}
+    for name in [n for n in methods if n in blocks]:  # spec order, so "as `listApps`" is resolved first
+        paragraphs = [p for p in '\n'.join(blocks[name]).split('\n\n') if 'Errors:' in p]
+        if len(paragraphs) != 1:
+            problems.append('%s: %d "Errors:" paragraphs, not 1' % (name, len(paragraphs)))
+            continue
+        found[name] = guide_errors(' '.join(paragraphs[0].split()), codes, found)
+        if found[name] != want[name]:
+            problems.append('%s: the guide names %s, the spec has %s (missing %s, extra %s)' % (
+                name, sorted(found[name]), sorted(want[name]), sorted(want[name] - found[name]) or '-',
+                sorted(found[name] - want[name]) or '-'))
+    # The methods table: | `name` | root | permission | selected Home | apiVersion |
+    rows = {}
+    for line in section:
+        m = re.match(r'\| `(\w+)` \|(.*)\|\s*$', line)
+        if m:
+            rows[m.group(1)] = [c.strip() for c in m.group(2).split('|')]
+    if sorted(rows) != sorted(methods):
+        problems.append('methods table rows %s, the spec has %s' % (sorted(rows), sorted(methods)))
+    for name, cells in rows.items():
+        if name not in methods or len(cells) < 3:
+            continue
+        for cell, key in zip(cells, ('x-needsRoot', 'x-needsPermission', 'x-needsSelectedHome')):
+            if cell.split()[0] not in ('yes', 'no') or (cell.split()[0] == 'yes') != bool(methods[name].get(key)):
+                problems.append('methods table: %s says %r, the spec has %s %s' % (name, cell, key, methods[name].get(key)))
+    # The "Error handling" table.
+    table = set()
+    lines = guide_section(text, 'Error handling') or []
+    for i, line in enumerate(lines):
+        m = re.match(r'\| `(\w+)` \|', line)
+        if m and not (i + 1 < len(lines) and lines[i + 1].startswith('| ---')):  # not the header row
+            table.add(m.group(1))
+    if table != codes:
+        problems.append('"Error handling" table lists %s, x-errors has %s' % (sorted(table), sorted(codes)))
+    for p in problems:
+        print('FAIL ' + p)
+    print('doc: %d methods, %d error codes in %s: %s' % (
+        len(found), len(table), os.path.basename(guide_path), 'ok' if not problems else '%d problem(s)' % len(problems)))
+    return 1 if problems else 0
+
+
 def main(argv):
     if len(argv) >= 4 and argv[0] == 'lint':
         return lint(argv[1], argv[2], argv[3:])
+    if len(argv) == 3 and argv[0] == 'doc':
+        return doc(argv[1], argv[2])
     if len(argv) >= 5 and argv[0] == 'contract':
         return contract(argv[1], argv[2], argv[3], argv[4], argv[5:])
     print(__doc__, file=sys.stderr)

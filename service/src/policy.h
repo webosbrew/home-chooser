@@ -38,7 +38,7 @@
 #define HC_GATE_DIR "/tmp/homechooser-runtime/home-gate"
 
 /* The launcher-facing API (docs/launcher-api.md). */
-#define HC_API_VERSION 1
+#define HC_API_VERSION 2
 #define HC_GROUP "org.webosbrew.homechooser.applications"
 #define HC_HBC_APP_ID "org.webosbrew.hbchannel"
 #define HC_STOCK_HOME_ID "com.webos.app.home"
@@ -118,6 +118,16 @@ bool hc_is_selected_home(const char *caller, const char *choice_text);
  * apiVersion: a field may be added, never removed or renamed. appCategory lets a launcher find the
  * other launchers. */
 extern const char *const hc_launcher_list_fields[];
+/* The launch point fields listLaunchPoints forwards, NULL-terminated; additive in the same way. */
+extern const char *const hc_launch_point_fields[];
+/* The directory eim's input icons (iconPrefix + icon) are read from. */
+#define HC_INPUT_ICON_DIR "/usr/palm/plugins/inputapps/assets"
+/* A launch point icon: an absolute image path whose real path lies in the launch point's own app
+ * folder under a known application root (prefixed by prefix, "" on the device). Rejects "..",
+ * symlink escapes and other directories (bookmark icons, until their directory is verified). */
+bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *path, char *out, size_t outlen);
+/* An input icon: an absolute image path whose real path lies in prefix + HC_INPUT_ICON_DIR. */
+bool hc_input_icon_resolve(const char *prefix, const char *path, char *out, size_t outlen);
 
 typedef enum {
 	HC_REMOVE_OK = 0,

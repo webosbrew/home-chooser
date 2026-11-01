@@ -28,6 +28,9 @@ import hashlib
 import io
 import threading
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'api', 'tools'))
+import launcher_schema  # noqa: E402  (the launcher spec's own schema checker)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 APP_ID = 'org.webosbrew.homechooser'
@@ -226,6 +229,21 @@ def idle_app_verdict(idle, launcher, overlay):
 def idle_app_stock(idle):
     """idleApp back to the stock value of every 10.3.1 / 11.2.0 device layer: LG Home, support true."""
     return isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == STOCK
+
+
+# --removal-race: the platform must be stock within one watcher confirmation (15 s of wall clock, not scaled)
+# plus this many seconds (times the host slowdown, for the removal calls and polling) of the launcher's
+# removal; two confirmations one after the other (about 30 s) must not pass.
+REMOVAL_RACE_CONFIRM_S = 15
+REMOVAL_RACE_SLACK_S = 8
+
+
+def platform_stock(major, record_home, stock_id, override, idle):
+    """Nothing Home Chooser writes names a launcher any more: the record's home is stock (5-9: the stock id,
+    10+: null or unset) and, on 10+, the override file is gone and getProfiles' idleApp is LG Home again."""
+    if not stock_record_ok(major, record_home, stock_id):
+        return False
+    return major < 10 or (override == 'no' and idle_app_stock(idle))
 
 
 def stock_home_id(major, fullhome_installed):
@@ -854,12 +872,14 @@ def split_known_crashes(lines, reply):
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
 API_GROUP = 'org.webosbrew.homechooser.applications'
-API_VERSION = 1
+API_VERSION = 2  # the level this build of Home Chooser reports; the contract itself only requires >= 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')
-API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory')
+API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory',
+                   'iconColor', 'bgColor')
 API_RUNNING_FIELDS = ('id', 'instanceId', 'processId', 'webProcessId')
+_SPEC = None  # (spec, validator), loaded on first use by spec_reply_problems
 
 
 def api_reply_problems(method, reply):
@@ -953,6 +973,25 @@ def api_reply_problems(method, reply):
     return p
 
 
+def spec_reply_problems(method, reply):
+    """--api-check: problems of a reply against the method's result schema in api/launcher-v1.openrpc.json,
+    checked with the spec lint's own checker (api/tools/launcher_schema.py). [] when it conforms; None for
+    a reply the spec does not describe (not JSON, or a reply of the luna bus itself, without apiVersion)."""
+    global _SPEC
+    if _SPEC is None:
+        _SPEC = (launcher_schema.load_spec(), launcher_schema.Validator([]))
+    try:
+        return launcher_schema.reply_problems(_SPEC[0], method, reply, _SPEC[1])
+    except launcher_schema.SchemaError as e:
+        return ['the spec cannot be checked: %s' % e]
+
+
+def launcher_methods():
+    """Every launcher method of api/launcher-v1.openrpc.json: what the permission grants, and getInfo."""
+    perm = launcher_schema.load_spec()['x-permission']
+    return list(perm['grants']) + list(perm['notNeededFor'])
+
+
 def api_refused(reply):
     """A refusal: a JSON reply with returnValue false (the service's errorCode, or the hub's denial)."""
     return isinstance(reply, dict) and reply.get('returnValue') is False
@@ -966,6 +1005,39 @@ FIXTURE_TYPES = ('native', 'qml', 'web')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
 FIXTURE_ID = 'org.webosbrew.hcfixture.%s.%s'
+# fixture:web.demo is examples/web-launcher, packaged by fixtures/web/build.sh: unlike the six it uses the
+# launcher API, so it always declares the permission, and the runner drives it (step 3d).
+DEMO_SPEC = 'fixture:web.demo'
+DEMO_ID = FIXTURE_ID % ('web', 'demo')
+# Step 3d opens this app, built by fixtures/disposable/build.sh with the disposable app: a plain page whose
+# title sorts before the TV's own titles in the demo's order, so OK on the demo's first tile opens it and not
+# an LG app that LG's first-use or EULA overlay holds back.
+DEMO_TARGET_ID = 'org.webosbrew.hcfixture.first'
+DEMO_TARGET_TITLE = '0 HC Fixture first'
+
+
+def demo_ascii_lower(text):
+    return re.sub('[A-Z]', lambda m: m.group(0).lower(), text)
+
+
+def demo_order(apps, self_id):
+    """The demo's grid order (orderApps in examples/web-launcher/launcher.js): without itself, without
+    visible:false and id-less entries, by title (the id when there is none) ignoring ASCII case, then by
+    id; strings compare by UTF-16 code unit as in JavaScript."""
+    def key(app):
+        title = app.get('title') or app['id']
+        return (demo_ascii_lower(title).encode('utf-16-be'), app['id'].encode('utf-16-be'))
+    shown = [a for a in apps if isinstance(a, dict) and isinstance(a.get('id'), str) and a['id']
+             and a['id'] != self_id and a.get('visible') is not False]
+    return sorted(shown, key=key)
+
+
+def demo_focus(reply, self_id):
+    """The app the demo focuses after a fresh start: the first of its order, from a listApps reply."""
+    if not isinstance(reply, dict) or reply.get('returnValue') is not True or not isinstance(reply.get('apps'), list):
+        return None
+    order = demo_order(reply['apps'], self_id)
+    return order[0]['id'] if order else None
 
 
 def lines_after(lines, mark):
@@ -1044,6 +1116,10 @@ class Launcher:
     def is_fixture(self):
         return self.kind == 'fixture'
 
+    @property
+    def is_demo(self):
+        return self.spec == DEMO_SPEC
+
 
 def fixture_specs():
     return ['fixture:%s.%s' % (t, w) for t in FIXTURE_TYPES for w in FIXTURE_WINDOWS]
@@ -1081,15 +1157,33 @@ def api_fixture_ipks(announce=print):
     return have
 
 
+def demo_target_ipk(announce=print):
+    """fixture:web.demo: the ipk of DEMO_TARGET_ID, built with the disposable app into build/fixtures-api/."""
+    def found():
+        g = sorted(glob.glob(os.path.join(API_FIXTURE_DIR, DEMO_TARGET_ID + '_*.ipk')))
+        return g[-1] if g and ipk_appinfo(g[-1]).get('title') == DEMO_TARGET_TITLE else None
+    ipk = found()
+    if not ipk:
+        announce('demo target missing: building %s with fixtures/disposable/build.sh into %s (offline)'
+                 % (DEMO_TARGET_ID, API_FIXTURE_DIR))
+        os.makedirs(API_FIXTURE_DIR, exist_ok=True)
+        rc, out = run(['sh', os.path.join(HERE, 'fixtures', 'disposable', 'build.sh'), API_FIXTURE_DIR], 600)
+        announce(out.strip()[-400:])
+        ipk = found()
+    if not ipk:
+        raise SystemExit('could not build %s in %s' % (DEMO_TARGET_ID, API_FIXTURE_DIR))
+    return ipk
+
+
 def make_launcher(spec, ipk_override=None, announce=print, api=False):
     """api (--api-check): a web fixture comes from the build with the permission; native and qml
     fixtures cannot declare it."""
     if spec.startswith('fixture:'):
         t, _, w = spec[8:].partition('.')
-        if t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS:
-            raise SystemExit('unknown fixture %r; use fixture:<native|qml|web>.<normal|overlay>' % spec)
+        if spec != DEMO_SPEC and (t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS):
+            raise SystemExit('unknown fixture %r; use fixture:<native|qml|web>.<normal|overlay> or %s' % (spec, DEMO_SPEC))
         ident = FIXTURE_ID % (t, w)
-        if api:
+        if api and spec != DEMO_SPEC:  # the demo always declares the permission: the plain build serves
             if t != 'web':
                 raise SystemExit('--api-check needs a launcher that declares %s: fixture:web.<normal|overlay>, '
                                  'or your own launcher with --launcher-ipk' % API_GROUP)
@@ -3142,6 +3236,8 @@ class Scenario:
                     self.screensaver_selected(baseline)
                     if self.a.scenario == 'screensaver':
                         break
+                if i == 3 and getattr(self.L, 'is_demo', False):
+                    guarded(self.step_demo)
                 if i == 3 and self.a.api_check:
                     guarded(self.step_api)
                 if i == 3 and self.a.reboot_check:
@@ -3154,6 +3250,9 @@ class Scenario:
                     guarded(self.step_launcher_update)
                 if i == 3 and self.a.restore_repair_check:
                     guarded(self.step_restore_repair)
+                    break
+                if i == 3 and getattr(self.a, 'removal_race', False):
+                    guarded(self.step_removal_race)
                     break
         except ScreensaverOutcome as exc:
             r.outcome('tvpower reboot readiness', exc.status, str(exc))
@@ -3596,6 +3695,10 @@ class Scenario:
             rc, out = d.install(self.a.disposable_ipk)
             r.check('--api-check: install the disposable app %s' % DISPOSABLE_ID, rc == 0 and 'Installed package' in out,
                     out.strip())
+        if getattr(self.L, 'is_demo', False):
+            rc, out = d.install(self.a.demo_target_ipk)
+            r.check('fixture:web.demo: install the app step 3d opens, %s (%r)' % (DEMO_TARGET_ID, DEMO_TARGET_TITLE),
+                    rc == 0 and 'Installed package' in out, out.strip())
         r.check('both apps are listed', APP_ID in d.installed() and self.launcher in d.installed(),
                 str(d.installed()))
         strat.prepare(d, r)
@@ -4177,6 +4280,53 @@ class Scenario:
         rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
         r.note('processes mentioning the launcher id', out.strip())
 
+    DEMO_SETTLE = 8  # s after the Home press for the demo's getInfo, listApps and first render
+
+    def step_demo(self):
+        """fixture:web.demo, after step 3 opened it with Home: OK starts the focused app.  The focused app is
+        the first in the demo's order (demo_order), computed here from listApps as the demo; the launch is
+        proved from sam, as for the launcher itself (launch_proof)."""
+        r, d = self.rec, self.dev
+        r.begin('3d the demo launcher opens the focused app')
+        reply, raw = self.api('listApps')
+        target = demo_focus(reply, self.launcher)
+        if not r.check('3d: listApps as the demo names a first app in its order', bool(target), raw[:400]):
+            return
+        order = [a['id'] for a in demo_order(reply['apps'], self.launcher)]
+        r.note('3d: the demo\'s order (first 8 of %d); focused: %s' % (len(order), target), ', '.join(order[:8]))
+        listed = [a for a in reply['apps'] if isinstance(a, dict) and a.get('id') == DEMO_TARGET_ID]
+        if not r.check('3d: the demo focuses %s, the runner\'s app %r, first in its order'
+                       % (DEMO_TARGET_ID, DEMO_TARGET_TITLE), target == DEMO_TARGET_ID,
+                       'focused %s; %s in listApps: %s' % (target, DEMO_TARGET_ID, json.dumps(listed)[:300])):
+            return
+        fg = d.foreground()
+        r.note('3d: foreground before OK: %s (the demo is full-screen and was opened by the Home press)' % fg[0], fg[1][:300])
+        if target in self.running_ids():
+            d.close(target)
+            sleep(3)
+        pre = target in self.running_ids()
+        r.say('3d: %s running before OK: %s%s' % (target, pre, ' (close did not stop it)' if pre else ''))
+        # Opened by step 3's Home press: the demo restarted, so its focus is on the first app.
+        sleep(self.DEMO_SETTLE)
+        popup = self.foreign_popup('3d-demo-ok', dismiss=True)
+        if popup:
+            r.check('3d: no foreign LG fault popup before OK', False, popup)
+            return
+        self.life_begin()
+        mark = self.messages_mark()
+        try:
+            key_result = self.press('OK')
+            r.say('3d: OK key-send result: %r; log mark %s' % (key_result, mark))
+            sleep(4)
+            self.launch_proof('3d-demo-ok', target, mark)
+            fg = d.foreground()
+            r.note('3d: foreground after OK: %s' % fg[0], fg[1][:300])
+            self.shot('3d-demo-ok')
+        finally:
+            self.life_end()
+            if target not in (self.launcher, APP_ID):
+                d.close(target)
+
     def step_reboot(self):
         """Optional (--reboot-check), launcher chosen: after a boot the watcher re-applied the policy
         (it is never persisted) and the stock home is not running.  On 6.x to 9.x
@@ -4271,7 +4421,20 @@ class Scenario:
         application id, as a plain shell luna-send)."""
         app = self.launcher if app == 'launcher' else app
         rc, raw, rep = self.dev.luna_as(app, 'luna://%s/%s' % (SVC_ID, method), json.dumps(payload or {}))
+        if getattr(self.a, 'api_check', False):
+            self.check_spec_schema(method, payload, app, rep, raw)
         return rep, raw
+
+    def check_spec_schema(self, method, payload, app, rep, raw):
+        """Every reply Home Chooser gives during --api-check, against the spec's result schema."""
+        problems = spec_reply_problems(method, rep)
+        if problems is None:
+            self.rec.note('%s %s as %s: not a Home Chooser reply (no apiVersion), outside the spec\'s schemas'
+                          % (method, json.dumps(payload or {}), app), raw[:400])
+            return
+        self.rec.check('%s %s as %s: the reply validates against the result schema of api/launcher-v1.openrpc.json'
+                       % (method, json.dumps(payload or {}), app), not problems,
+                       '%s\n%s' % ('; '.join(problems) or 'valid', raw[:400]))
 
     def api_conforms(self, method, label, payload=None):
         rep, raw = self.api(method, payload)
@@ -4413,10 +4576,13 @@ class Scenario:
                     files.append(json.loads(line))
                 except ValueError:
                     pass
-            methods = {SVC_ID + '/' + name for name in
-                       ('getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo',
-                        'getAppIcon', 'closeApp', 'uninstallApp')}
-            r.check('11+: namespaced permission and ares.webos.cli grant all eight launcher methods',
+            methods = {SVC_ID + '/' + name for name in launcher_methods()}
+            writes = {SVC_ID + '/closeApp', SVC_ID + '/uninstallApp'}
+            r.check('11+: application.query provides the reading methods, application.launcher closeApp and uninstallApp',
+                    bool(files) and all(set(f.get('application.query', [])) == methods - writes
+                                        and set(f.get('application.launcher', [])) == writes
+                                        and 'default.permission' not in f for f in files), raw[:1200])
+            r.check('11+: namespaced permission and ares.webos.cli grant every launcher method',
                     bool(files) and all(set(f.get(API_GROUP, [])) == methods
                                         and set(f.get('ares.webos.cli', [])) == methods
                                         and 'homechooser.applications' not in f for f in files), raw[:1200])
@@ -5130,6 +5296,69 @@ class Scenario:
                     after_boot['override'] == 'no', after_boot['override'])
         self.check_preload_on('after the cleanup boot')
 
+    def platform_stock_now(self):
+        d = self.dev
+        override = d.sh('test -e %s && echo yes || echo no' % OVERRIDE)[1].strip() if self.uses_override() else 'no'
+        idle = self.idle_app()[0] if self.uses_override() else None
+        return platform_stock(self.major, d.record_home()[0], self.stock_id, override, idle)
+
+    def step_removal_race(self):
+        """--removal-race: the owner removes the chosen launcher and then Home Chooser at once, without waiting
+        (docs/settings-app.md "Both removed").  The platform is stock one confirmation after the launcher's
+        removal, the restore finishes, and closing the last app shows LG Home or the last input, never the
+        black screen of an idleApp or record naming the removed launcher."""
+        r, d = self.rec, self.dev
+        r.begin('3r launcher and Home Chooser removed back to back')
+        toasts_before = len(self.notif_lines('createToast'))
+        alerts_before = len(self.notif_lines('createAlert'))
+        t0 = time.time()
+        rc, out = d.remove(self.launcher)
+        r.check('ares-install --remove launcher', rc == 0, out.strip()[-400:])
+        t1 = time.time()
+        rc, out = d.remove(APP_ID)
+        r.check('ares-install --remove Home Chooser right after the launcher', rc == 0, out.strip()[-400:])
+        r.note('removal calls', 'launcher %.1f s, then Home Chooser %.1f s' % (t1 - t0, time.time() - t1))
+        stock_at = self.wait(lambda: self.platform_stock_now() and time.time(), 120, 1)
+        elapsed = (stock_at - t0) if stock_at else None
+        bound = REMOVAL_RACE_CONFIRM_S + seconds(REMOVAL_RACE_SLACK_S)
+        r.check('platform stock again (record home%s) within %.0f s of the launcher removal'
+                % (', no override, idleApp LG Home' if self.uses_override() else '', bound),
+                elapsed is not None and elapsed <= bound,
+                'stock after %s' % ('%.1f s' % elapsed if elapsed is not None else 'never (120 s)'))
+        self.check_toast(toasts_before)
+        done = self.wait(lambda: self.watcher_active() != 'active'
+                         and 'No such file' in d.sh('cat %s 2>&1' % CHOICE)[1], 150, 5)
+        s = self.state()
+        r.note('state after both removals', json.dumps(s))
+        r.check('the watcher finished the restore: choice file and init.d entry gone, watcher stopped',
+                bool(done) and ('No such file' in s['initd'] or s['initd'] == ''), json.dumps(s))
+        self.assert_stock('after the back-to-back removal', s, baked_emptied=False)
+        self.check_preload_on('after the back-to-back removal')
+        alerts = self.notif_lines('createAlert')[alerts_before:]
+        r.note('launcher-removed alerts after the back-to-back removal (none expected when Home Chooser went '
+               'within the launcher\'s confirmation)', '\n'.join(alerts) or 'none')
+        r.note('watcher log', d.sh('tail -n 20 /tmp/homechooser-home.log')[1])
+        # The last app closes: SAM opens idleApp (10+) or the stock home; a removed launcher would leave it black.
+        hbc = 'org.webosbrew.hbchannel'
+        in_front = lambda: (lambda x: x if x[0] == hbc else None)(d.foreground())
+        fg = None
+        for attempt in range(2):  # the first launch after the removals can be slow to reach the front
+            rc, out = d.launch(hbc)
+            fg = self.wait(in_front, 45, 2)
+            if fg:
+                break
+        r.check('Homebrew Channel in front before it is closed', bool(fg), (fg or d.foreground())[1][:300])
+        sleep(3)
+        rc, out = d.close(hbc)
+        r.check('close Homebrew Channel, the only app in front', rc == 0, out.strip()[-300:])
+        fg = self.wait(lambda: (lambda x: x if x[0] and x[0] != 'org.webosbrew.hbchannel' else None)(d.foreground()), 30, 2)
+        sleep(3)
+        self.shot('3r-last-app-closed')
+        fg = d.foreground()
+        r.check('after the last app closed: LG Home or the last input is in front, not the removed launcher',
+                bool(fg[0]) and fg[0] not in (self.launcher, 'org.webosbrew.hbchannel'), fg[1][:400])
+        self.home_press(STOCK, '3r-home-stock')
+
     def step5(self):
         r, d = self.rec, self.dev
         r.begin('5 uninstall Home Chooser')
@@ -5175,7 +5404,8 @@ class Scenario:
                    'installed and the launcher chosen through its UI); the runner does not do that yet', '')
         else:
             removed_hc = False
-            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else [])
+            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else []) \
+                + ([DEMO_TARGET_ID] if getattr(self.L, 'is_demo', False) else [])
             try:
                 installed = d.installed()
             except RuntimeError as e:
@@ -5473,6 +5703,7 @@ def main():
     ap.add_argument('--device', help='an existing root-capable ares device name; run --api-check without Beanjar or reboot')
     ap.add_argument('--launcher', default=None,
                     help="'fixture:<native|qml|web>.<normal|overlay>' (default fixture:web.normal), "
+                         "'fixture:web.demo' (examples/web-launcher; adds step 3d: OK opens the focused app), "
                          "or an app id with --launcher-ipk (an author's own launcher)")
     ap.add_argument('--launchers', default=None,
                     help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
@@ -5484,6 +5715,8 @@ def main():
                     help='updated launcher ipk for --launcher-update-check (web fixture builds version 1.0.1 automatically)')
     ap.add_argument('--restore-repair-check', action='store_true',
                     help='after selection stop the watcher, uninstall, model a partial restore, and verify reinstall repairs Home')
+    ap.add_argument('--removal-race', action='store_true',
+                    help='after step 3 remove the launcher and Home Chooser back to back (step 3r), check stock, then clean up')
     ap.add_argument('--update-check', action='store_true',
                     help='install an older Home Chooser first, choose the launcher, then install the current build over it '
                          '(step 3u) and check that everything survives')
@@ -5530,7 +5763,7 @@ def main():
     if args.list:
         for m in MATRIX:
             print('%-5s %-18s %-10s %-9s %s' % (m[0], ' | '.join(candidates(m[1])), *m[2:]))
-        print('launchers: %s' % ', '.join(fixture_specs()))
+        print('launchers: %s' % ', '.join(fixture_specs() + [DEMO_SPEC]))
         return 0
     if args.device:
         if args.scenario != 'lifecycle' or args.saver_start != 'tvpower':
@@ -5538,6 +5771,8 @@ def main():
         return run_device_api(args, ap)
     if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
         ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
+    if args.removal_race and (args.restore_repair_check or args.scenario != 'lifecycle' or args.until < 3):
+        ap.error('--removal-race runs after step 3 of the lifecycle scenario, alone')
     if not args.vm:
         ap.error('--vm or --device is required')
     row = entry(args.vm)
@@ -5557,6 +5792,8 @@ def main():
     if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
         ap.error('--scenario screensaver/all requires a normal fixture launcher')
     args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
+    args.demo_target_ipk = demo_target_ipk(lambda t: print(t, flush=True)) \
+        if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
     host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
     global SLOWDOWN
     SLOWDOWN = host.slowdown

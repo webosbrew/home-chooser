@@ -7,10 +7,11 @@
 //   osRelease()             {version: [major, minor, patch], ...} from /etc/os-release
 //   readIcon(appId, icon)   a data: URL or null
 //   ensureRoot()            elevation (startup)
+//   restartService()        quit and restart the root service (an access change on 11+)
 import {ServiceError, errorMessage} from './errors';
 import {createBridgeCall} from './bridge';
 import {createServiceClient} from './service';
-import {ensureRoot, FatalError} from './elevate';
+import {ensureRoot, restartService, FatalError} from './elevate';
 import {HOME_FILE, HOMEKEY_FLAG} from '../homechooser/persistence';
 
 // Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
@@ -97,8 +98,9 @@ export const createPlatform = (call = createBridgeCall()) => {
 		exec: createExec(service),
 		osRelease: createOsRelease(service),
 		readIcon: createReadIcon(service),
-		ensureRoot: () => ensureRoot({service, call})
+		ensureRoot: () => ensureRoot({service, call}),
+		restartService: () => restartService({service})
 	};
 };
 
-export {ServiceError, FatalError, errorMessage, createBridgeCall, createServiceClient, ensureRoot};
+export {ServiceError, FatalError, errorMessage, createBridgeCall, createServiceClient, ensureRoot, restartService};

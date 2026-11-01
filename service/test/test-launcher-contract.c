@@ -9,7 +9,11 @@
  *   run_argv     the luna-send child of luna.c: records argv and answers from the case's script
  *   geteuid      the case's root state
  *   read_choice  the stored Home choice (HC_HOME_FILE on the device)
- *   open64       /dev/urandom fails when the case says entropy is false; other paths pass through */
+ *   open64       /dev/urandom fails when the case says entropy is false; other paths pass through
+ *   hc_fs_prefix the fixed icon directories (launch points, inputs) lie under the case's scratch root
+ * The upstream subscription children (luna-child.c) are stubs here: a subscribe case checks the first
+ * reply and the catalog; test-launcher-subscribe runs the real children. Each case ends by cancelling
+ * its subscriptions, so the message's reference count is back to one. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -21,13 +25,15 @@
 #include "fake-ls2.h"
 #include "json.h"
 #include "log.h"
+#include "luna.h"
+#include "service/catalog.h"
 #include "service/methods.h"
 
 PmLogContext hc_log;
 
 static struct {
 	bool root, entropy;
-	char *choice;
+	char *choice, *fs_root;
 	jvalue_ref script; /* the case's calls: [{stdout, exit}] */
 	ssize_t next;
 	jvalue_ref made;   /* [{argv, timeout}] */
@@ -38,6 +44,25 @@ uid_t __wrap_geteuid(void) { return g.root ? 0 : 1000; }
 
 char *__wrap_read_choice(void);
 char *__wrap_read_choice(void) { return g.choice ? g_strdup(g.choice) : NULL; }
+
+const char *__wrap_hc_fs_prefix(void);
+const char *__wrap_hc_fs_prefix(void) { return g.fs_root ? g.fs_root : ""; }
+
+/* The upstream children: not started here (see the top of this file). */
+static int stub;
+HCLuna *hc_luna_open(GMainLoop *loop, const char *program) { (void)loop; (void)program; return (HCLuna *)&stub; }
+void hc_luna_close(HCLuna *client) { (void)client; }
+HCSubscription *hc_luna_subscribe(HCLuna *client, const char *uri, const char *payload, HCSubscriptionReply reply, void *context)
+{
+	(void)client; (void)uri; (void)payload; (void)reply; (void)context;
+	return (HCSubscription *)&stub;
+}
+HCSubscription *hc_luna_once(HCLuna *client, const char *uri, const char *payload, HCSubscriptionReply reply, void *context)
+{
+	(void)client; (void)uri; (void)payload; (void)reply; (void)context;
+	return (HCSubscription *)&stub;
+}
+void hc_luna_cancel(HCSubscription *subscription) { (void)subscription; }
 
 int __real_open64(const char *path, int flags, ...);
 int __wrap_open64(const char *path, int flags, ...);
@@ -96,6 +121,9 @@ static const struct {
 	{"getForegroundApp", on_launcher_get_foreground},
 	{"getAppInfo", on_launcher_get_app_info},
 	{"getAppIcon", on_launcher_get_app_icon},
+	{"listLaunchPoints", on_launcher_list_launch_points},
+	{"listInputs", on_launcher_list_inputs},
+	{"getIcons", on_launcher_get_icons},
 	{"closeApp", on_launcher_close_by_id},
 	{"uninstallApp", on_launcher_uninstall},
 	{NULL, NULL}
@@ -111,6 +139,7 @@ static void run_case(jvalue_ref c)
 	g.root = get_bool(c, "root", true);
 	g.entropy = get_bool(c, "entropy", true);
 	g.choice = get_string(c, "choice");
+	g.fs_root = get_string(c, "fsRoot");
 	g.script = jvalue_copy(jobject_get(c, key_buf("calls")));
 	if (!jis_array(g.script)) {
 		j_release(&g.script);
@@ -127,8 +156,27 @@ static void run_case(jvalue_ref c)
 	if (!handler) {
 		put_str(out, "error", "unknown method");
 	} else {
+		/* subscribers: the list already has that many (the cap), before the call */
+		int32_t before = 0;
+		jvalue_ref n = jobject_get(c, key_buf("subscribers"));
+		if (jis_valid(n) && jis_number(n)) jnumber_get_i32(n, &before);
+		GPtrArray *others = g_ptr_array_new_with_free_func((GDestroyNotify)fake_message_free);
+		for (int k = 0; k < HC_LIST_COUNT; k++) {
+			if (strcmp(method, list_method((HCListKind)k)) != 0) continue;
+			for (int i = 0; i < before; i++) {
+				LSMessage *other = fake_message_new("org.example.other", NULL, "{\"subscribe\":true}");
+				subs_add(NULL, (HCListKind)k, other);
+				g_ptr_array_add(others, other);
+			}
+		}
 		LSMessage *msg = fake_message_new(app, service, payload ? payload : "{}");
 		handler(NULL, msg, NULL);
+		int added = 0;
+		for (int k = 0; k < HC_LIST_COUNT; k++) added += (int)subs_count(NULL, (HCListKind)k);
+		put_int(out, "subscribers", added - (int)others->len);
+		fake_subscription_cancel_all();
+		while (g_main_context_iteration(NULL, FALSE)) {}
+		g_ptr_array_free(others, TRUE);
 		jvalue_ref replies = jarray_create(NULL);
 		GPtrArray *sent = fake_message_replies(msg);
 		for (guint i = 0; i < sent->len; i++) jarray_append(replies, jstring_create(g_ptr_array_index(sent, i)));
@@ -144,6 +192,8 @@ static void run_case(jvalue_ref c)
 	j_release(&g.script);
 	g_free(g.choice);
 	g.choice = NULL;
+	g_free(g.fs_root);
+	g.fs_root = NULL;
 	g_free(name);
 	g_free(method);
 	g_free(payload);

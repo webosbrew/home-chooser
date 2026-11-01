@@ -908,6 +908,18 @@ class StockRecord(unittest.TestCase):
             for home in (HOME, FULL, 'org.example.launcher'):
                 self.assertFalse(e2e.stock_record_ok(major, home), (major, home))
 
+    def test_platform_stock_after_a_removal_race(self):
+        stock_idle = {'support': True, 'appId': HOME}
+        launcher_idle = {'support': True, 'appId': 'org.example.launcher'}
+        self.assertTrue(e2e.platform_stock(11, None, None, 'no', stock_idle))
+        self.assertFalse(e2e.platform_stock(11, 'org.example.launcher', None, 'no', stock_idle))
+        self.assertFalse(e2e.platform_stock(11, None, None, 'yes', stock_idle), 'override still there')
+        self.assertFalse(e2e.platform_stock(11, None, None, 'no', launcher_idle), 'idleApp names the launcher')
+        self.assertFalse(e2e.platform_stock(10, None, None, 'no', None), 'idleApp unreadable')
+        self.assertTrue(e2e.platform_stock(9, HOME, HOME, 'no', None), 'no override or idleApp before 10')
+        self.assertFalse(e2e.platform_stock(9, 'org.example.launcher', HOME, 'no', None))
+        self.assertTrue(e2e.platform_stock(5, FULL, None, 'no', None))
+
     def test_stock_home_id_resolution(self):
         self.assertEqual(e2e.stock_home_id(9, True), FULL)
         self.assertEqual(e2e.stock_home_id(6, False), HOME)
@@ -1077,10 +1089,10 @@ class Luna(unittest.TestCase):
         self.assertIsNone(e2e.parse_luna('[timeout]'))
 
     def test_get_info_contract(self):
-        ok = {'returnValue': True, 'apiVersion': 1, 'version': '0.1.0', 'root': True, 'permission': e2e.API_GROUP,
+        ok = {'returnValue': True, 'apiVersion': 2, 'version': '0.1.0', 'root': True, 'permission': e2e.API_GROUP,
               'permitted': True, 'isSelectedHome': False}
         self.assertEqual(e2e.api_reply_problems('getInfo', ok), [])
-        bad = dict(ok, apiVersion=2)
+        bad = dict(ok, apiVersion=3)
         del bad['isSelectedHome']
         p = e2e.api_reply_problems('getInfo', bad)
         self.assertTrue(any('isSelectedHome' in x for x in p) and any('apiVersion' in x for x in p), p)
@@ -1090,36 +1102,36 @@ class Luna(unittest.TestCase):
         self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, version=3)))
 
     def test_list_and_running_contract(self):
-        apps = {'returnValue': True, 'apiVersion': 1, 'apps': [
+        apps = {'returnValue': True, 'apiVersion': 2, 'apps': [
             {'id': 'a', 'title': 'A', 'icon': 'i.png', 'folderPath': '/x', 'removable': True, 'visible': True}]}
         self.assertEqual(e2e.api_reply_problems('listApps', apps), [])
-        leak = {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
+        leak = {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
         self.assertEqual(e2e.api_reply_problems('listApps', leak), [])
-        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
-        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1}))
-        run = {'returnValue': True, 'apiVersion': 1, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
+        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
+        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2}))
+        run = {'returnValue': True, 'apiVersion': 2, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
                                                                   'webProcessId': 34}]}
         self.assertEqual(e2e.api_reply_problems('listRunning', run), [])
         self.assertEqual(e2e.api_reply_problems('listRunning', dict(run, running=[dict(run['running'][0], futureField=5)])), [])
         self.assertTrue(e2e.api_reply_problems('listRunning', dict(run, running=[{'id': 'a', 'processId': '12'}])))
-        self.assertTrue(e2e.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 1, 'running': [{}]}))
+        self.assertTrue(e2e.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 2, 'running': [{}]}))
 
     def test_close_and_uninstall_reply_contract(self):
-        close = {'returnValue': True, 'apiVersion': 1, 'id': 'a'}
+        close = {'returnValue': True, 'apiVersion': 2, 'id': 'a'}
         self.assertEqual(e2e.api_reply_problems('closeApp', dict(close, later=1)), [])
         self.assertTrue(e2e.api_reply_problems('closeApp', {'returnValue': True, 'id': 'a'}))
         self.assertEqual(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='alert')), [])
         self.assertTrue(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='bad')))
 
     def test_new_launcher_replies(self):
-        front = {'returnValue': True, 'apiVersion': 1, 'appId': '', 'processId': 123}
+        front = {'returnValue': True, 'apiVersion': 2, 'appId': '', 'processId': 123}
         self.assertEqual(e2e.api_reply_problems('getForegroundApp', dict(front, futureField=True)), [])
         self.assertTrue(e2e.api_reply_problems('getForegroundApp', dict(front, processId='123')))
-        app = {'returnValue': True, 'apiVersion': 1,
+        app = {'returnValue': True, 'apiVersion': 2,
                'app': {'id': 'a', 'appCategory': ['home'], 'removable': True}}
         self.assertEqual(e2e.api_reply_problems('getAppInfo', dict(app, futureField=True)), [])
         self.assertTrue(e2e.api_reply_problems('getAppInfo', dict(app, app={'id': 'a', 'appCategory': 'home'})))
-        icon = {'returnValue': True, 'apiVersion': 1, 'mimeType': 'image/png',
+        icon = {'returnValue': True, 'apiVersion': 2, 'mimeType': 'image/png',
                 'data': 'YWJj', 'byteLength': 3}
         self.assertEqual(e2e.api_reply_problems('getAppIcon', dict(icon, futureField=True)), [])
         self.assertTrue(e2e.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
@@ -2195,6 +2207,37 @@ class HomeAndScreensaver(unittest.TestCase):
         for choice in ([], ['--saver-start', 'beanjar']):
             with patch.object(sys, 'argv', ['runner', '--list'] + choice), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(e2e.main(), 0)
+
+    def test_removal_race_runs_after_step_3_then_cleans_up(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s, events = self.make(), []
+        s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario='lifecycle',
+                              api_check=False, reboot_check=False, update_check=False,
+                              launcher_update_check=False, restore_repair_check=False, removal_race=True)
+        s.release, s.strategy_name, s.sure, s.note = '11.x', 'luna', 'fake', 'offline state model'
+        s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.host.mode = 'offline'
+        s.dev.release = lambda: (11, '11.2.0')
+        s.dev.app_installed = lambda app: False
+        s.state = lambda: {'choice': 'No such file'}
+        s.check_no_crash = Mock()
+        for number in range(1, 7):
+            setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
+        s.step_removal_race = lambda: events.append('3r')
+        s.run()
+        self.assertEqual(events, [1, 2, 3, '3r', 6])
+
+    def test_removal_race_is_rejected_where_it_cannot_run(self):
+        from unittest.mock import patch
+        for argv in (['--vm', '11.x', '--removal-race', '--restore-repair-check'],
+                     ['--vm', '11.x', '--removal-race', '--until', '2'],
+                     ['--vm', '11.x', '--removal-race', '--scenario', 'all']):
+            with self.subTest(argv=argv), patch.object(sys, 'argv', ['runner'] + argv), \
+                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    e2e.main()
+                self.assertEqual(cm.exception.code, 2)
 
     def test_main_recovery_failure_is_recorded_blocked_and_cleanup_still_runs(self):
         from types import SimpleNamespace

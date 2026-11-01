@@ -18,4 +18,6 @@ jvalue_ref pick_running(jvalue_ref arr);
 void put_normalized_pid(jvalue_ref out, const char *dest, jvalue_ref item, const char *source);
 /* Borrowed appInfo object, or the reply itself when SAM returns a flat object. */
 jvalue_ref appinfo_object(jvalue_ref reply);
+/* The prefix of the fixed icon directories: "" on the device (a seam for the contract test). */
+const char *hc_fs_prefix(void);
 #endif

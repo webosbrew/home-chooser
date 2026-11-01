@@ -33,6 +33,44 @@ export const ELEVATION = {
 
 const sleepFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Asks the running service to quit, then probes `status` until a root instance answers. It may not
+// answer the quit ("Message status unknown"), which is expected.
+const restartAndProbe = async ({service, probe, sleep, log, timings, what}) => {
+	try {
+		await service.quit(timings.quitTimeoutMs);
+		log('asked the service to quit');
+	} catch (e) {
+		log(`quit: ${errorMessage(e)} (expected)`);
+	}
+
+	let last = null;
+	for (let i = 0; i < timings.retries; i++) {
+		await sleep(timings.restartDelayMs);
+		last = await probe();
+		if (last.reply && last.reply.root) {
+			log(`service is root after ${what} (uid ${last.reply.uid}, version ${last.reply.version})`);
+			return last.reply;
+		}
+		log(`status after ${what} (${i + 1}/${timings.retries}): ${last.reply ? `not root, uid ${last.reply.uid}` : errorMessage(last.error)}`);
+	}
+	if (last && last.reply) throw new FatalError('notRoot', `the service runs as uid ${last.reply.uid} after ${what}`);
+	throw new FatalError('failed', `the service did not answer after ${what}: ${errorMessage(last && last.error)}`);
+};
+
+// restartService({service}) -> the root `status` reply of a fresh instance. On webOS 11 and later a
+// service registered before its access file changed keeps the old access groups until it registers
+// again (homechooser-access prints restart-service then; docs/service.md#luna-access-files).
+export const restartService = ({service, sleep = sleepFor, log = defaultLog, timings = ELEVATION}) => {
+	const probe = async () => {
+		try {
+			return {reply: await service.status(timings.statusTimeoutMs)};
+		} catch (e) {
+			return {error: e};
+		}
+	};
+	return restartAndProbe({service, probe, sleep, log, timings, what: 'the access change'});
+};
+
 // ensureRoot({service, call}) -> the root `status` reply. `service` is a createServiceClient.
 export const ensureRoot = async ({service, call, sleep = sleepFor, log = defaultLog, timings = ELEVATION}) => {
 	const probe = async () => {
@@ -61,24 +99,6 @@ export const ensureRoot = async ({service, call, sleep = sleepFor, log = default
 	}
 
 	// The running instance is still the unelevated one: ask it to exit so the next call starts the
-	// elevated binary. It may not answer ("Message status unknown"), which is expected.
-	try {
-		await service.quit(timings.quitTimeoutMs);
-		log('asked the service to quit');
-	} catch (e) {
-		log(`quit: ${errorMessage(e)} (expected)`);
-	}
-
-	let last = null;
-	for (let i = 0; i < timings.retries; i++) {
-		await sleep(timings.restartDelayMs);
-		last = await probe();
-		if (last.reply && last.reply.root) {
-			log(`service is root after elevation (uid ${last.reply.uid}, version ${last.reply.version})`);
-			return last.reply;
-		}
-		log(`status after elevation (${i + 1}/${timings.retries}): ${last.reply ? `not root, uid ${last.reply.uid}` : errorMessage(last.error)}`);
-	}
-	if (last && last.reply) throw new FatalError('notRoot', `the service runs as uid ${last.reply.uid} after elevation`);
-	throw new FatalError('failed', `the service did not answer after elevation: ${errorMessage(last && last.error)}`);
+	// elevated binary.
+	return restartAndProbe({service, probe, sleep, log, timings, what: 'elevation'});
 };

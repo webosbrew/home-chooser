@@ -375,8 +375,54 @@ int hc_remove_reply_class(const char *text)
 
 const char *const hc_launcher_list_fields[] = {
 	"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible",
-	"appCategory", NULL
+	"appCategory", "iconColor", "bgColor", NULL
 };
+
+/* The launch point fields listLaunchPoints forwards (additive, like hc_launcher_list_fields). */
+const char *const hc_launch_point_fields[] = {
+	"launchPointId", "id", "title", "lptype", "icon", "largeIcon", "iconColor", "bgColor", "bgImage",
+	"params", "removable", NULL
+};
+
+/* Where an absolute launch point icon may lie: the folder of the launch point's own app under one of
+ * these application roots (SAM joins the app folder into a launch point's icon paths). */
+static const char *const LAUNCH_POINT_ICON_ROOTS[] = {
+	"/usr/palm/applications",
+	"/mnt/otncabi/usr/palm/applications",
+	"/media/cryptofs/apps/usr/palm/applications",
+	"/media/developer/apps/usr/palm/applications",
+	NULL
+};
+
+/* Absolute path of an existing regular-or-other file whose real path lies inside the real dir. */
+static bool resolve_inside(const char *path, const char *dir, char *out, size_t outlen)
+{
+	char real_file[PATH_MAX], real_dir[PATH_MAX];
+	if (!path || path[0] != '/' || has_dotdot(path) || !hc_icon_mime(path)) return false;
+	if (!realpath(dir, real_dir) || !realpath(path, real_file)) return false;
+	if (!hc_path_within(real_file, real_dir) || strcmp(real_file, real_dir) == 0) return false;
+	if (strlen(real_file) >= outlen) return false;
+	strcpy(out, real_file);
+	return true;
+}
+
+bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *path, char *out, size_t outlen)
+{
+	if (!prefix || !hc_app_id_ok(app_id)) return false;
+	for (int i = 0; LAUNCH_POINT_ICON_ROOTS[i]; i++) {
+		char dir[PATH_MAX];
+		if (snprintf(dir, sizeof dir, "%s%s/%s", prefix, LAUNCH_POINT_ICON_ROOTS[i], app_id) >= (int)sizeof dir) continue;
+		if (resolve_inside(path, dir, out, outlen)) return true;
+	}
+	return false;
+}
+
+bool hc_input_icon_resolve(const char *prefix, const char *path, char *out, size_t outlen)
+{
+	char dir[PATH_MAX];
+	if (!prefix || snprintf(dir, sizeof dir, "%s%s", prefix, HC_INPUT_ICON_DIR) >= (int)sizeof dir) return false;
+	return resolve_inside(path, dir, out, outlen);
+}
 
 static const char *const LUNA_URIS[] = {
 	"luna://com.webos.service.preloadmanager/setPreloadPolicy",
@@ -393,6 +439,8 @@ static const char *const LUNA_URIS[] = {
 	"luna://com.webos.applicationManager/launch",
 	"luna://com.webos.applicationManager/removeLaunchPoint",
 	"luna://com.webos.applicationManager/listApps",
+	"luna://com.webos.applicationManager/listLaunchPoints",
+	"luna://com.webos.service.eim/getAllInputStatus",
 	"luna://com.webos.applicationManager/running",
 	"luna://com.webos.applicationManager/getAppInfo",
 	"luna://com.webos.applicationManager/getForegroundAppInfo",

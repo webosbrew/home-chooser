@@ -44,8 +44,8 @@ uninstall from `/tmp`.
 
 ## Native source layout
 
-`service/src/main.c` starts only the on-demand LS2 service, with the unchanged
-21-method table. `daemon-main.c` owns `--boot` and `--homekey <action>`.
+`service/src/main.c` starts only the on-demand LS2 service, with the 24-method table.
+`daemon-main.c` owns `--boot` and `--homekey <action>`.
 The daemon applies the Home redirect and runs the C watcher on a single GLib
 thread. All daemon LS2 traffic runs as `luna-send -a com.webos.applicationManager`
 children. It never registers an LS2 client.
@@ -59,7 +59,7 @@ This archive is a build artifact, not part of the package.
 | `log.h`, `version.h`, `roles.h` | Shared log context, build version and role entry points |
 | `json.c` | pbnjson parsing, members and reply validation |
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
-| `luna-child.c` | Daemon child streams, GIOChannel JSON framing, deadlines, cancellation and reaping |
+| `luna-child.c` | Child streams (daemon watcher, service subscriptions), GIOChannel JSON framing, deadlines, cancellation and reaping |
 | `watcher/{main,core,record,restore,preload,notify,gate,input}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount and the 10+ last-input launch after boot |
 | `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
 | `last-input.c` | The last TV input from an eim `getLastInput` reply, Live TV otherwise; used by the gate and the watcher |
@@ -76,13 +76,15 @@ This archive is a build artifact, not part of the package.
 | `service/files.c`, `service/files.h` | File RPCs and shared file-size limit |
 | `service/call.c` | Allow-listed forwarding and settings icon requests |
 | `service/run.c` | Named command RPC and log tail |
-| `service/launcher.c` | Launcher gates, consent, requests and private uninstall tokens |
+| `service/launcher.c`, `service/launcher.h` | Launcher gates, consent, requests and private uninstall tokens |
+| `service/catalog.c`, `service/catalog.h` | The launcher methods that subscribe (`listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`) and `getIcons` |
+| `service/subscribe.c` | Their subscriptions: one shared upstream child per method, fan-out through the LS2 catalog |
 | `service/system.c` | Retained reboot prompt method |
 
 The extra shared `fs.c` keeps file access available to app metadata, boot links and service methods
 without depending on the service role. Named commands have their own service module rather than
 living in the generic process runner. Boot link RPCs retain their gates and replies in `bootlink.c`.
-Service calls remain synchronous and bounded. The daemon serializes watcher policy events and
+Service calls remain synchronous and bounded, except the launcher subscriptions (below). The daemon serializes watcher policy events and
 uses GLib sources for confirmation/backoff, preload deadlines and child I/O. Subscription children
 use `-i`; one-shot children use `-n 1` with a deadline while subscription I/O keeps running.
 There is no shell or awk between the daemon and luna-send. Child EOF/exit ends a stream:
@@ -129,11 +131,14 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `link` / `unlink` / `linkStatus` | `{}` | the boot entry, below |
 | `run` | `{command}` | `{returnValue, exitCode, stdoutString, stderrString}` |
 | `getInfo` | `{}` | `{returnValue, apiVersion, version, root, permission, permitted, isSelectedHome}` |
-| `listApps` | `{}` | `{returnValue, apiVersion, apps:[…]}`; selected app fields only |
-| `listRunning` | `{}` | `{returnValue, apiVersion, running:[…]}`; selected process fields only |
-| `getForegroundApp` | `{}` | `{returnValue, apiVersion, appId, windowId?, processId?}`; one SAM lookup |
+| `listApps` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, apps:[…]}`; selected app fields only |
+| `listRunning` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, running:[…]}`; selected process fields only |
+| `getForegroundApp` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, appId, windowId?, processId?}`; one SAM lookup per reply |
 | `getAppInfo` | `{id}` | `{returnValue, apiVersion, app:{…}}`; one `listApps` item |
 | `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
+| `listLaunchPoints` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, launchPoints:[…]}`; SAM's launch points, selected fields |
+| `listInputs` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, inputs:[…]}`; eim `getAllInputStatus`, selected fields, plus `params` (the picker's launch params) and `signal` (`hdmiSignalExist`, where present) |
+| `getIcons` | `{items}` | `{returnValue, apiVersion, icons:[…]}`; one entry per item, at most 64 items and 1 MiB of icons |
 | `closeApp` | `{id, force?}` | `{returnValue, apiVersion, id}`; selected Home only |
 | `uninstallApp` | `{id}` | `{returnValue, apiVersion, pending:true, id, confirmation}` (`alert` or `screen`); selected Home only |
 | `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; screen fallback only |
@@ -177,7 +182,9 @@ Launcher methods use a separate gate: a valid hub-reported application id, root 
 installed `requiredPermissions` containing `org.webosbrew.homechooser.applications`. SAM's `getAppInfo` supplies the
 permissions, with an installed `appinfo.json` fallback. `closeApp` and `uninstallApp` also require the
 caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
-root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
+root/consent gate, and reports consent and selection. This check is the real gate: on 5.x to 10.x
+every app reaches the service through Homebrew Channel's `public` API file, and on 11.x and 12.x
+through LG's `application.query` and `application.launcher` groups in the access file below.
 
 `uninstallApp` checks the target and caller before showing an `Uninstall <title>?` alert. The
 Uninstall button calls LG's `appInstallService/dev/remove` for a developer install or
@@ -189,7 +196,7 @@ uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that 
 still Home, and first tries `removeLaunchPoint` before the appropriate `appInstallService` route.
 The settings app allows 120 seconds for screen confirmation.
 
-See [Launcher API version 1](launcher-api.md) for the contract, fields, errors, caller rules,
+See [Launcher API level 2](launcher-api.md) for the contract, fields, errors, caller rules,
 selection requests and absence detection. Plain shell callers have no application id and are
 refused by launcher gates.
 
@@ -214,7 +221,8 @@ calls and subscriptions carry the same fixed identity.
 
 Native one-shot calls use `luna_run` with a 20 second bound. They run serially, so a slow query or
 confirmation can delay other requests. The alert and screen-launch bounds are 8 and 15 seconds;
-streamed removal has a 90 second bound. Output is capped at 64 KiB per stream. JSON replies retain
+streamed removal has a 90 second bound. Output is capped at 1 MiB per stream (a launch point list
+of a set with many apps is larger than the former 64 KiB). JSON replies retain
 UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the same argv identity.
 The service's own identity is not used for these calls: `systemprofile/getProfiles` (12.x) and
 `systemprofile/debug/rescan` (11.x and 12.x) refuse it.
@@ -224,10 +232,26 @@ The service's own identity is not used for these calls: `systemprofile/getProfil
 `service/scripts/homechooser-access apply|remove|status` manages Home Chooser's access files under
 `/var/luna-service2-dev` and `/var/luna-service2`. Apply acts where
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
-`api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: eight
+`api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: the
 launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
-missing. On major 11+ the same eight methods are also under `ares.webos.cli`. Neither includes
-`uninstallConfirmed` or `rebootPrompt`. The group is declared only by that API file, the way the installer declares
+missing. On major 11+ the same methods are also under `ares.webos.cli`, and under two of LG's public
+groups that 11.x and 12.x give every developer app: the reading methods under `application.query`,
+`closeApp` and `uninstallApp` under `application.launcher` (never `default.permission`). The method
+list is the one variable `LAUNCHER_METHODS` at the top of the script, each entry `method:group`
+(`query` or `launcher`), which every grant is built from; `test-homechooser-access.sh` checks it
+against the spec's `x-permission` (`grants` plus `getInfo`). None includes `uninstallConfirmed` or
+`rebootPrompt`.
+
+On 11+ the service takes its provided groups when it registers: on 11.2.0 a changed file followed by
+`ls-control scan-services` alone did not let a launcher in while the same service instance ran, and a
+reboot did. So when apply changes the file on 11+, the running service must register again. Run by
+the service (`accessApply`), the script prints `restart-service` and the settings app quits the
+service and waits for a new root instance, as after elevation; run by the boot entry or the watcher,
+it sends SIGTERM to `homechooser-service` (Home Chooser's own service only) and the hub starts it on
+the next call. On first install the order is: elevation (quit, new root instance), `accessApply`
+writes the file and scans, `restart-service`, quit, the next `status` starts an instance that
+registers with the file in place. That a fresh registration is enough, without a reboot, is not yet
+verified on a device. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
 
 On webOS 9.2.1, Surface Manager turns `onclick` plus `params` into an alert action. Its role
@@ -296,6 +320,49 @@ reaches both methods as `com.webos.applicationManager`. A developer app's `getAp
 under `/media/developer/apps/usr/palm/applications/`, which is how the service picks the developer
 endpoint.
 
+## Launcher lists, icons and subscriptions
+
+`listApps`, `listLaunchPoints`, `listInputs`, `listRunning` and `getForegroundApp` read
+`applicationManager/listApps` (with the published `properties`), `applicationManager/listLaunchPoints`,
+`com.webos.service.eim/getAllInputStatus`, `applicationManager/running` and
+`applicationManager/getForegroundAppInfo` with one `luna_run` each, after the caller's consent lookup. `getIcons` makes the consent lookup and
+then at most one read of each list its items need (`listApps` with `id`, `folderPath`, `icon`,
+`largeIcon`; `listLaunchPoints`; `getAllInputStatus`), then reads the files. Nothing is cached: no
+list, appinfo or icon outlives the request, and every reply is read from the platform when it is
+sent. Launchers cache ([Subscriptions](launcher-api.md#subscriptions)).
+
+**Subscriptions** (`subscribe.c`). A first reply is the same fresh read as a single call, with
+`subscribed:true`; then the message joins the hub's subscription catalog (`LSSubscriptionAdd`, key
+`launcher/<method>`). Per method, one upstream `luna-send -a com.webos.applicationManager -i <uri>
+{...,"subscribe":true}` child (the daemon's `luna-child.c` transport: GIOChannel framing, self-pipe
+SIGCHLD, reaping, `PR_SET_PDEATHSIG`) runs while the method has a subscriber: it starts with the first
+and is killed when `LSSubscriptionGetHandleSubscribersCount` is zero after the hub's cancel callback
+(`LSSubscriptionSetCancelFunction`; a cancel and a subscriber that went away both call it). The
+upstream's replies are only a signal, whatever their shape (SAM sends single-item deltas for
+launch points): its first reply after a start is the state just sent and is skipped; any later one
+schedules, 200 ms later (a burst is one read), a non-blocking one-shot `luna-send -n 1` of the whole
+state, bounded at 20 s, whose result goes to every subscriber with `LSSubscriptionReply`. A dead
+upstream is restarted after 1 s, doubling to 60 s, and its first reply after a restart counts as a
+change. A failed read is retried with the same backoff. A method takes 16 subscribers;
+`tooManySubscriptions` refuses more. Idle cost: nothing without subscribers; one luna-send child per
+subscribed method. `getAppInfo`, `getAppIcon` and `getIcons` take no `subscribe`: SAM's `getAppInfo`
+has no subscription (its schema has only `id` and `properties`), and icon files have no change feed.
+
+Why children rather than the LS2 client API: the service's own identity cannot make the privileged
+calls (`listApps` and `listLaunchPoints` are in non-public groups; [Privileged luna
+identity](#privileged-luna-identity)), and every other outgoing call already goes through
+`luna-send -a com.webos.applicationManager`. The daemon's tested stream transport is reused as is.
+
+**Icon directories.** An app icon is resolved as for `getAppIcon`. A launch point icon is SAM's
+absolute path; it must resolve (`realpath`, no `..`, image extension) inside
+`<root>/<launch point id field>` for a root of `/usr/palm/applications`,
+`/mnt/otncabi/usr/palm/applications`, `/media/cryptofs/apps/usr/palm/applications` or
+`/media/developer/apps/usr/palm/applications` (5.6.1: SAM joins the app folder into launch point
+icons, `/mnt/otncabi/usr/palm/applications/netflix/icon.png`). An input icon is eim's
+`iconPrefix + icon` and must resolve under `/usr/palm/plugins/inputapps/assets` (5.6.1 device; the
+directory exists on 6.6.0, 7.6.0 and 11.2.0 roots). Browser bookmark icons are not read until their
+directory is verified on a device.
+
 ## Allow-lists
 
 The policy is in `service/src/policy.c` and tested on the host (`test-policy`, below).
@@ -313,7 +380,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
   `../usr/lib/os-release` (webOS 5.6 to 26 roots checked: W20L, W20H, W21P, W22L, W22P, W22H 43.x), so
   it is resolved with `realpath()` and read only when the result is `/etc/os-release` or
   `/usr/lib/os-release`; any other target is `notAllowed`.
-* **Icons**: `readIcon` and `getAppIcon` ask SAM for the app's `folderPath` and chosen icon field.
+* **Icons**: `readIcon`, `getAppIcon` and `getIcons` (for app items) ask SAM for the app's `folderPath` and chosen icon field.
   They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
   file of at most 256 KiB.
@@ -324,7 +391,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
 * **Commands** (`run`, by name, fixed argv, no shell, minimal environment, stdin from `/dev/null`,
-  output capped at 64 KiB per stream, a timeout each):
+  output capped at 1 MiB per stream, a timeout each):
 
 | Name | argv | Timeout |
 | --- | --- | --- |
@@ -353,7 +420,8 @@ process that outlives the command (the `watch` script starts a transient unit).
 Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
 (read it from the journal or with `PmLogCtl`). Current message ids: `START`, `CALL`,
 `CALL_FORWARD`, `CALL_DENIED`, `CALL_FAILED`, `REPLY_FAILED`, `RUN`, `RUN_DENIED`,
-`RUN_STDERR`, `WROTE`, `REMOVED`, `LINKED`, `UNLINKED`, `PATH_DENIED`, `REFUSED`,
+`RUN_STDERR`, `WROTE`, `REMOVED`, `LINKED`, `UNLINKED`, `PATH_DENIED`, `REFUSED`, `SUBSCRIBE_UP`,
+`SUBSCRIBE_DOWN`, `SUBSCRIBE_LOST`, `SUBSCRIBE_RETRY`, `SUBSCRIBE_READ`, `SUBSCRIBE_FAILED`,
 `NOT_ROOT`, `ICON_NONE`, `LAUNCHER_ERROR`, `UNINSTALL_ASK`, `UNINSTALL`, `REBOOT_ASK`,
 `REBOOT`, `HOMEKEY`, `REGISTER_FAILED`, `EXIT`. These ids are internal. The app logs its side with
 `[HomeChooser]` in the web console.
@@ -370,6 +438,9 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
   subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle, close guards
   and the 10+ last-input launch after boot (once per boot, overlay only, nothing full-screen in front, Live TV fallback, no retry of a failed launch).
 * `test-homekey`: native live-filter transactions with fake Luna.
+* `test-launcher-contract` and `test-launcher-subscribe`: the launcher handlers against the API
+  description on a fake hub, and the lists' subscriptions with real upstream children
+  ([api/README.md](../api/README.md#how-it-is-checked)).
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.

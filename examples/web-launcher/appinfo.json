@@ -1,0 +1,13 @@
+{
+  "id": "org.example.launcher",
+  "version": "1.0.0",
+  "vendor": "Example",
+  "type": "web",
+  "main": "index.html",
+  "title": "Example Launcher",
+  "icon": "icon.png",
+  "bgColor": "#101820",
+  "disableBackHistoryAPI": true,
+  "appCategory": ["home"],
+  "requiredPermissions": ["org.webosbrew.homechooser.applications"]
+}

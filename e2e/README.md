@@ -66,8 +66,10 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `fixture:web.normal`; an app id, for a real
-launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|fixture:web.demo|<app id>` (default `fixture:web.normal`;
+`fixture:web.demo` is `examples/web-launcher` and adds step 3d, OK on the demo opens its focused app, the runner's own
+`org.webosbrew.hcfixture.first`, installed with it; see
+`fixtures/README.md`; an app id, for a real launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
@@ -76,7 +78,7 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--reboot-via later|alert`
+`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--removal-race` (after step 3, step 3r, below, then the cleanup); `--reboot-via later|alert`
 (accepted for compatibility but not used: no release asks for a restart any more, `expects_reboot_dialog()` is always false, so
 `reboot_after_choice()` is never reached; see "webOS 6-9: nothing restarts");
 `--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
@@ -488,6 +490,15 @@ and Home key hook docs.
    again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
    reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
+With `--removal-race` step 3 is followed by 3r and the cleanup instead of steps 4 and 5:
+
+* 3r. `ares-install --remove` the launcher and then Home Chooser at once, as an owner uninstalling both. The
+  record's `home` (and on 10+ the override, and `getProfiles` `idleApp`) must be stock within 15 s plus 8 s (the
+  8 s times the host slowdown) of the launcher's removal: one confirmation, not one per app. Then the step 5 checks (toast,
+  watcher finished, `assert_stock`, preload policy enabled), Homebrew Channel opened and closed as the only app
+  with screenshot `3r-last-app-closed` (LG Home or the last input in front, never the removed launcher), and Home
+  opens stock.
+
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
    removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry
@@ -571,6 +582,11 @@ web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.home
 e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
 declare it and are refused. The run also installs a disposable non-home app,
 `org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
+`--launcher fixture:web.demo` (the example launcher, which always declares the permission) is accepted too.
+
+Every reply that comes from Home Chooser (one with `apiVersion`) is also validated against its method's result schema
+in `api/launcher-v1.openrpc.json`, with the spec lint's own checker (`api/tools/launcher_schema.py`), and recorded as a
+check of its own; a reply of the luna bus itself (no `apiVersion`) is noted as outside the schemas.
 
 * 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
   permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps`, `listRunning`,
