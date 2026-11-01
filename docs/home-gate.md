@@ -14,8 +14,9 @@ input (Live TV or an HDMI source), as the overlay homes of earlier webOS release
 
 Scope: webOS 6.x to 9.x only, where stock Home is native at `file:///usr/bin/com.webos.app.home`.
 On 5.x the visible home is `com.webos.app.fullhome` (`com.webos.app.home` never shows), and on
-10.x and later Home is a Flutter app folder, so neither has a binary to replace. 5.x and 10.x are
-unchanged. The 11+ "close LG Home once the launcher is in front" logic is unchanged.
+10.x and later Home is a Flutter app folder, so neither has a binary to replace. 5.x is
+unchanged; 10.x and later close LG Home once the launcher is in front instead
+([settings-app.md](settings-app.md#the-stock-home-is-not-preloaded)).
 
 ## The gate program
 
@@ -28,7 +29,7 @@ what stops SAM retrying and falling back to Live TV.
 Inputs: the choice file `/var/lib/webosbrew/homechooser/home`, the Home key flag
 `/var/lib/webosbrew/homechooser/homekey`, the envelope's `reason`, and `getAppInfo`'s
 `appInfo.defaultWindowType` for the choice (`overlay` is an overlay launcher, anything else
-full-screen; the watcher's 11+ close logic uses the same classification).
+full-screen; the watcher's 10+ close logic and the profile override's `idleApp` use the same classification).
 
 | Condition | Overlay launcher | Full-screen launcher |
 |---|---|---|

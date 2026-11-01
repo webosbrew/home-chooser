@@ -55,21 +55,20 @@ so. Your choice is remembered: install the launcher again and it becomes your Ho
 * **Home** opens your chosen launcher, from any app.
 * **After a restart**, the Home button opens your launcher once the TV has finished starting. On
   webOS 6 to 9 a short message, "Your new home will start shortly", may appear while it gets ready.
-* **When the last app closes** and nothing is left on screen, webOS 6 to 9 open your launcher if it
-  is a full-screen launcher. If it is an overlay launcher (one that draws over the TV picture, like
-  a dock), you go back to the last TV input (Live TV or HDMI) instead. On webOS 5, closing the last
-  app goes back to Live TV. Other webOS versions keep their own behaviour.
+* **When the last app closes** and nothing is left on screen, webOS 6 and later open your launcher
+  if it is a full-screen launcher. If it is an overlay launcher (one that draws over the TV picture,
+  like a dock), you go back to the last TV input (Live TV or HDMI) instead. On webOS 5, closing the
+  last app goes back to Live TV.
 * Holding Home, the other remote shortcuts and voice commands keep working as LG made them.
 
 ## Known limitations
 
 * **webOS 11 and later** need a Homebrew Channel update for root (see [Requirements](#requirements)).
 * **LG Home in memory.** On webOS 6 to 9, Home Chooser keeps LG Home from running while another
-  launcher is chosen, which frees its memory. On webOS 10, LG Home stays loaded in the background
-  while another launcher is chosen; the TV starts it again whenever it is closed. On webOS 5, LG
+  launcher is chosen, which frees its memory. On webOS 10 and later Home Chooser closes LG Home
+  once your launcher is on screen, after you choose it and again after each restart. On webOS 5, LG
   Home stays loaded in the background after you choose another launcher, until the TV next
-  restarts. On webOS 11 and later Home Chooser closes it once your
-  launcher is on screen.
+  restarts.
 * **Unrecognised TV software (webOS 6 to 9).** Home Chooser changes the Home button only on TV
   software it recognises. If it does not, the Home button keeps opening LG Home and Home Chooser
   says "The Home button can't be changed on this TV's software."
