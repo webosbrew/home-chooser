@@ -5,6 +5,42 @@ the Home button opens. This guide is for the authors of such apps (launchers, do
 home screens). It covers what the owner and Home Chooser do for you, how to declare your app, and
 the luna API that Home Chooser's root service offers to a launcher.
 
+Start from [`examples/web-launcher`](../examples/web-launcher/README.md), a small complete web
+launcher, and [`api/client`](../api/client), a one-file client generated from the
+[API description](../api/launcher-v1.openrpc.json) with types and a mock for a desktop browser.
+Terms such as SAM, the watcher or the home gate are explained in the [glossary](#glossary).
+
+## Checklist
+
+1. **Declare the app.** In `appinfo.json`, `"appCategory": ["home"]` makes it selectable and
+   `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` lets it call the API
+   ([Declare the app](#1-declare-the-app)).
+2. **Install Home Chooser first and open it once, then install your launcher.** Opening Home
+   Chooser finishes its setup, which makes the permission available. A launcher installed before
+   that is refused with `Not allowed permission is used`: open Home Chooser and install the
+   launcher again. Reinstall after any change to `requiredPermissions`.
+3. **Call `getInfo` at start and branch.** The call fails: Home Chooser is missing or too old.
+   `root` false: ask the owner to open Home Chooser. `permitted` false: reinstall the launcher.
+   `isSelectedHome` false: offer the [request launch](#3-asking-to-become-home)
+   ([Check where you stand](#4-check-where-you-stand-then-use-the-api)).
+4. **List the apps** with `listApps` and read their icons with `getAppIcon` ([Icons](#icons)).
+5. **Launch apps, handle Back and `webOSRelaunch`** with the platform's own calls
+   ([Platform calls you'll need](#platform-calls-youll-need)).
+6. **Choose full-screen or overlay** ([below](#full-screen-or-overlay)).
+7. **Try it** in a desktop browser with the mock, then on a TV with the compatibility kit
+   ([Testing your launcher](#testing-your-launcher)).
+
+### Full-screen or overlay
+
+| Your launcher | Window | `appinfo.json` | When the last app closes |
+| --- | --- | --- | --- |
+| A home screen: an app grid, rows of content | full-screen | nothing extra | your launcher opens: it is where navigation starts and ends |
+| A dock or bar drawn over the running app | overlay | `"defaultWindowType": "overlay"`, usually with `"transparent": true` | the last TV input (Live TV or HDMI) comes back; your launcher opens on Home only |
+
+Home Chooser reads `defaultWindowType` from the installed appinfo to decide what an empty screen
+shows on webOS 6 and later. On webOS 5 the screen goes back to Live TV in both cases. A
+full-screen launcher is the root of navigation, so it must not close itself on Back.
+
 ## What Home Chooser does for a launcher
 
 * **It makes your app the Home app on webOS 5 to 12.** The owner picks your app in Home Chooser;
@@ -55,7 +91,9 @@ A complete, minimal web launcher `appinfo.json`:
   you only want to be selectable. Merge both entries with your other categories and permissions.
 * **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Consider
   `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. These
-  are windowing advice, not part of Home Chooser's contract: Home Chooser does not read them. See
+  are windowing advice, not part of Home Chooser's contract. Home Chooser reads
+  `defaultWindowType` only to choose what an empty screen shows
+  ([Full-screen or overlay](#full-screen-or-overlay)); it does not read `transparent`. See
   [The stock home](#the-stock-home) for what happens to LG's own home app.
 
 The permission is read from the appinfo the app was installed with, so reinstall after any change
@@ -180,6 +218,12 @@ function requestHome() {
   });
 }
 ```
+
+[`api/client/homechooser.js`](../api/client/homechooser.js) is this code as one file to copy, one
+function per method, generated from the API description. Its promises reject with an error whose
+`source` tells a Home Chooser refusal (`errorCode` from the table below) from a platform reply and
+from no reply at all; `requestHome()` sends the request launch. `homechooser-mock.js` beside it
+answers the same calls with example data in a desktop browser.
 
 `webOS.service.request` from webOSTV.js does the same through the same bridge; its failure callback
 receives the same `returnValue:false` object. A native or QML launcher uses its own luna client
@@ -392,7 +436,45 @@ answers with a string `errorCode` from the table.
 
 Treat an unknown `errorCode` as a failure and log it.
 
+## Icons
+
+Use `getAppIcon`. `listApps` gives each app's `icon` and `folderPath` as the app declared them,
+but loading `folderPath` + `icon` as a `file://` URL needs your app to be able to read that file,
+and a [jailed](#glossary) launcher cannot read other apps' folders. `getAppIcon` reads the file as root, inside
+that app's folder only, for every app type and release, and returns base64 for a `data:` URL:
+
+```js
+const {mimeType, data} = await homeChooser('getAppIcon', {id});
+img.src = `data:${mimeType};base64,${data}`;
+```
+
+Cache the result (by `id` and `version`): every call reads the file again. Ask for one icon at a
+time rather than the whole list at once. `noIcon` and `iconTooLarge` are normal answers; show a
+placeholder.
+
+## Platform calls you'll need
+
+These are webOS platform behaviour, not part of Home Chooser's API v1: Home Chooser neither
+provides nor freezes them. They are here because every launcher needs them.
+
+* **Launch an app.** `luna://com.webos.applicationManager/launch` with `{"id": "<app id>"}`, and
+  `"params": {...}` for the app's own launch parameters. The reply has `returnValue: true` when the
+  platform accepted the launch. The [request launch](#3-asking-to-become-home) is this call with
+  Home Chooser's id.
+* **Back.** Back arrives as a `keydown` with `keyCode` 461 when `appinfo.json` sets
+  `"disableBackHistoryAPI": true`; otherwise the web runtime uses it for the page's history. A
+  Home app is the root of navigation: on Back, move the focus to a start position or do nothing;
+  do not close the app. The arrow keys are 37 to 40 and OK is 13.
+* **`webOSRelaunch`.** When your launcher is already running and is launched again (the Home
+  button, a request), the web runtime does not reload the page: it dispatches `webOSRelaunch` on
+  `document`, and `PalmSystem.launchParams` holds the new parameters. Refresh the app list there,
+  and on `visibilitychange` when the page becomes visible again.
+* **Your own id.** `PalmSystem.identifier`, up to its first space, is the app id of a web app.
+
 ## Per-release notes
+
+*Not needed to write a launcher.* This section explains how Home Chooser makes the Home button
+follow the choice on each release, for when you want to know why something behaves as it does.
 
 Releases are named by the major version in `/etc/os-release` (`VERSION_ID`), not by LG's marketing
 year. Your launcher declares the same appinfo on all of them. The API and the selection request
@@ -474,6 +556,13 @@ never closes a stock home while you select a launcher. Details are in
 
 ## Testing your launcher
 
+**In a desktop browser.** Load
+[`api/client/homechooser-mock.js`](../api/client/homechooser-mock.js) after `homechooser.js`. Where
+there is no webOS service bridge it answers every method from the API description's examples, with
+the caller checks in the service's order; on a TV it does nothing. `?hcmock=before-elevation`,
+`not-permitted`, `not-home` or `absent` in the page URL selects another start state. See
+[`api/README.md`](../api/README.md#client-and-mock).
+
 **By hand, as root on the device.** `luna-send -a <app id>` makes the call as an installed app with
 its effective client permissions, so install your launcher first; an uninstalled or made-up id
 tests nothing.
@@ -517,9 +606,28 @@ Your launcher ipk must declare `appCategory:["home"]` and
 is used as supplied. The kit will not replace an already installed launcher or disturb a
 nonstock Home choice. Results are in `e2e/results/<device>-<timestamp>/`.
 
-For a complete Home-key lifecycle test, maintainers use `--vm` on emulator VMs as described in
-[`e2e/README.md`](../e2e/README.md). Check `df -h /media/developer` before installing: a full
-partition makes an installation fail for an unrelated-looking reason.
+The project's own release test, which also covers the Home key, reboots and uninstalls, is
+described in [`e2e/README.md`](../e2e/README.md). Check `df -h /media/developer` before installing:
+a full partition makes an installation fail for an unrelated-looking reason.
+
+## Glossary
+
+* **SAM**: the System and Application Manager, `com.webos.applicationManager`, the webOS service
+  that launches, lists and closes apps. Its log lines carry `sam`.
+* **Compositor**: the webOS window manager (surface manager). It draws the windows and dispatches
+  keys, the Home key among them.
+* **Stock home**: LG's own home app, LG Home (`com.webos.app.home`; on webOS 5 the visible one is
+  `com.webos.app.fullhome`).
+* **Preload**: webOS starting an app in the background at boot so it opens fast. LG Home is
+  preloaded; on webOS 6 and later Home Chooser turns that off while another launcher is chosen.
+* **Watcher**: Home Chooser's background program. It re-applies the choice at boot, puts LG Home
+  back when the chosen launcher is uninstalled, and applies the choice again when it returns.
+* **Home gate**: on webOS 6 to 9, Home Chooser's stand-in for LG Home's program. When the system
+  would show LG Home, it opens your launcher or the last TV input instead.
+* **Elevation, root**: Homebrew Channel restarting Home Chooser's service as root. Until then
+  `getInfo` reports `root: false`.
+* **Jailed**: run by the platform in a sandbox (a jail) that cannot read other apps' files. Whether
+  an app is jailed depends on its type and the release; `getAppIcon` works either way.
 
 ## Stability
 

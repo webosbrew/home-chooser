@@ -36,10 +36,55 @@ where the two differ; a change to either must keep them in step.
   `version`) as regular expressions. The format is in `x-fixtureFormat`. `errorText` values in the
   examples are what the service sends today; they are not part of the contract.
 
+## Client and mock
+
+[`client/`](client) is generated from the description by
+[`tools/gen-client.py`](tools/gen-client.py) (`python3 api/tools/gen-client.py`; standard library
+only). Do not edit the files by hand.
+
+* [`homechooser.js`](client/homechooser.js): one file, no dependencies, ES5 plus `Promise` (the web
+  runtime of webOS 5, Chromium 68, and later). A `<script>` include defines the global
+  `HomeChooser`; `require` returns the same object. One promise-returning function per method
+  (`HomeChooser.getAppIcon({id})`), using the bridge call of the guide. A promise resolves with
+  the reply when `returnValue` is true and otherwise rejects with a `HomeChooserError`: `source`
+  is `homechooser` (a reply with `apiVersion`; `errorCode` and `errorText` as the service sent
+  them), `platform` (the luna bus answered: no `apiVersion`, often a numeric `errorCode`) or
+  `transport` (no bridge, no reply within 70 seconds, or not JSON). `requestHome(appId?)` sends the
+  request launch, `ownAppId()` reads the app's id from the web runtime, and `lunaCall(uri, payload)`
+  makes any other luna call, such as `applicationManager/launch`. `ERROR_CODES` lists each method's
+  codes.
+* [`homechooser.d.ts`](client/homechooser.d.ts): its types.
+* [`homechooser-mock.js`](client/homechooser-mock.js): the same API on fake data, for opening a
+  launcher in a desktop browser.
+
+To use the mock, include it after the client:
+
+```html
+<script src="homechooser.js"></script>
+<script src="homechooser-mock.js"></script>
+```
+
+It switches itself on only where the page has no webOS service bridge (`WebOSServiceBridge` or
+`PalmServiceBridge`), which is a desktop browser; on a TV it does nothing, so leaving the include in
+a package changes nothing. It never takes over silently in the other direction: without the include,
+a missing bridge is a `transport` error. In the browser it replaces the client's transport, so the
+real client code runs on fake replies: every method answers from `HomeChooser.mock` (the spec's
+examples: the `listApps`, `listRunning`, `getForegroundApp` and `getAppIcon` success examples, the
+caller `org.example.launcher`), applies the caller checks in the order of `x-replyModel`, and
+validates `id` and `size` as the param schemas do. `applicationManager/launch` is logged and
+succeeds. `?hcmock=<state>` in the page URL picks the `getInfo` state: `selected-home` (default),
+`before-elevation`, `not-permitted`, `not-home`, or `absent` (every call gets a platform error, as
+when Home Chooser is not installed). `HomeChooser.mock` can be changed in the console.
+
+[`examples/web-launcher`](../examples/web-launcher/README.md) carries copies of both `.js` files;
+the generator writes those too.
+
 ## How it is checked
 
-Both checks are CTest tests in [`service/test`](../service/test/CMakeLists.txt), run by
-[`launcher-spec.py`](../service/test/launcher-spec.py) with nothing but the Python standard library:
+The checks are CTest tests in [`service/test`](../service/test/CMakeLists.txt), run by
+[`launcher-spec.py`](../service/test/launcher-spec.py) and the scripts in [`tools/`](tools) with
+nothing but the Python standard library (and `node` for the client's behaviour). All but the
+contract test also run with `-DQEMU_TESTS=OFF`:
 
 ```sh
 cmake -S service/test -B build/service-host && cmake --build build/service-host
@@ -49,8 +94,17 @@ ctest --test-dir build/service-host --output-on-failure -R launcher
 * `test-launcher-spec` checks the file against the OpenRPC meta-schema, every schema for keywords
   the checker does not implement, every example and contract case result against its method's
   result schema and its params against the param schemas, every fixture against its format, and
-  that every `errorCode` of every method is produced by at least one example or case. It needs only
-  python3, so it also runs with `-DQEMU_TESTS=OFF`.
+  that every `errorCode` of every method is produced by at least one example or case.
+* `test-launcher-doc` checks [`docs/launcher-api.md`](../docs/launcher-api.md) against the file:
+  one heading per method under "Methods", each method's `Errors:` paragraph naming exactly the
+  method's `errorCode` values, the methods table agreeing with `x-needsRoot`, `x-needsPermission`
+  and `x-needsSelectedHome`, and the "Error handling" table listing exactly `x-errors`.
+* `test-launcher-client` fails if a file in `client/` or its copy in `examples/web-launcher` is not
+  what `gen-client.py` makes from the file now. `test-launcher-client-js`, run when CMake finds
+  `node`, loads the client and the mock in node with a fake bridge
+  ([`tools/client-test.js`](tools/client-test.js), checked by [`tools/test-client.py`](tools/test-client.py)):
+  replies, rejections and their `source`, the request launch payload, and every mock reply
+  validated against its method's result schema.
 * `test-launcher-contract` runs every example, and the further cases in
   [`launcher-contract-cases.json`](../service/test/launcher-contract-cases.json), through the real
   handlers of `service/src/service/launcher.c` (with the real `reply.c`, `luna.c`, `apps.c`,
