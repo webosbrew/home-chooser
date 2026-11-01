@@ -9,6 +9,17 @@ CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
 OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
 changed=0
 major=$(major_version)
+# The launcher API methods the group grants: the one list, here. It is the spec's x-permission.grants
+# plus getInfo (api/launcher-v1.openrpc.json; tests/test-homechooser-access.sh checks the two agree).
+LAUNCHER_METHODS='getInfo listApps listRunning getForegroundApp getAppInfo getAppIcon closeApp uninstallApp listLaunchPoints listInputs getIcons'
+SERVICE_ID=org.webosbrew.homechooser.service
+
+# The methods as a JSON array of "<service>/<method>".
+method_array() {
+    out=
+    for m in $LAUNCHER_METHODS; do out="$out${out:+,}\"$SERVICE_ID/$m\""; done
+    printf '[%s]' "$out"
+}
 
 # Strip JSON whitespace outside strings, preserving escaped quotes and spaces in values.
 compact() {
@@ -72,7 +83,7 @@ for root in $ROOTS; do
         case "$json" in \{*\}) ;; *) echo "Invalid manifest: $manifest" >&2; exit 1 ;; esac
         if [ "$action" = apply ]; then
             mkdir -p "$root/api-permissions.d"
-            methods='["org.webosbrew.homechooser.service/listApps","org.webosbrew.homechooser.service/listRunning","org.webosbrew.homechooser.service/closeApp","org.webosbrew.homechooser.service/uninstallApp","org.webosbrew.homechooser.service/getInfo","org.webosbrew.homechooser.service/getForegroundApp","org.webosbrew.homechooser.service/getAppInfo","org.webosbrew.homechooser.service/getAppIcon"]'
+            methods=$(method_array)
             permissions="{\"org.webosbrew.homechooser.applications\":$methods"
             [ "$major" -lt 11 ] || permissions="$permissions,\"ares.webos.cli\":$methods"
             write_changed "$api" "$permissions}"

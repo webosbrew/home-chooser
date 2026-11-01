@@ -24,9 +24,12 @@ for root in "$T/dev" "$T/system"; do
 done
 run() { $SH "$HERE/homechooser-access" "$@"; }
 verify() {
-    python3 - "$T" "$1" "$INSTALLER_API" <<'PY2'
+    python3 - "$T" "$1" "$INSTALLER_API" "$HERE/../../api/launcher-v1.openrpc.json" <<'PY2'
 import json, pathlib, sys
 root=pathlib.Path(sys.argv[1]); mode=sys.argv[2]; installer=sys.argv[3]
+spec=json.loads(pathlib.Path(sys.argv[4]).read_text())
+# Every launcher method of the spec: what the permission grants, and getInfo.
+spec_methods=spec['x-permission']['grants']+spec['x-permission']['notNeededFor']
 for name in ['dev','system']:
     r=root/name
     m=json.loads((r/'manifests.d/org.webosbrew.homechooser.json').read_text())
@@ -42,8 +45,8 @@ for name in ['dev','system']:
     assert path.exists()==(mode!='removed')
     if mode=='removed': continue
     api=json.loads(path.read_text())
-    expected=['org.webosbrew.homechooser.service/'+s for s in ['listApps','listRunning','closeApp','uninstallApp','getInfo','getForegroundApp','getAppInfo','getAppIcon']]
-    assert api['org.webosbrew.homechooser.applications']==expected
+    expected=api['org.webosbrew.homechooser.applications']
+    assert sorted(expected)==sorted('org.webosbrew.homechooser.service/'+s for s in spec_methods), expected
     assert ('ares.webos.cli' in api)==(mode=='11')
     if mode=='11': assert api['ares.webos.cli']==expected
 assert not (root/'absent').exists()
