@@ -68,6 +68,8 @@ if payload.get('test') == 'false':
 reply = {'returnValue': True}
 if method in state.get('refuse', []):
     reply = {'returnValue': False, 'errorText': 'refused'}
+elif method in state.get('replies', {}):
+    reply = state['replies'][method]
 elif method == 'getAppInfo' and 'apps' in state:
     reply['returnValue'] = payload['id'] in state['apps']
     reply['appInfo'] = state['apps'].get(payload['id'], {})

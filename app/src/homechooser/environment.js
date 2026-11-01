@@ -13,7 +13,10 @@ export {FatalError};
 export const loadEnvironment = async (platform = createPlatform()) => {
 	await platform.ensureRoot();
 	try {
-		await platform.exec('accessApply');
+		const access = await platform.exec('accessApply');
+		// webOS 11+: the launcher API's LG access groups changed; the running root service registered
+		// before that and keeps its old groups until it registers again.
+		if (/^restart-service$/m.test((access && access.stdout) || '')) await platform.restartService();
 	} catch (e) {
 		// Access setup is retried by the boot entry and watcher; the settings panel still works.
 		// eslint-disable-next-line no-console

@@ -66,8 +66,10 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `fixture:web.normal`; an app id, for a real
-launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|fixture:web.demo|<app id>` (default `fixture:web.normal`;
+`fixture:web.demo` is `examples/web-launcher` and adds step 3d, OK on the demo opens its focused app, the runner's own
+`org.webosbrew.hcfixture.first`, installed with it; see
+`fixtures/README.md`; an app id, for a real launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
@@ -571,6 +573,11 @@ web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.home
 e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
 declare it and are refused. The run also installs a disposable non-home app,
 `org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
+`--launcher fixture:web.demo` (the example launcher, which always declares the permission) is accepted too.
+
+Every reply that comes from Home Chooser (one with `apiVersion`) is also validated against its method's result schema
+in `api/launcher-v1.openrpc.json`, with the spec lint's own checker (`api/tools/launcher_schema.py`), and recorded as a
+check of its own; a reply of the luna bus itself (no `apiVersion`) is noted as outside the schemas.
 
 * 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
   permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps`, `listRunning`,

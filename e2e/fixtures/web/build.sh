@@ -1,9 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # usage: HC_FIXTURE_VERSION=1.0.1 build.sh <outdir> (default 1.0.0)
-# Packages both web fixture launchers with ares-package into
+# Packages both web fixture launchers and the demo with ares-package into
 #   <outdir>/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk
 #   <outdir>/org.webosbrew.hcfixture.web.overlay_1.0.0_all.ipk
+#   <outdir>/org.webosbrew.hcfixture.web.demo_1.0.0_all.ipk   (examples/web-launcher, id and title replaced)
 # Offline: python3 stdlib + ares-package only.
 set -eu
 [ $# -eq 1 ] || { echo "usage: $0 <outdir>" >&2; exit 2; }
@@ -61,3 +62,21 @@ PY
 	ares-package --outdir "$OUT" "$stage" >/dev/null
 	echo "built $OUT/${id}_${VERSION}_all.ipk"
 done
+
+# The demo: examples/web-launcher as it is, with the fixture's id, title and version. It always
+# declares the launcher API permission (it needs listApps), whatever HC_FIXTURE_PERMISSION says.
+id=org.webosbrew.hcfixture.web.demo
+stage=$TMP/$id
+mkdir -p "$stage"
+for f in "$HERE/../../../examples/web-launcher/"*; do
+	case $f in *.md) ;; *) cp "$f" "$stage/" ;; esac
+done
+python3 -I - "$stage/appinfo.json" "$id" <<'PY'
+import json, os, sys
+dst, appid = sys.argv[1:3]
+d = json.load(open(dst))
+d.update(id=appid, title="HC Fixture web demo", version=os.environ.get("HC_FIXTURE_VERSION", "1.0.0"))
+json.dump(d, open(dst, 'w'), indent=2)
+PY
+ares-package --outdir "$OUT" "$stage" >/dev/null
+echo "built $OUT/${id}_${VERSION}_all.ipk"

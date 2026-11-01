@@ -6,6 +6,7 @@
 #include "json.h"
 #include "log.h"
 #include "policy.h"
+#include "service/catalog.h"
 #include "service/methods.h"
 #include "service/reply.h"
 
@@ -67,6 +68,9 @@ static LSMethod methods[] = {
 	{"getForegroundApp", on_launcher_get_foreground, LUNA_METHOD_FLAGS_NONE},
 	{"getAppInfo", on_launcher_get_app_info, LUNA_METHOD_FLAGS_NONE},
 	{"getAppIcon", on_launcher_get_app_icon, LUNA_METHOD_FLAGS_NONE},
+	{"listLaunchPoints", on_launcher_list_launch_points, LUNA_METHOD_FLAGS_NONE},
+	{"listInputs", on_launcher_list_inputs, LUNA_METHOD_FLAGS_NONE},
+	{"getIcons", on_launcher_get_icons, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
 	{"rebootPrompt", on_reboot_prompt, LUNA_METHOD_FLAGS_NONE},
 	{NULL, NULL, LUNA_METHOD_FLAGS_NONE}
@@ -84,7 +88,9 @@ int hc_service_main(void)
 		LSErrorFree(&e);
 		return 1;
 	}
+	subs_init(g_handle);
 	g_main_loop_run(g_loop);
+	subs_shutdown();
 	LSUnregister(g_handle, &e);
 	LSErrorFree(&e);
 	g_main_loop_unref(g_loop);

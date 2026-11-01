@@ -38,6 +38,11 @@ char *icon_base64(const char *bytes, size_t length)
 	return b64;
 }
 
+const char *hc_fs_prefix(void)
+{
+	return "";
+}
+
 char *read_choice(void)
 {
 	char *buf = NULL;

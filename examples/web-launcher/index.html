@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Example Launcher</title>
+<link rel="stylesheet" href="style.css">
+<script src="homechooser.js"></script>
+<!-- Fake Home Chooser for a desktop browser. It does nothing on a TV. -->
+<script src="homechooser-mock.js"></script>
+<script src="launcher.js"></script>
+</head>
+<body>
+<div id="banner" hidden>
+	<div id="banner-message">
+		<p id="banner-text"></p>
+		<p id="banner-detail" hidden></p>
+	</div>
+	<button id="banner-action" type="button" hidden>Open Home Chooser</button>
+</div>
+<div id="grid"></div>
+<div id="toast" hidden></div>
+</body>
+</html>

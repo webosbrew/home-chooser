@@ -44,6 +44,16 @@ describe('loadEnvironment', () => {
 			log.mockRestore();
 		}
 	});
+	test('an access change on 11+ restarts the service before the watcher starts; otherwise no restart', async () => {
+		const restartService = jest.fn().mockResolvedValue({root: true});
+		const exec = jest.fn((name) => Promise.resolve({stdout: name === 'accessApply' ? 'restart-service\n' : '', stderr: ''}));
+		await loadEnvironment(platform({exec, restartService}));
+		expect(restartService).toHaveBeenCalledTimes(1);
+		expect(restartService.mock.invocationCallOrder[0]).toBeLessThan(exec.mock.invocationCallOrder[1]);
+		const quiet = jest.fn();
+		await loadEnvironment(platform({exec: jest.fn().mockResolvedValue({stdout: '', stderr: ''}), restartService: quiet}));
+		expect(quiet).not.toHaveBeenCalled();
+	});
 	test('the watcher is started after access setup, for its leftover check, and a failure is not fatal', async () => {
 		const p = platform();
 		await loadEnvironment(p);

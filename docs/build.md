@@ -34,10 +34,26 @@ particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
 
 For offline checks, use the native tests (`cmake -S service/test -B build/service-host`,
 `cmake --build build/service-host`, `ctest --test-dir build/service-host`; `-DQEMU_TESTS=OFF` on the
-first for the policy test and the launcher API spec check alone, without the SDK or firmware; the
+first for the policy test and the launcher API checks alone, without the SDK or firmware; the
 launcher contract test runs every example in `api/launcher-v1.openrpc.json` through the real handlers), `cd app && npm run lint && CI=true npm test`,
 the shell suites in `service/scripts/tests/`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
+
+The launcher API checks in `ctest` ([api/README.md](../api/README.md#how-it-is-checked)):
+
+| Test | Checks | Needs |
+| --- | --- | --- |
+| `test-launcher-spec` | the OpenRPC file against its meta-schema; examples and contract cases against the schemas | python3 |
+| `test-launcher-doc` | `docs/launcher-api.md`: method headings, per-method `errorCode` lists, the methods and error tables, against the spec | python3 |
+| `test-launcher-client` | `api/client/` and the copies in `examples/web-launcher/` are what `api/tools/gen-client.py` makes from the spec | python3 |
+| `test-launcher-client-js` | the client and the browser mock in node with a fake bridge; every mock reply against the spec | python3, node (skipped when CMake finds no node) |
+| `test-launcher-contract` | every example and case through the real handlers | the SDK, qemu-arm, a firmware rootfs |
+
+`e2e/test_demo_and_schema.py` (in the e2e suite) checks the demo launcher's grid order as the
+runner reproduces it (and, with node, against the demo's own code) and the `--api-check` reply
+validation. The client and the demo are ES5; lint them with the app's ESLint:
+`app/node_modules/@enact/cli/node_modules/.bin/eslint --no-eslintrc -c api/tools/eslint-es5.json api/client/*.js examples/web-launcher/*.js`
+(after `npm ci` in `app/`).
 
 ## App build, build variables and version
 
