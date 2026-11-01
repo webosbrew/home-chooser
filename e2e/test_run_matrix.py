@@ -344,7 +344,8 @@ class Main(Fixture):
         self.assertIn('[w24g-spacebuns](w24g-spacebuns/)', md)
         argv = s['runs'][0]['argv']
         self.assertEqual(argv[argv.index('--hc-ipk') + 1], os.path.join(root, 'ipk', 'hc.ipk'))  # a private copy
-        self.assertEqual(argv[-3:], ['--wait-popup', '60', '--reboot-check'])
+        self.assertEqual(argv[-2:], ['--wait-popup', '60'])  # unknown options go through as given
+        self.assertIn('--reboot-check', argv)  # a scheduler option now (a tier sets it), passed to every run
         self.assertTrue(os.path.exists(os.path.join(root, 'w22h-ombre.console.log')))
 
 
@@ -422,6 +423,94 @@ class HostsConfig(unittest.TestCase):
         h.sh = lambda cmd, timeout=120: (255, 'ssh: connect to host x: timed out')
         with self.assertRaises(RuntimeError):
             h.running_vms()
+
+
+# ---------------------------------------------------------------------------------------------
+# Tiers (e2e/README.md "Tiers")
+# ---------------------------------------------------------------------------------------------
+TIER_VMS = {'pi': ['w24g-ombre', 'w24p-ombre', 'w22h-ombre', 'w24g-spacebuns'],
+            'rockpi4a-1': ['w20l-jhericurl-rk1', 'w21a-kisscurl-rk1', 'w22p-mullet-rk1'],
+            'rockpi4a-2': ['w22o-number1-rk2', 'w22o-ponytail-us-rk2', 'w22o-queue-us-rk2']}
+
+
+class Tiers(unittest.TestCase):
+    def dry(self, *argv, hosts_text=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            hosts = os.path.join(tmp, 'hosts.toml')
+            write(hosts, hosts_text or ('default = "pi"\ndefault_slot = "9.x"\n[hosts.pi]\nssh = "raspberrypi"\n'
+                                        '[hosts.rockpi4a-1]\nssh = "a"\nslowdown = 1.5\n'
+                                        '[hosts.rockpi4a-2]\nssh = "b"\nslowdown = 1.5\n'))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--results', tmp] + list(argv),
+                                     lister=lambda h: TIER_VMS.get(h, []))
+        self.assertEqual(rc, 0, out.getvalue())
+        runs = {}
+        for l in out.getvalue().splitlines():
+            m = re.match(r'\s+\d+\. \S+\s+(\S+)\s+(.*)$', l)
+            if m:
+                runs[m.group(1)] = m.group(2)
+        return runs, out.getvalue()
+
+    def args(self, *argv):
+        parsed = {'tier': None, 'vms': None, 'launcher': None, 'launchers': None, 'api_check': None,
+                  'reboot_check': None, 'uninstall_via': None, 'update_check': False, 'update_on': None,
+                  'launcher_update_check': False}
+        it = iter(argv)
+        for a in it:
+            parsed[a.lstrip('-').replace('-', '_')] = next(it)
+        from types import SimpleNamespace
+        return run_matrix.apply_tier(SimpleNamespace(**parsed), {'default_slot': 'w22h-ombre'})
+
+    def test_smoke_is_one_vm_web_normal_no_reboot_api_smoke(self):
+        runs, out = self.dry('--tier', 'smoke')
+        self.assertEqual(list(runs), ['w24g-ombre'])  # default_slot 9.x: its first slot
+        argv = runs['w24g-ombre']
+        self.assertIn('--launchers fixture:web.normal --api-check', argv)
+        self.assertNotIn('--api-check=full', argv)
+        for flag in ('--reboot-check', '--update-check', '--uninstall-via'):
+            self.assertNotIn(flag, argv)
+        self.assertIn('fixture:web.normal: baseline, install, choose, api-before, window-chosen, home-proof, '
+                      'api-selected, removal, uninstall, cleanup', out)
+        a = self.args('--tier', 'smoke')
+        self.assertEqual(a.vms, 'w22h-ombre')  # hosts.toml's default_slot
+
+    def test_release_every_slot_two_windows_reboot_one_update(self):
+        runs, out = self.dry('--tier', 'release')
+        self.assertEqual(len(runs), sum(len(v) for v in TIER_VMS.values()))
+        for vm, argv in runs.items():
+            self.assertIn('--launchers fixture:web.normal,fixture:web.overlay', argv)
+            self.assertIn('--api-check --reboot-check --uninstall-via alert', argv)
+            self.assertEqual('--update-check' in argv, vm == run_matrix.UPDATE_SLOT, vm)
+        self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof, window-home, reboot', out)  # 10+
+        self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof\n', out)                    # 5-9
+
+    def test_full_all_six_on_one_boot_full_api_update_everywhere(self):
+        runs, out = self.dry('--tier', 'full')
+        for vm, argv in runs.items():
+            self.assertIn('--launchers all-fixtures', argv)
+            self.assertIn('--update-check --api-check=full --reboot-check --uninstall-via alert --launcher-update-check', argv)
+        self.assertIn('fixture:qml.overlay: qml-gate', out)  # 12.x
+        self.assertIn('fixture:native.overlay: switch, home-proof', out)
+
+    def test_explicit_options_win_over_the_tier(self):
+        a = self.args('--tier', 'release', '--launchers', 'fixture:web.overlay', '--api-check', 'full',
+                      '--reboot-check', 'all', '--update-on', 'none', '--uninstall-via', 'later', '--vms', '5.x')
+        self.assertEqual((a.launchers, a.api_check, a.reboot_check, a.update_check, a.uninstall_via, a.vms),
+                         ('fixture:web.overlay', 'full', 'all', False, 'later', '5.x'))
+        a = self.args('--tier', 'release', '--update-on', '11.x')
+        self.assertTrue(a.update_check)
+        self.assertTrue(run_matrix.updates({'vm': 'w22o-queue-us-rk2', 'release': '11.x'}, a.update_on))
+        self.assertFalse(run_matrix.updates({'vm': 'w24g-ombre', 'release': '9.x'}, a.update_on))
+        a = self.args('--tier', 'smoke', '--launcher', 'org.example.launcher')
+        self.assertIsNone(a.launchers)
+
+    def test_without_a_tier_the_flags_are_as_before(self):
+        runs, out = self.dry('--vms', '9.x,11.x', '--update-check', '--api-check', '--reboot-check')
+        for argv in runs.values():
+            self.assertIn('--update-check --api-check --reboot-check', argv)
+            self.assertNotIn('--launchers', argv)
+        a = self.args()
+        self.assertEqual((a.api_check, a.reboot_check, a.update_check, a.launchers), (None, None, False, None))
 
 
 if __name__ == '__main__':
