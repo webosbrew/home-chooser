@@ -161,6 +161,9 @@ static void finish(HCWatch *w)
     struct stat st;
     if (!choice && !g_file_test(flag, G_FILE_TEST_EXISTS) && !lstat(w->c.init_link, &st) && S_ISLNK(st.st_mode)) {
         unlink(w->c.init_link);
+        char *boot = g_build_filename(w->c.state_dir, "boot", NULL);
+        watch_remove_tree(boot); g_free(boot);
+        rmdir(w->c.state_dir); /* only when nothing else is left in it */
         watch_log(w, "previous launcher: no choice and no Home key hook; boot entry removed");
     }
     g_free(choice); g_free(flag);

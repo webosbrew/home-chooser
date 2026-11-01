@@ -878,6 +878,7 @@ static void test_previous(void) {
         front(f, STOCK); /* the owner pressed Home: LG Home, full-screen, in front */
         CHECK("P09 closed once, then exit 0", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && !pending_file(f));
         CHECK("P09 boot entry removed with no choice and no hook", !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+        CHECK("P09 boot copy removed too", !g_file_test(path(f, f->c.state_dir, "boot"), G_FILE_TEST_EXISTS));
         CHECK("P09 no write while only closing", !f->sets && !f->defaults && !f->gate_on && !f->preload_off);
         CHECK("P09 never a stock home", !count_of(f->closed, STOCK));
         teardown(f);
@@ -885,7 +886,8 @@ static void test_previous(void) {
     /* P09h: the Home key hook is enabled: the boot entry stays. */
     f = switch_setup(8, NULL, "old.home\n", "old.home"); file(path(f, f->c.state_dir, "homekey"), "");
     record(f, "{\"home\":\"com.webos.app.home\"}"); start(f); front(f, STOCK);
-    CHECK("P09h closed, exit 0, entry kept for the hook", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK)); teardown(f);
+    CHECK("P09h closed, exit 0, entry kept for the hook", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+    CHECK("P09h boot copy kept for the hook", g_file_test(path(f, f->c.state_dir, "boot/homechooser"), G_FILE_TEST_EXISTS)); teardown(f);
     f = switch_setup(8, NULL, "", LIVETV); start(f);
     CHECK("P09 no choice, nothing to close: exits as before", hc_watch_status(f->w) == 0 && !pending_file(f)); teardown(f);
     f = switch_setup(8, NULL, "old.home\n", "old.home"); start(f); installed(f, "old.home", -1); event(f, 'A', "{}");

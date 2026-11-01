@@ -7,7 +7,7 @@ import {
 import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
 import {
-	HOME_FILE, PREVIOUS_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
+	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
 	stopWatcherCommand, BOOT_SCRIPT
 } from '../persistence';
 
@@ -42,7 +42,7 @@ const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
 // A fake TV: `record` is general/defaultApps (undefined = never written); `profile` the getProfiles reply.
 // `windows` gives an app's defaultWindowType; getAppInfo knows every id except those in `unknown`.
 // `ignoreIdle`: the rescan takes the override's defaultApps but not its idleApp.
-const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false, previous = null} = {}) => {
+const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false, previous = null, homekey = false} = {}) => {
 	const luna = [];
 	const files = [];
 	const commands = [];
@@ -92,6 +92,7 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 	const readFile = async (path) => {
 		calls.push(['read', path]);
 		if (failures.readFile) throw new ServiceError(failures.readFile);
+		if (path === HOMEKEY_FLAG) return homekey ? '' : null;
 		return path === PREVIOUS_FILE ? previous : null;
 	};
 	const writeFile = async (path, text) => {
@@ -659,8 +660,21 @@ describe('restoreStock', () => {
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(tv.previous()).toBeNull();
-		expect(tv.commands).toEqual([STOP, REFRESH]);
+		expect(tv.commands).toEqual([STOP, REFRESH, 'unlinkEntry']);
 		NO_CLOSE(tv);
+	});
+
+	test('no custom home to close, the Home key hook enabled: the boot entry stays', async () => {
+		const tv = withApps(fakeTV({record: {home: STOCK}, previous: '', homekey: true}), [STOCK]);
+		const res = await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(res.ok).toBe(true);
+		expect(tv.commands).toEqual([STOP, REFRESH]);
+	});
+
+	test('a custom home to close: the watcher removes the boot entry, not the app', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
+		await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(tv.commands).not.toContain('unlinkEntry');
 	});
 
 	test('a launcher still waiting from an earlier switch is kept with the custom home', async () => {

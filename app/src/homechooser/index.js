@@ -4,8 +4,8 @@
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
 import {
-	HOME_FILE, PREVIOUS_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
-	startWatcherCommand, stopWatcherCommand
+	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
+	removeEntryCommand, startWatcherCommand, stopWatcherCommand
 } from './persistence';
 
 export const STOCK_HOME = 'com.webos.app.home';
@@ -434,6 +434,13 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					}
 				} else {
 					await run.remove(PREVIOUS_FILE);
+					// No watcher is left to remove the boot entry and its copy, and none would be after an uninstall:
+					// without a choice and without the Home key hook they have nothing to do.
+					try {
+						if ((await run.read(HOMEKEY_FLAG)) === null) await run.run(removeEntryCommand());
+					} catch (e) {
+						res.warnings.push(`Could not remove the boot entry: ${errorMessage(e)}`);
+					}
 				}
 			} catch (e) {
 				fail(res, e);
