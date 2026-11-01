@@ -34,7 +34,13 @@
     "declaredIn": "requiredPermissions of the launcher's appinfo.json",
     "readFrom": "the appinfo the app was installed with (reinstall after a change)",
     "grants": ["listApps", "listRunning", "getForegroundApp", "getAppInfo", "getAppIcon", "closeApp", "uninstallApp", "listLaunchPoints", "listInputs", "getIcons"],
-    "notNeededFor": ["getInfo"]
+    "notNeededFor": ["getInfo"],
+    "enforcedBy": "The service: it reads requiredPermissions from the caller's installed appinfo and answers noPermission without the group. The luna bus does not enforce this group.",
+    "busDelivery": {
+      "5-10": "Homebrew Channel's elevation gives the service a public API file; every app holds the public group, whatever its requiredPermissions or requiredACG.",
+      "11-12": "A developer app holds only the public groups of allowed_groups.json (or those of its requiredACG among them); requiredPermissions is ignored. Home Chooser's access file provides getInfo and the reading methods in application.query, closeApp and uninstallApp in application.launcher.",
+      "requiredACG": "A launcher that declares requiredACG must include application.query and application.launcher."
+    }
   },
   "x-appinfo": {
     "description": "What a launcher declares in its appinfo.json. Both entries are merged with the app's other categories and permissions.",

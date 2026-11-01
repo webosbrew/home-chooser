@@ -182,7 +182,9 @@ Launcher methods use a separate gate: a valid hub-reported application id, root 
 installed `requiredPermissions` containing `org.webosbrew.homechooser.applications`. SAM's `getAppInfo` supplies the
 permissions, with an installed `appinfo.json` fallback. `closeApp` and `uninstallApp` also require the
 caller to equal the stored Home selection. `getInfo` accepts any application caller, without the
-root/consent gate, and reports consent and selection. Hub permissions can still deny delivery.
+root/consent gate, and reports consent and selection. This check is the real gate: on 5.x to 10.x
+every app reaches the service through Homebrew Channel's `public` API file, and on 11.x and 12.x
+through LG's `application.query` and `application.launcher` groups in the access file below.
 
 `uninstallApp` checks the target and caller before showing an `Uninstall <title>?` alert. The
 Uninstall button calls LG's `appInstallService/dev/remove` for a developer install or
@@ -232,10 +234,24 @@ The service's own identity is not used for these calls: `systemprofile/getProfil
 `manifests.d/org.webosbrew.homechooser.json` exists. It writes
 `api-permissions.d/org.webosbrew.homechooser.launcher.api.json` (`org.webosbrew.homechooser.applications`: the
 launcher methods) and adds its absolute path to `apiPermissionFiles`, creating the array if
-missing. On major 11+ the same methods are also under `ares.webos.cli`. The method list is the one
-variable `LAUNCHER_METHODS` at the top of the script, which every grant is built from;
-`test-homechooser-access.sh` checks it against the spec's `x-permission` (`grants` plus `getInfo`). Neither includes
-`uninstallConfirmed` or `rebootPrompt`. The group is declared only by that API file, the way the installer declares
+missing. On major 11+ the same methods are also under `ares.webos.cli`, and under two of LG's public
+groups that 11.x and 12.x give every developer app: the reading methods under `application.query`,
+`closeApp` and `uninstallApp` under `application.launcher` (never `default.permission`). The method
+list is the one variable `LAUNCHER_METHODS` at the top of the script, each entry `method:group`
+(`query` or `launcher`), which every grant is built from; `test-homechooser-access.sh` checks it
+against the spec's `x-permission` (`grants` plus `getInfo`). None includes `uninstallConfirmed` or
+`rebootPrompt`.
+
+On 11+ the service takes its provided groups when it registers: on 11.2.0 a changed file followed by
+`ls-control scan-services` alone did not let a launcher in while the same service instance ran, and a
+reboot did. So when apply changes the file on 11+, the running service must register again. Run by
+the service (`accessApply`), the script prints `restart-service` and the settings app quits the
+service and waits for a new root instance, as after elevation; run by the boot entry or the watcher,
+it sends SIGTERM to `homechooser-service` (Home Chooser's own service only) and the hub starts it on
+the next call. On first install the order is: elevation (quit, new root instance), `accessApply`
+writes the file and scans, `restart-service`, quit, the next `status` starts an instance that
+registers with the file in place. That a fresh registration is enough, without a reboot, is not yet
+verified on a device. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
 
 On webOS 9.2.1, Surface Manager turns `onclick` plus `params` into an alert action. Its role

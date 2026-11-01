@@ -90,7 +90,10 @@ A complete, minimal web launcher `appinfo.json`:
   has it. This is the whole contract for being chosen as Home. It works for `type` `web`, `native`
   and `qml`, and needs no variant per webOS release. webOS 12 ships no QML runtime, so a `qml` app
   does not run there.
-* `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` opts into the API below. Leave it out if
+* `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` opts into the API below: the
+  service reads it from your installed appinfo and answers `noPermission` without it. If your appinfo
+  also declares `requiredACG`, include `application.query` and `application.launcher` there
+  ([Permission](#permission-on-5x-to-10x-and-on-11x-and-12x)). Leave it out if
   you only want to be selectable. Merge both entries with your other categories and permissions.
 * **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Consider
   `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. These
@@ -555,7 +558,7 @@ answers with a string `errorCode` from the table.
 
 | `errorCode` | Cause | What to do |
 | --- | --- | --- |
-| platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old, or the bus denied delivery because the permission was not installed with your app (on 11.2.0 a page's calls are always denied, see [Permission on 5.x to 10.x and on 11.x and 12.x](#permission-on-5x-to-10x-and-on-11x-and-12x)) | Call `getInfo`; offer to install or open Home Chooser; ask for a reinstall if `permitted` was false |
+| platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old; or, on 11.x and 12.x, its access file is not in place yet, or your `requiredACG` leaves out `application.query` or `application.launcher` (see [Permission on 5.x to 10.x and on 11.x and 12.x](#permission-on-5x-to-10x-and-on-11x-and-12x)) | Call `getInfo`; offer to install or open Home Chooser; check `requiredACG` |
 | `forbidden` | The caller has no valid application id | Call from the app. A shell `luna-send` needs `-a <app id>` |
 | `notRoot` | The service is not elevated | Ask the owner to open Home Chooser |
 | `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
@@ -647,8 +650,8 @@ the owner sees, and how the permission reaches you.
 The stock Home key handler launches the `home` entry of the `general/defaultApps` settings record
 directly, so Home Chooser only writes that record. No patch, no restart. The stock launcher is
 `com.webos.app.fullhome` (an overlay window), and LG Home is not running, so Home Chooser does not
-touch the stock home's memory here. The permission arrives through the hub group in the same way as
-on 6.x to 10.x (below).
+touch the stock home's memory here. Calls reach the service in the same way as on 6.x to 10.x
+(below).
 
 ### 6.x to 9.x
 
@@ -680,22 +683,44 @@ the profile's own stock launcher.
 
 ### Permission on 5.x to 10.x and on 11.x and 12.x
 
-On 5.x to 10.x a developer app's declared permission becomes one of its client permissions, and
-Home Chooser's access file maps the group `org.webosbrew.homechooser.applications` to the launcher methods.
+Two things decide whether a launcher's call is answered: whether the luna bus delivers it to Home
+Chooser's service at all, and the service's own check.
 
-On 11.x and 12.x the declared permission is not listed in a developer app's client-permissions
-file, whatever its `requiredPermissions` says. On 11.2.0 that file holds exactly the `public` list
-of the system's `allowed_groups.json` (`application.query`, `application.launcher` and 31 more),
-and neither `ares.webos.cli` nor `public`. Home Chooser's API file also grants the launcher methods to
-`ares.webos.cli`, but that group reaches only `luna-send` and the ares tools, not a page. So on
-11.2.0 a web launcher's own calls are refused by the bus: `getInfo` from the page replies
-`{"returnValue":false,"errorCode":-1,"errorText":"Denied method call \"getInfo\" for category \"/\""}`,
-which the client reports with `source` `platform`, while the same call through
-`luna-send -a <your id>` succeeds. Declare the permission all the same: the service demands it in
-the installed appinfo, and `getInfo` reports `permitted` from it. Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate
-Home Chooser's service from an ordinary app (`Denied method call`), so `root` stays false until the
-owner elevates it by other means or a newer Homebrew Channel allows it. The layout of the access
-files is in [the service reference](service.md#luna-access-files).
+**The service's check is the gate on every release.** It reads `requiredPermissions` from the
+launcher's installed appinfo: without `org.webosbrew.homechooser.applications` every method except
+`getInfo` answers `noPermission` (`closeApp` and `uninstallApp` check `notHome` first). That is the
+declaration Home Chooser reads to permit a launcher, and it is not something the bus enforces.
+
+**Delivery by the bus** differs by release:
+
+* **5.x to 10.x.** Homebrew Channel's elevation gives Home Chooser's service a `public` API file
+  (`org.webosbrew.homechooser.service.api.public.json`, `{"public": ["org.webosbrew.homechooser.service/*"]}`),
+  and every app holds the `public` group, so every app's calls reach the service. A developer app's
+  client permissions are `["public"]` whatever its `requiredPermissions` or `requiredACG` say
+  (verified on 9.2.1 and 10.3.1). Home Chooser's own group in its access file grants nothing more
+  here; it exists so that installing a launcher that declares it is accepted (the installer refuses an
+  undeclared group with `Not allowed permission is used`).
+* **11.x and 12.x.** A developer app holds exactly the public groups of the system's
+  `allowed_groups.json` (33 on 11.2.0, 36 on 12.0.0; `application.query` and `application.launcher`
+  among them), or, when its appinfo declares `requiredACG`, only those of its `requiredACG` that are
+  in that list. `requiredPermissions` is ignored there, and the `public` group is not given to
+  developer apps. Home Chooser's access file therefore also provides the reading methods (`getInfo`,
+  `listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`, `getAppInfo`,
+  `getAppIcon`, `getIcons`) in `application.query`, and `closeApp` and `uninstallApp` in
+  `application.launcher`. Verified on 11.2.0 and 12.0.0: with these, a launcher page's calls reach
+  the service, and the service's `noPermission` and `notHome` answers stand. The service registers
+  with its groups when it starts: when the access file changes, Home Chooser restarts its own service
+  (the settings app quits it after setup; the boot entry and the watcher stop it), and the next call
+  starts it again.
+
+**A launcher that declares `requiredACG`** must list `application.query` and `application.launcher`
+in it, or on 11.x and 12.x the bus refuses the methods of the group it left out (`Denied method
+call`) before Home Chooser sees them. Without `requiredACG` nothing is needed.
+
+Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate Home Chooser's service from an
+ordinary app (`Denied method call`), so `root` stays false until the owner elevates it by other means
+or a newer Homebrew Channel allows it. The layout of the access files is in
+[the service reference](service.md#luna-access-files).
 
 ### The stock home
 
