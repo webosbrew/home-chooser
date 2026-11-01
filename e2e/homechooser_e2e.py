@@ -979,7 +979,9 @@ def api_refused(reply):
 # Launchers under test: one of the six fixtures in e2e/fixtures ({native,qml,web} x
 # {normal,overlay}), or any app id with --launcher-ipk.
 # ---------------------------------------------------------------------------------------------
-FIXTURE_TYPES = ('native', 'qml', 'web')
+# web first: `--launchers all-fixtures` runs them in this order, and the first launcher of a run makes the
+# per-release checks, --api-check included, which needs a launcher that declares the permission
+FIXTURE_TYPES = ('web', 'native', 'qml')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
 FIXTURE_ID = 'org.webosbrew.hcfixture.%s.%s'
@@ -1166,6 +1168,205 @@ def qml_support(major):
         return 'unknown', 'support.json unreadable'
 
 
+def api_build(spec, index, api):
+    """--api-check: the first launcher of a run (it makes the API calls) and every web fixture come from the
+    build with the permission; a later native or qml launcher is the plain fixture."""
+    return bool(api) and (index == 0 or spec.startswith('fixture:web.'))
+
+
+# ---------------------------------------------------------------------------------------------
+# Scopes (e2e/README.md "Scopes"): what a check depends on decides how often one VM run makes it.
+#   per-release      independent of the launcher: made once, with the first launcher of the run;
+#   per-window-type  depends only on normal vs overlay: once with the first launcher of each window type;
+#   per-runtime      SAM launches this app as Home and the Home key reaches it: once per launcher.
+# PHASES is the one table of it: every check the runner records is recorded inside one of these
+# phases and results.json carries the phase's scope.  `guard` starts a crash window (check_no_crash at
+# its end, 6-9); a phase without it runs inside the window of the phase before it.
+# ---------------------------------------------------------------------------------------------
+PER_RELEASE, PER_WINDOW, PER_RUNTIME = 'per-release', 'per-window-type', 'per-runtime'
+PHASES = (
+    # phase, scope, step, guard, what it checks
+    ('baseline', PER_RELEASE, 0, False, 'release matches the row; no Home Chooser; Homebrew Channel; stock home id'),
+    ('install', PER_RELEASE, 1, True, 'install Home Chooser and the launcher (and the API apps); elevation; '
+                                      'the native generator accepts the firmware (6-9, when the plan has the cache phase)'),
+    ('choose', PER_RELEASE, 2, True, 'the Home Chooser UI: first open, stale marker, list, dialog, Done toast, 11+ page '
+                                     'stays; choice, record, watcher, init.d, key filter and flag (6-9), override (10+); '
+                                     'device texts; reopen with the row ticked'),
+    ('api-before', PER_RELEASE, 2, False, '2a, made inside choose while Home Chooser is open: the launcher API before '
+                                          'the choice (smoke or full) and the request dialog'),
+    ('screensaver', PER_RELEASE, 2, False, '--scenario screensaver|all: Home and the screensaver with the launcher chosen'),
+    ('switch', PER_RUNTIME, 2, True, '2s, a later launcher on the same boot: install it, choose it in the list over the '
+                                     'current one; Done toast, choice, record, watcher, key filter (6-9), override (10+)'),
+    ('window-chosen', PER_WINDOW, 2, False, 'what the empty screen shows after a choice: preload policy and the home gate '
+                                            '(6-9), idleApp (10+: the launcher, or support false for an overlay)'),
+    ('home-proof', PER_RUNTIME, 3, True, 'Home from an ordinary app opens the launcher: sam launch proof, running'),
+    ('qml-gate', PER_RUNTIME, 3, False, 'fixtures/qml/support.json says qml does not run on this release: XFAIL'),
+    ('window-home', PER_WINDOW, 3, False, '10+: the watcher closes LG Home once the launcher is in front'),
+    ('demo', PER_RUNTIME, 3, True, '3d, fixture:web.demo: OK on the demo opens its focused app'),
+    ('api-selected', PER_RELEASE, 3, True, '3a, the launcher API with the launcher chosen (smoke or full)'),
+    ('reboot', PER_WINDOW, 3, True, '3r: after a boot the choice holds, the watcher re-applies the policy, idleApp, the '
+                                    'gate (6-9), the last input (10+ overlay); the API grants survive (first launcher)'),
+    ('cache', PER_RELEASE, 3, True, '6-9 after the boot: no boot cache, no configd override; Home opens the launcher'),
+    ('update', PER_RELEASE, 3, True, '3u: the current build over the old one: no watcher restart, choice kept'),
+    ('launcher-update', PER_RELEASE, 3, True, '3v: a new version of the chosen launcher stays Home'),
+    ('restore-repair', PER_RELEASE, 3, True, '3f: uninstall with the watcher stopped, then repair (ends the run)'),
+    ('removal', PER_RELEASE, 4, True, '4: launcher removed: stock restore, the alert, Home opens stock; reinstall'),
+    ('uninstall', PER_RELEASE, 5, True, '5: Home Chooser removed: residue gone, the toast, Home opens stock'),
+    ('cleanup', PER_RELEASE, 6, False, '6: test apps removed, the watcher finished, the final screen'),
+)
+PHASE = {row[0]: dict(zip(('phase', 'scope', 'step', 'guard', 'checks'), row)) for row in PHASES}
+
+
+def launcher_shape(L):
+    """(runtime, window, demo) of a launcher: fixtures by their name, an author launcher by its appinfo."""
+    fixture = getattr(L, 'fixture', None)
+    runtime = fixture[0] if fixture else 'app'
+    return runtime, 'overlay' if getattr(L, 'overlay', False) else 'normal', bool(getattr(L, 'is_demo', False))
+
+
+def reboot_windows(major, windows, mode):
+    """The window types a run reboots with (--reboot-check auto|all), in the order of `windows` (the run's
+    launchers).  auto: one boot with the full-screen launcher (else the first one), plus one with the overlay
+    launcher on 10+, whose boot behaviour differs (the last input launch); all: one per window type."""
+    present = list(dict.fromkeys(windows))
+    if not mode or not present:
+        return []
+    if mode == 'all':
+        return present
+    out = ['normal' if 'normal' in present else present[0]]
+    if major >= 10 and 'overlay' in present and 'overlay' not in out:
+        out.append('overlay')
+    return [w for w in present if w in out]
+
+
+def run_plan(shapes, major, opts):
+    """The phases of one VM run on one boot, in order: [(launcher index, phase)].  shapes: launcher_shape()
+    per launcher; opts: api, reboot ('', 'auto', 'all'), update, launcher_update, restore_repair,
+    screensaver ('lifecycle', 'screensaver', 'all'), until.  The first runnable launcher makes the
+    per-release phases and the whole lifecycle; each later one switches in, on the same boot, and makes
+    only its scopes: its window type's checks when it is the first of its type, and its launch proof."""
+    gated = [runtime == 'qml' and qml_support(major)[0] is False for runtime, _, _ in shapes]
+    runnable = [i for i in range(len(shapes)) if not gated[i]]
+    until = opts.get('until', 5)
+    if not runnable:
+        return [(0, 'baseline')] + [(i, 'qml-gate') for i in range(len(shapes))] + ([(0, 'cleanup')] if until >= 5 else [])
+    owner = runnable[0]
+    window_owner = {}
+    for i in runnable:
+        window_owner.setdefault(shapes[i][1], i)
+    reboots = reboot_windows(major, [shapes[i][1] for i in runnable], opts.get('reboot'))
+    hook = 6 <= major <= 9
+    plan, extras, cache_done, ended = [(owner, 'baseline')], [], False, False
+
+    def chosen(i, out):
+        if window_owner.get(shapes[i][1]) == i:
+            out.append((i, 'window-chosen'))
+
+    def home(i, out):
+        nonlocal cache_done
+        owns = window_owner.get(shapes[i][1]) == i
+        out.append((i, 'home-proof'))
+        if owns and major >= 10:
+            out.append((i, 'window-home'))
+        if shapes[i][2]:
+            out.append((i, 'demo'))
+        if i == owner and opts.get('api'):
+            out.append((i, 'api-selected'))
+        if owns and shapes[i][1] in reboots:
+            out.append((i, 'reboot'))
+            if hook and not cache_done and not opts.get('update'):
+                out.append((i, 'cache'))
+                cache_done = True
+    for i in range(len(shapes)):
+        if gated[i]:
+            (plan if i < owner else extras).append((i, 'qml-gate'))
+            continue
+        if i == owner:
+            plan.append((i, 'install'))
+            plan.append((i, 'choose'))
+            if opts.get('api'):
+                plan.append((i, 'api-before'))
+            chosen(i, plan)
+            if opts.get('screensaver') in ('screensaver', 'all'):
+                plan.append((i, 'screensaver'))
+                if opts.get('screensaver') == 'screensaver':
+                    ended = True
+                    break
+            home(i, plan)
+            for flag, phase in (('update', 'update'), ('launcher_update', 'launcher-update'),
+                                ('restore_repair', 'restore-repair')):
+                if opts.get(flag):
+                    plan.append((i, phase))
+            if opts.get('restore_repair'):
+                ended = True  # it uninstalls Home Chooser: nothing else can follow on this boot
+                break
+            plan.append((i, 'removal'))
+        else:
+            extras.append((i, 'switch'))
+            chosen(i, extras)
+            home(i, extras)
+    if not ended:
+        plan += extras + [(owner, 'uninstall')]
+    plan.append((owner, 'cleanup'))
+    # --until N: the head's phases up to step N; later launchers come after step 4; cleanup only with 5
+    extra = {(i, p) for i, p in extras}
+    return [(i, p) for i, p in plan if (4 if (i, p) in extra else PHASE[p]['step']) <= until
+            or (p == 'cleanup' and until >= 5)]
+
+
+def plan_groups(plan):
+    """The crash windows of a plan: a guarded phase starts one, the phases without a guard join it."""
+    groups = []
+    for item in plan:
+        if not groups or PHASE[item[1]]['guard'] or groups[-1][0][0] != item[0]:
+            groups.append([item])
+        else:
+            groups[-1].append(item)
+    return groups
+
+
+def describe_plan(plan, launchers):
+    """One line per launcher: its phases, for the run log."""
+    out = []
+    for i, p in plan:
+        name = launchers[i] if isinstance(launchers[i], str) else getattr(launchers[i], 'spec', str(i))
+        if out and out[-1][0] == name:
+            out[-1][1].append(p)
+        else:
+            out.append((name, [p]))
+    return ['%s: %s' % (n, ', '.join(ps)) for n, ps in out]
+
+
+# Screenshots (e2e/README.md "System popups and screenshots"): the runner takes one only where a label
+# matches a row here; any other label is logged as skipped.  (label pattern, when)
+SCREENSHOTS = (
+    (r'-verdict$', 'after each Home press verdict (and the demo OK)'),
+    (r'-first-press$', 'a Home press that produced no action'),
+    (r'^fail-', 'on a FAIL, once per step'),
+    (r'^3r-after-reboot', 'at a reboot, after the boot checks'),
+    (r'^final$', 'the final state, after the cleanup'),
+    (r'-foreign-popup$|^keys-blocked$|^audiooutputd-crash-dialog-|-click-not-observed$', 'a fault or a system popup'),
+    (r'^4-alert|^5-toast$|^2-reboot-alert|^3a-uninstall-alert', 'our alert or toast'),
+    (r'-focus-proof$', 'the alert proof reads this picture (keys mode)'),
+    (r'^S\d', 'the home and screensaver scenario'),
+)
+
+
+def screenshot_reason(label):
+    """The SCREENSHOTS row a label matches, or None: not a key step, no picture."""
+    return next((why for pattern, why in SCREENSHOTS if re.search(pattern, label)), None)
+
+
+def preload_settled(major, gate_mounts, stock_running, close_logged):
+    """The condition polled instead of the fixed preload settle before the stock-home checks.  6-9: the
+    home gate is mounted and stock Home does not run (what check_home_gate then asserts).  10+: the
+    watcher logged its close of the stock home (a boot-started Home is closed after its own settle); until
+    then the settle bound applies, as the fixed wait did."""
+    if uses_home_gate(major):
+        return gate_mounts >= 1 and not stock_running
+    return bool(close_logged)
+
+
 def default_update_ref():
     """The previous commit that changed app/ or service/: the last one before HEAD, unless
     those paths have uncommitted changes (then HEAD is the build the working tree departs from)."""
@@ -1232,7 +1433,8 @@ DEFAULT_HOSTS = {'default': 'pi', 'hosts': {'pi': {'ssh': 'raspberrypi'}}}
 
 
 def load_hosts(path=None):
-    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]}}.  path: one file instead of hosts.toml + hosts.local.toml."""
+    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]}, optional
+    'default_slot'}.  path: one file instead of hosts.toml + hosts.local.toml."""
     import tomllib
     files = [path] if path else [f for f in (HOSTS_FILE, HOSTS_LOCAL_FILE) if os.path.exists(f)]
     if not files:
@@ -1242,6 +1444,8 @@ def load_hosts(path=None):
         with open(f, 'rb') as fh:
             d = tomllib.load(fh)
         cfg['default'] = d.get('default', cfg['default'])
+        if 'default_slot' in d:  # the smoke tier's VM (run_matrix.py --tier smoke): a VM name or a release
+            cfg['default_slot'] = d['default_slot']
         for name, h in d.get('hosts', {}).items():
             cfg['hosts'].setdefault(name, {}).update(h)
     for name, h in cfg['hosts'].items():
@@ -2095,6 +2299,8 @@ class Recorder:
         self.results = []
         self.step = ''
         self.tag = ''
+        self.scope = ''  # the scope of the phase running (PHASES), written with every result
+        self.on_fail = None  # called with the check's name after a FAIL (the scenario's screenshot)
         self.log = open(os.path.join(outdir, 'run.log'), 'w')
 
     def say(self, text):
@@ -2116,9 +2322,11 @@ class Recorder:
         evidence = re.sub(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', '[redacted]', str(evidence))
         status = 'PASS' if ok else ('XFAIL' if expected else 'FAIL')
         self.results.append({'step': self.step, 'name': name, 'status': status,
-                             'evidence': str(evidence), 'expected': expected})
+                             'evidence': str(evidence), 'expected': expected, 'scope': getattr(self, 'scope', '')})
         self.say('%s  %s\n    %s%s' % (status, name, str(evidence).replace('\n', '\n    '),
                                       '\n    expected: ' + expected if expected and not ok else ''))
+        if status == 'FAIL' and getattr(self, 'on_fail', None):
+            self.on_fail(name)
         return ok
 
     def outcome(self, name, status, evidence):
@@ -2150,9 +2358,10 @@ class Recorder:
 # The scenario
 # ---------------------------------------------------------------------------------------------
 class Scenario:
-    def __init__(self, args, host, rec, row, launcher):
+    def __init__(self, args, host, rec, row, launcher, launchers=None):
         self.a, self.host, self.rec = args, host, rec
         self.L = launcher
+        self.launchers = list(launchers or [launcher])  # every launcher of the run, on one boot (run_plan)
         self.release, self.vm, self.strategy_name, self.sure, self.note = row
         self.dev = Device.for_vm(host, self.vm)
         self.dev.say = rec.say
@@ -2170,6 +2379,9 @@ class Scenario:
         that fails: the guest capture (ares-do screenshot; com.webos.service.capture fails on webOS 5
         and 10.x to 12.x, and after the first failure it is not tried again). Each
         fallback used is logged."""
+        if not screenshot_reason(label):
+            self.rec.say('screenshot %s skipped (not a key step: SCREENSHOTS)' % label)
+            return None
         self.shot_n += 1
         name = '%02d-%s%s.png' % (self.shot_n, (self.L.tag + '-') if self.a.multi else '', label)
         path = os.path.join(self.rec.outdir, name)
@@ -2187,6 +2399,17 @@ class Scenario:
                 return path
         self.rec.say('FALLBACK: no host desktop capture; screenshots unavailable')
         return path
+
+    def fail_shot(self, name):
+        """Recorder.on_fail: one screenshot per step that has a FAIL (the first one's), never raising."""
+        done = self.__dict__.setdefault('fail_shots', set())
+        if self.rec.step in done:
+            return
+        done.add(self.rec.step)
+        try:
+            self.shot('fail-' + (re.sub(r'[^A-Za-z0-9]+', '-', self.rec.step).strip('-')[:60] or 'run'))
+        except Exception as exc:
+            self.rec.say('FAIL screenshot not taken: %r' % (exc,))
 
     def use_click(self):
         return (getattr(getattr(self, 'a', None), 'input_mode', 'keys') == 'click'
@@ -2945,15 +3168,26 @@ class Scenario:
             r.note(label + ': stock Home may still run until the launcher has a safe foreground',
                    'stock running=%s; foreground=%s' % (STOCK in self.running_ids(), self.dev.foreground()[0]))
             return
-        r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
-        sleep(settle)
+        if uses_home_gate(self.major):
+            # The fixed settle and the 60 s sample that came before check_home_gate decided nothing (the
+            # gate check makes the verdict): poll what it asserts, within the same 120 s bound, then check.
+            r.say('%s: polling up to %d s for the gate and no stock home, then the gate checks'
+                  % (label, settle + PRELOAD_SAMPLE))
+            t0 = time.time()
+            self.wait(lambda: preload_settled(self.major, self.gate_mount_count(), STOCK in self.running_ids(), False),
+                      settle + PRELOAD_SAMPLE, 5)
+            r.say('%s: settled after %d s' % (label, time.time() - t0))
+            self.check_home_gate(label)
+            return
+        # 10+: a boot-started LG Home is closed by the watcher after its own settle; its close line ends
+        # the settle early (same bound), then the stock home must stay away for the whole sample
+        r.say('%s: settling up to %d s (until the watcher logs its close), then sampling %s for %d s'
+              % (label, settle, STOCK, PRELOAD_SAMPLE))
+        self.wait(lambda: preload_settled(self.major, 0, False, 'closeByAppId' in self.preload_log()), settle, 5)
         if closes_stock_home(self.major):
             # 10.x starts LG Home at boot; the watcher closes it once the launcher is in front
             self.wait(lambda: STOCK not in self.running_ids(), 150, 5)
         samples = self.stock_running_samples()
-        if uses_home_gate(self.major):
-            self.check_home_gate(label)
-            return
         ok = not any(run_ for _, run_ in samples)
         r.check('%s: %s is not running over %d s' % (label, STOCK, PRELOAD_SAMPLE), ok,
                 'running at t=%s s' % [t for t, run_ in samples if run_] if not ok else 'never running in %d samples' % len(samples))
@@ -2984,6 +3218,11 @@ class Scenario:
         fg = self.wait(lambda: (lambda x: x if x[0] == appid else None)(self.dev.foreground()), 30, 2)
         self.rec.say('front app %s: %s' % (appid, fg))
         sleep(3)
+
+    def wait_closed(self, appid, timeout):
+        """After a close: poll until appid has no live process, at most `timeout` s (the fixed wait it
+        replaces).  True when it is gone."""
+        return bool(self.wait(lambda: appid not in self.running_ids(), timeout, 1))
 
     def running_ids(self):
         """Ids in applicationManager/running whose process is alive.  On 12.x sam keeps a ghost entry
@@ -3017,8 +3256,7 @@ class Scenario:
             expect = FULLHOME
         if expect != STOCK:
             self.dev.close(expect)
-            sleep(3)
-            pre = expect in self.running_ids()
+            pre = not self.wait_closed(expect, 3)
             r.say('%s: %s running before the press: %s%s' % (label, expect, pre,
                   ' (close did not stop it: this check does not discriminate)' if pre else ''))
         if from_app:
@@ -3031,7 +3269,6 @@ class Scenario:
         mark = self.messages_mark()
         key_result = self.press('HOME')
         r.say('%s: Home key-send result: %r; log mark %s' % (label, key_result, mark))
-        sleep(6)
         sam = []
 
         def seen():
@@ -3045,7 +3282,7 @@ class Scenario:
                 if sam:
                     return fg
             return None
-        fg = self.wait(seen, 20, 3)
+        fg = self.wait(seen, 26, 2)  # polled from the press on (was a fixed 6 s, then 20 s of polls)
         if not fg:
             rc, evidence = self.dev.sh(home_input_command(mark))
             r.note(label + ': first Home attempt produced no action; no retry',
@@ -3053,7 +3290,7 @@ class Scenario:
             self.shot(label + '-first-press')
         ok = bool(fg)
         fg = fg or self.dev.foreground()
-        shot_path = self.shot(label)
+        self.shot(label + '-verdict')
         if proof:
             self.launch_proof(label, expect, mark)
         via = 'foreground' if fg[0] == expect else ('sam log' if sam else 'none')
@@ -3140,17 +3377,97 @@ class Scenario:
         return [l for l in out.splitlines() if l.strip()]
 
     # -- steps
+    def plan_options(self):
+        a = self.a
+        return {'api': getattr(a, 'api_check', None), 'reboot': getattr(a, 'reboot_check', None),
+                'update': getattr(a, 'update_check', False),
+                'launcher_update': getattr(a, 'launcher_update_check', False),
+                'restore_repair': getattr(a, 'restore_repair_check', False),
+                'screensaver': getattr(a, 'scenario', 'lifecycle'), 'until': getattr(a, 'until', 5)}
+
+    def use_launcher(self, index):
+        """Make launcher `index` of the run the one the steps act on (a switch, on the same boot)."""
+        self.index = index
+        self.L = self.launchers[index]
+        self.launcher = self.L.id
+        self.rec.tag = '[%s]' % self.L.spec if getattr(self.a, 'multi', False) else ''
+
+    def planned(self, phase, index=None):
+        """Whether the run plan has `phase` for launcher `index` (default: the current one)."""
+        return (getattr(self, 'index', 0) if index is None else index, phase) in getattr(self, 'plan', ())
+
+    def is_owner(self):
+        """The current launcher makes the per-release checks (the first runnable one of the run)."""
+        plan = getattr(self, 'plan', None)
+        return not plan or getattr(self, 'index', 0) == plan[0][0]
+
     def run(self):
         r, d = self.rec, self.dev
+        self.launchers = getattr(self, 'launchers', None) or [self.L]
         strat = ELEVATIONS[self.a.elevation or self.strategy_name]()
-        r.say('run: vm=%s release=%s elevation=%s (matrix default %s) input=%s host=%s launcher=%s (%s, overlay=%s, ipk %s)'
+        r.say('run: vm=%s release=%s elevation=%s (matrix default %s) input=%s host=%s launchers=%s'
               % (self.vm, self.release, strat.name, self.strategy_name, self.a.input, self.host.mode,
-                 self.launcher, self.L.spec, self.L.overlay, self.L.ipk))
+                 '; '.join('%s (%s, overlay=%s, ipk %s)' % (L.id, L.spec, L.overlay, L.ipk) for L in self.launchers)))
         r.say('matrix confidence: %s -- %s' % (self.sure, self.note))
         self.major, osr = d.release()
+        self.osr = osr
+        self.plan = run_plan([launcher_shape(L) for L in self.launchers], self.major, self.plan_options())
+        r.say('plan, one boot (e2e/README.md "Scopes"):\n    ' + '\n    '.join(describe_plan(self.plan, self.launchers)))
+        owner = self.plan[0][0]
+        runners = {
+            'baseline': self.step0, 'install': lambda: self.step1(strat), 'choose': self.step2,
+            'api-before': None,  # made by step2 while Home Chooser is open
+            'screensaver': lambda: self.screensaver_selected(self.saver_baseline),
+            'switch': self.step_switch, 'window-chosen': self.window_chosen, 'home-proof': self.step3,
+            'qml-gate': self.step_qml_gate, 'window-home': self.window_home, 'demo': self.step_demo,
+            'api-selected': self.api_selected, 'reboot': self.step_reboot, 'cache': self.step_cache,
+            'update': self.step_update, 'launcher-update': self.step_launcher_update,
+            'restore-repair': self.step_restore_repair, 'removal': self.step4, 'uninstall': self.step5,
+        }
+        failed = set()
+        try:
+            for group in plan_groups([x for x in self.plan if x[1] != 'cleanup']):
+                index = group[0][0]
+                if index in failed:
+                    continue
+                self.use_launcher(index)
+                guard = PHASE[group[0][1]]['guard']
+                try:
+                    # 6.x to 9.x: no crash of WebAppMgr (or anything crashd reports) during the step
+                    snap = self.compositor_snapshot() if guard and self.uses_home_key_hook() else None
+                    for _, phase in group:
+                        r.scope = PHASE[phase]['scope']
+                        if runners[phase]:
+                            runners[phase]()
+                    if guard:
+                        self.check_no_crash('end of step', snap)
+                except ScreensaverOutcome:
+                    raise
+                except Exception as e:  # a later launcher: its failure is recorded and the next one runs
+                    if index == owner:
+                        raise
+                    import traceback
+                    r.say('runner error in %s:\n%s' % (self.L.spec, traceback.format_exc()))
+                    r.check('scenario ran to the end', False, repr(e))
+                    failed.add(index)
+        except ScreensaverOutcome as exc:
+            r.outcome('tvpower reboot readiness', exc.status, str(exc))
+        finally:
+            if getattr(self, 'ask_monitor', None):
+                self.ask_monitor.close()
+                self.ask_monitor = None
+            if (owner, 'cleanup') in self.plan:
+                self.use_launcher(owner)
+                r.tag, r.scope = '', PER_RELEASE
+                self.step6()
+            else:
+                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+
+    def step0(self):
+        r, d = self.rec, self.dev
         r.begin('0 baseline')
         r.check('device release matches the matrix (%s)' % self.release,
-                '%d.' % self.major == self.release[:-1], 'os-release: ' + osr)
+                '%d.' % self.major == self.release[:-1], 'os-release: ' + self.osr)
         fullhome = d.app_installed(FULLHOME)
         self.stock_id = stock_home_id(self.major, fullhome)
         r.note('stock home id written by restore/removal/uninstall: %s (%s installed: %s)'
@@ -3165,56 +3482,15 @@ class Scenario:
         df = d.sh('df -h /media/developer | tail -1')[1].strip()
         r.note('df /media/developer', df)
         r.note('baseline preload policy of %s (isEnabled, raw reply)' % STOCK, repr(d.preload_policy()))
-
-        if self.L.is_fixture and self.L.fixture[0] == 'qml':
-            sup, ev = qml_support(self.major)
-            r.note('qml support expectation for %d.x: %s' % (self.major, sup), ev)
-            if sup is False:
-                r.check('qml fixtures run on %d.x' % self.major, False, ev, expected=ev)
-                return
         screensaver = getattr(self.a, 'scenario', 'lifecycle') in ('screensaver', 'all')
-        baseline = self.screensaver_baseline() if screensaver else None
-        steps = [self.step1, self.step2, self.step3, self.step4, self.step5]
+        self.saver_baseline = self.screensaver_baseline() if screensaver and self.planned('screensaver') else None
 
-        def guarded(fn, *a):
-            # 6.x to 9.x: no crash of WebAppMgr (or anything crashd reports) during the step
-            snap = self.compositor_snapshot() if self.uses_home_key_hook() else None
-            fn(*a)
-            self.check_no_crash('end of step', snap)
-        try:
-            for i, fn in enumerate(steps, 1):
-                if i > self.a.until:
-                    break
-                guarded(fn, strat) if i == 1 else guarded(fn)
-                if i == 2 and screensaver:
-                    self.screensaver_selected(baseline)
-                    if self.a.scenario == 'screensaver':
-                        break
-                if i == 3 and getattr(self.L, 'is_demo', False):
-                    guarded(self.step_demo)
-                if i == 3 and self.a.api_check:
-                    guarded(self.step_api)
-                if i == 3 and self.a.reboot_check:
-                    guarded(self.step_reboot)
-                    if self.uses_home_key_hook() and not self.a.update_check:
-                        guarded(self.step_cache)
-                if i == 3 and self.a.update_check:
-                    guarded(self.step_update)
-                if i == 3 and self.a.launcher_update_check:
-                    guarded(self.step_launcher_update)
-                if i == 3 and self.a.restore_repair_check:
-                    guarded(self.step_restore_repair)
-                    break
-        except ScreensaverOutcome as exc:
-            r.outcome('tvpower reboot readiness', exc.status, str(exc))
-        finally:
-            if getattr(self, 'ask_monitor', None):
-                self.ask_monitor.close()
-                self.ask_monitor = None
-            if self.a.until >= 5:
-                self.step6()
-            else:
-                r.say('--until %d: apps left installed for debugging; no cleanup' % self.a.until)
+    def step_qml_gate(self):
+        """A qml launcher on a release where fixtures/qml/support.json says qml does not run: XFAIL, skipped."""
+        r = self.rec
+        sup, ev = qml_support(self.major)
+        r.note('qml support expectation for %d.x: %s' % (self.major, sup), ev)
+        r.check('qml fixtures run on %d.x' % self.major, False, ev, expected=ev)
 
     # -- home and screensaver (all calls below are bounded; no settings writes or ENTER)
     def screensaver_power(self):
@@ -3639,9 +3915,10 @@ class Scenario:
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
         rc, out = d.install(self.L.ipk)
         r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
-        if self.uses_home_key_hook() and self.a.reboot_check and not self.a.update_check:
+        if any(p == 'cache' for _, p in getattr(self, 'plan', ())):
             self.cache_prepare_measure()
         r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
+        self.qml_note()
         if self.a.api_check:
             rc, out = d.install(self.a.disposable_ipk)
             r.check('--api-check: install the disposable app %s' % DISPOSABLE_ID, rc == 0 and 'Installed package' in out,
@@ -3669,14 +3946,14 @@ class Scenario:
         first = self.ui() or {}
         r.check('first open after a fresh install: no error toast (a marker left by an earlier install is dropped)',
                 not (first.get('toast') or '').startswith("Couldn't"), 'toast: %r' % first.get('toast'))
-        if self.a.api_check:
-            self.api_before_selection()
+        if self.planned('api-before'):
+            self.api_before()
             r.begin('2 choose the launcher through the UI (continued)')
         # a marker as an earlier install's cut-short run leaves it (WAM keeps localStorage across an
         # uninstall; the choice was removed with it): the next open must drop it without a toast
         r.note('planted stale marker', self.insp.evaluate(PLANT_JS % self.launcher))
         d.close(APP_ID)
-        sleep(3)
+        self.wait_closed(APP_ID, 3)
         self.launch_mark = self.messages_mark()
         d.launch(APP_ID)
         toasts = []
@@ -3699,6 +3976,36 @@ class Scenario:
         r.check('the list shows the launcher row (data-app-id)', bool(ui), 'DOM: %s' % json.dumps(ui))
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
+        self.choose_in_ui(ui, full=True)
+        if not self.a.update_check:  # --update-check: step 1 installed the old build; checked in 3u
+            self.check_device_texts()
+        # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
+        info = self.reopen_panel(120)
+        again, seen = info['again'], info['seen']
+        r.note('toasts seen while re-opening', repr(seen + [again.get('toast')]))
+        again['toast'] = again.get('toast') or next((t for t in seen if t.startswith("Couldn't")), None)
+        self.shot('reopened')
+        r.check('re-open after the apply: no error toast', not (again.get('toast') or '').startswith("Couldn't"),
+                'toast: %r' % again.get('toast'))
+        # The tick is read in the same evaluate as the DOM (FOCUS_JS 'ticked'): on 6.5.2 and 9.2.1 a normal
+        # (full-screen) launcher takes the front and the Home Chooser page is gone from /json a moment after
+        # the DOM read, so a separate TICK_JS evaluate got None ("no page").  Only when that read did not
+        # carry the tick, a bounded retry of the separate evaluate.
+        ticked = self.ticked_after_reopen(info)
+        for _ in range(5):
+            if ticked == self.launcher or not self.insp:
+                break
+            sleep(2)
+            ticked = self.insp.evaluate(TICK_JS)
+        r.check('re-open after the apply: the chosen row is ticked', ticked == self.launcher,
+                self.reopen_evidence(info, ticked, ticked == self.launcher))
+        d.close(APP_ID)
+        self.close_insp()
+
+    def choose_in_ui(self, ui, full):
+        """Home Chooser is open and lists the launcher (`ui`): select its row, confirm "Use as Home", and check
+        what the choice writes.  full: the per-release extras of the first choice (11+ page check)."""
+        r, d = self.rec, self.dev
         r.say('UI driven: initial focus on %s' % ui.get('row'))
         rows = ui['rows']
         if not self.ensure_page('2 before the list keys'):
@@ -3753,7 +4060,7 @@ class Scenario:
             if not self.ask_monitor.start():
                 r.note('notification bus monitor did not start; using PmLog evidence', '')
         toasts = self.confirm_home_choice(clicking)
-        if self.major >= 11:
+        if self.major >= 11 and full:
             page = self.insp._page() if self.insp else None
             state = self.page_state() or {}
             r.check('Home Chooser page is still open right after confirming',
@@ -3800,34 +4107,46 @@ class Scenario:
         if self.uses_override():
             r.check('profile override exists (webOS 10+)', s['override'] == 'yes', s['override'])
             r.note('override', d.sh('cat %s' % OVERRIDE)[1])
+
+    def window_chosen(self):
+        """Per window type, after a choice: idleApp (10+) and what the empty screen shows: the stock home's
+        preload policy, the home gate on 6-9."""
+        if self.uses_override():
             self.check_idle_chosen('after choosing')
-        if not self.a.update_check:  # --update-check: step 1 installed the old build; checked in 3u
-            self.check_device_texts()
-        # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
-        info = self.reopen_panel(120)
-        again, seen = info['again'], info['seen']
-        r.note('toasts seen while re-opening', repr(seen + [again.get('toast')]))
-        again['toast'] = again.get('toast') or next((t for t in seen if t.startswith("Couldn't")), None)
-        self.shot('reopened')
-        r.check('re-open after the apply: no error toast', not (again.get('toast') or '').startswith("Couldn't"),
-                'toast: %r' % again.get('toast'))
-        # The tick is read in the same evaluate as the DOM (FOCUS_JS 'ticked'): on 6.5.2 and 9.2.1 a normal
-        # (full-screen) launcher takes the front and the Home Chooser page is gone from /json a moment after
-        # the DOM read, so a separate TICK_JS evaluate got None ("no page").  Only when that read did not
-        # carry the tick, a bounded retry of the separate evaluate.
-        ticked = self.ticked_after_reopen(info)
-        for _ in range(5):
-            if ticked == self.launcher or not self.insp:
-                break
-            sleep(2)
-            ticked = self.insp.evaluate(TICK_JS)
-        r.check('re-open after the apply: the chosen row is ticked', ticked == self.launcher,
-                self.reopen_evidence(info, ticked, ticked == self.launcher))
-        d.close(APP_ID)
-        if self.insp:
-            self.insp.close()
-            self.insp = None
         self.check_preload_off('after the switch')
+
+    def step_switch(self):
+        """A later launcher of the run, on the same boot: install it, then choose it in Home Chooser's list
+        over the launcher chosen now, as a user switches (e2e/README.md "Scopes")."""
+        r, d = self.rec, self.dev
+        r.begin('2s switch to the launcher through the UI (same boot)')
+        self.popup_mark = self.popup_mark_now()
+        self.qml_note()
+        rc, out = d.install(self.L.ipk)
+        r.check('install launcher %s' % self.launcher, rc == 0 and 'Installed package' in out, out.strip())
+        r.note('launcher appinfo (from the ipk; overlay=%s)' % self.L.overlay, json.dumps(self.L.appinfo))
+        if getattr(self.L, 'is_demo', False) and not d.app_installed(DEMO_TARGET_ID):
+            rc, out = d.install(self.a.demo_target_ipk)
+            r.check('fixture:web.demo: install the app step 3d opens, %s (%r)' % (DEMO_TARGET_ID, DEMO_TARGET_TITLE),
+                    rc == 0 and 'Installed package' in out, out.strip())
+        self.mark_log()
+        self.residency('before switching')
+        self.close_insp()
+        self.insp = Inspector(self.dev)
+        self.launch_mark = self.messages_mark()
+        d.launch(APP_ID)
+        ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
+        r.check('the list shows the launcher row (data-app-id)', bool(ui), 'DOM: %s' % json.dumps(ui))
+        if not ui:
+            raise RuntimeError('UI never listed the launcher; cannot continue')
+        self.choose_in_ui(ui, full=False)
+        d.close(APP_ID)
+        self.close_insp()
+
+    def qml_note(self):
+        if launcher_shape(self.L)[0] == 'qml':
+            sup, ev = qml_support(self.major)
+            self.rec.note('qml support expectation for %d.x: %s' % (self.major, sup), ev)
 
     def reopen_panel(self, timeout):
         """Close and relaunch Home Chooser, then read the panel until the launcher row is listed (within
@@ -3842,7 +4161,7 @@ class Scenario:
             rc, out = fn(APP_ID)
             info['launch'].append('ares-launch %s rc=%s %r' % (label, rc, (out or '').strip()[-200:]))
             if label == 'close':
-                sleep(3)
+                self.wait_closed(APP_ID, 3)
         end = time.time() + seconds(timeout)
         while True:
             if self.insp is None:
@@ -4202,28 +4521,38 @@ class Scenario:
             r.check('app contains no reboot instruction: ' + text, not got, repr(got))
 
     def step3(self):
+        """Per runtime: Home from an ordinary app opens the launcher, with sam's launch proof."""
         self.rec.begin('3 Home opens the launcher')
         # Record the current foreground without sending a key. A Home-key proof follows only after
         # the usual foreign-popup check in home_press().
         fg0 = self.dev.foreground()
-        self.shot('3-home-from-stock-home')
-        self.rec.note('foreground before the Home-key proof: %s' % fg0[0],
-                      'see screenshot 3-home-from-stock-home')
+        self.rec.note('foreground before the Home-key proof: %s' % fg0[0], fg0[1][:300])
+        if self.planned('window-home') and not self.is_owner() and STOCK not in self.running_ids():
+            # A later launcher on the same boot: the close rule needs a running LG Home, as the boot of a
+            # fresh run leaves it; start it, then the press comes from an ordinary app as always.
+            rc, out = self.dev.launch(STOCK)
+            running = self.wait(lambda: STOCK in self.running_ids(), 30, 2)
+            self.rec.note('LG Home started for the close rule (it is not running on this boot any more): running=%s'
+                          % bool(running), 'rc=%s %s' % (rc, out.strip()[-200:]))
         self.home_press(self.launcher, '3-home')
         self.residency('after the Home press')
-        if closes_stock_home(self.major):
-            def deferred_close():
-                return 'closeByAppId %s after %s in front' % (STOCK, self.launcher) in self.dev.sh(
-                    'cat /tmp/homechooser-home.log 2>&1')[1]
-            closed = self.wait(deferred_close, 60, 3)
-            self.rec.check('watcher closed LG Home after the chosen launcher was in front', bool(closed),
-                           self.dev.sh('tail -n 12 /tmp/homechooser-home.log')[1])
-            self.wait(lambda: STOCK not in self.running_ids(), 30, 3)
-            self.rec.check('LG Home has no live process after the launcher was in front',
-                           STOCK not in self.running_ids(), repr(self.running_ids()))
         r, d = self.rec, self.dev
         rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
         r.note('processes mentioning the launcher id', out.strip())
+
+    def window_home(self):
+        """Per window type, 10+: the watcher closes LG Home once the chosen launcher is in front."""
+        if not closes_stock_home(self.major):
+            return
+        def deferred_close():
+            return 'closeByAppId %s after %s in front' % (STOCK, self.launcher) in self.dev.sh(
+                'cat /tmp/homechooser-home.log 2>&1')[1]
+        closed = self.wait(deferred_close, 60, 3)
+        self.rec.check('watcher closed LG Home after the chosen launcher was in front', bool(closed),
+                       self.dev.sh('tail -n 12 /tmp/homechooser-home.log')[1])
+        self.wait(lambda: STOCK not in self.running_ids(), 30, 3)
+        self.rec.check('LG Home has no live process after the launcher was in front',
+                       STOCK not in self.running_ids(), repr(self.running_ids()))
 
     DEMO_SETTLE = 8  # s after the Home press for the demo's getInfo, listApps and first render
 
@@ -4266,7 +4595,7 @@ class Scenario:
             self.launch_proof('3d-demo-ok', target, mark)
             fg = d.foreground()
             r.note('3d: foreground after OK: %s' % fg[0], fg[1][:300])
-            self.shot('3d-demo-ok')
+            self.shot('3d-demo-ok-verdict')
         finally:
             self.life_end()
             if target not in (self.launcher, APP_ID):
@@ -4343,7 +4672,7 @@ class Scenario:
             self.check_hook_status('after reboot')
         self.residency('after the reboot')
         self.shot('3r-after-reboot')
-        if self.a.api_check:
+        if self.a.api_check and self.is_owner():  # the API caller is the run's first launcher
             self.api_after_reboot()
 
     def cache_prepare_measure(self):
@@ -4499,6 +4828,65 @@ class Scenario:
                 '%s; SAM: %s; service: %s' % (rule, platform_raw[:200], raw[:400]))
         r.note('getForegroundApp %s timing and reply size' % appid,
                '%.1f ms; %d bytes; %s' % (elapsed, len(raw.encode()), raw[:400]))
+
+    # -- --api-check modes.  smoke (the bare flag): reachability as a launcher calls the API, getInfo, one
+    # read method and one Home-only method, each reply checked against the spec's schema; the host contract
+    # test (service/test) owns the methods and errorCodes.  full (--api-check=full): the whole sweep below.
+    def api_mode(self):
+        return 'full' if getattr(self.a, 'api_check', None) == 'full' else 'smoke'
+
+    def api_before(self):
+        return self.api_before_selection() if self.api_mode() == 'full' else self.api_smoke_before()
+
+    def api_selected(self):
+        return self.step_api() if self.api_mode() == 'full' else self.api_smoke_selected()
+
+    def api_smoke_before(self):
+        """2a smoke: the launcher declares the opt-in, gets the grant (11+: the namespaced files) and reaches
+        getInfo and listApps; then the request dialog."""
+        r, d = self.rec, self.dev
+        r.begin('2a launcher API smoke before the launcher is chosen (--api-check)')
+        r.note('API caller: ' + self.api_kit_note(), '')
+        ai = self.L.appinfo
+        perm, home = API_GROUP in (ai.get('requiredPermissions') or []), 'home' in (ai.get('appCategory') or [])
+        r.check('the launcher appinfo declares requiredPermissions ["%s"] and appCategory "home"' % API_GROUP, perm and home,
+                'requiredPermissions %r; appCategory %r' % (ai.get('requiredPermissions'), ai.get('appCategory')))
+        r.note('launcher access files (homechooser-access status; the app applies them when it loads)',
+               d.exec('sh %s/homechooser-access status 2>&1' % SCRIPTS_DIR)[1].strip())
+        # the app's accessApply runs while the list loads: allow it a moment (listApps needs the grant)
+        self.wait(lambda: (self.api('listApps')[0] or {}).get('returnValue') is True, 30, 3)
+        info = self.api_conforms('getInfo', 'before selection')
+        r.check('before selection: getInfo says root true, permitted true, isSelectedHome false',
+                info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is False, json.dumps(info))
+        apps = self.api_conforms('listApps', 'before selection')
+        ids = [a.get('id') for a in apps.get('apps') or [] if isinstance(a, dict)]
+        r.check('listApps names the launcher', self.launcher in ids, '%d apps; launcher %s' % (len(ids), self.launcher in ids))
+        self.api_request(selected=False)
+
+    def api_smoke_selected(self):
+        """3a smoke: as the selected Home, getInfo and one Home-only method, closeApp of the running
+        disposable app; with --uninstall-via alert also the uninstallApp confirmation on LG's alert; then the
+        request toast."""
+        r, d = self.rec, self.dev
+        r.begin('3a launcher API smoke with the launcher selected (--api-check)')
+        comp0 = self.compositor_snapshot() if self.uses_home_key_hook() else None
+        info = self.api_conforms('getInfo', 'selected')
+        r.check('selected: getInfo says root true, permitted true, isSelectedHome true',
+                info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is True, json.dumps(info))
+        d.launch(DISPOSABLE_ID)
+        running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
+        r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
+        rep, raw = self.api('closeApp', {'id': DISPOSABLE_ID})
+        r.check('closeApp as the selected Home accepts the disposable app',
+                (rep or {}).get('returnValue') is True and rep.get('id') == DISPOSABLE_ID
+                and not api_reply_problems('closeApp', rep), raw[:400])
+        gone = self.wait(lambda: DISPOSABLE_ID not in self.running_ids(), 20, 2)
+        r.check('the disposable app is not running after closeApp', bool(gone), str(self.running_ids()))
+        if getattr(self.a, 'uninstall_via', 'later') == 'alert':
+            self.api_uninstall_cancel()
+            self.api_uninstall_confirm()
+        self.api_request(selected=True)
+        self.check_no_compositor_restart('the launcher API calls', comp0)
 
     def api_before_selection(self):
         """Home Chooser open and elevated, the launcher installed but not chosen."""
@@ -5283,8 +5671,10 @@ class Scenario:
                    'installed and the launcher chosen through its UI); the runner does not do that yet', '')
         else:
             removed_hc = False
-            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else []) \
-                + ([DEMO_TARGET_ID] if getattr(self.L, 'is_demo', False) else [])
+            launchers = getattr(self, 'launchers', None) or [self.L]
+            ids = list(dict.fromkeys([L.id for L in launchers] if getattr(self, 'launchers', None) else [self.launcher]))
+            apps = ids + [APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else []) \
+                + ([DEMO_TARGET_ID] if any(getattr(L, 'is_demo', False) for L in launchers) else [])
             try:
                 installed = d.installed()
             except RuntimeError as e:
@@ -5313,6 +5703,7 @@ class Scenario:
                         bool(done) and ('No such file' in s['initd'] or s['initd'] == ''), json.dumps(s))
                 r.note('watcher log', d.sh('tail -n 12 /tmp/homechooser-home.log')[1])
         r.note('df /media/developer', d.sh('df -h /media/developer | tail -1')[1])
+        self.shot('final')
 
 
 class DeviceApiScenario(Scenario):
@@ -5434,11 +5825,11 @@ class DeviceApiScenario(Scenario):
             if not self.wait(lambda: (self.ui() or {}).get('rows'), 90, 1):
                 raise RuntimeError('Home Chooser UI did not load')
             strategy.verify(d, r)
-            self.api_before_selection()
+            self.api_before()
             r.begin('device selection')
             if not self.choose_on_device(self.launcher):
                 return
-            self.step_api()
+            self.api_selected()
         finally:
             r.begin('device cleanup')
             self.close_insp()
@@ -5585,8 +5976,9 @@ def main():
                          "'fixture:web.demo' (examples/web-launcher; adds step 3d: OK opens the focused app), "
                          "or an app id with --launcher-ipk (an author's own launcher)")
     ap.add_argument('--launchers', default=None,
-                    help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
-                         "same VM, in sequence, with cleanup between")
+                    help="'all-fixtures' or a comma list of --launcher values, all on one boot: the first runs the whole "
+                         "lifecycle, each later one is switched to through Home Chooser and runs only its scopes "
+                         "(window type, launch proof; e2e/README.md \"Scopes\")")
     ap.add_argument('--launcher-ipk', default=None, help='ipk of --launcher when it is an app id')
     ap.add_argument('--launcher-update-check', action='store_true',
                     help='after selection install a newer version of the same launcher id and verify Home stays selected')
@@ -5618,17 +6010,20 @@ def main():
     ap.add_argument('--until', type=int, default=5, help='debugging: stop after this step and skip the cleanup')
     ap.add_argument('--wait-popup', type=int, default=0,
                     help='seconds to wait for a system popup holding key focus to be dismissed by hand')
-    ap.add_argument('--reboot-check', action='store_true',
-                    help='after step 3 reboot the VM (beanjar stop/start) and check that the watcher re-applied '
-                         'the stock-home preload policy and the stock home is not running')
+    ap.add_argument('--reboot-check', nargs='?', const='auto', choices=['auto', 'all'], default=None,
+                    help='reboot the VM (beanjar stop/start) with a launcher chosen and check what the watcher '
+                         're-applies at boot. auto (the bare flag): once with the full-screen launcher, plus once '
+                         'with the overlay launcher on 10+ (the last input launch); all: once per window type')
     ap.add_argument('--reboot-via', choices=['later', 'alert'], default='later',
                     help="webOS 6-9, the restart the first choice asks for (the service's system alert): close our alert "
                          "with closeAlert and restart the VM with beanjar stop/start (default; no key is pressed), or "
                          "'alert': automatically press Reboot after verifying the alert and focus from the screen; "
                          "fall back to a 240 s MANUAL wait if proof fails")
-    ap.add_argument('--api-check', action='store_true',
-                    help='the launcher-API contract (docs/launcher-api.md): calls as the launcher before and after it is '
+    ap.add_argument('--api-check', nargs='?', const='smoke', choices=['smoke', 'full'], default=None,
+                    help='the launcher API (docs/launcher-api.md) as the launcher calls it, before and after it is '
                          'chosen (2a, 3a), after --reboot-check and after the uninstall; installs a disposable app. '
+                         'smoke (the bare flag): getInfo, listApps and closeApp, reachability only (the host contract '
+                         'test owns the methods); full: every method and errorCode, as before. '
                          'The launcher must declare org.webosbrew.homechooser.applications: the default is the web fixture built with it; '
                          '--launcher <id> --launcher-ipk <ipk> runs it against your own launcher')
     ap.add_argument('--uninstall-via', choices=['later', 'alert'], default='later',
@@ -5657,13 +6052,14 @@ def main():
     else:
         specs = [args.launcher or 'fixture:web.normal']
     args.multi = len(specs) > 1
-    if args.launcher_update_check and not args.launcher_update_ipk and any(not s.startswith('fixture:web.') for s in specs):
-        ap.error('--launcher-update-check needs --launcher-update-ipk unless using a web fixture')
+    if args.launcher_update_check and not args.launcher_update_ipk and not specs[0].startswith('fixture:web.'):
+        ap.error('--launcher-update-check needs --launcher-update-ipk unless the first launcher is a web fixture')
     if args.multi and vm in KEEP_LAUNCHER_VMS:
         ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
     cfg = load_hosts(args.hosts_file)
     launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
-                               lambda t: print(t, flush=True), api=args.api_check) for sp in specs]
+                               lambda t: print(t, flush=True), api=api_build(sp, i, args.api_check))
+                 for i, sp in enumerate(specs)]
     if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
         ap.error('--scenario screensaver/all requires a normal fixture launcher')
     args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
@@ -5723,42 +6119,23 @@ def main():
         if state != READY:
             raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
         removed_launchers = clean_launchers(dev, rec)
-        for index, launcher in enumerate(launchers):
-            rec.tag = '[%s]' % launcher.spec if args.multi else ''
-            rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))
-            scenario = Scenario(args, host, rec, row, launcher)
-            try:
-                if index == 0:
-                    restart_after_launcher_cleanup(scenario, removed_launchers)
-                scenario.run()
-                if index + 1 < len(launchers) and args.until >= 5:
-                    # Give every fixture a stock boot. On 6-9, uninstall removes the cached hook
-                    # but its bind mounts survive until boot. On 11, a later QML fixture can lose
-                    # the Home Chooser page immediately after confirmation in the same boot.
-                    if not scenario.beanjar_reboot('between fixtures: stock boot after cleanup'):
-                        raise SystemExit('the VM did not return for the next fixture')
-                    if scenario.uses_home_key_hook():
-                        mounts = scenario.dev.mounts()
-                        rec.check('between fixtures: Home key hook mounts are gone',
-                                  not mounts, repr(mounts))
-            except Exception as e:  # with several launchers: keep going, the failure is recorded
-                if not args.multi:
-                    raise
-                import traceback
-                rec.say('runner error in %s:\n%s' % (launcher.spec, traceback.format_exc()))
-                rec.check('scenario ran to the end', False, repr(e))
-            finally:
-                if scenario.insp:
-                    scenario.insp.close()
-                    scenario.insp = None
+        # every launcher on this one boot: the first makes the whole lifecycle, the later ones switch in
+        # through Home Chooser and make only their scopes (run_plan; e2e/README.md "Scopes")
+        scenario = Scenario(args, host, rec, row, launchers[0], launchers)
+        rec.on_fail = scenario.fail_shot
+        restart_after_launcher_cleanup(scenario, removed_launchers)
+        scenario.run()
     except SystemExit as e:
         rec.say('abort: %s' % e)
+        rec.on_fail = None
         rec.check('runner setup', False, str(e))
     except Exception as e:  # keep the artefacts
         import traceback
         rec.say('runner error:\n' + traceback.format_exc())
+        rec.on_fail = None
         rec.check('scenario ran to the end', False, repr(e))
     finally:
+        rec.on_fail = None
         if scenario and scenario.insp:
             scenario.insp.close()
         if started:

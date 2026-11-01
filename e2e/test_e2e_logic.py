@@ -1908,9 +1908,10 @@ class HomeAndScreensaver(unittest.TestCase):
     def test_selector_runs_screensaver_alone_or_with_lifecycle_and_cleans_up(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
-        for mode, expected in (('lifecycle', [1, 2, 3, 4, 5, 6]),
-                               ('screensaver', ['S0', 1, 2, 'S1-S4', 6]),
-                               ('all', ['S0', 1, 2, 'S1-S4', 3, 4, 5, 6])):
+        # W/H: the window-type phases after the choice and after the Home press (10.x, run_plan)
+        for mode, expected in (('lifecycle', [1, 2, 'W', 3, 'H', 4, 5, 6]),
+                               ('screensaver', ['S0', 1, 2, 'W', 'S1-S4', 6]),
+                               ('all', ['S0', 1, 2, 'W', 'S1-S4', 3, 'H', 4, 5, 6])):
             with self.subTest(mode=mode):
                 s, events = self.make(), []
                 s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario=mode,
@@ -1918,6 +1919,7 @@ class HomeAndScreensaver(unittest.TestCase):
                                       launcher_update_check=False, restore_repair_check=False)
                 s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline state model'
                 s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+                s.L.id = s.launcher
                 s.host.mode = 'offline'
                 s.dev.release = lambda: (10, '10.3.1')
                 s.dev.app_installed = lambda app: False
@@ -1925,6 +1927,8 @@ class HomeAndScreensaver(unittest.TestCase):
                 s.check_no_crash = Mock()
                 s.screensaver_baseline = lambda: events.append('S0') or 'PASS'
                 s.screensaver_selected = lambda baseline: events.append('S1-S4')
+                s.window_chosen = lambda: events.append('W')
+                s.window_home = lambda: events.append('H')
                 for number in range(1, 7):
                     setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
                 s.run()
@@ -2205,11 +2209,13 @@ class HomeAndScreensaver(unittest.TestCase):
                               launcher_update_check=False, restore_repair_check=False)
         s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline'
         s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.L.id = s.launcher
         s.host.mode = 'offline'
         s.dev.release = lambda: (10, '10.3.1')
         s.dev.app_installed = lambda app: False
         s.state = lambda: {'choice': 'No such file'}
         s.check_no_crash = Mock()
+        s.window_chosen, s.window_home = Mock(), Mock()
         for number in range(1, 7):
             setattr(s, 'step%d' % number, Mock())
         s.step1.side_effect = lambda strategy: s.dev.select()
@@ -2881,6 +2887,275 @@ class LunaThroughPty(unittest.TestCase):
         self.assertIsNone(d.luna_pty)
         self.assertEqual(json.loads(d.luna('luna://a.b/c')), json.loads(self.REPLY))
         self.assertTrue(d.luna_pty)
+
+
+# ---------------------------------------------------------------------------------------------
+# Scopes, the run plan, screenshots and polling (e2e/README.md "Scopes", "Tiers")
+# ---------------------------------------------------------------------------------------------
+WEB_N, WEB_O = ('web', 'normal', False), ('web', 'overlay', False)
+ALL6 = [WEB_N, WEB_O, ('native', 'normal', False), ('native', 'overlay', False),
+        ('qml', 'normal', False), ('qml', 'overlay', False)]
+RELEASE_OPTS = {'api': 'smoke', 'reboot': 'auto', 'until': 5}
+FULL_OPTS = {'api': 'full', 'reboot': 'auto', 'update': True, 'launcher_update': True, 'until': 5}
+
+
+class Scopes(unittest.TestCase):
+    def test_the_table_has_one_row_per_phase_and_three_scopes(self):
+        names = [row[0] for row in e2e.PHASES]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual({row[1] for row in e2e.PHASES}, {e2e.PER_RELEASE, e2e.PER_WINDOW, e2e.PER_RUNTIME})
+        self.assertEqual(e2e.PHASE['home-proof']['scope'], e2e.PER_RUNTIME)
+        self.assertEqual(e2e.PHASE['qml-gate']['scope'], e2e.PER_RUNTIME)
+        for phase in ('window-chosen', 'window-home', 'reboot'):
+            self.assertEqual(e2e.PHASE[phase]['scope'], e2e.PER_WINDOW, phase)
+        for phase in ('baseline', 'install', 'choose', 'api-before', 'api-selected', 'update', 'removal',
+                      'uninstall', 'cleanup'):
+            self.assertEqual(e2e.PHASE[phase]['scope'], e2e.PER_RELEASE, phase)
+
+    def test_every_phase_is_planned_somewhere_and_run_knows_it(self):
+        seen = set()
+        for major in (5, 9, 10, 12):
+            for opts in (RELEASE_OPTS, FULL_OPTS, dict(FULL_OPTS, update=False), dict(RELEASE_OPTS, screensaver='all'),
+                         dict(RELEASE_OPTS, restore_repair=True)):
+                seen |= {p for _, p in e2e.run_plan(ALL6 + [('web', 'normal', True)], major, opts)}
+        self.assertEqual(seen, set(e2e.PHASE))
+        source = __import__('inspect').getsource(e2e.Scenario.run)
+        for phase in e2e.PHASE:
+            self.assertIn("'%s'" % phase, source, phase)
+
+    def test_release_tier_plan_per_release_once_overlay_only_its_scopes(self):
+        for major in (5, 6, 9, 10, 11, 12):
+            plan = e2e.run_plan([WEB_N, WEB_O], major, RELEASE_OPTS)
+            with self.subTest(major=major):
+                self.assertEqual(plan[0], (0, 'baseline'))
+                self.assertEqual(plan[-2:], [(0, 'uninstall'), (0, 'cleanup')])
+                overlay = [p for i, p in plan if i == 1]
+                self.assertEqual(overlay[:3], ['switch', 'window-chosen', 'home-proof'])
+                self.assertTrue(all(e2e.PHASE[p]['scope'] != e2e.PER_RELEASE for p in overlay), overlay)
+                for phase in ('install', 'choose', 'api-before', 'api-selected', 'removal', 'uninstall'):
+                    self.assertEqual([i for i, p in plan if p == phase], [0], phase)
+                self.assertEqual([i for i, p in plan if p == 'window-chosen'], [0, 1])
+                self.assertEqual([i for i, p in plan if p == 'window-home'], [0, 1] if major >= 10 else [])
+                self.assertEqual([i for i, p in plan if p == 'home-proof'], [0, 1])
+                self.assertNotIn('update', [p for _, p in plan])
+
+    def test_full_tier_six_launchers_one_boot_scopes_once(self):
+        for major in (5, 9, 10, 11, 12):
+            plan = e2e.run_plan(ALL6, major, FULL_OPTS)
+            with self.subTest(major=major):
+                proofs = [i for i, p in plan if p == 'home-proof']
+                gates = [i for i, p in plan if p == 'qml-gate']
+                self.assertEqual(sorted(proofs + gates), list(range(6)))
+                self.assertEqual(gates, [4, 5] if major == 12 else [])
+                self.assertEqual([i for i, p in plan if p == 'window-chosen'], [0, 1])  # web.normal, web.overlay
+                self.assertEqual([i for i, p in plan if p == 'switch'], [i for i in range(1, 6) if i not in gates])
+                # a later launcher of the same window type: switch and launch proof only
+                for i in (2, 3):
+                    self.assertEqual([p for j, p in plan if j == i], ['switch', 'home-proof'])
+                self.assertEqual([i for i, p in plan if p == 'update'], [0])
+                self.assertEqual([i for i, p in plan if p == 'launcher-update'], [0])
+
+    def test_a_later_launcher_of_a_new_window_type_owns_its_window_checks(self):
+        plan = e2e.run_plan([('native', 'normal', False), WEB_O, ('native', 'overlay', False)], 10, RELEASE_OPTS)
+        self.assertEqual([p for i, p in plan if i == 1], ['switch', 'window-chosen', 'home-proof', 'window-home', 'reboot'])
+        self.assertEqual([p for i, p in plan if i == 2], ['switch', 'home-proof'])
+
+    def test_reboot_plan(self):
+        n, o = 'normal', 'overlay'
+        self.assertEqual(e2e.reboot_windows(9, [n, o], None), [])
+        self.assertEqual(e2e.reboot_windows(5, [n, o], 'auto'), [n])
+        self.assertEqual(e2e.reboot_windows(9, [o, n], 'auto'), [n])  # the full-screen one, wherever it is
+        self.assertEqual(e2e.reboot_windows(9, [o], 'auto'), [o])     # a lone overlay launcher still boots
+        self.assertEqual(e2e.reboot_windows(10, [n, o], 'auto'), [n, o])
+        self.assertEqual(e2e.reboot_windows(12, [o, n], 'auto'), [o, n])
+        self.assertEqual(e2e.reboot_windows(9, [n, o, n], 'all'), [n, o])
+        for major in range(5, 13):
+            plan = e2e.run_plan(ALL6, major, FULL_OPTS)
+            reboots = [i for i, p in plan if p == 'reboot']
+            self.assertEqual(reboots, [0, 1] if major >= 10 else [0], major)
+            # the boot cache check follows the first 6-9 reboot when no update replaced the build
+            plan = e2e.run_plan([WEB_N, WEB_O], major, RELEASE_OPTS)
+            self.assertEqual([i for i, p in plan if p == 'cache'], [0] if 6 <= major <= 9 else [], major)
+
+    def test_until_restore_repair_screensaver_and_a_gated_run(self):
+        plan = e2e.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, until=3))
+        self.assertNotIn('removal', [p for _, p in plan])
+        self.assertFalse([i for i, _ in plan if i == 1])
+        self.assertNotIn('cleanup', [p for _, p in plan])
+        plan = e2e.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, until=4))
+        self.assertEqual([p for _, p in plan][-3:], ['switch', 'window-chosen', 'home-proof'])
+        plan = e2e.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, restore_repair=True))
+        self.assertEqual([p for _, p in plan][-2:], ['restore-repair', 'cleanup'])
+        plan = e2e.run_plan([WEB_N], 10, {'screensaver': 'screensaver', 'until': 5})
+        self.assertEqual([p for _, p in plan], ['baseline', 'install', 'choose', 'window-chosen', 'screensaver', 'cleanup'])
+        qml = [('qml', 'normal', False), ('qml', 'overlay', False)]
+        self.assertEqual(e2e.run_plan(qml, 12, RELEASE_OPTS), [(0, 'baseline'), (0, 'qml-gate'), (1, 'qml-gate'), (0, 'cleanup')])
+        plan = e2e.run_plan([('qml', 'normal', False), WEB_N], 12, RELEASE_OPTS)
+        self.assertEqual(plan[:3], [(1, 'baseline'), (0, 'qml-gate'), (1, 'install')])
+
+    def test_crash_windows_group_unguarded_phases_with_the_step_before(self):
+        plan = e2e.run_plan([WEB_N, WEB_O], 10, RELEASE_OPTS)
+        groups = [[p for _, p in g] for g in e2e.plan_groups([x for x in plan if x[1] != 'cleanup'])]
+        self.assertIn(['choose', 'api-before', 'window-chosen'], groups)
+        self.assertIn(['home-proof', 'window-home'], groups)
+        self.assertIn(['switch', 'window-chosen'], groups)
+        self.assertTrue(all(e2e.PHASE[g[0]]['guard'] or g[0] == 'baseline' for g in groups), groups)
+
+    def test_describe_plan_and_api_build(self):
+        plan = e2e.run_plan([WEB_N, WEB_O], 9, RELEASE_OPTS)
+        lines = e2e.describe_plan(plan, ['fixture:web.normal', 'fixture:web.overlay'])
+        self.assertTrue(lines[1].startswith('fixture:web.overlay: switch'))
+        self.assertTrue(e2e.api_build('fixture:native.normal', 0, 'smoke'))
+        self.assertFalse(e2e.api_build('fixture:native.normal', 2, 'full'))
+        self.assertTrue(e2e.api_build('fixture:web.overlay', 1, 'full'))
+        self.assertFalse(e2e.api_build('fixture:web.normal', 0, None))
+        self.assertEqual(e2e.FIXTURE_TYPES[0], 'web')  # all-fixtures puts a web launcher first
+        self.assertEqual(e2e.fixture_specs()[:2], ['fixture:web.normal', 'fixture:web.overlay'])
+
+    def test_results_carry_the_scope_and_a_fail_calls_the_hook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = e2e.Recorder(tmp)
+            failed = []
+            rec.on_fail = failed.append
+            rec.scope = e2e.PER_WINDOW
+            rec.check('a', True)
+            rec.check('b', False)
+            rec.check('c', False, expected='documented limitation')
+            rec.log.close()
+        self.assertEqual([r['scope'] for r in rec.results], [e2e.PER_WINDOW] * 3)
+        self.assertEqual(failed, ['b'])
+
+
+class Screenshots(unittest.TestCase):
+    def test_only_key_steps_are_taken(self):
+        for label in ('3-home-verdict', '4-home-stock-verdict', '3d-demo-ok-verdict', '3-home-first-press',
+                      'fail-2-choose', '3r-after-reboot', 'final', '4-alert', '4-alert-dismissed', '4-alert-refused',
+                      '5-toast', '3a-uninstall-alert', '3a-uninstall-alert-2-dismissed', 'keys-blocked',
+                      '3-home-foreign-popup', 'audiooutputd-crash-dialog-before', 'launcher row-click-not-observed',
+                      '3a-uninstall-alert-focus-proof', 'S1-before', '2-reboot-alert'):
+            self.assertTrue(e2e.screenshot_reason(label), label)
+        for label in ('app-open', 'stale-marker', 'row-focused', 'dialog', 'after-confirm', 'reopened',
+                      '3a-request-selected', '2a-request-dialog', '3a-uninstall-screen', '3a-uninstalled', '3u-app'):
+            self.assertIsNone(e2e.screenshot_reason(label), label)
+
+    def scenario(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.rec, s.shot_n, s.vm, s.capture_broken = FakeRec(), 0, 'vm', False
+        s.rec.outdir, s.rec.step = tempfile.gettempdir(), '2 choose the launcher through the UI'
+        s.a, s.L = SimpleNamespace(multi=False), SimpleNamespace(tag='t')
+        s.host = SimpleNamespace(tv_screenshot=Mock(return_value=(True, 'ok')))
+        return s
+
+    def test_a_skipped_label_takes_nothing_and_a_fail_one_picture_per_step(self):
+        s = self.scenario()
+        self.assertIsNone(s.shot('dialog'))
+        s.host.tv_screenshot.assert_not_called()
+        s.fail_shot('x')
+        s.fail_shot('y')
+        self.assertEqual(s.host.tv_screenshot.call_count, 1)
+        self.assertIn('fail-2-choose-the-launcher-through-the-UI', s.host.tv_screenshot.call_args.args[1])
+        s.rec.step = '3 Home opens the launcher'
+        s.fail_shot('z')
+        self.assertEqual(s.host.tv_screenshot.call_count, 2)
+
+
+class PreloadPolling(unittest.TestCase):
+    """The 6-9 settle and sample (a fixed 60 s, then 60 s of samples nobody read) became a poll of what
+    check_home_gate asserts, within the same 120 s bound; 10+ ends its settle at the watcher's close line."""
+
+    def test_settled_condition(self):
+        self.assertTrue(e2e.preload_settled(9, 1, False, False))
+        self.assertFalse(e2e.preload_settled(9, 0, False, False))
+        self.assertFalse(e2e.preload_settled(6, 1, True, False))
+        self.assertTrue(e2e.preload_settled(10, 0, True, True))
+        self.assertFalse(e2e.preload_settled(11, 1, False, False))
+
+    def scenario(self, major, polls_until_settled):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = scenario(major)
+        s.L = SimpleNamespace(overlay=False)
+        state = {'n': 0}
+        s.dev.preload_policy = lambda appid=e2e.STOCK: (False, '{"isEnabled":false}')
+        def running_ids():
+            state['n'] += 1
+            return [e2e.STOCK] if state['n'] <= polls_until_settled else []
+        s.running_ids = running_ids
+        s.gate_mount_count = lambda: 1
+        s.preload_log = lambda: 'closeByAppId com.webos.app.home' if state['n'] > polls_until_settled else ''
+        s.check_home_gate = Mock()
+        s.residency = Mock()
+        s.waits = []
+        def wait(cond, timeout, every=3):
+            s.waits.append(timeout)
+            for _ in range(int(timeout / every) + 1):
+                v = cond()
+                if v:
+                    return v
+            return v
+        s.wait = wait
+        s.stock_running_samples = lambda: [(0, False), (5, False)]
+        return s, state
+
+    def test_6_to_9_polls_then_checks_the_gate_without_a_fixed_sleep(self):
+        from unittest.mock import patch
+        for major in (6, 9):
+            s, state = self.scenario(major, polls_until_settled=2)
+            with patch.object(e2e, 'sleep') as slept:
+                s.check_preload_off('after the switch')
+            self.assertEqual([c.args for c in slept.call_args_list], [], 'no fixed wait')
+            self.assertEqual(s.waits[-1], e2e.PRELOAD_SETTLE + e2e.PRELOAD_SAMPLE)  # the same upper bound
+            self.assertEqual(state['n'], 3)  # stopped as soon as it settled
+            s.check_home_gate.assert_called_once_with('after the switch')
+
+    def test_10_after_a_boot_ends_the_settle_at_the_close_line_and_still_samples(self):
+        from unittest.mock import patch
+        s, state = self.scenario(10, polls_until_settled=0)
+        with patch.object(e2e, 'sleep') as slept:
+            s.check_preload_off('after the reboot', settle=30)
+        slept.assert_not_called()
+        self.assertEqual(s.waits[:2], [60, 30])  # the policy wait, then the settle bound (unchanged)
+        self.assertIn(('after the reboot: %s is not running over %d s' % (e2e.STOCK, e2e.PRELOAD_SAMPLE), True),
+                      s.rec.checks)
+        s.check_home_gate.assert_not_called()
+
+    def test_wait_closed_polls_with_the_old_bound(self):
+        s = scenario(9)
+        seen = []
+        s.wait = lambda cond, timeout, every=3: seen.append((timeout, every)) or cond()
+        s.running_ids = lambda: []
+        self.assertTrue(s.wait_closed('x', 3))
+        self.assertEqual(seen, [(3, 1)])
+
+
+class ApiModes(unittest.TestCase):
+    def test_bare_flag_is_smoke_and_full_is_the_sweep(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for value, mode in ((True, 'smoke'), ('smoke', 'smoke'), ('full', 'full')):
+            s = scenario(9)
+            s.a = SimpleNamespace(api_check=value)
+            for name in ('api_before_selection', 'step_api', 'api_smoke_before', 'api_smoke_selected'):
+                setattr(s, name, Mock())
+            s.api_before()
+            s.api_selected()
+            self.assertEqual(s.api_mode(), mode)
+            full = mode == 'full'
+            self.assertEqual((s.api_before_selection.called, s.step_api.called), (full, full))
+            self.assertEqual((s.api_smoke_before.called, s.api_smoke_selected.called), (not full, not full))
+
+    def test_cli_modes(self):
+        from unittest.mock import patch
+        seen = {}
+        def fake(args, ap):
+            seen.update(api=args.api_check)
+            return 0
+        for argv, api in ((['--api-check'], 'smoke'), (['--api-check=full'], 'full'), (['--api-check', 'full'], 'full')):
+            with patch.object(sys, 'argv', ['runner', '--device', 'tv'] + argv), patch.object(e2e, 'run_device_api', fake):
+                e2e.main()
+            self.assertEqual(seen['api'], api)
 
 
 if __name__ == '__main__':

@@ -190,8 +190,10 @@ class DemoLauncher(unittest.TestCase):
         s.dev = SimpleNamespace(installed=Mock(side_effect=lambda: sorted(installed)),
                                 remove=Mock(side_effect=lambda app: installed.discard(app) or (0, 'Removed')),
                                 sh=Mock(return_value=(0, '')))
+        s.shot = Mock()
         s.step6()
         self.assertEqual(installed, {'org.webosbrew.hbchannel'})
+        s.shot.assert_called_once_with('final')
         s.rec.check.assert_any_call('no test apps left installed', True, "['org.webosbrew.hbchannel']")
 
 
