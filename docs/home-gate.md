@@ -20,7 +20,7 @@ unchanged. The 11+ "close LG Home once the launcher is in front" logic is unchan
 ## The gate program
 
 `homechooser-home-gate` ([service/src/gate/](../service/src/gate/)) is native C, built by the same
-Makefile and SDK and linked to `libhomechooser.a`. It does not link libluna-service2. Every LS2 request
+CMake project and SDK and linked to `libhomechooser.a`. It does not link libluna-service2. Every LS2 request
 is a bounded `luna-send -n 1` child (2 s for queries, 3 s for a launch). SAM starts it as root,
 with SAM's argv; `argv[1]` is the JSON launch envelope. It decides, acts and exits 0. A clean exit is
 what stops SAM retrying and falling back to Live TV.
@@ -219,7 +219,8 @@ because the daemon already stages its runtime copy in `/tmp/homechooser-runtime`
 ## Tests
 
 ```sh
-make -C service test-gate        # decision table and self-release through real luna-send children (fake-luna-send.py)
-make -C service test-gate-mount  # mount/unmount, idempotence, rollback, foreign/stacked mounts, jail copies, release marker
-make -C service test-watcher     # G11-G19: when the watcher mounts and unmounts; the stock Home close and its retries
+cmake -S service/test -B build/service-host && cmake --build build/service-host
+ctest --test-dir build/service-host -R '^test-gate$'        # decision table and self-release through real luna-send children (fake-luna-send.py)
+ctest --test-dir build/service-host -R '^test-gate-mount$'  # mount/unmount, idempotence, rollback, foreign/stacked mounts, jail copies, release marker
+ctest --test-dir build/service-host -R '^test-watcher'      # G11-G19: when the watcher mounts and unmounts; the stock Home close and its retries
 ```

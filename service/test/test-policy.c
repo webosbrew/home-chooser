@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Host-side test of src/policy.c: make test */
+/* Host-side test of src/policy.c: ctest --test-dir build/service-host -R test-policy */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

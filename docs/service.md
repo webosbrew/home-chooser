@@ -13,7 +13,7 @@ See [Root access](settings-app.md#root-access) for the app side and
 ## Package
 
 `ares-package dist build/service-pkg` packs the app and the service together
-(`npm run package` in `app/` builds the service with `make -C service`, stages
+(`npm run package` in `app/` builds the service with CMake into `build/service`, stages
 `services.json`, the three binaries, three entry scripts and their `scripts/lib/` helpers with
 `app/scripts/stage-service.js`, then packages). The ipk holds
 `usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,homechooser-daemon,homechooser-home-gate,services.json,scripts/}` (binary mode
@@ -22,12 +22,12 @@ See [Root access](settings-app.md#root-access) for the app side and
 build, and the one source of the version, are in
 [Build and test](build.md).
 
-Both binaries are C. The service links `libluna-service2.so.3`, `libpbnjson_c.so.2`,
-`libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. The daemon links the same
-libraries **except libluna-service2**. `make -C service check-abi` validates both
-against the oldest supported rootfs (5.6.1) and rejects any daemon LS2 dependency
-or LS registration/call symbols. `homechooser-home-gate` ([home-gate.md](home-gate.md)) links the
-daemon's libraries, also without libluna-service2, and is checked the same way. No shared library is installed.
+All three binaries are C, built by `service/CMakeLists.txt`. The service links `libluna-service2.so.3`,
+`libpbnjson_c.so.2`, `libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. The daemon and
+`homechooser-home-gate` ([home-gate.md](home-gate.md)) link the same libraries **except
+libluna-service2**. `cmake --build build/service --target check-abi` validates all three against the
+oldest supported rootfs (5.6.1), rejects a libluna-service2 dependency in the daemon and the gate,
+and rejects LS registration/call symbols in the daemon. No shared library is installed.
 
 `services.json` declares only `homechooser-service`: only that executable receives
 an LS2 service role. `homechooser-daemon` needs root for boot/state operations and
@@ -50,8 +50,8 @@ The daemon applies the Home redirect and runs the C watcher on a single GLib
 thread. All daemon LS2 traffic runs as `luna-send -a com.webos.applicationManager`
 children. It never registers an LS2 client.
 
-`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c` and the Home-key transaction/generator
-are compiled once into `libhomechooser.a` and linked into both programs as needed.
+`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c`, the Home-key transaction/generator and
+`gate-mount.c` are compiled once into `libhomechooser.a` and linked into all three programs.
 This archive is a build artifact, not part of the package.
 
 | Source under `service/src/` | Responsibility |
@@ -169,8 +169,8 @@ settings and confirmation methods are internal; their additional codes have thes
 
 Settings methods (`status`, `quit`, `call`, files/icons, boot links, `run` and `rebootPrompt`) check
 `LSMessageGetApplicationID`: it must be `org.webosbrew.homechooser` (an instance suffix after a
-space is accepted). Others receive `forbidden`. `make -C service dev` relaxes this settings gate;
-it is never packaged.
+space is accepted). Others receive `forbidden`. A dev build relaxes this settings gate
+(`cmake -S service -B build/service-dev -DEXTRA_CFLAGS=-DHC_ALLOW_ANY_SENDER`); it is never packaged.
 
 Launcher methods use a separate gate: a valid hub-reported application id, root and the caller's
 installed `requiredPermissions` containing `org.webosbrew.homechooser.applications`. SAM's `getAppInfo` supplies the
@@ -296,7 +296,7 @@ endpoint.
 
 ## Allow-lists
 
-The policy is in `service/src/policy.c` and tested on the host (`make -C service test`).
+The policy is in `service/src/policy.c` and tested on the host (`test-policy`, below).
 
 * **`call` URIs**: `applicationManager` `listApps`, `getAppInfo`, `setDefaultApp`,
   `launchDefaultApp`, `closeByAppId`; `settingsservice` `getSystemSettings` and
@@ -358,12 +358,15 @@ Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
 
 ## Tests
 
-* `make -C service test`: the pure policy (sender, file and call allow-lists, argv table, icon
+The native tests run with CTest: `cmake -S service/test -B build/service-host`,
+`cmake --build build/service-host`, then `ctest --test-dir build/service-host`.
+
+* `test-policy`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
-* `make -C service test-watcher`: native watcher policy and child-stream runtime with an executable
+* `test-watcher` and `test-watcher-luna`: native watcher policy and child-stream runtime with an executable
   Luna double under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
   subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle and close guards.
-* `make -C service test-homekey`: native live-filter transactions with fake Luna.
+* `test-homekey`: native live-filter transactions with fake Luna.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.

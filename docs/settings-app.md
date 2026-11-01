@@ -181,9 +181,10 @@ Home Chooser keeps its own copy of the choice and enforces it.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
   (`/tmp/homechooser-home.log`).
 
-Tests: `make -C service test-watcher` runs the C policy and child-transport/runtime tests under
-qemu-arm with firmware libraries and a fake transport. It covers record merging, backoff,
-per-version restore, package removal, notifications, preload retry/settle and foreground safety.
+Tests: `ctest --test-dir build/service-host -R '^test-watcher'` runs the C policy and
+child-transport/runtime tests under qemu-arm with firmware libraries and a fake transport. It
+covers record merging, backoff, per-version restore, package removal, notifications, preload
+retry/settle and foreground safety.
 `service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
 
 ## When apps are removed

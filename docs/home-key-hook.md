@@ -103,11 +103,10 @@ An active watcher handles normal uninstall immediately.
 The app has no restart prompt or “Restart now” row.
 
 ```sh
-make -C service test
-make -C service test-homekey KEYFILTER_ROOTFS=/path/to/7.6/rootfs
+cmake -S service/test -B build/service-host -DKEYFILTER_ROOTFS=/path/to/7.6/rootfs
+cmake --build build/service-host && ctest --test-dir build/service-host  # policy, homekey, watcher, gate
 OPENHOUSE_STOCK_COPIES=/path/to/stock sh service/scripts/tests/test-minimal-hook.sh
 sh service/scripts/tests/test-homechooser.sh
-make -C service test-watcher
 sh service/scripts/tests/test-homechooser-access.sh
 npm --prefix app test -- --runInBand
 python3 -m unittest discover -s e2e -p test_e2e_logic.py

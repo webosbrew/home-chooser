@@ -224,7 +224,7 @@ runs its reach calls for, not the whole matrix every time:
 
 | Change | Runs |
 | --- | --- |
-| Any change | The offline suites: `service/scripts/tests/test-*.sh`, `make -C service test`, `cd app && npm run lint && CI=true npm test` |
+| Any change | The offline suites: `service/scripts/tests/test-*.sh`, `cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host`, `cd app && npm run lint && CI=true npm test` |
 | Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
 | Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (Home key hook), 11.x (root-shell elevation, profile path) |
 | Only the runner or the docs | One VM |
