@@ -4529,6 +4529,11 @@ class Scenario:
                 except ValueError:
                     pass
             methods = {SVC_ID + '/' + name for name in launcher_methods()}
+            writes = {SVC_ID + '/closeApp', SVC_ID + '/uninstallApp'}
+            r.check('11+: application.query provides the reading methods, application.launcher closeApp and uninstallApp',
+                    bool(files) and all(set(f.get('application.query', [])) == methods - writes
+                                        and set(f.get('application.launcher', [])) == writes
+                                        and 'default.permission' not in f for f in files), raw[:1200])
             r.check('11+: namespaced permission and ares.webos.cli grant every launcher method',
                     bool(files) and all(set(f.get(API_GROUP, [])) == methods
                                         and set(f.get('ares.webos.cli', [])) == methods
