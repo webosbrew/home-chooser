@@ -1,8 +1,57 @@
 # End-to-end test
 
-`homechooser_e2e.py` records each assertion with its raw evidence. Python 3 standard library
-only; Beanjar VMs are reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw
-ssh).
+`homechooser_e2e.py` records each assertion with its raw evidence. The runner (`homechooser_e2e.py`,
+`run_matrix.py` and the `hc_e2e/` package, see "Code layout") is Python 3 standard library only; Beanjar VMs are
+reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw ssh). pytest is optional: it
+runs the same scenario as one test per phase, with live progress and JUnit and HTML reports (see "The pytest device
+tests").
+
+## Quick start
+
+```sh
+# once, for pytest and the reports (the runner itself needs only python3)
+python3 -m venv .venv && .venv/bin/pip install -r e2e/requirements.txt
+
+# the offline unit tests, no device (about 6 s); the second line runs the same tests through pytest
+python3 -I -m unittest discover -s e2e -p 'test_*.py'
+.venv/bin/python -m pytest e2e
+
+# a device run against the fake device: the plan, the test ids and both reports, no VM (under a second)
+.venv/bin/python -m pytest e2e/device -v --vm 12.x --tier release --dry
+
+# smoke on one VM: the default slot (9.x), fixture:web.normal, the API smoke check
+# (about 6 min on the Pi, 10 min on a board)
+.venv/bin/python -m pytest e2e/device -v --tier smoke
+
+# one VM, some phases: the earlier phases they need run first, then the cleanup
+# (a late phase such as reboot takes most of a full run's time)
+.venv/bin/python -m pytest e2e/device -v --vm 10.x --tier release -k reboot
+.venv/bin/python -m pytest e2e/device -v --vm 10.x --tier release -k "web.overlay and home"
+
+# the release tier: every slot, one VM at a time per machine, machines in parallel (about 1 h with the three)
+.venv/bin/python -I e2e/run_matrix.py --build --tier release --pytest
+
+# the full tier: every slot, the six fixtures, the full API check (about 1.5 h with the three machines)
+.venv/bin/python -I e2e/run_matrix.py --build --tier full --pytest
+```
+
+Without `--pytest`, `run_matrix.py` runs `homechooser_e2e.py` per slot as before, and the plain commands below
+(`python3 -I e2e/homechooser_e2e.py --vm 9.x ...`) still work without the venv.
+
+**Where the results land.** A pytest run writes `e2e/results/<vm>-<timestamp>/` (or `--outdir`): `run.log` and
+`results.json` as the plain runner does, the screenshots, `junit.xml` and `report.html` (self-contained; each phase's
+checks, and the screenshots of a failing phase embedded). The terminal summary ends with the counts and these paths.
+A matrix run writes `e2e/results/matrix-<timestamp>/`: `summary.md`, `summary.json`, and per VM `<vm>/` (the same
+files) and `<vm>.console.log` (that run's pytest output).
+
+**Reading the progress.** With `-v` each phase test is named when it starts, `test_<vm>[<launcher>-<phase>]`, and
+while it runs a live line per step (`== 2 choose`) and per check (`PASS ...`, `FAIL ...`, `XFAIL ...`, `MANUAL ...`)
+follows; the VM start and the cleanup at the end have lines of their own. `--log-cli-level=DEBUG` shows every line
+the runner writes, which is also in `run.log` (`tail -f e2e/results/<vm>-*/run.log`). The matrix prints one line per
+finished run; `tail -f` a run's `<vm>.console.log` to follow it.
+
+Put pytest's path before `--api-check` or `--reboot-check` without a value, or give the value (`--api-check=smoke`):
+the bare flag takes the next word as its value.
 
 ## Launcher author: your own TV
 
@@ -41,7 +90,7 @@ host and VM setup in addition to ares:
   forward (`ares-novacom -f`) as the developer-mode user, the way the old plain device did; shell commands,
   luna calls, logs, mounts and key/screenshot fallbacks (`ares-shell -r`, `ares-do`) with `--root`. A VM on
   another machine is `HOST/NAME` (the `--host` name), which Beanjar reaches with a port forward per call.
-  All of it is built in one place, the `Device` class of `homechooser_e2e.py`.
+  All of it is built in one place, the `Device` class (`hc_e2e/device.py`).
 * Root shell commands share one `beanjar ares-shell --root -d [HOST/]NAME -r sh` per VM, fed on its stdin
   (each command `sh -c CMD </dev/null 2>&1`, then a marker line with its status). Each `beanjar ares-TOOL`
   call to a remote VM first asks its machine for the VM and opens an ssh forward, about 2 s from this PC to
@@ -267,7 +316,8 @@ which are the verdict, stay as they are.
 
 ## Tiers
 
-`run_matrix.py --tier` sets the defaults of a pass; an option given on the command line wins (`--vms`, `--launchers`,
+`run_matrix.py --tier` (and pytest's `--tier` for one VM) sets the defaults of a pass, from `TIERS` in
+`hc_e2e/tiers.py`; an option given on the command line wins (`--vms`, `--launchers`,
 `--api-check=full`, `--reboot-check=all`, `--update-on`, `--uninstall-via`). Without `--tier` the options mean what
 they always did.
 
@@ -290,10 +340,58 @@ live key filter, the flag and the baked id survive the update), and that slot is
 override and the 11+ re-elevation after an update are in the full tier. The times are estimates from the per-step
 times of earlier single-launcher runs, less the waits that are now polled.
 
+## The pytest device tests
+
+`e2e/device/` runs one VM run as one pytest session (`device/plugin.py`, loaded by `e2e/conftest.py`; the logic is
+in `hc_e2e/phase_tests.py`, standard library). It needs `e2e/requirements.txt` (pytest and pytest-html, pinned).
+
+* **Options.** `--vm`, `--host`, `--tier smoke|release|full`, `--launchers`, `--hc-ipk`, `--api-check[=smoke|full]`,
+  `--reboot-check[=auto|all]`, `--uninstall-via`, `--update-check`, `--outdir` mean what they mean to
+  `homechooser_e2e.py`; any other runner option goes through as `--hc-arg=<word>`, once per word
+  (`--hc-arg=--input-mode --hc-arg=keys`, `--hc-arg=--build`). `--tier` fills what is not given from `TIERS`, as
+  `run_matrix.py` does for one slot (the release tier's update check only on its slot); `--tier smoke` without `--vm`
+  takes the default slot, and the release and full tiers over every slot are `run_matrix.py --pytest`. The options
+  become a `homechooser_e2e.py` command line, which the runner's own parser checks before anything starts; the header
+  of the run prints it with the planned phases.
+* **One test per planned phase.** The tests come from `run_plan()` for the slot's release, one per `(launcher,
+  phase)`, named `test_<vm>[<launcher>-<phase>]`: `test_w22o_ponytail_us[web.overlay-reboot]`; the launcher is the
+  fixture's name or an author launcher's id. `-k` matches those words: `-k reboot`, `-k api` (`api-before`,
+  `api-selected`), `-k "web.overlay and home"` (its `home-proof` and `window-home`), `-k "not cleanup"`. Without `--vm`
+  or `--tier` no device test exists, so `pytest e2e` runs the unit tests only. The run re-plans from the release it
+  finds on the device; a test whose phase is not in that plan is skipped with the plan it found.
+* **Order and dependencies.** The tests run in plan order on one boot, through `PlanRun` (`hc_e2e/plan.py`), the
+  loop `homechooser_e2e.py` itself runs, with its rules: crash windows per group of phases, a later launcher's
+  exception recorded and only that launcher stopped. A selected phase first runs every earlier phase of the plan that
+  has not run, since each one leaves the device in the state the next expects; they are named in the test's
+  `setup` property, in its failure message and in the HTML. Their FAIL checks fail the test that pulled them in.
+* **Verdicts.** Every `r.check` is recorded as before (`run.log`, `results.json`). A phase test fails when a check
+  recorded during it is `FAIL`, with each failing check, its step and evidence in the message; it is `xfail` when it
+  recorded an `XFAIL` and no `PASS` (the qml gate); `MANUAL` never fails it. The counts per status, the phase, the setup phases
+  and the screenshots taken are the test's JUnit properties. When a phase of the first launcher raises, the run ends
+  as on the command line: that test fails with the traceback and every later phase but the cleanup is skipped with the reason; when a
+  later launcher's phase raises, only that launcher's remaining phases are skipped.
+* **Cleanup.** The session fixture starts the VM before the first test (`VmSession.bring_up`, as the command line
+  does) and, after the last one, whatever failed, runs the cleanup (step 6) unless a selected `-cleanup` test made
+  it, then stops VNC and the VM (`VmSession.tear_down`) and writes `results.json`. A FAIL of a cleanup made there is an
+  error at teardown. If the VM does not come up, every test fails with the reason, and the stop still runs.
+* **Reports.** `junit.xml` (xunit1, for the properties) and `report.html` go into the run's directory unless
+  `--junitxml` or `--html` say otherwise.
+* **`--dry`.** The same plan, PlanRun, fixture and reports against a fake device that records its calls
+  (`hc_e2e/dry.py`, `dry-calls.json`); `--dry-fail`, `--dry-manual` and `--dry-raise` (comma lists of phases;
+  `vm-start` for the VM start) inject a FAIL, a MANUAL or an exception. `e2e/test_phase_tests.py` runs it.
+
+**The matrix with pytest.** `run_matrix.py --pytest` keeps its scheduler and runs each slot as
+`python -m pytest e2e/device --vm <vm> --host <host> --outdir <matrix>/<vm> --hc-arg=...`, with the same flags the
+plain run would get; run it with the venv's python. pytest-xdist with `--dist loadgroup` was not used: it fixes each
+test's worker when the tests are collected, so it cannot express a slot that may run on any of several machines, the
+wait for a machine with no VM running (ours or another session's), a refused run, or Ctrl-C stopping each running VM;
+`run_matrix.py` already guarantees one VM per machine at a time, with one worker thread per machine claiming slots
+under a lock. Each pytest session is one VM, so its fixture's teardown stops exactly that VM.
+
 ## Scopes
 
 A check depends on the release, on the window type, or on the launcher itself, and one VM run makes it once at that
-scope. `PHASES` in `homechooser_e2e.py` is the one table of it; every result in `results.json` carries its phase's
+scope. `PHASES` in `hc_e2e/plan.py` is the one table of it; every result in `results.json` carries its phase's
 `scope`, and the run log starts with the run's plan (`run_plan`).
 
 * **per-release**, independent of the launcher: made once, with the first launcher of the run.
@@ -360,7 +458,7 @@ the demo's 8 s to render, and the waits for our own alert and toast to be shown 
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
 through Python 3, the TV screenshot through `beanjar screenshot`) goes through the
-`BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
+`BeanjarHost` class (`hc_e2e/beanjar.py`). The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
 `ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
 runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
 on PATH, but the QMP sockets and the VM files are on the machine the VM runs on.
@@ -434,7 +532,7 @@ ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<
 "<alias>"` to `e2e/hosts.local.toml` (or `hosts.toml` when it is shared) under the same name. The VMs
 run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
 
-`MATRIX` in `homechooser_e2e.py` contains release slots. The VM field accepts a name or an ordered
+`MATRIX` in `hc_e2e/matrix.py` contains release slots. The VM field accepts a name or an ordered
  tuple of alternatives, for example `('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna',
  'verified', '...')`. Each row runs exactly once, using a candidate reported by host discovery.
  The three 9.x rows remain separate slots; `--vms 9.x` selects the first, as before. A single-run
@@ -815,6 +913,35 @@ Asserted after a 45 s settle:
 
 Then steps 4 and 5 run on the updated install.
 
+## Code layout
+
+`homechooser_e2e.py` is the command line only (`hc_e2e.cli.main`); `run_matrix.py` the scheduler. The `hc_e2e`
+package is standard library only:
+
+| Module | What it holds |
+| --- | --- |
+| `cli.py` | the options (`build_parser`), `VmSession` (the VM bring-up and teardown around a run), `main()` |
+| `scenario.py` | `Scenario`: one VM run, its launchers on one boot, composed of the step mixins below; `begin_run`, `end_run`, `run` |
+| `plan.py` | `PHASES` (the scope table), `run_plan()`, `plan_groups()`, `PlanRun` (the plan phase by phase) |
+| `tiers.py` | `TIERS` and what a tier sets, for `run_matrix.py` and pytest |
+| `phase_tests.py`, `dry.py` | the pytest device tests without pytest: options, test ids, `PhaseTests`; the fake device |
+| `recorder.py` | `Recorder` (checks, `run.log`, `results.json`), `SCREENSHOTS` |
+| `timing.py` | `SLOWDOWN`, `seconds()`, `sleep()`, `run()`: always used as `timing.X`, so one assignment or patch reaches every wait |
+| `beanjar.py` | `BeanjarHost`: the VM's machine, locally or over ssh; keys, clicks, screenshots |
+| `device.py` | `Device` (every `ares-*` command line), `RootSession`, the luna-send pty rule, the elevation strategies |
+| `inspector.py` | the web inspector and the page probes |
+| `preflight.py` | the VM settings, waiting for root SSH, removing foreign launchers |
+| `matrix.py` | `MATRIX`, `entry()`, the hosts file |
+| `launchers.py` | `Launcher`, the fixtures and their builds, the demo, the Home Chooser builds for the update |
+| `constants.py`, `releases.py` | ids, paths and product texts; what each release is expected to do |
+| `evidence.py`, `alerts.py`, `checks.py`, `api_spec.py` | log reading and crash classification; our alerts on screen; shared verdicts; the API replies and their schema |
+| `device_api.py` | the author-TV API contract (`--device`) |
+| `steps/` | the Scenario's steps, one mixin per family: `screen`, `state`, `popups`, `preload`, `home_press` (shared by the phases); `baseline`, `choose`, `panel`, `home_proof`, `demo`, `reboot`, `api`, `update`, `removal`, `screensaver` |
+
+`e2e/device/` is the pytest plugin and test module; `e2e/test_*.py` are the offline unit tests (unittest, also
+collected by pytest). The tests patch a name in the module that looks it up (`hc_e2e.steps.api.Inspector`,
+`hc_e2e.cli.Scenario`), and the timing names in `hc_e2e.timing`.
+
 ## System popups and screenshots
 
 * On `w24g-ombre` (9.2.4), `legacy-broadcast-dvb` has intermittently crashed at
@@ -832,7 +959,7 @@ Then steps 4 and 5 run on the updated install.
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
 * `audiooutputd` crash dialog (beanjar#183, closed as stock LG behaviour; Beanjar `docs/research/w22o-audiooutputd-gain-race.md`): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse threads race, and on about 7-9% of boots audiooutputd crashes about 50-56 s after boot; LG shows "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." with YES and NO, and it takes key focus. When the probe key does not move the list, the runner reads the screen (`beanjar elements`); only if the dialog text contains both "[crash] Fault Occured" and "audiooutputd" (the text decides, not the VM name or release) does it dismiss it with NO (a click on the "NO" button, or in keys mode a focus move to NO verified on screen before OK; YES is never pressed), screenshots before and after (`audiooutputd-crash-dialog-before/after`), re-reads the screen to confirm the dialog is gone, records `RECOVERED` with the OCR text and the reference, and retries the key probe once. Any other dialog (`[general]` included) or a crash fault naming another process still stops the run as before. The "no LG [crash] fault dialog or crash fault this boot" check notes an audiooutputd crash as an expected environment fault instead of failing, and an audiooutputd fault entry or crashd line no longer counts as a foreign popup; any other crashing process still fails.
 * Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then a logged capture-unavailable result if both fail. Each fallback is logged with the word FALLBACK.
-  Pictures are taken only at key steps, the `SCREENSHOTS` list in `homechooser_e2e.py`: after each Home press verdict
+  Pictures are taken only at key steps, the `SCREENSHOTS` list in `hc_e2e/recorder.py`: after each Home press verdict
   (`<label>-verdict`, and `-first-press` when a press did nothing), once per step that has a `FAIL` (`fail-<step>`), after
   a reboot's checks (`3r-after-reboot`), the final screen (`final`), and every popup or fault as before (foreign popups,
   `keys-blocked`, the audiooutputd dialog, our alerts and toast, the keys-mode alert proof). Any other label is logged as

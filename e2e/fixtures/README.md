@@ -74,7 +74,7 @@ web fixture also declares a valid oversized `largeIcon` to check `getAppIcon`'s 
 has opened it, step 3d presses OK and proves from sam, as for the launcher itself, that the focused app was launched.
 The focused app is deterministic: the demo starts on the first app of its order (by title ignoring ASCII case, then by
 id, without itself and `visible: false` apps), and the runner computes the same order from `listApps` called as the
-demo (`demo_order` in `homechooser_e2e.py`, checked against the demo's own `orderApps` by
+demo (`demo_order` in `hc_e2e/launchers.py`, checked against the demo's own `orderApps` by
 `e2e/test_demo_and_schema.py`). That first app must be the runner's own `org.webosbrew.hcfixture.first` (below),
 installed in step 1 and removed in cleanup; 3d fails without pressing OK if another app sorts first. A TV's own first
 app is no target: on 9.2.1 and 5.6.1 LG's first-use and EULA overlays held back the launch of `com.webos.app.discovery`
@@ -93,7 +93,7 @@ demo's first tile and the app step 3d opens. The runner builds both into `build/
 
 ## What the runner proves
 
-The same for native, qml, web and any `--launcher-ipk` app (`homechooser_e2e.py` `launch_proof`, run after each Home press that should
+The same for native, qml, web and any `--launcher-ipk` app (`launch_proof` in `hc_e2e/steps/home_press.py`, run after each Home press that should
 open the launcher): sam's own record naming the id, plus the id in `applicationManager/running` with a live pid.
 
 * `/var/log/messages` lines of the form `<UTC ts>Z [<uptime>] user.info sam [] SAM NL_APP_LAUNCH_BEGIN
