@@ -629,8 +629,8 @@ UI). The run removes your launcher at the end like any other.
 
 ## Launchers: Dock and the fixtures
 
-`--launcher dock` is Dock from `/home/mariotaku/Projects/webosbrew/Dock.app/dist` unless `[paths] dock_ipk` in
-`e2e/hosts.local.toml` or `--dock-ipk` names another ipk. The six fixtures
+`--launcher dock` installs Dock from the ipk that `--dock-ipk` or `[paths] dock_ipk` in
+`e2e/hosts.local.toml` names; there is no default. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.

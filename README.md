@@ -7,6 +7,9 @@ the remote opens: LG's own Home, or a launcher you have installed, such as a doc
 home screen. Your choice stays in place after the TV restarts, and Home Chooser puts LG Home back by
 itself if the launcher or Home Chooser is removed.
 
+> **Not released yet.** There is no release package so far. Launcher authors can already build
+> against the [launcher API](docs/launcher-api.md): version 1 is frozen.
+
 ## Requirements
 
 * An LG TV running webOS 5 to 12. The version is the first number of the webOS TV version shown in
