@@ -5,8 +5,9 @@ import shlex
 
 from .. import timing
 from ..alerts import RebootAlertMonitor
-from ..constants import (APPDIR, APP_ID, BOOT_DIR, BOOT_SCRIPT, DONE_TEXT, OLD_RESTART_TEXTS, OVERRIDE,
-    REBOOT_ASKED_TEXT, REBOOT_PROMPT, REMOVAL_ALERT, RESTART_NOTE, RESTART_NOW, SCRIPTS_DIR, SVC_ID, UNINSTALL_TOAST)
+from ..constants import (APPDIR, APP_ID, BOOT_DIR, BOOT_SCRIPT, CHOICE, DONE_TEXT, OLD_RESTART_TEXTS, OVERRIDE,
+    REBOOT_ASKED_TEXT, REBOOT_PROMPT, REMOVAL_ALERT, RESTART_NOTE, RESTART_NOW, SCRIPTS_DIR, STOCK, SVC_ID, UNINSTALL_TOAST)
+from ..evidence import PREVIOUS_ARMED, closes_under_panel, previous_closes, previous_dropped
 from ..inspector import Inspector, MARKER_JS, PLANT_JS, TICK_JS
 from ..launchers import DEMO_TARGET_ID, DEMO_TARGET_TITLE
 from ..releases import device_text_forms, expects_reboot_dialog
@@ -162,6 +163,12 @@ class ChooseSteps:
             r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast) if toast == DONE_TEXT else
                     '%r; why our page went away since the click (none: it stayed): %s' % (
                         toast, self.page_gone_evidence(self.ask_mark)))
+            # the watcher closes nothing while the panel is up; a previous launcher is closed later
+            self.wait(lambda: any(PREVIOUS_ARMED in l for l in self.log_since_mark()), 60, 3)
+            since = self.log_since_mark()
+            r.check('the watcher held its closes while Home Chooser was on screen (previous-launcher hold)',
+                    any(PREVIOUS_ARMED in l for l in since) and not closes_under_panel(since),
+                    '\n'.join(l for l in since if 'previous launcher:' in l or 'closeByAppId' in l) or 'no previous-launcher line')
             if self.uses_home_key_hook():
                 # the patch was mounted already (an earlier choice in this boot): a live switch
                 self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
@@ -225,9 +232,27 @@ class ChooseSteps:
                 'DOM: %s; Home Chooser in front: %s' % (json.dumps(ui), front))
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
+        prev = d.sh('cat %s 2>&1' % CHOICE)[1].strip()
         self.choose_in_ui(ui, full=False)
         d.close(APP_ID)
         self.close_insp()
+        self.check_previous_closed(prev)
+
+    def check_previous_closed(self, prev):
+        """After a switch: nothing closed while the panel was up (checked in choose_in_ui); once Home or a
+        full-screen app is next in front, exactly one close of the previous launcher, or it closed by itself;
+        never a close of the new launcher."""
+        r = self.rec
+        if not prev or prev == self.launcher or prev == STOCK:
+            return
+        self.home_press(self.launcher, '2s-home-after-switch')
+        self.wait(lambda: previous_closes(self.log_since_mark(), prev) or previous_dropped(self.log_since_mark(), prev), 60, 3)
+        since = self.log_since_mark()
+        closes, dropped = previous_closes(since, prev), previous_dropped(since, prev)
+        r.check('the previous launcher %s was closed once after the panel, or closed by itself' % prev,
+                len(closes) + len(dropped) == 1 and len(closes) <= 1, '\n'.join(closes + dropped) or 'no previous-launcher line')
+        r.check('the new launcher %s was never closed by the watcher' % self.launcher,
+                not previous_closes(since, self.launcher), '\n'.join(previous_closes(since, self.launcher)) or 'none')
 
     def check_device_texts(self):
         """The installed build carries the texts of 144ef21/34a4ff9 and none of the old restart wording:

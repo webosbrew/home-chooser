@@ -28,6 +28,9 @@ static void gate_follow(const char *action, gboolean stock, int rc)
     if (major < 6 || major > 9) return;
     char *choice = redirect && !stock && rc == 0 ? hc_gate_wanted(HC_STATE_DIR, homekey_call, NULL) : NULL;
     HCGateOps ops = hc_gate_ops(homekey_call, NULL);
+    /* A change of Home made in Home Chooser (the app wrote the previous-launcher file first): the panel may
+     * be on screen, so the watcher closes stock Home later (watcher/previous.c), never this run. */
+    ops.skip_close = g_file_test(HC_PREVIOUS_FILE, G_FILE_TEST_EXISTS);
     /* An explicit apply re-arms a gate that released itself. */
     if (!strcmp(action, "apply")) hc_gate_rearm(&ops);
     GString *log = g_string_new(NULL);

@@ -37,6 +37,12 @@ struct HCWatch {
     unsigned gate_source, gate_attempts, gate_settle_source;
     gint64 gate_closed_us; /* wall clock of the close that armed the settle check */
     unsigned input_source, input_attempts; /* 10+: the last-input launch after boot (input.c) */
+    /* previous.c: launchers to close once the change of Home is safe; the hold while Home Chooser is on screen */
+    GPtrArray *prev_ids;
+    gboolean prev_hold, only_close; /* only_close: no choice stored, running only to close prev_ids */
+    char *prev_front, *prev_logged;
+    gint64 prev_mtime;
+    gboolean gate_held_logged;
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
@@ -71,11 +77,20 @@ void preload_sync(HCWatch *w, int state, char why);
 void preload_follow(HCWatch *w, const char *id, char why);
 void close_foreground(HCWatch *w);
 int gate_apply(HCWatch *w, const char *choice);
+/* After the previous-launcher hold: the stock Home close it kept waiting, if still wanted. */
+void gate_resume(HCWatch *w);
 void gate_sync(HCWatch *w);
 /* 10+, overlay launcher: open the last input once per boot when nothing full-screen is in front. */
 void input_arm(HCWatch *w);
 void input_seen(HCWatch *w, const char *foreground);
 void handle_foreground(HCWatch *w, jvalue_ref reply);
+/* previous.c: the previous launcher, closed after Home Chooser left the screen (docs/settings-app.md). */
+void previous_load(HCWatch *w);
+gboolean previous_holding(HCWatch *w); /* TRUE: Home Chooser may still be on screen, close nothing */
+gboolean previous_pending(HCWatch *w); /* TRUE: launchers left to close */
+void previous_check(HCWatch *w, const char *front, char why);
+void previous_life(HCWatch *w, const char *id, const char *event);
+void previous_free(HCWatch *w);
 void handle_life(HCWatch *w, jvalue_ref reply);
 void remember_title(HCWatch *w, const char *id);
 void notify_removed(HCWatch *w, const char *id);

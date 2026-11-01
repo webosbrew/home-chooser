@@ -16,6 +16,14 @@ static gboolean gate_settled(gpointer context);
  * preload cadence, bounded, and at each gate sync, until `running` or closeByAppId confirms. */
 static void gate_close(HCWatch *w)
 {
+    /* Home was just changed in Home Chooser: closing a stock Home in front would empty the screen under
+     * the panel. Kept pending; gate_resume tries once Home Chooser is off screen. */
+    if (previous_holding(w)) {
+        if (!w->gate_held_logged) watch_log(w, "home gate: stock Home close waits until Home Chooser is off screen");
+        w->gate_held_logged = TRUE;
+        return;
+    }
+    w->gate_held_logged = FALSE;
     HCGateOps ops = gate_ops(w);
     GString *log = g_string_new(NULL);
     gboolean closed = FALSE;
@@ -71,6 +79,13 @@ static gboolean gate_settled(gpointer context)
     w->depth--;
     if (w->ops.wake) w->ops.wake(w->ops.context);
     return G_SOURCE_REMOVE;
+}
+
+void gate_resume(HCWatch *w)
+{
+    if (w->major < 6 || w->major > 9 || !w->gate_active || !w->gate_pending || w->gate_source) return;
+    w->gate_attempts = 0;
+    gate_close(w);
 }
 
 /* choice NULL unmounts. 0 ok or nothing to do, 1 failed. */

@@ -3299,5 +3299,33 @@ class PanelOpen(unittest.TestCase):
         self.assertTrue(said[-1].endswith('NOT in front (b)'))
 
 
+class PreviousLauncherLog(unittest.TestCase):
+    """The watcher's previous-launcher hold and deferred close, as the runner reads its log."""
+    ARMED = '2026-11-01 13:42:40 previous launcher: Home changed in Home Chooser; to close later: old.home; ' \
+            'closes wait until Home Chooser is off screen (in front: old.home)'
+    OFF = '2026-11-01 13:42:50 previous launcher: Home Chooser is off screen (its close event); held closes may go ahead'
+    CLOSE = '2026-11-01 13:43:10 previous launcher: closeByAppId old.home with com.webos.app.livetv in front: {"returnValue":true}'
+    GATE = '2026-11-01 13:42:51 home gate: closeByAppId com.webos.app.home: {"returnValue":true}; stock Home close confirmed'
+    SELF = '2026-11-01 13:43:11 previous launcher: old.home closed by itself; not closed'
+
+    def test_closes_after_the_panel_pass(self):
+        self.assertEqual(hc_e2e.evidence.closes_under_panel([self.ARMED, self.OFF, self.GATE, self.CLOSE]), [])
+
+    def test_a_close_under_the_panel_fails(self):
+        self.assertEqual(hc_e2e.evidence.closes_under_panel([self.ARMED, self.CLOSE, self.OFF]), [self.CLOSE])
+        self.assertEqual(hc_e2e.evidence.closes_under_panel([self.ARMED, self.GATE]), [self.GATE])
+
+    def test_no_change_in_the_panel_holds_nothing(self):
+        self.assertEqual(hc_e2e.evidence.closes_under_panel([self.GATE]), [])
+
+    def test_previous_closes_counts_one_id(self):
+        lines = [self.ARMED, self.OFF, self.CLOSE, self.CLOSE.replace('old.home', 'old.home2')]
+        self.assertEqual(hc_e2e.evidence.previous_closes(lines, 'old.home'), [self.CLOSE])
+
+    def test_previous_dropped_finds_a_self_close(self):
+        self.assertEqual(hc_e2e.evidence.previous_dropped([self.ARMED, self.SELF], 'old.home'), [self.SELF])
+        self.assertEqual(hc_e2e.evidence.previous_dropped([self.ARMED, self.SELF], 'old.home2'), [])
+
+
 if __name__ == '__main__':
     unittest.main()

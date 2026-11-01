@@ -27,6 +27,9 @@ typedef struct {
     const char *last_input; /* getLastInput: NULL no answer, "!refuse" returnValue false, "!none" no id */
     int launch_fail, last_input_calls; /* launch_fail 1: refused, 2: no reply */
     GString *launched; /* ids of every launch, each followed by a space */
+    GString *closed; /* ids of every closeByAppId, each followed by a space */
+    GHashTable *windows; /* id -> defaultWindowType, else `window` */
+    gboolean any_close, hc_running; /* any_close: closes other than stock Home allowed; hc_running: in `running` */
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
@@ -68,7 +71,9 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
             if (state == 1) {
                 jvalue_ref info = jobject_create(); put_str(info, "id", id);
                 if (f->title) put_str(info, "title", f->title);
-                if (f->window) put_str(info, "defaultWindowType", f->window);
+                const char *window = g_hash_table_lookup(f->windows, id);
+                if (!window) window = f->window;
+                if (window) put_str(info, "defaultWindowType", window);
                 jobject_set(r, key_buf("appInfo"), info);
             }
         }
@@ -122,6 +127,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         else {
             r = response(TRUE); jvalue_ref list = jarray_create(NULL);
             if (f->home_pid) { jvalue_ref e = jobject_create(); put_str(e, "id", STOCK); put_str(e, "processid", f->home_pid); jarray_append(list, e); }
+            if (f->hc_running) { jvalue_ref e = jobject_create(); put_str(e, "id", HC_APP_ID); put_str(e, "processid", "300"); jarray_append(list, e); }
             jobject_set(r, key_buf("running"), list);
         }
     } else if (eq(method, "launch")) {
@@ -134,7 +140,10 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         else if (f->last_input) { r = response(TRUE); if (!eq(f->last_input, "!none")) put_str(r, "lastSourceAppId", f->last_input); }
     } else if (eq(method, "closeByAppId")) {
         f->closes++; r = f->close_dead ? NULL : response(TRUE); if (f->close_dead) f->close_dead--;
-        char *id = get_string(p, "id"); CHECK("W16 close only stock", eq(id, STOCK)); g_free(id);
+        char *id = get_string(p, "id"); CHECK("W16 close only stock", f->any_close || eq(id, STOCK));
+        char *chosen = watch_choice(f->w); CHECK("P never closes the stored choice", !eq(id, chosen)); g_free(chosen);
+        CHECK("P never closes Home Chooser", !eq(id, HC_APP_ID));
+        g_string_append_printf(f->closed, "%s ", id); g_free(id);
         bool force = false; jboolean_get(member(p, "forceMode"), &force); CHECK("W16 force close", force);
     } else CHECK("known Luna method", FALSE);
     char *out = r ? g_strdup(jvalue_stringify(r)) : NULL;
@@ -177,7 +186,8 @@ static Fixture *setup(int major, const char *id) {
     Fixture *f = g_new0(Fixture, 1); f->paths = g_ptr_array_new_with_free_func(g_free);
     f->calls = g_ptr_array_new_with_free_func(g_free); f->apps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     f->write_times = g_array_new(FALSE, FALSE, sizeof(gint64)); f->waits = g_array_new(FALSE, FALSE, sizeof(unsigned));
-    f->major = major; f->clock = 1000; f->live = TRUE; f->launched = g_string_new(NULL);
+    f->major = major; f->clock = 1000; f->live = TRUE; f->launched = g_string_new(NULL); f->closed = g_string_new(NULL);
+    f->windows = g_hash_table_new(g_str_hash, g_str_equal);
     f->title = "Pretty Home";
     f->profiles = "{\"returnValue\":true,\"profiles\":{\"defaultApps\":{\"_source\":\"factory\",\"categories\":{\"home\":\"com.webos.app.home\",\"kids\":\"k.app\"},\"other\":{\"a\":[1,2]},\"_hidden\":true},"
         "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
@@ -208,7 +218,7 @@ static void teardown(Fixture *f) {
     hc_watch_free(f->w); watch_remove_tree(g_ptr_array_index(f->paths, 0));
     g_ptr_array_free(f->paths, TRUE); g_ptr_array_free(f->calls, TRUE); g_hash_table_destroy(f->apps);
     j_release(&f->record); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE);
-    g_string_free(f->launched, TRUE); g_free(f);
+    g_string_free(f->launched, TRUE); g_string_free(f->closed, TRUE); g_hash_table_destroy(f->windows); g_free(f);
 }
 static void pump(void) {
     for (int i = 0; i < 50 && g_main_context_pending(NULL); i++) g_main_context_iteration(NULL, FALSE);
@@ -759,6 +769,156 @@ static void test_last_input(void) {
     CHECK("L07 clean stop leaves no launch", !f->launches && !input_marked(f));
     HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
 }
+/* P01-P14: the previous launcher is closed later, never while Home Chooser is on screen (docs/settings-app.md). */
+#define LIVETV "com.webos.app.livetv"
+static unsigned count_of(GString *s, const char *id) {
+    unsigned n = 0; char *word = g_strdup_printf("%s ", id);
+    for (const char *p = s->str; (p = strstr(p, word)); p += strlen(word)) if (p == s->str || p[-1] == ' ') n++;
+    g_free(word); return n;
+}
+static char *previous_file(Fixture *f) { return path(f, f->c.state_dir, "previous"); }
+/* /proc/stat's btime `offset_s` from now (the file written now is from this boot when negative). */
+static void booted(Fixture *f, int offset_s) {
+    char *text = g_strdup_printf("cpu  1 2 3\nbtime %lld\nprocesses 1\n", (long long)(time(NULL) + offset_s));
+    file(path(f, f->c.proc, "stat"), text); g_free(text);
+}
+/* `previous` the app's file (NULL: none), `front` in front while the panel is up, every app known. */
+static Fixture *switch_setup(int major, const char *choice_id, const char *previous, const char *front) {
+    Fixture *f = setup(major, choice_id); f->any_close = TRUE; f->hc_running = TRUE; booted(f, -1000);
+    installed(f, "old.home", 1); installed(f, "older.home", 1); installed(f, LIVETV, 1); installed(f, "netflix", 1);
+    g_hash_table_insert(f->windows, HC_APP_ID, "overlay");
+    if (previous) file(previous_file(f), previous);
+    f->foreground = front; return f;
+}
+static void life(Fixture *f, const char *id, const char *what) {
+    char *p = g_strdup_printf("{\"event\":\"%s\",\"appId\":\"%s\"}", what, id); event(f, 'L', p); g_free(p);
+}
+static void front(Fixture *f, const char *id) {
+    f->foreground = id; char *p = g_strdup_printf("{\"appId\":\"%s\"}", id); event(f, 'F', p); g_free(p);
+}
+static gboolean pending_file(Fixture *f) { return g_file_test(previous_file(f), G_FILE_TEST_EXISTS); }
+static void test_previous(void) {
+    /* P01: every release, every kind of switch: nothing while the panel is up, the old launcher once, later. */
+    for (int major = 5; major <= 12; major++) for (int kind = 0; kind < 4; kind++) {
+        gboolean old_overlay = kind & 1, new_overlay = kind & 2;
+        Fixture *f = switch_setup(major, "my.home", "old.home\n", old_overlay ? LIVETV : "old.home");
+        g_hash_table_insert(f->windows, "old.home", old_overlay ? "overlay" : "fullscreen");
+        g_hash_table_insert(f->windows, "my.home", new_overlay ? "overlay" : "fullscreen");
+        start(f);
+        CHECK("P01 armed: held while Home Chooser is up", f->w->prev_hold && !count_of(f->closed, "old.home"));
+        const char *before = f->foreground; front(f, HC_APP_ID); f->foreground = before; settings(f, "{\"home\":\"my.home\"}"); event(f, 'A', "{}"); event(f, 'T', NULL);
+        CHECK("P01 nothing closed while the panel is up", !count_of(f->closed, "old.home") && f->w->prev_hold);
+        life(f, HC_APP_ID, "close");
+        CHECK("P01 the panel closed: the hold ends", !f->w->prev_hold && logged(f, "previous launcher: Home Chooser is off screen (its close event)"));
+        if (!old_overlay) {
+            CHECK("P01 the old full-screen launcher in front is not closed", !count_of(f->closed, "old.home") && pending_file(f));
+            if (new_overlay) {
+                life(f, "my.home", "launch"); CHECK("P01 the new overlay over the old launcher: still not closed", !count_of(f->closed, "old.home"));
+                front(f, LIVETV);
+            } else { life(f, "my.home", "launch"); front(f, "my.home"); }
+        }
+        CHECK("P01 closed once a full-screen app other than it is in front", count_of(f->closed, "old.home") == 1);
+        CHECK("P01 the file is gone", !pending_file(f));
+        CHECK("P01 logged", logged(f, "previous launcher: closeByAppId old.home with "));
+        front(f, "netflix"); life(f, HC_APP_ID, "close"); event(f, 'T', NULL); front(f, LIVETV);
+        CHECK("P01 at most once", count_of(f->closed, "old.home") == 1);
+        CHECK("P01 never the new launcher or a stock home", !count_of(f->closed, "my.home") && !count_of(f->closed, FULLHOME));
+        CHECK("P01 watcher keeps running", hc_watch_status(f->w) == -1);
+        teardown(f);
+    }
+    /* P02: a foreground change from the app in front when the hold began also ends it (no life event seen). */
+    Fixture *f = switch_setup(8, "my.home", "old.home\n", LIVETV); g_hash_table_insert(f->windows, "old.home", "overlay"); start(f);
+    front(f, LIVETV); CHECK("P02 the same app again: still held", f->w->prev_hold && !count_of(f->closed, "old.home"));
+    front(f, "netflix"); CHECK("P02 another app came up: closed", !f->w->prev_hold && count_of(f->closed, "old.home") == 1); teardown(f);
+    /* P03: the periodic check ends the hold when Home Chooser is no longer running. */
+    f = switch_setup(9, "my.home", "old.home\n", LIVETV); start(f); event(f, 'T', NULL);
+    CHECK("P03 Home Chooser still running: held", f->w->prev_hold);
+    f->hc_running = FALSE; event(f, 'T', NULL);
+    CHECK("P03 not running: released and closed", !f->w->prev_hold && count_of(f->closed, "old.home") == 1); teardown(f);
+    /* P04: the new launcher, a stock home and an invalid line are never closed. */
+    f = switch_setup(11, "my.home", "my.home\ncom.webos.app.home\ncom.webos.app.kidshome\nbad id\nold.home\n", LIVETV); start(f);
+    life(f, HC_APP_ID, "close");
+    CHECK("P04 only the previous launcher", eq(f->closed->str, "old.home ") || (count_of(f->closed, "old.home") == 1 && !count_of(f->closed, "my.home") && !count_of(f->closed, "com.webos.app.kidshome")));
+    CHECK("P04 the chosen one dropped, logged", logged(f, "previous launcher: my.home is the launcher chosen now; not closed"));
+    CHECK("P04 stock dropped, logged", logged(f, "previous launcher: com.webos.app.kidshome is a stock home; not closed")); teardown(f);
+    /* P05: opened again by the owner, closed by itself, or uninstalled: dropped, never closed. */
+    f = switch_setup(10, "my.home", "old.home\nolder.home\n", LIVETV); start(f);
+    life(f, "old.home", "launch"); life(f, "older.home", "close"); life(f, HC_APP_ID, "close");
+    CHECK("P05 opened again or closed by itself: dropped", !count_of(f->closed, "old.home") && !count_of(f->closed, "older.home") && !pending_file(f));
+    CHECK("P05 logged", logged(f, "previous launcher: old.home was opened again; not closed") && logged(f, "previous launcher: older.home closed by itself; not closed"));
+    teardown(f);
+    f = switch_setup(7, "my.home", "old.home\n", LIVETV); installed(f, "old.home", -1); start(f); life(f, HC_APP_ID, "close");
+    CHECK("P05 uninstalled: dropped", !count_of(f->closed, "old.home") && !pending_file(f) && logged(f, "previous launcher: old.home is not installed; not closed")); teardown(f);
+    /* P06: a watcher restart reads the file again, holds again, and still closes once. */
+    f = switch_setup(8, "my.home", "old.home\n", "old.home"); start(f); life(f, HC_APP_ID, "close");
+    CHECK("P06 old launcher in front: pending", pending_file(f) && !count_of(f->closed, "old.home"));
+    HCWatchOps ops = f->w->ops; hc_watch_free(f->w); f->w = hc_watch_new(&f->c, &ops); start(f);
+    CHECK("P06 restart: held again from the file", f->w->prev_hold && f->w->prev_ids && f->w->prev_ids->len == 1);
+    front(f, "my.home"); CHECK("P06 then closed once", count_of(f->closed, "old.home") == 1 && !pending_file(f));
+    hc_watch_free(f->w); f->w = hc_watch_new(&f->c, &ops); start(f); front(f, LIVETV);
+    CHECK("P06 after the close a restart closes nothing", count_of(f->closed, "old.home") == 1 && !f->w->prev_hold); teardown(f);
+    /* P07: a file from before this boot is dropped: nothing held, nothing closed. */
+    f = switch_setup(8, "my.home", "old.home\n", LIVETV); booted(f, 1000); start(f);
+    CHECK("P07 stale file dropped", !f->w->prev_hold && !pending_file(f) && logged(f, "was written before this boot; dropped"));
+    life(f, HC_APP_ID, "close"); front(f, "netflix"); CHECK("P07 nothing closed", !count_of(f->closed, "old.home")); teardown(f);
+    /* P08: a second change before the first close: both closed, each once, the newest choice never. */
+    f = switch_setup(9, "my.home", "old.home\n", "old.home"); start(f); life(f, HC_APP_ID, "close");
+    file(previous_file(f), "older.home\n"); settings(f, "{\"home\":\"my.home\"}");
+    CHECK("P08 merged and held again", f->w->prev_hold && f->w->prev_ids->len == 2);
+    life(f, HC_APP_ID, "close"); CHECK("P08 old launcher in front: only the other closed", count_of(f->closed, "older.home") == 1 && !count_of(f->closed, "old.home"));
+    front(f, "my.home"); CHECK("P08 both once", count_of(f->closed, "older.home") == 1 && count_of(f->closed, "old.home") == 1); teardown(f);
+    /* P09: LG Home chosen again (no choice): the watcher stays only to close, then exits. */
+    for (int major = 5; major <= 12; major++) {
+        f = switch_setup(major, NULL, "old.home\n", "old.home"); record(f, "{\"home\":\"com.webos.app.home\"}");
+        unlink(path(f, f->c.state_dir, "homekey")); /* the fixture enables the Home key hook */
+        start(f);
+        CHECK("P09 no choice, a launcher to close: running", hc_watch_status(f->w) == -1 && f->w->only_close && f->w->prev_hold);
+        life(f, HC_APP_ID, "close"); event(f, 'A', "{}"); event(f, 'T', NULL); settings(f, "{\"home\":\"com.webos.app.home\"}");
+        CHECK("P09 old launcher still in front: running", hc_watch_status(f->w) == -1 && !count_of(f->closed, "old.home"));
+        front(f, STOCK); /* the owner pressed Home: LG Home, full-screen, in front */
+        CHECK("P09 closed once, then exit 0", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && !pending_file(f));
+        CHECK("P09 boot entry removed with no choice and no hook", !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+        CHECK("P09 boot copy removed too", !g_file_test(path(f, f->c.state_dir, "boot"), G_FILE_TEST_EXISTS));
+        CHECK("P09 no write while only closing", !f->sets && !f->defaults && !f->gate_on && !f->preload_off);
+        CHECK("P09 never a stock home", !count_of(f->closed, STOCK));
+        teardown(f);
+    }
+    /* P09h: the Home key hook is enabled: the boot entry stays. */
+    f = switch_setup(8, NULL, "old.home\n", "old.home"); file(path(f, f->c.state_dir, "homekey"), "");
+    record(f, "{\"home\":\"com.webos.app.home\"}"); start(f); front(f, STOCK);
+    CHECK("P09h closed, exit 0, entry kept for the hook", count_of(f->closed, "old.home") == 1 && hc_watch_status(f->w) == 0 && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+    CHECK("P09h boot copy kept for the hook", g_file_test(path(f, f->c.state_dir, "boot/homechooser"), G_FILE_TEST_EXISTS)); teardown(f);
+    f = switch_setup(8, NULL, "", LIVETV); start(f);
+    CHECK("P09 no choice, nothing to close: exits as before", hc_watch_status(f->w) == 0 && !pending_file(f)); teardown(f);
+    f = switch_setup(8, NULL, "old.home\n", "old.home"); start(f); installed(f, "old.home", -1); event(f, 'A', "{}");
+    CHECK("P09 the old launcher uninstalled: dropped, exit", hc_watch_status(f->w) == 0 && !count_of(f->closed, "old.home")); teardown(f);
+    /* P10: only closing, then a launcher chosen again: the whole watcher comes back. */
+    f = switch_setup(8, NULL, "old.home\n", "old.home"); start(f); CHECK("P10 only closing", f->w->only_close);
+    choice(f, "my.home"); settings(f, "{\"home\":\"my.home\"}");
+    CHECK("P10 watching again", !f->w->only_close && hc_watch_status(f->w) == -1 && logged(f, "watching, home=my.home") && f->gate_last == 1);
+    life(f, HC_APP_ID, "close"); front(f, "my.home"); CHECK("P10 the old one still closed once", count_of(f->closed, "old.home") == 1); teardown(f);
+    /* P11: 6-9, LG Home -> launcher: the gate's stock Home close waits for the panel to leave. */
+    for (int major = 6; major <= 9; major++) {
+        f = switch_setup(major, "my.home", "", STOCK); proc_setup(f); f->home_pid = "100"; f->foreground = STOCK; start(f);
+        CHECK("P11 gate mounted, stock Home not closed while the panel is up", f->gate_last == 1 && !f->closes && f->w->gate_pending);
+        CHECK("P11 logged once", logged(f, "home gate: stock Home close waits until Home Chooser is off screen"));
+        event(f, 'A', "{}"); CHECK("P11 still held", !f->closes);
+        life(f, HC_APP_ID, "close");
+        CHECK("P11 then closed", f->closes == 1 && count_of(f->closed, STOCK) == 1 && !f->w->gate_pending && !pending_file(f));
+        teardown(f);
+    }
+    /* P12: 10+: the LG Home close also waits for the panel, even with the launcher in front. */
+    f = switch_setup(11, "my.home", "", "my.home"); start(f);
+    CHECK("P12 launcher in front, panel up: LG Home not closed", !f->closes);
+    life(f, HC_APP_ID, "close"); CHECK("P12 then once", f->closes == 1 && count_of(f->closed, STOCK) == 1); teardown(f);
+    /* P13: 10+, overlay launcher: a change made in Home Chooser launches no last input. */
+    f = switch_setup(11, "my.home", "", ""); f->window = "overlay"; f->last_input = "com.webos.app.hdmi2"; f->w->c.input_settle_ms = 0; start(f); pump();
+    CHECK("P13 no last-input launch under the panel", !f->launches && input_marked(f) && logged(f, "last input: Home was just changed in Home Chooser; nothing launched this boot"));
+    teardown(f);
+    /* P14: no file: nothing held, the earlier rules unchanged. */
+    f = switch_setup(7, "my.home", NULL, ""); proc_setup(f); f->home_pid = "100"; start(f);
+    CHECK("P14 no change in Home Chooser: stock Home closed at mount", f->closes == 1 && !f->w->prev_hold); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -771,6 +931,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

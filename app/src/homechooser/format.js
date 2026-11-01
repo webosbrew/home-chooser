@@ -6,6 +6,9 @@ export const formatStep = (step) => {
 		case 'luna':
 			what = `${step.uri} ${JSON.stringify(step.payload)}`;
 			break;
+		case 'readFile':
+			what = `read ${step.path}`;
+			break;
 		case 'writeFile':
 			what = `write ${step.path}`;
 			break;

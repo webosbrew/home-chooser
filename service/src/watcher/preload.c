@@ -90,7 +90,7 @@ static char *foreground_now(HCWatch *w)
 }
 static void maybe_close(HCWatch *w, const char *foreground, gboolean fresh)
 {
-    if (!close_choice(w)) return;
+    if (!close_choice(w) || previous_holding(w)) return;
     if (!w->window) {
         jvalue_ref r = watch_id_call(w, SAM "getAppInfo", w->close_choice, 5);
         if (!reply_ok(r)) { j_release(&r); return; }
@@ -124,6 +124,7 @@ void handle_foreground(HCWatch *w, jvalue_ref r)
     if (!id || !*id) { g_free(id); return; }
     input_seen(w, id);
     maybe_close(w, id, w->close_launched);
+    previous_check(w, id, 'F');
     if (w->close_done && eq(id, STOCK) && !w->relaunch_logged) {
         watch_log(w, "sam brought %s to the foreground after its close; not closing it again this boot", STOCK);
         w->relaunch_logged = TRUE;
@@ -133,6 +134,8 @@ void handle_foreground(HCWatch *w, jvalue_ref r)
 void handle_life(HCWatch *w, jvalue_ref r)
 {
     char *id = get_string(r, "appId"), *event = get_string(r, "event");
+    previous_life(w, id, event);
+    if (w->status >= 0) goto done;
     close_choice(w);
     if (eq(id, w->close_choice) && (eq(event, "close") || eq(event, "background"))) {
         w->close_launched = FALSE; goto done;

@@ -19,7 +19,7 @@ bool hc_sender_ok(const char *app_id)
 	return app_id[n] == '\0' || app_id[n] == ' ';
 }
 
-static const char *const FILES[] = {HC_HOME_FILE, HC_HOMEKEY_FLAG, HC_OVERRIDE_FILE, NULL};
+static const char *const FILES[] = {HC_HOME_FILE, HC_HOMEKEY_FLAG, HC_PREVIOUS_FILE, HC_OVERRIDE_FILE, NULL};
 
 bool hc_file_allowed(const char *path)
 {

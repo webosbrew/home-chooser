@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-// Home-choice logic. Pure over injected {rootLuna, exec, writeFile, removeFile, version}; exec takes
+// Home-choice logic. Pure over injected {rootLuna, exec, readFile, writeFile, removeFile, version}; exec takes
 // a command name (see persistence.js), not shell text.
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
 import {
-	HOME_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
-	startWatcherCommand, stopWatcherCommand
+	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
+	removeEntryCommand, startWatcherCommand, stopWatcherCommand
 } from './persistence';
 
 export const STOCK_HOME = 'com.webos.app.home';
@@ -149,7 +149,7 @@ export const removeHomeFromRecord = (run, record) => writeDefaultApps(run, withN
 const CANDIDATE_PROPERTIES = ['id', 'title', 'icon', 'appCategory', 'folderPath'];
 
 // A runner logs each call into `log`; a failing call is logged with its error and then rethrown.
-export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) => {
+export const createRunner = ({rootLuna, exec, readFile, writeFile, removeFile}) => (log) => {
 	const wrap = async (step, fn) => {
 		log.push(step);
 		try {
@@ -166,15 +166,22 @@ export const createRunner = ({rootLuna, exec, writeFile, removeFile}) => (log) =
 	};
 	return {
 		luna: (uri, payload) => wrap({kind: 'luna', uri, payload}, () => rootLuna(uri, payload)),
+		read: (path) => wrap({kind: 'readFile', path}, () => (readFile ? readFile(path) : null)),
 		write: (path, text) => wrap({kind: 'writeFile', path, text}, () => writeFile(path, text)),
 		remove: (path) => wrap({kind: 'removeFile', path}, () => removeFile(path)),
 		run: (command) => wrap({kind: 'exec', command}, () => exec(command))
 	};
 };
 
-export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, version}) => {
+// The previous-launcher list: the ids in `text` (the file, one a line) and `add`, without stock homes,
+// `except` (the new choice), invalid ids and repeats.
+const APP_ID_RE = /^[A-Za-z0-9._-]+$/;
+export const previousList = (text, add, except) => String(text || '').split('\n').map((s) => s.trim()).concat(add)
+	.filter((id, i, all) => id && APP_ID_RE.test(id) && !STOCK_LABELS[id] && id !== except && all.indexOf(id) === i);
+
+export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFile, version}) => {
 	const info = releaseInfo(version);
-	const runner = createRunner({rootLuna, exec, writeFile, removeFile});
+	const runner = createRunner({rootLuna, exec, readFile, writeFile, removeFile});
 
 	const readRecord = readDefaultApps;
 
@@ -239,12 +246,26 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 
 	const writeRecord = writeDefaultApps;
 
-	const closeApp = async (run, res, id) => {
+	// Never a close while this panel is on screen: closing the launcher in front empties the foreground,
+	// SAM brings up its idle app (6-9: the gate, the last input for an overlay launcher) and
+	// surface-manager closes the panel before the "Done" toast. The previous launchers go to a file
+	// (the ones still listed are kept), and the watcher closes each once the panel is gone; while the
+	// file is fresh it also holds its own stock-home closes (service/src/watcher/previous.c). Returns
+	// the list written.
+	const recordPrevious = async (run, res, add, except) => {
+		let text = '';
 		try {
-			await run.luna(`${SAM}/closeByAppId`, {id, forceMode: true});
+			text = await run.read(PREVIOUS_FILE);
 		} catch (e) {
-			res.warnings.push(`Could not close ${id}: ${errorMessage(e)}`);
+			res.warnings.push(`Could not read the previous launchers: ${errorMessage(e)}`);
 		}
+		const ids = previousList(text, add, except);
+		try {
+			await run.write(PREVIOUS_FILE, ids.map((id) => id + '\n').join(''));
+		} catch (e) {
+			res.warnings.push(`Could not note the previous launcher, so it stays open: ${errorMessage(e)}`);
+		}
+		return ids;
 	};
 
 	return {
@@ -314,8 +335,10 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				// 10.x and later: full-screen or overlay decides the override's idleApp
 				const windowType = info.usesProfile ? await windowFor(run, appId) : null;
 
-				// 0. the stored choice, which the boot entry and the watcher enforce from here on
+				// 0. the stored choice, which the boot entry and the watcher enforce from here on, and the
+				// previous launcher, which the watcher closes later (nothing is closed here)
 				await run.write(HOME_FILE, appId);
+				await recordPrevious(run, res, [state.recordHome, state.profileHome], appId);
 
 				// 1. the settings record
 				if (info.hasSetDefaultApp) {
@@ -352,10 +375,6 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 				} catch (e) {
 					res.warnings.push(`Could not start the watcher: ${errorMessage(e)}`);
 				}
-
-				// 4. close a previous custom home; closing a stock home can displace this panel
-				const previous = state.recordHome || state.profileHome || STOCK_HOME;
-				if (previous !== appId && !STOCK_LABELS[previous]) await closeApp(run, res, previous);
 
 				// The 6-9 filter launches an explicit id; SAM never needs restarting.
 				if (info.needsHomeKeyHook) await run.run(homekeyCommand('refresh'));
@@ -405,8 +424,24 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 						res.warnings.push(`Could not refresh the Home key hook: ${errorMessage(e)}`);
 					}
 				}
-				const custom = [state.recordHome, state.profileHome].filter((id, i, all) => id && !STOCK_LABELS[id] && all.indexOf(id) === i);
-				for (const id of custom) await closeApp(run, res, id);
+				// The custom home is closed later, by a watcher that runs only for that and then exits.
+				const custom = await recordPrevious(run, res, [state.recordHome, state.profileHome], null);
+				if (custom.length) {
+					try {
+						await run.run(startWatcherCommand());
+					} catch (e) {
+						res.warnings.push(`Could not start the watcher to close ${custom.join(', ')}: ${errorMessage(e)}`);
+					}
+				} else {
+					await run.remove(PREVIOUS_FILE);
+					// No watcher is left to remove the boot entry and its copy, and none would be after an uninstall:
+					// without a choice and without the Home key hook they have nothing to do.
+					try {
+						if ((await run.read(HOMEKEY_FLAG)) === null) await run.run(removeEntryCommand());
+					} catch (e) {
+						res.warnings.push(`Could not remove the boot entry: ${errorMessage(e)}`);
+					}
+				}
 			} catch (e) {
 				fail(res, e);
 			}

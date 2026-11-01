@@ -174,6 +174,9 @@ stateDiagram-v2
     BootApply --> Start: 6-9 wait for compositor and configd, select the generated filter, toast
     BootApply --> Start: 5 and 10+ nothing to apply
     Start --> Exit0: no usable choice, after the leftover-Home check
+    Start --> OnlyClose: no choice, a previous launcher to close (LG Home chosen)
+    OnlyClose --> Exit0: previous launcher closed, dropped or uninstalled
+    OnlyClose --> Start: a launcher chosen meanwhile
     Start --> Watching: access files applied, record and override checked, subscriptions open
     Watching --> Watching: choice change, re-apply record, override, filter and gate
     Watching --> Watching: settings event or 5 min tick, record repaired with backoff
@@ -217,13 +220,21 @@ flowchart TD
 * **Stock Home close on 10 and later.** The watcher subscribes to SAM's foreground and life events and closes
   LG Home once per boot or choice change: for a full-screen launcher when it is in front, for an
   overlay launcher only on its own launch with a nonstock full-screen app beneath it.
+* **The previous launcher.** The app closes nothing while its panel is on screen. A change of Home
+  writes the launchers it replaced to `/var/lib/webosbrew/homechooser/previous`; while that file is
+  fresh the watcher holds every close above, until Home Chooser's own close or background event, a
+  foreground change, or Home Chooser gone from `running`. Then it closes each previous launcher once,
+  when SAM names a full-screen app in front that is neither that launcher nor Home Chooser, so the
+  foreground never empties. On every release, LG Home chosen included
+  ([settings-app.md](settings-app.md#the-previous-launcher)).
 * **Last input after boot on 10 and later.** With an overlay launcher chosen, 20 s after the watcher
   starts (retried every 10 s, up to 12 times, while SAM does not answer) and only if the foreground
   is empty or the overlay itself, the watcher launches the last input from eim (else Live TV), once
   per boot: a marker in `/tmp/homechooser-runtime` records the decision before the launch.
 * **Restoring LG Home from the app** stops the unit first (SIGTERM: preload back on, gate
   unmounted), then removes the choice and restores the record, the profile override and the stock
-  key filter list.
+  key filter list. The launcher it replaced goes to the `previous` file, and the unit is started
+  again only to close it later.
 
 ## Design rules
 

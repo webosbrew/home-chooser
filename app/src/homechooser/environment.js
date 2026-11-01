@@ -39,6 +39,7 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 	const deps = {
 		rootLuna: platform.rootLuna,
 		exec: platform.exec,
+		readFile: platform.readFile,
 		writeFile: platform.writeFile,
 		removeFile: platform.removeFile,
 		version: release.version

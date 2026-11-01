@@ -91,6 +91,7 @@ HCWatch *hc_watch_new(const HCWatchConfig *c, const HCWatchOps *ops)
     w->c = *c; w->ops = *ops; w->status = -1;
     w->major = major_version(c->osrelease);
     w->choice_file = g_build_filename(c->state_dir, "home", NULL);
+    w->prev_mtime = G_MININT64; /* nothing read yet */
     return w;
 }
 
@@ -190,9 +191,17 @@ void hc_watch_start(HCWatch *w)
     char *id = watch_choice(w);
     if (!id) { repair_leftover(w); id = watch_choice(w); }
     if (w->status >= 0) { g_free(id); goto done; }
+    if (!id && previous_pending(w)) {
+        /* LG Home was chosen again: stay only to close the launcher it replaced (previous.c). */
+        w->only_close = w->early_exit = TRUE;
+        watch_log(w, "previous launcher: no launcher chosen; watching only to close the previous one, webOS %d", w->major);
+        goto done;
+    }
     if (!id) { w->early_exit = TRUE; hc_watch_stop(w, 0, "no usable choice file, nothing to watch"); goto done; }
+    w->only_close = w->early_exit = FALSE;
     watch_log(w, "watching, home=%s, webOS %d", id, w->major);
     g_free(id);
+    previous_load(w);
     check_apps(w, 's');
     if (w->status >= 0) goto done;
     id = watch_choice(w);
@@ -210,15 +219,25 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
     w->depth++;
     if (tag == 's') hc_watch_stop(w, 1, "subscription ended");
     else if (tag == 'a') watch_log(w, "apps subscription ended, relying on the periodic check");
-    else if (tag == 'f' || tag == 'l') watch_log(w, "stock-home close subscription ended; leaving stock home running");
-    else if (tag == 'A' || tag == 'T') check_apps(w, tag);
-    else if (tag == 'B') close_foreground(w);
+    else if (tag == 'f' || tag == 'l') watch_log(w, "foreground subscription ended; the stock-home and previous-launcher closes rely on the periodic check");
+    else if (w->only_close && (tag == 'S' || tag == 'A' || tag == 'T')) {
+        /* Only closing the previous launcher: a stored choice brings the whole watcher back. */
+        char *id = watch_choice(w);
+        if (tag != 'S') check_hc(w);
+        if (w->status >= 0) {}
+        else if (id) { watch_log(w, "previous launcher: %s was chosen meanwhile", id); hc_watch_start(w); }
+        else previous_check(w, NULL, tag);
+        g_free(id);
+    }
+    else if (tag == 'A' || tag == 'T') { check_apps(w, tag); if (w->status < 0) previous_check(w, NULL, tag); }
+    else if (tag == 'B') { close_foreground(w); previous_check(w, NULL, tag); }
     else {
         jvalue_ref r = parse_object(text);
         if (tag == 'F') handle_foreground(w, r);
         else if (tag == 'L') handle_life(w, r);
         else if (tag == 'S' && (jis_object(member(r, "settings")) || (text && strstr(text, "no matched result")))) {
             char *id = watch_choice(w);
+            previous_load(w);
             if (!id) hc_watch_stop(w, 0, "choice file is gone, exiting");
             else if (!eq(w->missing, id)) {
                 if (w->missing) {
@@ -248,5 +267,6 @@ void hc_watch_free(HCWatch *w)
     if (w->gate_settle_source) g_source_remove(w->gate_settle_source);
     if (w->input_source) g_source_remove(w->input_source);
     g_free(w->choice_file); g_free(w->missing); g_free(w->baked);
+    previous_free(w);
     g_free(w->title_id); g_free(w->title); g_free(w->close_choice); g_free(w);
 }

@@ -170,3 +170,32 @@ def lines_after(lines, mark):
     """The log lines written after `mark` lines; a log shorter than the mark was started afresh (a new
     boot), so all of it counts."""
     return lines[mark:] if mark <= len(lines) else list(lines)
+
+
+PREVIOUS_ARMED = 'previous launcher: Home changed in Home Chooser'
+PREVIOUS_RELEASED = 'previous launcher: Home Chooser is off screen'
+
+
+def closes_under_panel(lines):
+    """Watcher log lines that close something (a previous launcher, or stock Home through
+    closeByAppId) between the hold being armed by a change made in Home Chooser and its end (Home
+    Chooser off screen); docs/settings-app.md "The previous launcher".  Empty is the pass."""
+    out, held = [], False
+    for l in lines:
+        if PREVIOUS_ARMED in l:
+            held = True
+        elif PREVIOUS_RELEASED in l:
+            held = False
+        elif held and 'closeByAppId' in l:
+            out.append(l)
+    return out
+
+
+def previous_closes(lines, ident):
+    """The watcher's deferred closes of the previous launcher `ident` (closed at most once per change)."""
+    return [l for l in lines if 'previous launcher: closeByAppId %s ' % ident in l]
+
+
+def previous_dropped(lines, ident):
+    """The watcher's lines saying the previous launcher `ident` closed by itself (nothing left to close)."""
+    return [l for l in lines if 'previous launcher: %s closed by itself' % ident in l]

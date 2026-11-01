@@ -111,7 +111,9 @@ already mounted by something else, nothing is mounted. A changed installed gate 
 swapped in.
 
 Closing a stock Home that runs while the gate is mounted: a one-off `--homekey` run tries once after
-a new mount. The watcher keeps trying until SAM has answered. At boot SAM starts Home (about 50 s)
+a new mount, unless `/var/lib/webosbrew/homechooser/previous` exists (a change of Home made in Home
+Chooser, whose panel may be over that Home: the watcher closes it once the panel is off screen, see
+[The previous launcher](settings-app.md#the-previous-launcher)). The watcher keeps trying until SAM has answered. At boot SAM starts Home (about 50 s)
 before the mount and the watcher's first calls can get no reply (on 7.6.0 `running` and
 `setPreloadPolicy` got none for about 25 s), so a single close at mount time can be lost, and the
 mount is idempotent afterwards. The close is `running`, then `closeByAppId
@@ -119,6 +121,9 @@ mount is idempotent afterwards. The close is `running`, then `closeByAppId
 instance the preload manager started before the mount: it keeps running from the old inode until
 closed.
 
+- While the [previous-launcher hold](settings-app.md#the-previous-launcher) is on, no attempt is made
+  and nothing is counted; the first attempt follows when the hold ends (`home gate: stock Home close
+  waits until Home Chooser is off screen` is logged once).
 - After a close that confirmed by `closeByAppId` (Home really was running), the watcher waits
   `gate_settle_ms` (20 s) and asks `getForegroundAppInfo` once. SAM does not always relaunch after
   that close: on 6.5.2 at boot it logged `LAUNCH_LASTAPP on_foreground_null triggered` about 10 s

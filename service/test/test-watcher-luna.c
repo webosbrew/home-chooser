@@ -199,7 +199,7 @@ static void test_runtime(int mode) {
     fixture_open(root);
     save_state(FALSE);
     config.luna_send=program;
-    runtime_case=mode;expected_subs=mode==5?2:4;ticks=0;initial_tasks=task_count();
+    runtime_case=mode;expected_subs=4;ticks=0;initial_tasks=task_count();
     char *mapped=NULL,*copy=NULL;gsize mapped_size=0,copy_size=0;
     CHECK("W02 running image readable before unlink",g_file_get_contents("/proc/self/exe",&mapped,&mapped_size,NULL));
     guint driver=g_timeout_add(10,runtime_drive,NULL);
