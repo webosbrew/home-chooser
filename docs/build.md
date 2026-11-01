@@ -34,7 +34,8 @@ particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
 
 For offline checks, use the native tests (`cmake -S service/test -B build/service-host`,
 `cmake --build build/service-host`, `ctest --test-dir build/service-host`; `-DQEMU_TESTS=OFF` on the
-first for the policy test alone, without the SDK or firmware), `cd app && npm run lint && CI=true npm test`,
+first for the policy test and the launcher API spec check alone, without the SDK or firmware; the
+launcher contract test runs every example in `api/launcher-v1.openrpc.json` through the real handlers), `cd app && npm run lint && CI=true npm test`,
 the shell suites in `service/scripts/tests/`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
 

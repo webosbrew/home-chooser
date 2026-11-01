@@ -7,9 +7,12 @@
 #   test-watcher-luna  watcher child transport/runtime, through fake-luna-send.py  } cross built into
 #   test-gate          the home gate's decision table and self-release             } build/service-host/arm
 #   test-gate-mount    the daemon's gate mount/unmount decisions                    } and run under qemu-arm
+#   test-launcher-contract  the real launcher API handlers on a fake hub, against api/launcher-v1.openrpc.json
+#                      (ARM program test-launcher-contract, driven by launcher-spec.py)
+#   test-launcher-spec the launcher API description against the OpenRPC meta-schema (python3 only)
 # The ARM programs run against KEYFILTER_ROOTFS's libraries (and its systemUi.js); the paths are in
-# ../cmake/settings.cmake. -DQEMU_TESTS=OFF builds and runs test-policy alone, without the SDK or a
-# firmware rootfs.
+# ../cmake/settings.cmake. -DQEMU_TESTS=OFF builds and runs test-policy and test-launcher-spec alone,
+# without the SDK or a firmware rootfs.
 cmake_minimum_required(VERSION 3.20)
 project(homechooser-tests LANGUAGES C)
 enable_testing()
@@ -28,8 +31,17 @@ add_test(NAME test-policy COMMAND test-policy WORKING_DIRECTORY "${work}/policy-
 set_tests_properties(test-policy PROPERTIES FIXTURES_REQUIRED scratch)
 # Scratch directories the programs write into (kept between runs, as before).
 add_test(NAME scratch-dirs COMMAND "${CMAKE_COMMAND}" -E make_directory "${work}/policy-test/test"
-	"${work}/keyfilter-test" "${work}/watcher-test" "${work}/gate-test" "${work}/gate-mount-test")
+	"${work}/keyfilter-test" "${work}/watcher-test" "${work}/gate-test" "${work}/gate-mount-test"
+	"${work}/launcher-contract-test")
 set_tests_properties(scratch-dirs PROPERTIES FIXTURES_SETUP scratch)
+
+# The launcher API description (api/README.md): checked here, and against the real handlers below.
+find_program(PYTHON3 python3 REQUIRED)
+set(api "${CMAKE_CURRENT_SOURCE_DIR}/../../api")
+set(launcher_spec "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/launcher-spec.py")
+set(launcher_cases "${CMAKE_CURRENT_SOURCE_DIR}/launcher-contract-cases.json")
+add_test(NAME test-launcher-spec COMMAND ${launcher_spec} lint "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
+	"${api}/vendor/openrpc-meta-schema-1.14.9.json" "${api}/vendor/json-schema-tools-meta-schema-1.8.3.json")
 
 if(NOT QEMU_TESTS)
 	return()
@@ -49,7 +61,7 @@ endif()
 # The ARM programs: ../CMakeLists.txt configured with the webOS toolchain in a build directory of its own.
 include(ExternalProject)
 set(arm "${CMAKE_CURRENT_BINARY_DIR}/arm")
-set(programs test-homekey test-watcher test-watcher-luna test-gate test-gate-mount)
+set(programs test-homekey test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract)
 set(cache_args -DSDK:PATH=${SDK} -DSYSROOT:PATH=${SYSROOT} -DCROSS:STRING=${CROSS})
 foreach(name VERSION EXTRA_CFLAGS)
 	if(NOT "${${name}}" STREQUAL "")
@@ -79,7 +91,11 @@ add_test(NAME test-watcher COMMAND ${qemu} "${arm}/test-watcher" "${work}/watche
 add_test(NAME test-watcher-luna COMMAND ${qemu} "${work}/watcher-test/runtime-image" "${work}/watcher-test" "${system_ui}" "${fake_luna_send}")
 add_test(NAME test-gate COMMAND ${qemu} "${arm}/test-gate" "${work}/gate-test" "${fake_luna_send}")
 add_test(NAME test-gate-mount COMMAND ${qemu} "${arm}/test-gate-mount" "${work}/gate-mount-test")
-set_tests_properties(test-homekey test-watcher test-gate test-gate-mount PROPERTIES FIXTURES_REQUIRED scratch)
+# launcher-spec.py writes each case's files under launcher-contract-test/cases and runs the driver as
+# qemu-arm -L KEYFILTER_ROOTFS test-launcher-contract.
+add_test(NAME test-launcher-contract COMMAND ${launcher_spec} contract "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
+	"${arm}/test-launcher-contract" "${work}/launcher-contract-test" ${qemu})
+set_tests_properties(test-homekey test-watcher test-gate test-gate-mount test-launcher-contract PROPERTIES FIXTURES_REQUIRED scratch)
 set_tests_properties(test-watcher-luna PROPERTIES FIXTURES_REQUIRED "scratch;runtime-image")
 # The two watcher programs share watcher-test; never run them at once.
 set_tests_properties(test-watcher test-watcher-luna watcher-runtime-image PROPERTIES RESOURCE_LOCK watcher-test)
