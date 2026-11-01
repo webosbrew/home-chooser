@@ -169,7 +169,8 @@ static Fixture *setup(int major, const char *id) {
     f->write_times = g_array_new(FALSE, FALSE, sizeof(gint64)); f->waits = g_array_new(FALSE, FALSE, sizeof(unsigned));
     f->major = major; f->clock = 1000; f->live = TRUE;
     f->title = "Pretty Home";
-    f->profiles = "{\"returnValue\":true,\"profiles\":{\"defaultApps\":{\"_source\":\"factory\",\"categories\":{\"home\":\"com.webos.app.home\",\"kids\":\"k.app\"},\"other\":{\"a\":[1,2]},\"_hidden\":true}}}";
+    f->profiles = "{\"returnValue\":true,\"profiles\":{\"defaultApps\":{\"_source\":\"factory\",\"categories\":{\"home\":\"com.webos.app.home\",\"kids\":\"k.app\"},\"other\":{\"a\":[1,2]},\"_hidden\":true},"
+        "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
     f->c = hc_watch_config();
     char *name = g_strdup_printf("case-%u", serial++), *root = path(f, base, name); g_free(name);
     f->c.state_dir = path(f, root, "state"); f->c.osrelease = path(f, root, "os-release");
@@ -298,6 +299,61 @@ static void test_profiles(void) {
     }
     Fixture *f = setup(10, "my.home"); f->profiles = "{\"defaultApps\":{\"x\":1}}"; start(f);
     CHECK("W10 missing categories refused", !g_file_test(f->c.override, G_FILE_TEST_EXISTS)); teardown(f);
+}
+/* The override's idleApp: "" when absent, else "<support>/<appId or ->/<keep or ->". */
+static char *idle_text(Fixture *f) {
+    char *home = NULL; jvalue_ref idle = NULL; override_read(f->w, &home, &idle); g_free(home);
+    if (!idle) return g_strdup("");
+    bool support = false; jboolean_get(member(idle, "support"), &support);
+    char *app = get_string(idle, "appId"), *keep = get_string(idle, "keep");
+    char *s = g_strdup_printf("%s/%s/%s%s", support ? "true" : "false", app ? app : "-", keep ? keep : "-",
+        jis_valid(member(idle, "_configuration")) ? "/meta" : "");
+    g_free(app); g_free(keep); j_release(&idle); return s;
+}
+#define IDLE_IS(item, f, expected) do { char *s_ = idle_text(f); CHECK(item, eq(s_, expected)); if (!eq(s_, expected)) fprintf(stderr, "  idleApp %s\n", s_); g_free(s_); } while (0)
+/* I01-I08: webOS 10 and later, the override carries idleApp (docs/settings-app.md). */
+static void test_idle_app(void) {
+    for (int major = 10; major <= 12; major++) {
+        Fixture *f = setup(major, "my.home"); start(f);
+        IDLE_IS("I01 full-screen names the launcher, keeps other keys, drops metadata", f, "true/my.home/me");
+        CHECK("I01 asked for idleApp", contains(f, "\"names\":[\"defaultApps\",\"idleApp\"]"));
+        int scans = f->scans; check_override(f->w, "my.home"); CHECK("I02 good no rescan", f->scans == scans);
+        file(f->c.override, "{\"defaultApps\":{\"categories\":{\"home\":\"my.home\"}},\"idleApp\":{\"support\":true,\"appId\":\"stale.app\"}}");
+        check_override(f->w, "my.home"); CHECK("I02 wrong idleApp repaired", f->scans == scans + 1); IDLE_IS("I02 repaired value", f, "true/my.home/me");
+        file(f->c.override, "{\"defaultApps\":{\"categories\":{\"home\":\"my.home\"}}}");
+        check_override(f->w, "my.home"); CHECK("I02 missing idleApp repaired", f->scans == scans + 2); IDLE_IS("I02 added", f, "true/my.home/me");
+        teardown(f);
+        f = setup(major, "my.home"); f->window = "overlay"; start(f);
+        IDLE_IS("I03 overlay: support false, no appId", f, "false/-/me");
+        scans = f->scans; check_override(f->w, "my.home"); CHECK("I03 overlay ok", f->scans == scans);
+        f->window = NULL; check_override(f->w, "my.home"); CHECK("I03 window change rewrites", f->scans == scans + 1);
+        IDLE_IS("I03 now full-screen", f, "true/my.home/me"); teardown(f);
+        /* I04: never an idleApp for an id getAppInfo does not know, or an empty one. */
+        f = setup(major, "my.home"); start(f);
+        check_override(f->w, "gone.app"); IDLE_IS("I04 unknown id: no idleApp", f, "");
+        file(f->c.override, "{}"); check_override(f->w, ""); IDLE_IS("I04 empty id: no idleApp", f, "");
+        f->silent = 1; file(f->c.override, "{}"); check_override(f->w, "my.home"); IDLE_IS("I04 no answer: no idleApp", f, "");
+        teardown(f);
+        /* I05: the launcher goes missing: the whole override goes; it comes back with the launcher. */
+        f = setup(major, "my.home"); start(f); installed(f, "my.home", -1); event(f, 'A', "{}");
+        CHECK("I05 missing launcher drops the override", !g_file_test(f->c.override, G_FILE_TEST_EXISTS));
+        installed(f, "my.home", 1); event(f, 'A', "{}"); IDLE_IS("I05 back again", f, "true/my.home/me"); teardown(f);
+        /* I06: uninstall drops it too. */
+        f = setup(major, "my.home"); start(f); installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+        CHECK("I06 uninstall drops the override", hc_watch_status(f->w) == 0 && !g_file_test(f->c.override, G_FILE_TEST_EXISTS)); teardown(f);
+    }
+    for (int mode = 0; mode < 4; mode++) {
+        /* I07: leftover repair also reads idleApp. */
+        Fixture *f = setup(10, NULL); record(f, "{\"home\":\"my.home\"}");
+        const char *idle[] = {"{\"support\":true,\"appId\":\"gone.app\"}", "{\"support\":false,\"appId\":\"gone.app\"}",
+            "{\"support\":true,\"appId\":\"my.home\"}", "{\"appId\":\"gone.app\"}"};
+        char *text = g_strdup_printf("{\"defaultApps\":{\"categories\":{\"home\":\"my.home\"}},\"idleApp\":%s}", idle[mode]);
+        file(f->c.override, text); g_free(text); start(f);
+        gboolean gone = mode == 0 || mode == 3;
+        CHECK("I07 idleApp leftover", g_file_test(f->c.override, G_FILE_TEST_EXISTS) == !gone);
+        CHECK("I07 record untouched", !f->sets && !f->defaults && home_is(f, "my.home"));
+        CHECK("I07 confirmed once", f->wait_count == (gone ? 1 : 0)); teardown(f);
+    }
 }
 static void test_remove_return(void) {
     for (int major = 5; major <= 12; major++) for (int full = 0; full <= 1; full++) {
@@ -450,16 +506,16 @@ static void test_preload_close(void) {
     for(int major=5;major<=12;major++) {
         Fixture *f=setup(major,"my.home"); f->foreground="my.home"; start(f);
         CHECK("W14 preload version",f->preload_off==(major>=6));
-        CHECK("W16 close version",f->closes==(major>=11));
+        CHECK("W16 close version",f->closes==(major>=10));
         event(f,'F',"{\"appId\":\"my.home\"}"); event(f,'L',"{\"event\":\"launch\",\"appId\":\"my.home\"}");
-        CHECK("W16 close once",f->closes==(major>=11));
-        event(f,'F',"{\"appId\":\"com.webos.app.home\"}"); CHECK("W16 relaunch never closed",f->closes==(major>=11));
+        CHECK("W16 close once",f->closes==(major>=10));
+        event(f,'F',"{\"appId\":\"com.webos.app.home\"}"); CHECK("W16 relaunch never closed",f->closes==(major>=10));
         hc_watch_stop(f->w,0,"stopped by signal"); hc_watch_free(f->w); f->w=NULL;
         CHECK("W19 clean exit preload",f->preload_on==(major>=6));
         /* teardown needs a watch, with no preload work remaining. */
         HCWatchOps ops={.call=fake_call,.context=f}; f->w=hc_watch_new(&f->c,&ops); teardown(f);
     }
-    for(int major=11;major<=12;major++) {
+    for(int major=10;major<=12;major++) {
         Fixture *f=setup(major,"my.home"); f->window="overlay"; f->foreground=STOCK; start(f);
         CHECK("W16 overlay no fresh launch",!f->closes);
         event(f,'L',"{\"event\":\"launch\",\"appId\":\"my.home\"}"); CHECK("W16 unsafe stock card",!f->closes);
@@ -479,6 +535,14 @@ static void test_preload_close(void) {
     f=setup(11,"my.home"); f->w->c.preload=FALSE; start(f); CHECK("W14 toggle",!f->preload_off && !f->closes); teardown(f);
     f=setup(11,STOCK); start(f); CHECK("W14 stock on",f->preload_on==1 && !f->preload_off); choice(f,"my.home"); event(f,'A',"{}");
     CHECK("W14 change off immediate ready",f->preload_off==1 && f->w->preload_ready); teardown(f);
+    /* I08: webOS 10 closes once per boot and once per choice change, never in a loop. */
+    f=setup(10,"my.home"); f->foreground="my.home"; start(f); CHECK("I08 10 closes after the launcher is in front",f->closes==1);
+    for(int i=0;i<3;i++) { event(f,'L',"{\"event\":\"launch\",\"appId\":\"com.webos.app.home\"}"); event(f,'F',"{\"appId\":\"my.home\"}"); event(f,'T',NULL); }
+    CHECK("I08 no close loop",f->closes==1 && f->w->relaunch_logged);
+    choice(f,"other.home"); f->foreground="other.home"; settings(f,"{\"home\":\"my.home\"}"); CHECK("I08 choice change closes once more",f->closes==2);
+    event(f,'F',"{\"appId\":\"other.home\"}"); CHECK("I08 still once",f->closes==2); teardown(f);
+    f=setup(10,"my.home"); f->foreground="org.webosbrew.hbchannel"; start(f); CHECK("I08 not before the launcher is in front",!f->closes);
+    f->foreground="my.home"; event(f,'F',"{\"appId\":\"my.home\"}"); CHECK("I08 then once",f->closes==1); teardown(f);
 }
 /* G11-G15: the 6-9 home gate follows the baked Home key redirect (docs/home-gate.md). */
 static void test_gate(void) {
@@ -599,6 +663,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

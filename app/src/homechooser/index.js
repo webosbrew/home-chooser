@@ -60,15 +60,14 @@ const parseMaybeJson = (v) => {
 
 // The reply shape of getProfiles is not in the study: look for a `defaultApps` object that has
 // `categories`, at the top of the reply or one or two levels down.
-export const extractDefaultAppsProfile = (reply) => {
+const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+
+const findProfile = (reply, name, accept) => {
 	const seen = [];
 	const search = (node, depth) => {
 		if (!node || typeof node !== 'object' || depth > 3 || seen.includes(node)) return null;
 		seen.push(node);
-		if (node.defaultApps && typeof node.defaultApps === 'object' && !Array.isArray(node.defaultApps)) {
-			const d = node.defaultApps;
-			if (d.categories && typeof d.categories === 'object') return d;
-		}
+		if (isObject(node[name]) && accept(node[name])) return node[name];
 		for (const k of Object.keys(node)) {
 			const found = search(node[k], depth + 1);
 			if (found) return found;
@@ -78,13 +77,45 @@ export const extractDefaultAppsProfile = (reply) => {
 	return search(reply, 0);
 };
 
-export const buildOverride = (profile, appId) => {
+export const extractDefaultAppsProfile = (reply) =>
+	findProfile(reply, 'defaultApps', (d) => Boolean(d.categories) && typeof d.categories === 'object');
+
+// The idleApp profile (10.x and later): what sam launches when the last app closes. null when absent.
+export const extractIdleAppProfile = (reply) => findProfile(reply, 'idleApp', () => true);
+
+// A profile object without its `_` metadata keys and without the keys in `skip`.
+const profileCopy = (profile, skip = []) => {
 	const out = {};
-	Object.keys(profile || {}).forEach((k) => {
-		if (k[0] !== '_') out[k] = profile[k];
+	Object.keys(isObject(profile) ? profile : {}).forEach((k) => {
+		if (k[0] !== '_' && skip.indexOf(k) < 0) out[k] = profile[k];
 	});
+	return out;
+};
+
+// The override's idleApp: the profile's other keys stay, `support` and `appId` are the choice's.
+// A full-screen launcher is the idle app; an overlay launcher turns the idle app off (support false),
+// so the last input comes back when the last app closes. The watcher writes the same
+// (service/src/watcher/record.c, check_override).
+export const buildIdleApp = (idleProfile, appId, overlay) => {
+	const out = profileCopy(idleProfile, ['support', 'appId']);
+	out.support = !overlay;
+	if (!overlay) out.appId = appId;
+	return out;
+};
+
+// `windowType`: 'fullscreen' or 'overlay' adds idleApp; anything else leaves idleApp out (the stock one applies).
+export const buildOverride = (profile, appId, windowType, idleProfile) => {
+	const out = profileCopy(profile);
 	out.categories = Object.assign({}, profile && profile.categories, {home: appId});
-	return {defaultApps: out};
+	const override = {defaultApps: out};
+	if (windowType === 'fullscreen' || windowType === 'overlay') override.idleApp = buildIdleApp(idleProfile, appId, windowType === 'overlay');
+	return override;
+};
+
+// getAppInfo's defaultWindowType, as the watcher reads it: 'overlay' or 'fullscreen'.
+export const windowOf = (reply) => {
+	const info = (reply && (reply.appInfo || reply)) || {};
+	return info.defaultWindowType === 'overlay' ? 'overlay' : 'fullscreen';
 };
 
 // null, "" and a missing key all read as "no home set" (docs/research/home-key-and-home-app.md).
@@ -158,23 +189,38 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 	const rescan = (run) => lunaSend(run, 'profileRescan');
 
 	const readProfile = async (run) => {
-		if (!info.usesProfile) return {profile: null, error: null};
+		if (!info.usesProfile) return {profile: null, idleApp: null, error: null};
 		try {
 			const reply = await lunaSend(run, 'profileGet');
 			const profile = extractDefaultAppsProfile(reply);
-			return profile ? {profile, error: null} : {profile: null, error: 'getProfiles reply has no defaultApps.categories'};
+			const idleApp = extractIdleAppProfile(reply);
+			return profile ? {profile, idleApp, error: null} : {profile: null, idleApp, error: 'getProfiles reply has no defaultApps.categories'};
 		} catch (e) {
-			return {profile: null, error: errorMessage(e)};
+			return {profile: null, idleApp: null, error: errorMessage(e)};
 		}
+	};
+
+	// Never an idleApp for an id sam does not know: it leaves a black screen when the last app closes.
+	const windowFor = async (run, appId) => {
+		if (!appId) throw new Error('No app id to set as the Home app');
+		let reply;
+		try {
+			reply = await run.luna(`${SAM}/getAppInfo`, {id: appId});
+		} catch (e) {
+			throw new Error(`Cannot read the app info of ${appId}: ${errorMessage(e)}`);
+		}
+		if (!reply || reply.returnValue === false) throw new Error(`Cannot read the app info of ${appId}`);
+		return windowOf(reply);
 	};
 
 	const readStateWith = async (run) => {
 		const record = await readRecord(run);
-		const {profile, error} = await readProfile(run);
+		const {profile, idleApp, error} = await readProfile(run);
 		return {
 			record,
 			recordHome: homeOf(record),
 			profile,
+			idleApp,
 			profileHome: (profile && profile.categories && profile.categories.home) || null,
 			profileError: error
 		};
@@ -265,6 +311,8 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 			try {
 				const state = await readStateWith(run);
 				const record = Object.assign({}, state.record || {}, {home: appId});
+				// 10.x and later: full-screen or overlay decides the override's idleApp
+				const windowType = info.usesProfile ? await windowFor(run, appId) : null;
 
 				// 0. the stored choice, which the boot entry and the watcher enforce from here on
 				await run.write(HOME_FILE, appId);
@@ -282,14 +330,19 @@ export const createHomeChooser = ({rootLuna, exec, writeFile, removeFile, versio
 					await writeRecord(run, record);
 				}
 
-				// 2. the system profile override (10.x and later)
+				// 2. the system profile override (10.x and later): the home and the idle app
 				if (info.usesProfile) {
 					if (!state.profile) throw new Error(`Cannot read the defaultApps profile: ${state.profileError}`);
-					await run.write(OVERRIDE_PATH, JSON.stringify(buildOverride(state.profile, appId), null, 2));
+					const override = buildOverride(state.profile, appId, windowType, state.idleApp);
+					await run.write(OVERRIDE_PATH, JSON.stringify(override, null, 2));
 					await rescan(run);
 					const after = await readProfile(run);
 					const home = after.profile && after.profile.categories && after.profile.categories.home;
 					if (home !== appId) throw new Error(`The system profile still names ${home || 'no home app'} after the rescan`);
+					const idle = after.idleApp;
+					if (idle && (idle.support !== override.idleApp.support || (override.idleApp.support && idle.appId !== appId))) {
+						res.warnings.push(`The system profile's idleApp is ${JSON.stringify(profileCopy(idle))} after the rescan`);
+					}
 				}
 
 				// 3. the boot entry (a symlink into the app) and the watcher, so the choice survives boots

@@ -71,36 +71,100 @@ gboolean apply_record(HCWatch *w, const char *id)
     return merged_write(w, id);
 }
 
-static char *override_home(HCWatch *w)
+void override_read(HCWatch *w, char **home, jvalue_ref *idle)
 {
     char *text = watch_read(w->c.override);
     jvalue_ref r = parse_object(text);
-    char *id = get_string(member(member(r, "defaultApps"), "categories"), "home");
-    j_release(&r); g_free(text); return id;
+    if (home) *home = get_string(member(member(r, "defaultApps"), "categories"), "home");
+    if (idle) *idle = jis_object(member(r, "idleApp")) ? jvalue_duplicate(member(r, "idleApp")) : NULL;
+    j_release(&r); g_free(text);
+}
+/* idleApp.support, or `fallback` when it is absent or not a boolean. */
+static bool idle_support(jvalue_ref idle, bool fallback)
+{
+    bool support = fallback;
+    if (jis_object(idle) && jis_boolean(member(idle, "support")) && jboolean_get(member(idle, "support"), &support) != CONV_OK)
+        support = fallback;
+    return support;
+}
+char *idle_app_of(jvalue_ref idle)
+{
+    char *id = jis_object(idle) && idle_support(idle, true) ? get_string(idle, "appId") : NULL;
+    if (id && !*id) g_clear_pointer(&id, g_free);
+    return id;
+}
+int window_type(HCWatch *w, const char *id)
+{
+    if (!id || !*id) return 0;
+    jvalue_ref r = watch_id_call(w, SAM "getAppInfo", id, 10);
+    int type = 0;
+    if (reply_ok(r)) {
+        char *t = get_string(member(r, "appInfo"), "defaultWindowType");
+        type = eq(t, "overlay") ? 2 : 1; g_free(t);
+    }
+    j_release(&r); return type;
+}
+/* The written idleApp fits `window`: 1 names the launcher, 2 has support false; 0 (getAppInfo does not
+ * know the launcher) accepts no idleApp, support false, or one already naming this launcher. */
+static gboolean idle_ok(jvalue_ref idle, const char *id, int window)
+{
+    char *app = jis_object(idle) ? get_string(idle, "appId") : NULL;
+    /* explicitly true / explicitly false */
+    gboolean on = idle_support(idle, false), off = !idle_support(idle, true), ok;
+    if (window == 1) ok = jis_object(idle) && on && eq(app, id);
+    else if (window == 2) ok = jis_object(idle) && off;
+    else ok = !jis_object(idle) || off || eq(app, id);
+    g_free(app); return ok;
+}
+/* A copy of a profile object without its `_` metadata keys and without the keys in `skip`. */
+static jvalue_ref profile_copy(jvalue_ref profile, const char *const *skip)
+{
+    jvalue_ref copy = jobject_create();
+    jobject_iter it;
+    jobject_key_value pair;
+    if (jis_object(profile) && jobject_iter_init(&it, profile)) while (jobject_iter_next(&it, &pair)) {
+        raw_buffer name = jstring_get_fast(pair.key);
+        gboolean keep = name.m_len && name.m_str[0] != '_';
+        for (int i = 0; keep && skip && skip[i]; i++)
+            if (name.m_len == strlen(skip[i]) && !memcmp(name.m_str, skip[i], name.m_len)) keep = FALSE;
+        if (keep) jobject_set(copy, name, jvalue_duplicate(pair.value));
+    }
+    return copy;
+}
+static jvalue_ref profile_named(jvalue_ref reply, const char *name)
+{
+    jvalue_ref profile = member(member(reply, "profiles"), name);
+    return jis_object(profile) ? profile : member(reply, name);
 }
 void check_override(HCWatch *w, const char *id)
 {
     if (w->major < 10) return;
-    char *existing = override_home(w);
-    gboolean ok = eq(existing, id); g_free(existing);
+    char *existing = NULL;
+    jvalue_ref idle = NULL;
+    override_read(w, &existing, &idle);
+    int window = window_type(w, id);
+    if (!window) watch_log(w, "getAppInfo does not know '%s', no idleApp for it", id ? id : "");
+    gboolean ok = eq(existing, id) && idle_ok(idle, id, window);
+    g_free(existing); j_release(&idle);
     if (ok) { watch_log(w, "profile override ok"); return; }
     watch_log(w, "profile override missing or wrong, rebuilding it");
-    jvalue_ref r = watch_call(w, PROFILE "getProfiles", "{\"names\":[\"defaultApps\"]}", 10);
-    jvalue_ref profile = member(member(r, "profiles"), "defaultApps");
-    if (!jis_object(profile)) profile = member(r, "defaultApps");
+    jvalue_ref r = watch_call(w, PROFILE "getProfiles", "{\"names\":[\"defaultApps\",\"idleApp\"]}", 10);
+    jvalue_ref profile = profile_named(r, "defaultApps");
     if (!jis_object(profile) || !jis_object(member(profile, "categories"))) {
         watch_log(w, "getProfiles reply has no defaultApps profile with categories, override not written");
         j_release(&r); return;
     }
-    jvalue_ref copy = jobject_create(), out = jobject_create();
-    jobject_iter it;
-    jobject_key_value pair;
-    if (jobject_iter_init(&it, profile)) while (jobject_iter_next(&it, &pair)) {
-        raw_buffer name = jstring_get_fast(pair.key);
-        if (name.m_len && name.m_str[0] != '_') jobject_set(copy, name, jvalue_duplicate(pair.value));
-    }
+    jvalue_ref copy = profile_copy(profile, NULL), out = jobject_create();
     put_str(member(copy, "categories"), "home", id);
     jobject_set(out, key_buf("defaultApps"), copy);
+    if (window) {
+        /* The profile's other idleApp keys stay; support and appId are this choice's (docs/settings-app.md). */
+        const char *const skip[] = {"support", "appId", NULL};
+        jvalue_ref idle_out = profile_copy(profile_named(r, "idleApp"), skip);
+        put_bool(idle_out, "support", window == 1);
+        if (window == 1) put_str(idle_out, "appId", id);
+        jobject_set(out, key_buf("idleApp"), idle_out);
+    }
     if (write_atomic(w->c.override, jvalue_stringify(out), strlen(jvalue_stringify(out)))) {
         watch_log(w, "wrote %s", w->c.override);
         jvalue_ref scan = watch_call(w, PROFILE "debug/rescan", "{}", 10); j_release(&scan);

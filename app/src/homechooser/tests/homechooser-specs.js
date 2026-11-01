@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
 import {
-	OVERRIDE_PATH, buildOverride, createHomeChooser, extractDefaultAppsProfile, releaseInfo
+	OVERRIDE_PATH, buildIdleApp, buildOverride, createHomeChooser, extractDefaultAppsProfile, extractIdleAppProfile,
+	releaseInfo, windowOf
 } from '..';
 import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
@@ -22,16 +23,26 @@ const ABSENT = {returnValue: false, errorCode: -1, errorText: 'There is no match
 const UNKNOWN = {returnValue: false, errorText: 'Unknown method "setDefaultApp" for category "/"'};
 const NOT_SET = {returnValue: false, errorCode: 1, errorText: 'no default app is set for the category'};
 
-const profileReply = (home = STOCK, extra = {}) => ({
+// The stock idleApp of every 10.3.1 / 11.2.0 device layer, plus a key of no meaning that must survive.
+const STOCK_IDLE = {_packageIncluded: true, _configuration: 'idleApp.json', support: true, appId: STOCK, keep: 'me'};
+
+const profileReply = (home = STOCK, extra = {}, idleApp = STOCK_IDLE) => ({
 	returnValue: true,
-	profiles: {defaultApps: Object.assign({_packageIncluded: true, _configuration: 'defaultApps.json', support: true, categories: {home, aod: 'com.webos.app.lifeonscreen'}}, extra)}
+	profiles: Object.assign(
+		{defaultApps: Object.assign({_packageIncluded: true, _configuration: 'defaultApps.json', support: true, categories: {home, aod: 'com.webos.app.lifeonscreen'}}, extra)},
+		idleApp ? {idleApp} : {}
+	)
 });
 
-const GETPROFILE = ['luna://com.webos.service.systemprofile/getProfiles', {names: ['defaultApps']}];
+const GETPROFILE = ['luna://com.webos.service.systemprofile/getProfiles', {names: ['defaultApps', 'idleApp']}];
+const APPINFO = (id) => ['luna://com.webos.applicationManager/getAppInfo', {id}];
+const FULL_IDLE = (id) => ({support: true, appId: id, keep: 'me'});
 const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
 
 // A fake TV: `record` is general/defaultApps (undefined = never written); `profile` the getProfiles reply.
-const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => {
+// `windows` gives an app's defaultWindowType; getAppInfo knows every id except those in `unknown`.
+// `ignoreIdle`: the rescan takes the override's defaultApps but not its idleApp.
+const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false} = {}) => {
 	const luna = [];
 	const files = [];
 	const commands = [];
@@ -70,6 +81,9 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => 
 				return {returnValue: true};
 			case 'com.webos.applicationManager/closeByAppId':
 				return {returnValue: true};
+			case 'com.webos.applicationManager/getAppInfo':
+				if (unknown.indexOf(payload.id) >= 0) throw new ServiceError({returnValue: false, errorText: `Cannot find proper launchPoint: ${payload.id}`});
+				return {returnValue: true, appId: payload.id, appInfo: Object.assign({id: payload.id}, windows[payload.id] ? {defaultWindowType: windows[payload.id]} : {})};
 			default:
 				throw new Error('unexpected call ' + uri);
 		}
@@ -78,9 +92,9 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}} = {}) => 
 		calls.push(['write', path]);
 		files.push([path, text]);
 		if (path === HOME_FILE) return;
-		// the real service reads the override on rescan
-		const o = JSON.parse(text).defaultApps;
-		profile = {returnValue: true, profiles: {defaultApps: Object.assign({}, o)}};
+		// the real service reads the override on rescan; 10.3.1 merges idleApp key by key onto the stock one
+		const o = JSON.parse(text);
+		profile = {returnValue: true, profiles: {defaultApps: Object.assign({}, o.defaultApps), idleApp: Object.assign({}, STOCK_IDLE, ignoreIdle ? {} : o.idleApp)}};
 	};
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
@@ -181,6 +195,45 @@ describe('extractDefaultAppsProfile / buildOverride', () => {
 	test('drops underscore keys and keeps the other categories', () => {
 		const p = profileReply().profiles.defaultApps;
 		expect(buildOverride(p, MINE)).toEqual({defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}}});
+	});
+
+	test('finds idleApp beside defaultApps', () => {
+		const reply = profileReply();
+		expect(extractIdleAppProfile(reply)).toBe(reply.profiles.idleApp);
+		expect(extractIdleAppProfile({idleApp: {support: false}})).toEqual({support: false});
+		expect(extractIdleAppProfile(profileReply(STOCK, {}, null))).toBeNull();
+	});
+
+	test('full-screen launcher: idleApp names it, other idleApp keys stay, metadata goes', () => {
+		const {defaultApps, idleApp} = profileReply().profiles;
+		expect(buildOverride(defaultApps, MINE, 'fullscreen', idleApp)).toEqual({
+			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}},
+			idleApp: {support: true, appId: MINE, keep: 'me'}
+		});
+	});
+
+	test('overlay launcher: idleApp support false, no appId', () => {
+		const {defaultApps, idleApp} = profileReply().profiles;
+		expect(buildOverride(defaultApps, MINE, 'overlay', idleApp).idleApp).toEqual({support: false, keep: 'me'});
+	});
+
+	test('an earlier override read back is replaced, not carried: support and appId are the choice\'s', () => {
+		const {defaultApps} = profileReply(OTHER).profiles;
+		const earlier = {support: true, appId: OTHER, keep: 'me'};
+		expect(buildOverride(defaultApps, MINE, 'overlay', earlier).idleApp).toEqual({support: false, keep: 'me'});
+		expect(buildIdleApp({support: false, keep: 'me'}, MINE, false)).toEqual({support: true, appId: MINE, keep: 'me'});
+	});
+
+	test('no idleApp in the profile: only support and appId; no window: no idleApp at all', () => {
+		const {defaultApps} = profileReply().profiles;
+		expect(buildOverride(defaultApps, MINE, 'fullscreen', null).idleApp).toEqual({support: true, appId: MINE});
+		expect(buildOverride(defaultApps, MINE, null, STOCK_IDLE)).not.toHaveProperty('idleApp');
+	});
+
+	test('windowOf reads defaultWindowType like the watcher', () => {
+		expect(windowOf({appInfo: {defaultWindowType: 'overlay'}})).toBe('overlay');
+		expect(windowOf({appInfo: {defaultWindowType: 'card'}})).toBe('fullscreen');
+		expect(windowOf({appInfo: {}})).toBe('fullscreen');
 	});
 });
 
@@ -298,25 +351,75 @@ describe('apply', () => {
 		const res = await chooser(tv, version).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(res.needsHomeKeyHook).toBe(false);
-		expect(tv.luna).toEqual([GET, GETPROFILE, SETDEFAULT(MINE), RESCAN, GETPROFILE]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, APPINFO(MINE), SETDEFAULT(MINE), RESCAN, GETPROFILE]);
 		expect(tv.files).toHaveLength(2);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
 		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
 		expect(JSON.parse(tv.files[1][1])).toEqual({
-			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}}
+			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}},
+			idleApp: FULL_IDLE(MINE)
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'luna:getProfiles', 'write:home', 'luna:setDefaultApp', 'write:org.webosbrew.homechooser.json',
-			'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(), 'exec:' + WATCH.split('/').pop()
+			'luna:getSystemSettings', 'luna:getProfiles', 'luna:getAppInfo', 'write:home', 'luna:setDefaultApp',
+			'write:org.webosbrew.homechooser.json', 'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(),
+			'exec:' + WATCH.split('/').pop()
 		]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
+		expect(res.warnings).toEqual([]);
+	});
+
+	test.each([[[10, 3, 1]], [[11, 2, 0]]])('%j: an overlay launcher turns the idle app off', async (version) => {
+		const tv = fakeTV({record: {}, profile: profileReply(), windows: {[MINE]: 'overlay'}});
+		const res = await chooser(tv, version).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(JSON.parse(tv.files[1][1]).idleApp).toEqual({support: false, keep: 'me'});
+		expect(res.warnings).toEqual([]);
+	});
+
+	test('10.3.1: from an overlay launcher to a full-screen one, the earlier idleApp is not carried', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply(OTHER, {}, {support: false, appId: STOCK, keep: 'me'})});
+		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(JSON.parse(tv.files[1][1]).idleApp).toEqual(FULL_IDLE(MINE));
+	});
+
+	test('10.3.1: an id getAppInfo does not know is refused before anything is written', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply(), unknown: [MINE]});
+		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
+		expect(res.ok).toBe(false);
+		expect(res.errors[0]).toMatch(/Cannot read the app info of org.webosbrew.homechooser.launcher/);
+		expect(tv.files).toEqual([]);
+		expect(tv.commands).toEqual([]);
+	});
+
+	test('10.3.1: an empty id is refused before anything is written', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply()});
+		const res = await chooser(tv, [10, 3, 1]).apply('');
+		expect(res.ok).toBe(false);
+		expect(tv.files).toEqual([]);
+		expect(JSON.stringify(tv.luna)).not.toContain('getAppInfo');
+	});
+
+	test('10.3.1: a profile whose idleApp does not follow is a warning', async () => {
+		const tv = fakeTV({record: {}, profile: profileReply(), ignoreIdle: true});
+		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(res.warnings[0]).toMatch(/idleApp is .*com.webos.app.home/);
+	});
+
+	test('5.x to 9.x: no getAppInfo, no idleApp', async () => {
+		for (const version of [[5, 6, 1], [8, 3, 0], [9, 2, 1]]) {
+			const tv = fakeTV({record: {}});
+			await chooser(tv, version).apply(MINE);
+			expect(JSON.stringify(tv.luna)).not.toContain('getAppInfo');
+		}
 	});
 
 	test('11.2.0 / 12.0.0: the profile is read and rescanned through root commands, never through call', async () => {
 		const tv = fakeTV({record: {}, profile: profileReply()});
 		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(tv.luna.map((c) => c[0].split('/').pop())).toEqual(['getSystemSettings', 'getProfiles', 'setDefaultApp', 'rescan', 'getProfiles']);
+		expect(tv.luna.map((c) => c[0].split('/').pop())).toEqual(['getSystemSettings', 'getProfiles', 'getAppInfo', 'setDefaultApp', 'rescan', 'getProfiles']);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 	});
 
@@ -475,6 +578,9 @@ describe('restoreStock', () => {
 		expect(tv.files[0]).toEqual(['rm', HOME_FILE]);
 		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
 		expect(tv.commands).toContain(STOP);
+		// LG Home: no override at all, so no idleApp of Home Chooser's
+		expect(tv.files.filter((f) => f[0] !== 'rm')).toEqual([]);
+		expect(tv.files.some((f) => f[1] === OVERRIDE_PATH)).toBe(version[0] >= 10);
 	});
 
 	test('other stock homes stay ordinary choices', async () => {

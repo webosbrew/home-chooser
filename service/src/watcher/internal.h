@@ -51,6 +51,12 @@ char *record_home(jvalue_ref reply);
 char *current_home(HCWatch *w);
 gboolean merged_write(HCWatch *w, const char *id);
 gboolean apply_record(HCWatch *w, const char *id);
+/* The override file's defaultApps home and its idleApp object (a copy); either may come back NULL. */
+void override_read(HCWatch *w, char **home, jvalue_ref *idle);
+/* idleApp.appId when idleApp names an app (support not false), else NULL. */
+char *idle_app_of(jvalue_ref idle);
+/* getAppInfo's defaultWindowType: 2 overlay, 1 full-screen, 0 unknown id, empty id or no answer. */
+int window_type(HCWatch *w, const char *id);
 void check_override(HCWatch *w, const char *id);
 void drop_override(HCWatch *w);
 void reconcile(HCWatch *w, const char *id);
