@@ -122,6 +122,7 @@ void handle_foreground(HCWatch *w, jvalue_ref r)
 {
     char *id = get_string(r, "appId");
     if (!id || !*id) { g_free(id); return; }
+    input_seen(w, id);
     maybe_close(w, id, w->close_launched);
     if (w->close_done && eq(id, STOCK) && !w->relaunch_logged) {
         watch_log(w, "sam brought %s to the foreground after its close; not closing it again this boot", STOCK);

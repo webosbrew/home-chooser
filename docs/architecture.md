@@ -53,7 +53,7 @@ flowchart LR
     daemon -- "reads, writes" --> statefiles
     svc --> lunasend
     daemon --> lunasend
-    lunasend --> sam & settings & profile & configd & preload & notif
+    lunasend --> sam & settings & profile & configd & preload & notif & eim
     configd -- "volatile list, 6-9" --> compositor
     compositor -- "HOME: launch chosen id, 6-9" --> sam
     daemon -- "bind mount, 6-9" --> homebin
@@ -104,6 +104,7 @@ flowchart LR
         s10 -- "full-screen launcher" --> l10b["chosen launcher"]
         s10 -- "overlay launcher<br/>(support false)" --> t10["last input<br/>Live TV or HDMI"]
         w10c["watcher"] -- "closes the LG Home the boot started,<br/>once, after the launcher is in front" --> h10["stock LG Home"]
+        w10c -- "overlay launcher: once per boot,<br/>nothing full-screen in front" --> t10
     end
     subgraph w11["webOS 11 and later"]
         k11["HOME"] --> f11["C++ key filter,<br/>launchDefaultApp"] --> l11["chosen launcher"]
@@ -111,13 +112,17 @@ flowchart LR
         s11 -- "full-screen launcher" --> l11b["chosen launcher"]
         s11 -- "overlay launcher<br/>(support false)" --> t11["last input<br/>Live TV or HDMI"]
         w11c["watcher"] -- "closes LG Home once,<br/>after the launcher is in front" --> h11["stock LG Home"]
+        w11c -- "overlay launcher: once per boot,<br/>nothing full-screen in front" --> t11
     end
 ```
 
 On 10.x and later SAM takes the idle app live from the system profile's `idleApp`, so the same
 override that names the home also names the idle app ([settings-app.md](settings-app.md#what-is-written)).
 An `idleApp` that names a missing app leaves a black screen when the last app closes, so the
-override goes whenever the chosen launcher does.
+override goes whenever the chosen launcher does. With `support` false SAM only falls back to the
+last input once an app has been launched in the boot, so under an overlay launcher the watcher opens
+the last input itself once after each boot, by the gate's rule
+([settings-app.md](settings-app.md#the-last-input-after-a-boot-webos-10-and-later)).
 
 | Family | HOME follows the choice through | Stock LG Home while a launcher is chosen |
 | --- | --- | --- |
@@ -212,6 +217,10 @@ flowchart TD
 * **Stock Home close on 10 and later.** The watcher subscribes to SAM's foreground and life events and closes
   LG Home once per boot or choice change: for a full-screen launcher when it is in front, for an
   overlay launcher only on its own launch with a nonstock full-screen app beneath it.
+* **Last input after boot on 10 and later.** With an overlay launcher chosen, 20 s after the watcher
+  starts (retried every 10 s, up to 12 times, while SAM does not answer) and only if the foreground
+  is empty or the overlay itself, the watcher launches the last input from eim (else Live TV), once
+  per boot: a marker in `/tmp/homechooser-runtime` records the decision before the launch.
 * **Restoring LG Home from the app** stops the unit first (SIGTERM: preload back on, gate
   unmounted), then removes the choice and restores the record, the profile override and the stock
   key filter list.

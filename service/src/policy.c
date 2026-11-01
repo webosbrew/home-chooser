@@ -386,6 +386,7 @@ static const char *const LUNA_URIS[] = {
 	"luna://com.webos.service.config/getConfigs",
 	"luna://com.webos.service.config/setConfigs",
 	"luna://com.webos.surfacemanager/getCurrentState",
+	"luna://com.webos.service.eim/getLastInput",
 	"luna://com.webos.notification/createAlert",
 	"luna://com.webos.notification/createToast",
 	"luna://com.webos.service.tvpower/power/reboot",

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Real child pipes, GIOChannel readers and reaping under qemu; no LS2 stubs. */
 #define _GNU_SOURCE
+#include "last-input.h"
 #include "luna.h"
 #include "log.h"
 #include "watcher/internal.h"
@@ -128,6 +129,7 @@ static void test_client(void) {
     GMainLoop *loop=g_main_loop_new(NULL,FALSE);HCLuna *c=hc_luna_open(loop,program);CHECK("open child transport",c!=NULL);
     char *s=hc_luna_call(SETTINGS "getSystemSettings",RECORD_GET,2,c);CHECK("bounded reply",s&&strstr(s,"true"));g_free(s);
     CHECK("allowlist rejects",hc_luna_call("luna://bad/method","{}",1,c)==NULL);
+    s=hc_luna_call(HC_LAST_INPUT_URI,HC_LAST_INPUT_PAYLOAD,2,c);CHECK("allowlist has eim getLastInput",s&&strstr(s,"true"));g_free(s);
     const char *tests[]={"garbage","no-newline","false","fail"};
     for(unsigned i=0;i<G_N_ELEMENTS(tests);i++) {
         char *payload=g_strdup_printf("{\"test\":\"%s\"}",tests[i]);s=hc_luna_call(SAM "getAppInfo",payload,2,c);
