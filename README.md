@@ -29,15 +29,15 @@ Manager or `ares-install`. Then open Home Chooser once from the app list.
 2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (stock)" and every
    launcher on the TV; a check mark shows the current one.
 
-   ![Home Chooser panel listing LG Home (stock) and a test launcher](docs/images/panel.png)
+   ![Home Chooser panel listing LG Home (stock) and a test launcher](docs/images/panel.webp)
 
 3. Move to your launcher and press OK, then confirm "Use *name* as Home?".
 
-   ![The "Use as Home?" confirmation](docs/images/confirm.png)
+   ![The "Use as Home?" confirmation](docs/images/confirm.webp)
 
 4. When "Done. Press Home to try it." appears, press Home.
 
-   ![The "Done. Press Home to try it." message](docs/images/done.png)
+   ![The "Done. Press Home to try it." message](docs/images/done.webp)
 
 The change takes effect at once; no restart is needed. Nothing changes unless you confirm.
 
