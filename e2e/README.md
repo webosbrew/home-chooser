@@ -66,14 +66,13 @@ python3 -I e2e/homechooser_e2e.py --list
 python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
-Options: `--launcher dock|fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `dock`, with `--api-check`
-`fixture:web.normal`; an app id needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
+Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|<app id>` (default `fixture:web.normal`; an app id, for a real
+launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
 Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
-`--dock-ipk <path>` (required for Dock unless configured in `hosts.toml`);
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
@@ -231,7 +230,7 @@ TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
 | Release | VM | Elevation | How sure |
 | --- | --- | --- | --- |
 | 5.x | `w20l-jhericurl` | luna | verified: 5.6.1 (os-release) |
-| 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (os-release). `w21p-kisscurl` (6.6.0) belongs to the Dock project and is not in the matrix |
+| 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (os-release). `w21p-kisscurl` (6.6.0) belongs to another project and is not in the matrix |
 | 7.x | `w22p-mullet` | luna | verified: 7.6.0 |
 | 8.x | `w22o-number1` | luna | verified: 8.3.0 (beanjar's "webOS 23" is a platform label) |
 | 9.x | `w22h-ombre` | luna | verified: 9.2.1 |
@@ -313,7 +312,7 @@ VM through the normal stop/start/VNC path before any HOME tests, clearing inject
 Host helper code must use `python3` with the standard library only (or baseline POSIX shell/coreutils), without extra tools such as socat, nc, jq or grim; Beanjar itself is required.
 
 The Beanjar machines are listed in `e2e/hosts.toml`; `e2e/hosts.local.toml` (git-ignored) is read over
-it, for this PC's own machines and `[paths]`. Without either file the one machine is today's: `pi`,
+it, for this PC's own machines. Without either file the one machine is today's: `pi`,
 reached with `ssh raspberrypi`, so a single-machine run needs no configuration.
 
 ```toml
@@ -443,7 +442,7 @@ and Home key hook docs.
    inspector, reopens, and asserts no toast and the marker cleared), and after the
    apply the panel is opened again with no error toast and the chosen row ticked.
 3. Home from an ordinary app (Homebrew Channel; docs T4): the launcher is running after having
-   been closed first, or in front (a launcher bar like Dock is an overlay window, so the app
+   been closed first, or in front (an overlay launcher bar is an overlay window, so the app
    beneath stays "foreground"). A press with the stock home in front is only observed. On 6 to 9
    this needs the boot of step 2, which has happened by then.
 4. `ares-install --remove` the launcher: record `home` is the stock id on 5.x to 9.x
@@ -627,10 +626,10 @@ built from your ipk, not with the permission, and the overlay rule of the preloa
 appinfo's `defaultWindowType`. Your launcher's own behaviour is not tested (whatever it calls at start, its
 UI). The run removes your launcher at the end like any other.
 
-## Launchers: Dock and the fixtures
+## Launchers: the fixtures and your own
 
-`--launcher dock` installs Dock from the ipk that `--dock-ipk` or `[paths] dock_ipk` in
-`e2e/hosts.local.toml` names; there is no default. The six fixtures
+The default launcher is `fixture:web.normal`. A real launcher is tested as an app id with `--launcher-ipk <path>`
+(see "Checking your own launcher"); there is no built-in special case for any one project. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
@@ -639,7 +638,7 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
   running for every launcher, on 6.x to 9.x the home gate keeps it from running, on 11.x and 12.x it is closed for every launcher. `Launcher.overlay`
   (`defaultWindowType == "overlay"` in the ipk's `appinfo.json`) is still logged and still decides how "Home opens
   the launcher" is observed (an overlay leaves the app underneath in the foreground).
-* **Launch proof** (every Home press that should open the launcher, for Dock, any `--launcher-ipk` app and the
+* **Launch proof** (every Home press that should open the launcher, for any `--launcher-ipk` app and the
   fixtures alike: steps 3, 4 and 3u). Nothing visual is evidence; `beanjar screenshot` pictures are kept as artefacts
   only. The check passes when both hold:
   1. sam's own record of the launch. Before the press the runner starts `luna-send -i

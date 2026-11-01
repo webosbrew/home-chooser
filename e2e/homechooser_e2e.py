@@ -93,7 +93,7 @@ def service_log_command(mark, message_id):
 MATRIX = [
     # release, vm, elevation, sure, note
     ('5.x', ('w20l-jhericurl-rk1', 'w20l-jhericurl'), 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
-    ('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to the Dock project and is not in the matrix)'),
+    ('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to another project and is not in the matrix)'),
     ('9.x', 'w24g-ombre', 'luna', 'verified', 'W24G 33.20.23.01 = 9.2.4; os-release read 2026-10-23'),
     ('9.x', 'w24p-ombre', 'luna', 'docs', 'W24P 33.20.23.01 = 9.2.4-4603 per firmware metadata; os-release to be read'),
     ('7.x', ('w22p-mullet-rk1', 'w22p-mullet'), 'luna', 'verified', 'W22P 04.60.90.01 = 7.6.0; os-release read 2026-10-22'),
@@ -897,11 +897,9 @@ def api_refused(reply):
 
 
 # ---------------------------------------------------------------------------------------------
-# Launchers under test: Dock, one of the six fixtures in e2e/fixtures ({native,qml,web} x
+# Launchers under test: one of the six fixtures in e2e/fixtures ({native,qml,web} x
 # {normal,overlay}), or any app id with --launcher-ipk.
 # ---------------------------------------------------------------------------------------------
-DOCK_ID = 'org.webosbrew.dock'
-DOCK_IPK = None  # Dock is optional; supply --dock-ipk or hosts.toml [paths] dock_ipk
 FIXTURE_TYPES = ('native', 'qml', 'web')
 FIXTURE_WINDOWS = ('normal', 'overlay')
 FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures')
@@ -997,13 +995,9 @@ def api_fixture_ipks(announce=print):
     return have
 
 
-def make_launcher(spec, ipk_override=None, announce=print, dock_ipk=DOCK_IPK, api=False):
+def make_launcher(spec, ipk_override=None, announce=print, api=False):
     """api (--api-check): a web fixture comes from the build with the permission; native and qml
     fixtures cannot declare it."""
-    if spec == 'dock':
-        if not (ipk_override or dock_ipk):
-            raise SystemExit('Dock has no default ipk; use --dock-ipk or --launcher-ipk, or choose fixture:web.normal')
-        return Launcher(spec, DOCK_ID, ipk_override or dock_ipk, 'dock')
     if spec.startswith('fixture:'):
         t, _, w = spec[8:].partition('.')
         if t not in FIXTURE_TYPES or w not in FIXTURE_WINDOWS:
@@ -1100,24 +1094,22 @@ def entry(release_or_vm):
 # ---------------------------------------------------------------------------------------------
 HOSTS_FILE = os.path.join(HERE, 'hosts.toml')
 HOSTS_LOCAL_FILE = os.path.join(HERE, 'hosts.local.toml')
-DEFAULT_HOSTS = {'default': 'pi', 'hosts': {'pi': {'ssh': 'raspberrypi'}}, 'paths': {}}
+DEFAULT_HOSTS = {'default': 'pi', 'hosts': {'pi': {'ssh': 'raspberrypi'}}}
 
 
 def load_hosts(path=None):
-    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]},
-    'paths': {...}}.  path: one file instead of hosts.toml + hosts.local.toml."""
+    """{'default': name, 'hosts': {name: {'ssh': alias} or {'local': True}, optional 'vms': [...]}}.  path: one file instead of hosts.toml + hosts.local.toml."""
     import tomllib
     files = [path] if path else [f for f in (HOSTS_FILE, HOSTS_LOCAL_FILE) if os.path.exists(f)]
     if not files:
         return json.loads(json.dumps(DEFAULT_HOSTS))
-    cfg = {'default': None, 'hosts': {}, 'paths': {}}
+    cfg = {'default': None, 'hosts': {}}
     for f in files:
         with open(f, 'rb') as fh:
             d = tomllib.load(fh)
         cfg['default'] = d.get('default', cfg['default'])
         for name, h in d.get('hosts', {}).items():
             cfg['hosts'].setdefault(name, {}).update(h)
-        cfg['paths'].update(d.get('paths', {}))
     for name, h in cfg['hosts'].items():
         import math
         if not math.isfinite(float(h.get('slowdown', 1.0))) or float(h.get('slowdown', 1.0)) < 1:
@@ -2887,7 +2879,7 @@ class Scenario:
     def home_press(self, expect, label, from_app=True):
         """Press Home from an ordinary app.  The stock home must be in the foreground afterwards;
         a launcher counts when it is running (it was closed first) or in the foreground: a
-        launcher bar such as Dock is an overlay window, so the app underneath stays "foreground"."""
+        overlay launcher bar is an overlay window, so the app underneath stays "foreground"."""
         r = self.rec
         proof = expect == self.launcher
         if proof:
@@ -5076,8 +5068,8 @@ class Scenario:
         if self.insp:
             self.insp.close()
         if self.vm in KEEP_LAUNCHER_VMS:
-            r.note('this VM keeps Dock installed and selected: restore by hand (Home Chooser must be '
-                   'installed and Dock chosen through its UI); the runner does not do that yet', '')
+            r.note('this VM keeps its launcher installed and selected: restore by hand (Home Chooser must be '
+                   'installed and the launcher chosen through its UI); the runner does not do that yet', '')
         else:
             removed_hc = False
             apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else [])
@@ -5340,9 +5332,7 @@ def run_device_api(args, ap):
         ap.error('--device requires --api-check and cannot be combined with VM, matrix, update, reboot or build options')
     args.input = 'ares'
     spec = args.launcher or 'fixture:web.normal'
-    if spec == 'dock' and not (args.launcher_ipk or args.dock_ipk):
-        ap.error('Dock is optional: pass --dock-ipk or --launcher-ipk, or use the web fixture')
-    launcher = make_launcher(spec, args.launcher_ipk, dock_ipk=args.dock_ipk, api=True)
+    launcher = make_launcher(spec, args.launcher_ipk, api=True)
     args.disposable_ipk = api_fixture_ipks()[DISPOSABLE_ID]
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' %
                                         (args.device, time.strftime('%Y%m%d-%H%M%S')))
@@ -5379,12 +5369,12 @@ def main():
     ap.add_argument('--vm', help='a VM name or a release (e.g. w22h-ombre or 9.x)')
     ap.add_argument('--device', help='an existing root-capable ares device name; run --api-check without Beanjar or reboot')
     ap.add_argument('--launcher', default=None,
-                    help="'dock' (default; with --api-check fixture:web.normal), 'fixture:<native|qml|web>.<normal|overlay>', "
+                    help="'fixture:<native|qml|web>.<normal|overlay>' (default fixture:web.normal), "
                          "or an app id with --launcher-ipk (an author's own launcher)")
     ap.add_argument('--launchers', default=None,
                     help="'all-fixtures' or a comma list of --launcher values: the scenario runs once per launcher on the "
                          "same VM, in sequence, with cleanup between")
-    ap.add_argument('--launcher-ipk', default=None, help='ipk of --launcher when it is an app id (or to replace Dock\'s)')
+    ap.add_argument('--launcher-ipk', default=None, help='ipk of --launcher when it is an app id')
     ap.add_argument('--launcher-update-check', action='store_true',
                     help='after selection install a newer version of the same launcher id and verify Home stays selected')
     ap.add_argument('--launcher-update-ipk', default=None,
@@ -5402,7 +5392,6 @@ def main():
     ap.add_argument('--host-mode', choices=['local', 'remote'], default=None,
                     help="override the host's mode: beanjar run here, or over ssh")
     ap.add_argument('--host-device', default=None, help="override the host's ssh target (an ssh config alias)")
-    ap.add_argument('--dock-ipk', default=None, help='optional Dock ipk (otherwise hosts.toml [paths] dock_ipk in VM mode)')
     ap.add_argument('--hc-ipk', default=None, help='the Home Chooser ipk to test (default: the newest build/ipk/*.ipk)')
     ap.add_argument('--old-ipk', default=None, help='--update-check: the older Home Chooser ipk, already built (skips the build)')
     ap.add_argument('--outdir', default=None, help='the result directory (default e2e/results/<vm>-<timestamp>); must not exist')
@@ -5438,7 +5427,7 @@ def main():
     if args.list:
         for m in MATRIX:
             print('%-5s %-18s %-10s %-9s %s' % (m[0], ' | '.join(candidates(m[1])), *m[2:]))
-        print('launchers: dock, %s' % ', '.join(fixture_specs()))
+        print('launchers: %s' % ', '.join(fixture_specs()))
         return 0
     if args.device:
         if args.scenario != 'lifecycle' or args.saver_start != 'tvpower':
@@ -5453,16 +5442,15 @@ def main():
     if args.launchers:
         specs = fixture_specs() if args.launchers == 'all-fixtures' else [x for x in args.launchers.split(',') if x]
     else:
-        specs = [args.launcher or ('fixture:web.normal' if args.api_check or args.scenario != 'lifecycle' else 'dock')]
+        specs = [args.launcher or 'fixture:web.normal']
     args.multi = len(specs) > 1
     if args.launcher_update_check and not args.launcher_update_ipk and any(not s.startswith('fixture:web.') for s in specs):
         ap.error('--launcher-update-check needs --launcher-update-ipk unless using a web fixture')
     if args.multi and vm in KEEP_LAUNCHER_VMS:
         ap.error('%s keeps its launcher installed; run one launcher at a time there' % vm)
     cfg = load_hosts(args.hosts_file)
-    dock_ipk = args.dock_ipk or cfg['paths'].get('dock_ipk') or DOCK_IPK
     launchers = [make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None,
-                               lambda t: print(t, flush=True), dock_ipk, api=args.api_check) for sp in specs]
+                               lambda t: print(t, flush=True), api=args.api_check) for sp in specs]
     if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
         ap.error('--scenario screensaver/all requires a normal fixture launcher')
     args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None

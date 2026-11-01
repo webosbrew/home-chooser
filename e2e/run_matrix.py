@@ -319,12 +319,10 @@ def build_once(args, outroot, cfg):
             args.old_ipk = shutil.copy(old, os.path.join(outroot, 'ipk', 'old'))
             shutil.rmtree(tmp, ignore_errors=True)
             rec.say('old Home Chooser ipk (%s): %s' % (args.update_from, args.old_ipk))
-        args.dock_ipk = args.dock_ipk or cfg['paths'].get('dock_ipk') or e2e.DOCK_IPK
         specs = (e2e.fixture_specs() if args.launchers == 'all-fixtures' else args.launchers.split(',')) \
-            if args.launchers else [args.launcher or ('fixture:web.normal' if args.api_check else 'dock')]
+            if args.launchers else [args.launcher or 'fixture:web.normal']
         for sp in [s for s in specs if s]:  # builds missing fixture ipks now, not in N runs at once
-            e2e.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say, args.dock_ipk,
-                              api=args.api_check)
+            e2e.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say, api=args.api_check)
         if args.api_check:  # the permission-built web fixtures and the disposable app
             e2e.api_fixture_ipks(rec.say)
     finally:
@@ -336,7 +334,7 @@ def build_once(args, outroot, cfg):
 def runner_command(args, rest):
     def command(run):
         argv = RUNNER + ['--vm', run['vm'], '--host', run['host'], '--outdir', run['outdir']]
-        for flag, value in (('--hosts-file', args.hosts_file), ('--hc-ipk', args.hc_ipk), ('--dock-ipk', args.dock_ipk),
+        for flag, value in (('--hosts-file', args.hosts_file), ('--hc-ipk', args.hc_ipk),
                             ('--launcher', args.launcher), ('--launchers', args.launchers),
                             ('--launcher-ipk', args.launcher_ipk), ('--update-from', args.update_from),
                             ('--old-ipk', args.old_ipk)):
@@ -362,7 +360,6 @@ def main(argv=None, lister=None, busy=None):
     ap.add_argument('--results', default=os.path.join(HERE, 'results'), help='where matrix-<timestamp>/ goes')
     ap.add_argument('--build', action='store_true', help='npm run package once, before any run')
     ap.add_argument('--hc-ipk', default=None)
-    ap.add_argument('--dock-ipk', default=None)
     ap.add_argument('--launcher', default=None)
     ap.add_argument('--launchers', default=None)
     ap.add_argument('--launcher-ipk', default=None)

@@ -70,7 +70,7 @@ the six built by `build.sh`.
 
 ## What the runner proves
 
-The same for native, qml, web and Dock (`homechooser_e2e.py` `launch_proof`, run after each Home press that should
+The same for native, qml, web and any `--launcher-ipk` app (`homechooser_e2e.py` `launch_proof`, run after each Home press that should
 open the launcher): sam's own record naming the id, plus the id in `applicationManager/running` with a live pid.
 
 * `/var/log/messages` lines of the form `<UTC ts>Z [<uptime>] user.info sam [] SAM NL_APP_LAUNCH_BEGIN

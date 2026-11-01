@@ -52,7 +52,7 @@ def write(path, text):
         f.write(text)
 
 
-CFG = {'default': 'a', 'paths': {}, 'hosts': {'a': {'ssh': 'host-a'}, 'b': {'ssh': 'host-b'}, 'c': {'local': True}}}
+CFG = {'default': 'a', 'hosts': {'a': {'ssh': 'host-a'}, 'b': {'ssh': 'host-b'}, 'c': {'local': True}}}
 
 
 class Fixture(unittest.TestCase):
@@ -298,7 +298,7 @@ class Main(Fixture):
             import run_matrix
             run_matrix.RUNNER = [sys.executable, '-I', %r]
             sys.exit(run_matrix.main(['--vms', 'w20l-jhericurl,w22h-ombre,w24g-spacebuns', '--hosts-file', %r,
-                                      '--hc-ipk', %r, '--dock-ipk', '/nonexistent.ipk', '--results', %r],
+                                      '--hc-ipk', %r, '--results', %r],
                                      lister=lambda h: ['w20l-jhericurl', 'w22h-ombre'] if h == 'a' else ['w24g-spacebuns'],
                                      busy=lambda h: []))
         ''') % (HERE, self.runner, hosts, hc, self.tmp)
@@ -329,7 +329,7 @@ class Main(Fixture):
         try:
             with contextlib.redirect_stdout(io.StringIO()) as out:
                 rc = run_matrix.main(['--vms', 'w20l-jhericurl,w22h-ombre,w24g-spacebuns', '--hosts-file', hosts,
-                                      '--hc-ipk', hc, '--dock-ipk', os.path.join(self.tmp, 'no-dock.ipk'),
+                                      '--hc-ipk', hc,
                                       '--results', self.tmp, '--wait-popup', '60', '--reboot-check'],
                                      lister=lambda h: ['w20l-jhericurl', 'w22h-ombre'] if h == 'a' else ['w24g-spacebuns'],
                                      busy=lambda h: [])
@@ -399,8 +399,7 @@ class HostsConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             base, local = os.path.join(d, 'hosts.toml'), os.path.join(d, 'hosts.local.toml')
             write(base, 'default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n')
-            write(local, '[hosts.pi]\nvms = ["w22h-ombre"]\n[hosts.box]\nlocal = true\n'
-                                   '[paths]\ndock_ipk = "/x/dock.ipk"\n')
+            write(local, '[hosts.pi]\nvms = ["w22h-ombre"]\n[hosts.box]\nlocal = true\n')
             saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
             e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = base, local
             try:
@@ -409,7 +408,6 @@ class HostsConfig(unittest.TestCase):
                 e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = saved
         self.assertEqual(cfg['hosts']['pi'], {'ssh': 'raspberrypi', 'vms': ['w22h-ombre']})
         self.assertEqual(e2e.BeanjarHost.from_config(cfg, 'box').mode, 'local')
-        self.assertEqual(cfg['paths']['dock_ipk'], '/x/dock.ipk')
 
     def test_committed_hosts_file_parses(self):
         cfg = e2e.load_hosts(e2e.HOSTS_FILE)

@@ -860,7 +860,7 @@ class StockRecord(unittest.TestCase):
         for home in (FULL, HOME):
             self.assertTrue(e2e.stock_record_ok(5, home))
             self.assertTrue(e2e.stock_record_ok(5, home, FULL))  # the id is not pinned on 5.x
-        for home in (None, '', 'null', 'org.webosbrew.dock'):
+        for home in (None, '', 'null', 'org.example.launcher'):
             self.assertFalse(e2e.stock_record_ok(5, home))
 
     def test_6_to_9_require_the_stock_id_not_null(self):
@@ -869,7 +869,7 @@ class StockRecord(unittest.TestCase):
             self.assertTrue(e2e.stock_record_ok(major, FULL, FULL))
             self.assertFalse(e2e.stock_record_ok(major, FULL, HOME), 'the resolved id, exactly')
             self.assertFalse(e2e.stock_record_ok(major, HOME, FULL))
-            for home in (None, '', 'null', 'org.webosbrew.dock'):
+            for home in (None, '', 'null', 'org.example.launcher'):
                 self.assertFalse(e2e.stock_record_ok(major, home, HOME), (major, home))
             # stock id not resolved: either stock launcher, never null
             self.assertTrue(e2e.stock_record_ok(major, HOME))
@@ -879,7 +879,7 @@ class StockRecord(unittest.TestCase):
         for major in (10, 11, 12):
             for home in (None, '', 'null'):
                 self.assertTrue(e2e.stock_record_ok(major, home), (major, home))
-            for home in (HOME, FULL, 'org.webosbrew.dock'):
+            for home in (HOME, FULL, 'org.example.launcher'):
                 self.assertFalse(e2e.stock_record_ok(major, home), (major, home))
 
     def test_stock_home_id_resolution(self):
@@ -892,7 +892,7 @@ class StockRecord(unittest.TestCase):
     def test_baseline_on_6_to_9_accepts_unset_or_a_left_stock_id(self):
         for home in (None, '', 'null', HOME, FULL):
             self.assertTrue(e2e.stock_baseline_ok(8, home))
-        self.assertFalse(e2e.stock_baseline_ok(8, 'org.webosbrew.dock'))
+        self.assertFalse(e2e.stock_baseline_ok(8, 'org.example.launcher'))
         self.assertFalse(e2e.stock_baseline_ok(10, HOME))
         self.assertFalse(e2e.stock_baseline_ok(5, None))
 
@@ -937,7 +937,7 @@ class Texts(unittest.TestCase):
         self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the hook.')
         self.assertEqual(e2e.REBOOT_PROMPT, {'apply': 'Restart the TV to finish setting up the Home button.',
                                              'remove': 'Restart the TV to finish removing the Home button patch.'})
-        self.assertNotIn('restart', (e2e.REMOVAL_ALERT % 'Dock').lower())
+        self.assertNotIn('restart', (e2e.REMOVAL_ALERT % 'Launcher').lower())
         self.assertNotIn('restart', e2e.UNINSTALL_TOAST.lower())
 
     def test_the_old_restart_wording_is_gone_from_the_product(self):
@@ -1878,7 +1878,7 @@ class HomeAndScreensaver(unittest.TestCase):
         for fixture, overlay in ((True, True), (False, False)):
             with self.subTest(fixture=fixture, overlay=overlay), \
                     patch.object(sys, 'argv', ['runner', '--vm', '10.x', '--scenario', 'screensaver']), \
-                    patch.object(e2e, 'load_hosts', return_value={'paths': {}}), \
+                    patch.object(e2e, 'load_hosts', return_value={}), \
                     patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(is_fixture=fixture, overlay=overlay)), \
                     patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), \
                     contextlib.redirect_stderr(io.StringIO()):
@@ -2360,6 +2360,14 @@ class ApiLaunchers(unittest.TestCase):
         self.assertEqual((L.id, L.ipk, L.is_fixture), ('org.webosbrew.hcfixture.web.normal', '/nonexistent/web.ipk', True))
         author = e2e.make_launcher('org.example.launcher', '/nonexistent/author.ipk', api=True)
         self.assertEqual((author.id, author.is_fixture), ('org.example.launcher', False))
+        self.assertEqual((author.spec, author.kind, author.tag), ('org.example.launcher', 'app', 'org.example.launcher'))
+        with self.assertRaises(SystemExit):  # an app id without --launcher-ipk, and no special ids
+            e2e.make_launcher('org.webosbrew.dock')
+
+    def test_no_dock_special_case_is_left(self):
+        self.assertFalse(hasattr(e2e, 'DOCK_IPK') or hasattr(e2e, 'DOCK_ID'))
+        for src in (e2e.main, run_matrix.build_once, run_matrix.runner_command):
+            self.assertNotIn('dock', __import__('inspect').getsource(src).lower())
 
     def test_disposable_fixture_declares_no_home_and_no_permission(self):
         with open(os.path.join(HERE, 'fixtures', 'disposable', 'build.sh')) as f:
@@ -2530,7 +2538,7 @@ class HostInput(unittest.TestCase):
                     for name in ['prepare_vm', 'clean_launchers', 'restart_after_launcher_cleanup']:
                         stack.enter_context(patch.object(e2e, name))
                     stack.enter_context(patch.object(e2e, 'wait_for_device', return_value=e2e.READY))
-                    stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1', 'paths': {}}))
+                    stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1'}))
                     stack.enter_context(patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(spec='test', id='test')))
                     stack.enter_context(patch.object(e2e.BeanjarHost, 'from_config', return_value=host))
                     stack.enter_context(patch.object(e2e, 'Recorder', return_value=rec))
