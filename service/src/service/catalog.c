@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* listApps, listLaunchPoints, listInputs and getIcons (docs/launcher-api.md). Every call reads the
- * platform afresh; the service keeps no copy of a list or an icon. */
+/* listApps, listLaunchPoints, listInputs, listRunning, getForegroundApp and getIcons
+ * (docs/launcher-api.md). Every call reads the platform afresh; the service keeps no copy of a list,
+ * the foreground app or an icon. */
 #include <limits.h>
 #include <string.h>
 #include "apps.h"
@@ -13,18 +14,24 @@
 #include "service/methods.h"
 #include "service/reply.h"
 
-static const char *const LIST_METHODS[] = {"listApps", "listLaunchPoints", "listInputs"};
+static const char *const LIST_METHODS[] = {"listApps", "listLaunchPoints", "listInputs", "listRunning", "getForegroundApp"};
 static const char *const LIST_URIS[] = {
-	SAM_URI "/listApps", SAM_URI "/listLaunchPoints", EIM_URI "/getAllInputStatus"
+	SAM_URI "/listApps", SAM_URI "/listLaunchPoints", EIM_URI "/getAllInputStatus", SAM_URI "/running",
+	SAM_URI "/getForegroundAppInfo"
 };
-/* The array each platform reply carries, and the name the launcher reply gives it. */
-static const char *const PLATFORM_KEYS[] = {"apps", "launchPoints", "devices"};
-static const char *const REPLY_KEYS[] = {"apps", "launchPoints", "inputs"};
-static const char *const WHO[] = {"application manager", "application manager", "input manager"};
+/* The array each platform reply carries, and the name the launcher reply gives it (none for the
+ * foreground app, whose reply is an object of its own). */
+static const char *const PLATFORM_KEYS[] = {"apps", "launchPoints", "devices", "running", NULL};
+static const char *const REPLY_KEYS[] = {"apps", "launchPoints", "inputs", "running", NULL};
+static const char *const WHO[] = {
+	"application manager", "application manager", "input manager", "application manager", "application manager"
+};
 static const char *const BAD_ARRAY[] = {
 	"The application manager did not return an app array",
 	"The application manager did not return a launch point array",
-	"The input manager did not return a device array"
+	"The input manager did not return a device array",
+	"The application manager did not return an app array",
+	"The application manager returned an invalid appId"
 };
 
 const char *list_method(HCListKind kind) { return LIST_METHODS[kind]; }
@@ -131,8 +138,28 @@ static jvalue_ref pick_inputs(jvalue_ref arr)
 	return out;
 }
 
+/* getForegroundApp: appId ("" when the platform has none), windowId and processId when given. */
+static jvalue_ref foreground_reply(jvalue_ref reply, bool subscribed)
+{
+	jvalue_ref v = reply ? jobject_get(reply, key_buf("appId")) : NULL;
+	if (!reply || (v && jis_valid(v) && !jis_null(v) && !jis_string(v))) return NULL;
+	char *app_id = get_string(reply, "appId");
+	char *window_id = get_string(reply, "windowId");
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	put_int(o, "apiVersion", HC_API_VERSION);
+	if (subscribed) put_bool(o, "subscribed", true);
+	put_str(o, "appId", app_id ? app_id : "");
+	if (window_id) put_str(o, "windowId", window_id);
+	put_normalized_pid(o, "processId", reply, "processId");
+	g_free(app_id);
+	g_free(window_id);
+	return o;
+}
+
 jvalue_ref list_reply(HCListKind kind, jvalue_ref reply, bool subscribed)
 {
+	if (kind == HC_LIST_FOREGROUND) return foreground_reply(reply, subscribed);
 	jvalue_ref arr = reply ? jobject_get(reply, key_buf(PLATFORM_KEYS[kind])) : NULL;
 	if (!arr || !jis_valid(arr) || !jis_array(arr)) return NULL;
 	jvalue_ref o = jobject_create();
@@ -140,11 +167,12 @@ jvalue_ref list_reply(HCListKind kind, jvalue_ref reply, bool subscribed)
 	put_int(o, "apiVersion", HC_API_VERSION);
 	if (subscribed) put_bool(o, "subscribed", true);
 	jobject_set(o, key_buf(REPLY_KEYS[kind]), kind == HC_LIST_APPS ? pick_fields(arr, LIST_FIELDS) :
-		kind == HC_LIST_LAUNCH_POINTS ? pick_launch_points(arr) : pick_inputs(arr));
+		kind == HC_LIST_LAUNCH_POINTS ? pick_launch_points(arr) : kind == HC_LIST_INPUTS ? pick_inputs(arr) :
+		pick_running(arr));
 	return o;
 }
 
-/* ---- the list methods ---- */
+/* ---- the subscribable methods ---- */
 
 static HCListKind op_kind(LOp *op)
 {
@@ -174,11 +202,11 @@ static void list_next(LOp *op)
 	HCListKind kind = op_kind(op);
 	if (op->subscribe && !subs_room(op->sh, kind)) {
 		LOGE("REFUSED", "%s subscription from %s: %d subscribers already", op->method, op->caller, HC_SUBSCRIBERS_MAX);
-		send_error_for(op->msg, op->method, "tooManySubscriptions", "This list has the most subscribers it takes; cancel one first");
+		send_error_for(op->msg, op->method, "tooManySubscriptions", "This method has the most subscribers it takes; cancel one first");
 		op_free(op);
 		return;
 	}
-	/* The first reply, subscription or not, is a fresh read of the whole list. */
+	/* The first reply, subscription or not, is a fresh read of the whole state. */
 	char *payload = list_payload(kind, false);
 	call_start(LIST_URIS[kind], payload, list_done, op);
 	g_free(payload);
@@ -210,6 +238,20 @@ bool on_launcher_list_inputs(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)ctx;
 	list_begin(sh, msg, HC_LIST_INPUTS);
+	return true;
+}
+
+bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)ctx;
+	list_begin(sh, msg, HC_LIST_RUNNING);
+	return true;
+}
+
+bool on_launcher_get_foreground(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)ctx;
+	list_begin(sh, msg, HC_LIST_FOREGROUND);
 	return true;
 }
 

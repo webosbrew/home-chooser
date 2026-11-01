@@ -8,8 +8,10 @@
 // Chooser methods answer from HomeChooser.mock (edit it in the console), with the caller checks in
 // the service's order, and luna://com.webos.applicationManager/launch is logged and succeeds.
 // ?hcmock=<scenario> in the page URL picks the getInfo state: before-elevation, not-home, not-permitted, selected-home, absent.
+// ?hcmock-apps=<n> lists n apps (default 20: the spec's example apps, then made-up ones).
 // Subscriptions answer at once and again on HomeChooser.mock.notify(method); ?hcmock-changes=<ms> also
-// flips the last input's connected state every <ms> and notifies the listInputs subscribers.
+// flips the last input's connected state every <ms>, brings the next app to the foreground (and into the
+// running list), and notifies the listInputs, getForegroundApp and listRunning subscribers.
 (function (root) {
 	'use strict';
 	var HC = root.HomeChooser;
@@ -53,7 +55,7 @@
 			"timeout": "A bounded application manager call reached its time limit.",
 			"refused": "The application manager explicitly refused an operation or target lookup for a reason other than absence.",
 			"badReply": "The application manager did not provide usable JSON, or its successful list reply lacked the expected array.",
-			"tooManySubscriptions": "A list already has 16 subscribers.",
+			"tooManySubscriptions": "The method already has 16 subscribers.",
 			"internal": "The service could not make a confirmation token."
 		},
 		"scenarios": {
@@ -104,6 +106,168 @@
 				"removable": true
 			}
 		],
+		"moreApps": [
+			{
+				"id": "org.example.weather",
+				"title": "Weather",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.weather",
+				"removable": true,
+				"iconColor": "#2a7fd4"
+			},
+			{
+				"id": "org.example.photos",
+				"title": "Photos",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.photos",
+				"removable": true,
+				"iconColor": "#e2584a",
+				"bgColor": "#ffffff"
+			},
+			{
+				"id": "org.example.music",
+				"title": "Music",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.music",
+				"removable": true
+			},
+			{
+				"id": "org.example.podcasts",
+				"title": "Podcasts",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.podcasts",
+				"removable": true,
+				"iconColor": "#8a3fc7"
+			},
+			{
+				"id": "org.example.news",
+				"title": "News Today",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.news",
+				"removable": true
+			},
+			{
+				"id": "org.example.recipes",
+				"title": "Recipes",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.recipes",
+				"removable": true,
+				"bgColor": "#f4e7d3"
+			},
+			{
+				"id": "org.example.fitness",
+				"title": "Fitness at Home",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.fitness",
+				"removable": true,
+				"iconColor": "#1c9c6b"
+			},
+			{
+				"id": "org.example.cartoons",
+				"title": "Kids Cartoons",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.cartoons",
+				"removable": true,
+				"iconColor": "#f2b705",
+				"bgColor": "#202020"
+			},
+			{
+				"id": "org.example.moviestore",
+				"title": "Movie Store",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.moviestore",
+				"removable": true
+			},
+			{
+				"id": "org.example.radio",
+				"title": "Internet Radio",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.radio",
+				"removable": true,
+				"iconColor": "#d43f6a"
+			},
+			{
+				"id": "org.example.chess",
+				"title": "Chess",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.chess",
+				"removable": true
+			},
+			{
+				"id": "org.example.sports",
+				"title": "Sports Live",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.sports",
+				"removable": true,
+				"iconColor": "#0e5aa7",
+				"bgColor": "#0e5aa7"
+			},
+			{
+				"id": "org.example.travel",
+				"title": "Travel Guide",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.travel",
+				"removable": true
+			},
+			{
+				"id": "org.example.karaoke",
+				"title": "Karaoke Night",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.karaoke",
+				"removable": true,
+				"iconColor": "#c2185b"
+			},
+			{
+				"id": "org.example.browser",
+				"title": "Web Browser",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.browser",
+				"removable": true
+			},
+			{
+				"id": "org.example.gallery",
+				"title": "Art Gallery",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.gallery",
+				"removable": true,
+				"bgColor": "#111111"
+			},
+			{
+				"id": "org.example.yoga",
+				"title": "Yoga",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.yoga",
+				"removable": true,
+				"iconColor": "#6d757f"
+			},
+			{
+				"id": "org.example.helper",
+				"title": "Background Helper",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.helper",
+				"removable": false,
+				"visible": false
+			}
+		],
+		"appCount": 20,
 		"running": [
 			{
 				"id": "org.example.app",
@@ -202,6 +366,8 @@
 		"appIdPattern": "^[A-Za-z0-9._-]{1,128}$",
 		"subscribing": [
 			"listApps",
+			"listRunning",
+			"getForegroundApp",
 			"listLaunchPoints",
 			"listInputs"
 		],
@@ -228,13 +394,23 @@
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getForegroundApp": {
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getAppInfo": {
 				"needsRoot": true,
@@ -349,11 +525,21 @@
 		scenario = 'selected-home';
 	}
 
+	// n apps: the example apps, the made-up ones, then numbered ones.
+	function mockApps(n) {
+		var apps = DATA.apps.concat(DATA.moreApps);
+		for (var i = apps.length + 1; apps.length < n; i++) {
+			apps.push({id: 'org.example.mock' + i, title: 'Mock App ' + i, icon: 'icon.png', removable: true});
+		}
+		return copy(apps.slice(0, n));
+	}
+	var count = /[?&]hcmock-apps=(\d+)/.exec((root.location && root.location.search) || '');
+
 	var mock = {
 		scenario: scenario,
 		callerId: DATA.callerId,
 		info: copy(DATA.scenarios[scenario] || DATA.scenarios['selected-home']),
-		apps: copy(DATA.apps),
+		apps: mockApps(count ? Number(count[1]) : DATA.appCount),
 		running: copy(DATA.running),
 		foreground: copy(DATA.foreground),
 		launchPoints: copy(DATA.launchPoints),
@@ -410,7 +596,7 @@
 		return null;
 	}
 
-	// The list reply of a subscribing method, with subscribed true on a subscription.
+	// The list reply of a method that subscribes, with subscribed true on a subscription.
 	function list(key, items, params) {
 		var fields = {};
 		if (params && params.subscribe === true) fields.subscribed = true;
@@ -455,15 +641,19 @@
 			for (var i = 0; i < items.length; i++) {
 				var key = iconItemKey(items[i]);
 				if (!key) return fail('badRequest');
-				icons.push(copy(mock.batchIcons[key] || {errorCode: 'notFound', errorText: 'No such item (mock)'}));
+				var known = key.indexOf('id:') === 0 && findApp(key.slice(3).split('#')[0]);
+				icons.push(copy(mock.batchIcons[key] || (known ? {errorCode: 'noIcon', errorText: 'No icon (mock)'} :
+					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
 			}
 			return success({icons: icons});
 		},
-		listRunning: function () {
-			return success({running: copy(mock.running)});
+		listRunning: function (params) {
+			return list('running', mock.running, params);
 		},
-		getForegroundApp: function () {
-			return success(copy(mock.foreground));
+		getForegroundApp: function (params) {
+			var reply = success(copy(mock.foreground));
+			if (params && params.subscribe === true) reply.subscribed = true;
+			return reply;
 		},
 		getAppInfo: function (params) {
 			var app = findApp(params.id);
@@ -508,7 +698,7 @@
 		return {returnValue: false, errorCode: -1, errorText: 'Unknown service (mock: only Home Chooser and ' + DATA.launchUri + ' are faked)'};
 	}
 
-	// Subscriptions: per list method, the onMessage functions of the open ones.
+	// Subscriptions: per method, the onMessage functions of the open ones.
 	var subscribers = {};
 
 	mock.notify = function (method) {
@@ -537,12 +727,22 @@
 	});
 
 	var changes = /[?&]hcmock-changes=(\d+)/.exec((root.location && root.location.search) || '');
+	var turn = 0;
 	if (changes && Number(changes[1]) > 0) {
 		setInterval(function () {
 			var input = mock.inputs[mock.inputs.length - 1];
-			if (!input) return;
-			input.connected = !input.connected;
-			mock.notify('listInputs');
+			if (input) {
+				input.connected = !input.connected;
+				mock.notify('listInputs');
+			}
+			// The next visible app other than the caller comes to the foreground, as if the owner opened it.
+			var shown = mock.apps.filter(function (a) { return a.id !== mock.callerId && a.visible !== false; });
+			if (!shown.length) return;
+			var app = shown[turn++ % shown.length];
+			mock.foreground = {appId: app.id};
+			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
+			mock.notify('getForegroundApp');
+			mock.notify('listRunning');
 		}, Number(changes[1]));
 	}
 

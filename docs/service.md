@@ -77,14 +77,14 @@ This archive is a build artifact, not part of the package.
 | `service/call.c` | Allow-listed forwarding and settings icon requests |
 | `service/run.c` | Named command RPC and log tail |
 | `service/launcher.c`, `service/launcher.h` | Launcher gates, consent, requests and private uninstall tokens |
-| `service/catalog.c`, `service/catalog.h` | Launcher lists (`listApps`, `listLaunchPoints`, `listInputs`) and `getIcons` |
-| `service/subscribe.c` | The lists' subscriptions: one shared upstream child per list, fan-out through the LS2 catalog |
+| `service/catalog.c`, `service/catalog.h` | The launcher methods that subscribe (`listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`) and `getIcons` |
+| `service/subscribe.c` | Their subscriptions: one shared upstream child per method, fan-out through the LS2 catalog |
 | `service/system.c` | Retained reboot prompt method |
 
 The extra shared `fs.c` keeps file access available to app metadata, boot links and service methods
 without depending on the service role. Named commands have their own service module rather than
 living in the generic process runner. Boot link RPCs retain their gates and replies in `bootlink.c`.
-Service calls remain synchronous and bounded, except the lists' subscriptions (below). The daemon serializes watcher policy events and
+Service calls remain synchronous and bounded, except the launcher subscriptions (below). The daemon serializes watcher policy events and
 uses GLib sources for confirmation/backoff, preload deadlines and child I/O. Subscription children
 use `-i`; one-shot children use `-n 1` with a deadline while subscription I/O keeps running.
 There is no shell or awk between the daemon and luna-send. Child EOF/exit ends a stream:
@@ -132,8 +132,8 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `run` | `{command}` | `{returnValue, exitCode, stdoutString, stderrString}` |
 | `getInfo` | `{}` | `{returnValue, apiVersion, version, root, permission, permitted, isSelectedHome}` |
 | `listApps` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, apps:[…]}`; selected app fields only |
-| `listRunning` | `{}` | `{returnValue, apiVersion, running:[…]}`; selected process fields only |
-| `getForegroundApp` | `{}` | `{returnValue, apiVersion, appId, windowId?, processId?}`; one SAM lookup |
+| `listRunning` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, running:[…]}`; selected process fields only |
+| `getForegroundApp` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, appId, windowId?, processId?}`; one SAM lookup per reply |
 | `getAppInfo` | `{id}` | `{returnValue, apiVersion, app:{…}}`; one `listApps` item |
 | `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
 | `listLaunchPoints` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, launchPoints:[…]}`; SAM's launch points, selected fields |
@@ -322,9 +322,10 @@ endpoint.
 
 ## Launcher lists, icons and subscriptions
 
-`listApps`, `listLaunchPoints` and `listInputs` read `applicationManager/listApps` (with the published
-`properties`), `applicationManager/listLaunchPoints` and `com.webos.service.eim/getAllInputStatus`
-with one `luna_run` each, after the caller's consent lookup. `getIcons` makes the consent lookup and
+`listApps`, `listLaunchPoints`, `listInputs`, `listRunning` and `getForegroundApp` read
+`applicationManager/listApps` (with the published `properties`), `applicationManager/listLaunchPoints`,
+`com.webos.service.eim/getAllInputStatus`, `applicationManager/running` and
+`applicationManager/getForegroundAppInfo` with one `luna_run` each, after the caller's consent lookup. `getIcons` makes the consent lookup and
 then at most one read of each list its items need (`listApps` with `id`, `folderPath`, `icon`,
 `largeIcon`; `listLaunchPoints`; `getAllInputStatus`), then reads the files. Nothing is cached: no
 list, appinfo or icon outlives the request, and every reply is read from the platform when it is
@@ -332,19 +333,20 @@ sent. Launchers cache ([Subscriptions](launcher-api.md#subscriptions)).
 
 **Subscriptions** (`subscribe.c`). A first reply is the same fresh read as a single call, with
 `subscribed:true`; then the message joins the hub's subscription catalog (`LSSubscriptionAdd`, key
-`launcher/<method>`). Per list, one upstream `luna-send -a com.webos.applicationManager -i <uri>
+`launcher/<method>`). Per method, one upstream `luna-send -a com.webos.applicationManager -i <uri>
 {...,"subscribe":true}` child (the daemon's `luna-child.c` transport: GIOChannel framing, self-pipe
-SIGCHLD, reaping, `PR_SET_PDEATHSIG`) runs while the list has a subscriber: it starts with the first
+SIGCHLD, reaping, `PR_SET_PDEATHSIG`) runs while the method has a subscriber: it starts with the first
 and is killed when `LSSubscriptionGetHandleSubscribersCount` is zero after the hub's cancel callback
 (`LSSubscriptionSetCancelFunction`; a cancel and a subscriber that went away both call it). The
 upstream's replies are only a signal, whatever their shape (SAM sends single-item deltas for
 launch points): its first reply after a start is the state just sent and is skipped; any later one
 schedules, 200 ms later (a burst is one read), a non-blocking one-shot `luna-send -n 1` of the whole
-list, bounded at 20 s, whose result goes to every subscriber with `LSSubscriptionReply`. A dead
+state, bounded at 20 s, whose result goes to every subscriber with `LSSubscriptionReply`. A dead
 upstream is restarted after 1 s, doubling to 60 s, and its first reply after a restart counts as a
-change. A failed read is retried with the same backoff. A list takes 16 subscribers;
+change. A failed read is retried with the same backoff. A method takes 16 subscribers;
 `tooManySubscriptions` refuses more. Idle cost: nothing without subscribers; one luna-send child per
-subscribed list.
+subscribed method. `getAppInfo`, `getAppIcon` and `getIcons` take no `subscribe`: SAM's `getAppInfo`
+has no subscription (its schema has only `id` and `properties`), and icon files have no change feed.
 
 Why children rather than the LS2 client API: the service's own identity cannot make the privileged
 calls (`listApps` and `listLaunchPoints` are in non-public groups; [Privileged luna
