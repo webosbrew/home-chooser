@@ -16,6 +16,9 @@
 #define HC_STATE_DIR "/var/lib/webosbrew/homechooser"
 #define HC_HOME_FILE HC_STATE_DIR "/home"
 #define HC_HOMEKEY_FLAG HC_STATE_DIR "/homekey"
+/* Written by the app at each change of Home: the previous launchers still to close, one id a line. The watcher
+ * holds every close while it is fresh and closes them later (docs/settings-app.md, "The previous launcher"). */
+#define HC_PREVIOUS_FILE HC_STATE_DIR "/previous"
 #define HC_OVERRIDE_FILE "/var/webos-profile/override/" HC_APP_ID ".json"
 #define HC_INIT_DIR "/var/lib/webosbrew/init.d"
 #define HC_INIT_LINK HC_INIT_DIR "/homechooser"
