@@ -732,13 +732,13 @@ def classify_faults(reply, since_uptime):
     return real, noise
 
 
-# A known LG crash, accepted as a limitation (docs/home-key-hook.md "Known limitations"): on webOS 9.2.4 the
+# A known LG crash, accepted as a limitation (docs/home-key-hook.md "Known LG crash on 9.2.4"): on webOS 9.2.4 the
 # boot compositor restart intermittently (about 1 boot in 10 on the VM) sets off a legacy-broadcast-dvb crash
 # at API_SI_GetLinkageUriInfo+0x197.  crashd names only the process (`legacy-broadcas.<pid>`); the location is
 # in the faultmanager entry, whose gz name carries the same pid.  So a crashd line is known only when a fault
 # entry for the same pid has the known location.  Anything else (other process, other location, WebAppMgr)
 # stays a crash.
-KNOWN_CRASH_DOC = 'docs/research/home-key-hook-early-mount-study.md'
+KNOWN_CRASH_DOC = 'docs/home-key-hook.md#known-lg-crash-on-924'
 KNOWN_FAULT_RE = re.compile(r'^RDXDErr3_legacy-broadcas__.*legacy-broadcast-dvb \(API_SI_GetLinkageUriInfo\+0x197\)'
                             r'.*legacy-broadcas\.(\d+)\.')
 KNOWN_CRASHD_RE = re.compile(r'crashd.*CRASHED.*"process":\s*"legacy-broadcas\.(\d+)"')

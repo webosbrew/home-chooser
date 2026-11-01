@@ -2,9 +2,13 @@
 
 `org.webosbrew.homechooser.service` is a small native (C) luna service in the Home Chooser package
 (`service/`). Homebrew Channel elevates it once, so it runs as root without the developer-mode
-jail, and the app does every privileged thing through it. It replaces the earlier design in which
-the app ran `luna-send` and shell commands through Homebrew Channel's `exec`. See the decision in
-the [README](../README.md#decisions) and [Root access](settings-app.md#root-access).
+jail, and the app does every privileged thing through it. A developer app cannot make these calls
+itself: the settings service's per-key whitelist refuses `general/defaultApps` to developer apps,
+`closeByAppId` and `listApps` are in non-public groups, and on webOS 11 and later Homebrew Channel's
+`exec` refuses ordinary apps ([Permissions](research/home-key-and-home-app.md#permissions)). A
+service with a fixed set of narrow, allow-listed operations also keeps app input away from a shell.
+See [Root access](settings-app.md#root-access) for the app side and
+[architecture.md](architecture.md) for where the service sits.
 
 ## Package
 
@@ -16,18 +20,27 @@ the [README](../README.md#decisions) and [Root access](settings-app.md#root-acce
 755) next to the app. `services.json` has `"engine": "native"` and `"executable":
 "homechooser-service"`, so `ares-package` marks the ipk `arm`. The SDK and firmware paths of the
 build, and the one source of the version, are in
-[Build and test](settings-app.md#build-and-test).
+[Build and test](build.md).
 
-Both binaries are C. The service links `libluna-service2.so.3`, `libpbnjson_c.so.2`,
-`libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. The daemon links the same
-libraries **except libluna-service2**. `cmake --build build/service --target check-abi` validates both
-against the oldest supported rootfs (5.6.1) and rejects any daemon LS2 dependency
-or LS registration/call symbols. `homechooser-home-gate` ([home-gate.md](home-gate.md)) links the
-daemon's libraries, also without libluna-service2, and is checked the same way. No shared library is installed.
+All three binaries are C, built by `service/CMakeLists.txt`. The service links `libluna-service2.so.3`,
+`libpbnjson_c.so.2`, `libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. The daemon and
+`homechooser-home-gate` ([home-gate.md](home-gate.md)) link the same libraries **except
+libluna-service2**. `cmake --build build/service --target check-abi` validates all three against the
+oldest supported rootfs (5.6.1), rejects a libluna-service2 dependency in the daemon and the gate,
+and rejects LS registration/call symbols in the daemon. No shared library is installed.
 
 `services.json` declares only `homechooser-service`: only that executable receives
 an LS2 service role. `homechooser-daemon` needs root for boot/state operations and
 uses the existing privileged `/usr/bin/luna-send` role for every LS2 request.
+
+Why the daemon does not use libluna-service2: the installer gives Home Chooser's executable a
+`regular` role. With it, a call made on behalf of `com.webos.applicationManager`
+(`LSCallFromApplication`) fails locally with "not privileged", and an executable with no role of its
+own is refused registration ("Invalid permissions for (null)"). `/usr/bin/luna-send` has a
+`privileged` role with `allowedNames:["*"]` and outbound `*`, so `luna-send -a
+com.webos.applicationManager` children give the daemon the application identity the platform
+methods need, without new permissions and without a role for the runtime copy that recovers an
+uninstall from `/tmp`.
 
 ## Native source layout
 
@@ -37,8 +50,8 @@ The daemon applies the Home redirect and runs the C watcher on a single GLib
 thread. All daemon LS2 traffic runs as `luna-send -a com.webos.applicationManager`
 children. It never registers an LS2 client.
 
-`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c` and the Home-key transaction/generator
-are compiled once into `libhomechooser.a` and linked into both programs as needed.
+`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c`, the Home-key transaction/generator and
+`gate-mount.c` are compiled once into `libhomechooser.a` and linked into all three programs.
 This archive is a build artifact, not part of the package.
 
 | Source under `service/src/` | Responsibility |
@@ -77,12 +90,11 @@ and continues. JSON false replies alone are not EOF. Children inherit the daemon
 are killed/reaped on cancellation and clean shutdown, and receive SIGKILL through
 `PR_SET_PDEATHSIG` if their parent is killed. The systemd unit cgroup remains the outer cleanup
 boundary. SIGCHLD uses a self-pipe, avoiding GLib child-watch worker threads.
-See the [port inventory and offline validation](research/native-watcher-port.md).
+Idle residency is the daemon plus two subscription children (settings and app list), four on 11+
+with preload enabled (also foreground and life events).
 
 The internal Home-key worker status uses `active=yes/no` for whether configd selects a generated
 Home Chooser filter. The app and E2E parser use that field directly, without a legacy field alias.
-The [module refactor report](research/service-module-refactor.md) records the old section map and
-offline verification.
 
 ## Elevation
 
@@ -182,9 +194,9 @@ refused by launcher gates.
 
 ## Restarting the TV
 
-On webOS 6–9, hook installation, runtime changes and disable use a live configd **volatile**
-key-filter reload. No GUI process is restarted and no reboot prompt is raised. The retained
-`rebootPrompt` RPC is a compatibility endpoint: current status never reports a pending reboot,
+Nothing needs a restart. On webOS 6–9, hook installation, runtime changes and disable use a live
+configd **volatile** key-filter reload; no GUI process is restarted and no reboot prompt is raised.
+The `rebootPrompt` RPC remains as a compatibility endpoint: status never reports a pending reboot,
 so it refuses with `notPending`. See [the live-filter design](home-key-hook.md).
 
 ## Privileged luna identity
@@ -202,9 +214,8 @@ Native one-shot calls use `luna_run` with a 20 second bound. They run serially, 
 confirmation can delay other requests. The alert and screen-launch bounds are 8 and 15 seconds;
 streamed removal has a 90 second bound. Output is capped at 64 KiB per stream. JSON replies retain
 UTF-8. Children are reaped after exit or timeout. Fixed profile commands use the same argv identity.
-
-This identity has been exercised on Beanjar VMs for some releases. Prior service-identity
-denials do not establish its groups on every release.
+The service's own identity is not used for these calls: `systemprofile/getProfiles` (12.x) and
+`systemprofile/debug/rescan` (11.x and 12.x) refuse it.
 
 ## Luna access files
 
@@ -222,23 +233,15 @@ allows calls to LG's `com.webos.*` services but denies `org.webosbrew.*` before 
 The buttons therefore call LG's tvpower and appInstallService directly. Neither Home Chooser's
 role nor the vendor role grants an extra callback service.
 
-No `groupsFiles` entry and no `groups.d` file. The first version declared the group in
-`groups.d/homechooser.groups.json` through `groupsFiles`. On webOS 9.2.1 (w22h-ombre) ls-hubd then
-segfaults (`g_hash_table_iter_next`, NULL table) when appinstalld unloads the package manifest at
-"removing service files" (`luna://com.webos.service.bus/removeOneManifest`). appinstalld retries
-that removal at every boot, so the bus never comes up again. It was reproduced on 2026-10-24 with a
-synthetic manifest that had only a `groupsFiles` entry. A manifest that provides a group only
-through `apiPermissionFiles` was removed the same way without a crash. `ls-control scan-services`
-after dropping the entry did not crash either. The same crash at uninstall was seen on 11.2.0
-(w22o-queue-us), which recovered after a reboot. The first version also wrote over the installer's
-own `api-permissions.d/org.webosbrew.homechooser.service.api.json`; that file is the installer's
-and is not touched now. A targeted 2026-10-25 update from development build `9581378` on
-w22h-ombre (`e2e/results/w22h-ombre-20261025-214258`) ended with 46 PASS and 18 FAIL:
-`ares-install` timed out, the selected Home was lost, and LG processes crashed. That run does
-not isolate the ls-hubd failure as the sole cause. The `groupsFiles` layout existed only in
-unreleased builds `1871941` through `9581378`; updating from those builds is unsupported.
-The access script manages only its current access files; it does not try to
-clean up that unsupported development layout.
+No `groupsFiles` entry and no `groups.d` file. A package manifest that declares a group through
+`groupsFiles` crashes ls-hubd on webOS 9.2.1 (`g_hash_table_iter_next`, NULL table) when
+appinstalld unloads it at "removing service files"
+(`luna://com.webos.service.bus/removeOneManifest`). appinstalld retries that removal at every boot,
+so the bus never comes up again. The same crash at uninstall happens on 11.2.0, which recovers after
+a reboot. A manifest that provides the group only through `apiPermissionFiles` is removed without a
+crash, and so is `ls-control scan-services` after dropping such an entry. The installer's own
+`api-permissions.d/org.webosbrew.homechooser.service.api.json` belongs to the installer and is not
+touched. The access script manages only its current access files.
 
 The elevated service's broader public registration still requires the service's own caller gates.
 
@@ -248,10 +251,6 @@ status prints file presence. The app best-effort applies after elevation, the bo
 without needing a Home choice, and the watcher applies at start. The watcher stages the access
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
 Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`, `HOMECHOOSER_NODE`.
-
-The group format, manifest keys, app-id naming, permission metadata in `getAppInfo` and
-`listRunning` availability have been exercised on Beanjar VMs for some releases. The
-[device status](#launcher-api-device-status) below records coverage by release.
 
 The settings-only methods (`status`, `quit`, `call`, file methods, `readIcon`, `link`,
 `unlink`, `linkStatus`, `run`), confirmation and reboot methods, files, `status` output and log ids
@@ -282,47 +281,18 @@ This is what the service does behind `uninstallApp` and its screen fallback.
   `notRemovable`, `removeFailed`. Any root caller without an application id that holds a live token
   can complete the screen removal; the token is the capability. A stale system alert can still
   remove the target after the selected Home changes, because LG receives its button action directly.
-
-On webOS 9.2.1, the firmware's `com.webos.appinstalld.service` registers
-`com.webos.appInstallService`. Its API permissions list `dev/remove` under `ares.webos.cli` and
-`remove` under `appinstalld.internal`; Surface Manager's client permissions grant `all`. Live
-alerts reached both methods as `com.webos.applicationManager`: `dev/remove` removed a disposable
-developer fixture, while `remove` returned `FAILED_REMOVE` for a nonexistent ID. The fixture's
-`getAppInfo.folderPath` was `/media/developer/apps/usr/palm/applications/...`, so the service chose
-the developer endpoint. No store app was removed in this probe.
 * **Caller identity and launcher gates.** The caller is `LSMessageGetApplicationID` (dropping an
   instance suffix after a space). The service independently reads the caller's installed
   `requiredPermissions`; `closeApp` and `uninstallApp` also compare the id with the stored choice in
   `/var/lib/webosbrew/homechooser/home`. These are service checks even where the hub allows the call
   through a broader group.
 
-## Launcher API device status
-
-The launcher API has host policy, shell and UI tests, plus targeted Beanjar VM verification.
-The table tracks release coverage; a VM result is not a physical TV result.
-
-| webOS major | API/group files | privileged `-a` identity | developer CLI group |
-| --- | --- | --- | --- |
-| 5.x | v1 not yet verified | v1 not yet verified | not added |
-| 6.x | v1 not yet verified | v1 not yet verified | not added |
-| 7.x | v1 not yet verified | v1 not yet verified | not added |
-| 8.x | v1 not yet verified | v1 not yet verified | not added |
-| 9.x | verified on Beanjar VM 9.2.4 | verified on Beanjar VM 9.2.4 | not added |
-| 10.x | v1 not yet verified | v1 not yet verified | not added |
-| 11.x | v1 not yet verified | v1 not yet verified | v1 not yet verified |
-| 12.x | v1 not yet verified | v1 not yet verified | v1 not yet verified |
-
-Physical TV behaviour is still unverified for the permission grant and the confirmation
-routes. A VM test of the alert route does not press its Uninstall button.
-
-For a device validation session, the order is: install/elevate Home Chooser and inspect the access
-files; install a consenting Home fixture and inspect its effective client permissions; call
-`getInfo`, `listApps` and `listRunning`; test the Home request and close checks before/after selection;
-exercise cancel and confirm for removal of a disposable user app, including the screen fallback;
-then check access restoration after reboot and cleanup after Home Chooser removal. As root,
-simulate an installed caller with its real id (see
-[Testing your launcher](launcher-api.md#testing-your-launcher) for the fixture build). Destructive
-removal checks require the owner's device permission.
+The firmware's `com.webos.appinstalld.service` registers `com.webos.appInstallService`. On 9.2.1
+its API permissions list `dev/remove` under `ares.webos.cli` and `remove` under
+`appinstalld.internal`, and Surface Manager's client permissions grant `all`, so an alert button
+reaches both methods as `com.webos.applicationManager`. A developer app's `getAppInfo.folderPath` is
+under `/media/developer/apps/usr/palm/applications/`, which is how the service picks the developer
+endpoint.
 
 ## Allow-lists
 
@@ -400,5 +370,5 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
   against temporary roots and stubbed `ls-control`; watcher/boot tests cover the integration.
-* Beanjar VM runs verify the hub sender ids, elevation, effective permissions and launcher calls
-  for the rows marked verified above. Physical TV behavior remains unverified.
+* The end-to-end runner ([`e2e/README.md`](../e2e/README.md)) checks hub sender ids, elevation,
+  effective permissions and the launcher calls on a device (`--api-check`).

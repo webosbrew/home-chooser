@@ -10,8 +10,7 @@ the luna API that Home Chooser's root service offers to a launcher.
 * **It makes your app the Home app on webOS 5 to 12.** The owner picks your app in Home Chooser;
   from then on the Home button opens it. The choice survives reboots: a small watcher re-applies it
   at boot, and puts LG Home back if your app is uninstalled (and re-applies the choice if it comes
-  back). On webOS 6 to 9 it installs a Home key hook patch for this, which needs one TV restart the
-  first time. See [Per-release notes](#per-release-notes).
+  back). No restart is needed on any release. See [Per-release notes](#per-release-notes).
 * **It tells the owner when your launcher is removed.** If the chosen launcher is uninstalled, the
   owner sees one alert saying that the Home button opens LG Home again, instead of a Home button
   that does nothing.
@@ -26,8 +25,7 @@ What it needs: a TV with Homebrew Channel and a Home Chooser service running as 
 current Homebrew Channel may refuse that request; see [Per-release notes](#per-release-notes).
 Until elevation, only `getInfo` works, and it tells you so.
 
-Status: the API is implemented and covered by host tests. Its calls have been verified on Beanjar
-VMs. See [Stability](#stability) for the version policy.
+See [Stability](#stability) for the version policy.
 
 ## Quick start
 
@@ -51,7 +49,8 @@ A complete, minimal web launcher `appinfo.json`:
 
 * `"appCategory": ["home"]` makes the app eligible: Home Chooser lists every installed app that
   has it. This is the whole contract for being chosen as Home. It works for `type` `web`, `native`
-  and `qml`, and needs no variant per webOS release.
+  and `qml`, and needs no variant per webOS release. webOS 12 ships no QML runtime, so a `qml` app
+  does not run there.
 * `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` opts into the API below. Leave it out if
   you only want to be selectable. Merge both entries with your other categories and permissions.
 * **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Consider
@@ -69,8 +68,7 @@ Home Chooser and install again.
 
 The owner opens Home Chooser (it is an ordinary app), moves to your launcher's row and presses OK.
 Home Chooser asks `Use <your title> as Home?`; the owner confirms and the Home button opens your
-app. On webOS 6 to 9 the first selection ends with a request to restart the TV, and the Home button
-changes after the restart.
+app at once.
 
 ### 3. Asking to become Home
 
@@ -90,15 +88,17 @@ The owner decides. This is a request only:
 * the request is dropped without any message when the id is the stock home, unknown, not in the
   Home category or malformed, and also when Home Chooser still shows a setup problem (for example
   the service is not elevated yet) or is busy;
-* on webOS 6 to 9, the dialog changes nothing if the structural Home key hook refuses the firmware
-  (see [the minimal hook](home-key-hook.md));
+* on webOS 6 to 9, the dialog changes nothing if the Home key filter refuses the firmware
+  (see [the live Home key filter](home-key-hook.md));
 * the parameters are read at start (`PalmSystem.launchParams`) and on `webOSRelaunch` (dispatched on `document`; `window` is listened to as well), so the
   request works whether or not Home Chooser is already open.
 
 When Home is pressed, launch parameters come from the platform and are passed through, not
 guaranteed by this API. On webOS 6 to 9 the stock launch's parameters are forwarded with
 `checkUpdateOnLaunch:false`, `autoInstallation:false` and `reason` (the stock reason, or `hotKey`).
-On webOS 10 and later the platform uses `{launchType:"homeKey", activateType:...}`.
+A launch made by the [home gate](home-gate.md) (for example when the screen would otherwise be
+empty) carries only the id. On webOS 10 and later the platform uses
+`{launchType:"homeKey", activateType:...}`.
 
 ### 4. Check where you stand, then use the API
 
@@ -235,7 +235,7 @@ Feature detection and status. Works for any app, before elevation and without th
   could not read your appinfo, which can happen while `root` is false; look at `root` first.
 * `isSelectedHome`: your app id equals the choice Home Chooser has stored. While the chosen app is missing,
   the watcher puts LG Home back but keeps the stored choice, so this can be true while the Home key
-  opens LG Home. On webOS 6 to 9 it is also true between the selection and the TV restart.
+  opens LG Home.
 
 Errors: `forbidden` (no valid application id).
 
@@ -281,9 +281,9 @@ One lookup of the platform's current foreground app. This call does not subscrib
 
 `appId` is an empty string if the platform reports no foreground app. `windowId` is included when
 the platform gives it. `processId` is included only when the platform gives a numeric PID; it is
-normalized to a JSON number. A launcher overlay may not become the platform's foreground app: on
-webOS 9 the stock home remains reported in front of a Home Chooser overlay. On the 11.2.0 Beanjar
-VM, Live TV remained reported in front under that overlay. Errors: `forbidden`,
+normalized to a JSON number. A launcher overlay may not become the platform's foreground app: the
+app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of a Home
+Chooser overlay. Errors: `forbidden`,
 `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
 
 ### `getAppInfo {id}`
@@ -312,11 +312,10 @@ symlink escapes, are rejected. There is no fallback to the other icon field.
 
 `data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 262144 bytes, so
 the base64 payload is at most 349528 characters. Luna replies carry the base64 as JSON; the cap
-keeps that message near 350 KiB and matches the existing internal icon reader. On the 9.2.4
-Beanjar VM, LG Home, Homebrew Channel and the web fixture icons measured 2831, 3258 and 172 bytes.
-No cross-release LS2 reply limit is claimed here; this is Home Chooser's own conservative limit.
-On the 11.2.0 Beanjar VM, LG Home's appinfo advertises `icon.png` but has no file at that path;
-`getAppIcon` reports `noIcon` for it. Show a placeholder for this case.
+keeps that message near 350 KiB and matches the existing internal icon reader. This is Home
+Chooser's own conservative limit, not a platform one. On 11.x, LG Home's appinfo advertises
+`icon.png` but has no file at that path; `getAppIcon` reports `noIcon` for it. Show a placeholder
+for this case.
 Errors: as `getAppInfo`, plus `noIcon` when no readable
 icon is referenced and `iconTooLarge` when the icon exceeds the byte limit. An invalid `size` is
 `badRequest`.
@@ -407,23 +406,23 @@ on 6.x to 10.x (below).
 
 ### 6.x to 9.x
 
-The stock Home key handler launches LG Home by its fixed id, whatever the record says. Home Chooser ships
-a Home key hook patch that makes the Home key follow the record, and mounts patched copies of the
-system files at boot. For a launcher this means:
+The stock Home key handler launches LG Home by its fixed id, whatever the record says. Home Chooser
+generates a copy of this TV's Home key filter with your id as the launch target and selects it live
+through the system configuration. For a launcher this means:
 
-* **Restart on first setup.** The first selection stores the choice and enables the patch, then
-  asks the owner to restart the TV with a system alert (Reboot or Later). The Home button opens your
-  launcher after that restart. Until then the choice is stored (`isSelectedHome` is true) but the Home
-  button still opens LG Home. Later changes between launchers need no restart. Nothing restarts the
-  compositor while the TV runs, so setup never closes your window.
-* **Structural Home key hook.** Every webOS 6–9 build uses the same guarded rewriter at boot.
-  Essential hooks apply together; supporting files are patched or skipped independently. A refusal
-  leaves stock behavior and prevents selecting a custom Home. See [the minimal hook](home-key-hook.md).
-
-* **When the owner restores LG Home or your launcher is removed**, the record is written with the
-  stock home id (not cleared), so LG Home opens at once; the patch stays mounted until the next
-  restart. The owner is told about a removed launcher as described above, and the choice is
-  re-applied if you are reinstalled.
+* **No restart.** The Home button opens your launcher as soon as the owner confirms, and at every
+  boot after the system is ready. Nothing restarts the compositor, so setup never closes your
+  window.
+* **Guarded edit.** Only the launch target in the stock Home key function is changed. If this TV's
+  firmware has a function shape Home Chooser does not recognise, it refuses, the Home button keeps
+  opening LG Home, and the owner cannot select a custom Home. See
+  [the live Home key filter](home-key-hook.md).
+* **When the system would show LG Home** (for example when the last app closes), the
+  [home gate](home-gate.md) runs instead: it opens your launcher if it is full-screen, or the last
+  TV input if your launcher is an overlay.
+* **When the owner restores LG Home or your launcher is removed**, the stock key filter is
+  restored at once and LG Home opens on Home. The owner is told about a removed launcher as
+  described above, and the choice is re-applied if you are reinstalled.
 
 ### 10.x and later
 
@@ -446,7 +445,7 @@ installed appinfo, so nothing changes for your appinfo: declare the permission, 
 reports `permitted`. Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate
 Home Chooser's service from an ordinary app (`Denied method call`), so `root` stays false until the
 owner elevates it by other means or a newer Homebrew Channel allows it. The layout of the access
-files is in [the service reference](service.md#launcher-access-files).
+files is in [the service reference](service.md#luna-access-files).
 
 ### The stock home
 
@@ -455,14 +454,19 @@ home is selected, Home Chooser keeps it from being preloaded, once per boot. Thi
 nothing is written, and a reboot starts with the stock policy until Home Chooser sets it again. 5.x
 is left alone.
 
+On 6.x to 9.x the [home gate](home-gate.md) takes the stock home's place while your launcher is
+chosen, and the running stock home is closed once. A launch of `com.webos.app.home` then runs the
+gate, so `listRunning` can briefly list that id while the gate decides.
+
+On 10.x Home Chooser does not close LG Home: the system relaunches the stock home at once as the
+last-input app, so a close frees nothing. It can stay resident until the next reboot, and
+`listRunning` will list `com.webos.app.home` (a `closeApp` of it by your launcher will not stick
+either). After a reboot it is gone, because its preload is off from boot.
+
 On 11.x and 12.x the watcher closes it once the chosen launcher is in front. For an overlay
 launcher it waits for a launch with a nonstock full-screen app beneath the overlay; closing LG
 Home beneath an overlay can dismiss the overlay and trigger an idle relaunch. Home Chooser itself
-never closes a stock home while you select a launcher. On 6.x to 10.x it does not close LG Home,
-for any launcher, overlay or not: the system relaunches the stock home at once as the last-input
-app, so a close frees nothing. The stock home can therefore stay resident until the next reboot, and
-`listRunning` will list `com.webos.app.home` (a `closeApp` of it by your launcher will not stick
-either). After a reboot it is gone, because its preload is off from boot. Details are in
+never closes a stock home while you select a launcher. Details are in
 [The stock home is not preloaded](settings-app.md#the-stock-home-is-not-preloaded).
 
 ## Testing your launcher
@@ -495,9 +499,8 @@ Without the variable you get a launcher with no permission, which is the control
 configured for root access. Install Home Chooser first, or pass its ipk with `--hc-ipk`. The
 ares-only compatibility kit installs a permission-declaring web fixture and a disposable control
 app, checks the v1 API before and after choosing the fixture, then restores LG Home and removes
-the test apps. It does not reboot, need Beanjar, or require Dock. It requires LG Home to be the
-starting choice so cleanup can restore it. On webOS 6–9, a pending hook restart alert is closed
-without rebooting; Home-key behavior itself needs a separate reboot test.
+the test apps. It does not reboot and needs no emulator. It requires LG Home to be the
+starting choice so cleanup can restore it.
 
 ```sh
 python3 -I e2e/homechooser_e2e.py --device my-root-tv --api-check
@@ -511,7 +514,7 @@ Your launcher ipk must declare `appCategory:["home"]` and
 is used as supplied. The kit will not replace an already installed launcher or disturb a
 nonstock Home choice. Results are in `e2e/results/<device>-<timestamp>/`.
 
-For a complete Home-key lifecycle test, maintainers use `--vm` on Beanjar VMs as described in
+For a complete Home-key lifecycle test, maintainers use `--vm` on emulator VMs as described in
 [`e2e/README.md`](../e2e/README.md). Check `df -h /media/developer` before installing: a full
 partition makes an installation fail for an unrelated-looking reason.
 
@@ -521,8 +524,7 @@ partition makes an installation fail for an unrelated-looking reason.
 `appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch
 parameter are the v1 contract. Reply fields and methods may be added within v1. Removing a field
 or method, or changing a documented meaning, raises `apiVersion`. Check `apiVersion` at start and
-ignore unknown fields and error codes. The [service reference](service.md#launcher-api-device-status)
-records VM coverage by release.
+ignore unknown fields and error codes.
 
 Settings-only and confirmation methods, files, status output and log ids are internal and are not
 frozen by this contract.

@@ -1,9 +1,11 @@
 # Live Home key filter, webOS 6–9
 
-Home Chooser copies **this device's** stock `KeyFilters/systemUi.js`, changes the Home launch target,
-and selects the copy through configd. No compositor, SAM, WAM or input-method restart is required,
-including at boot. No QML source is changed or bind mounted. webOS 5 and 10–12 retain their existing
-settings/profile and watcher behavior.
+On webOS 6 to 9 the stock Home key handler launches `com.webos.app.home` by its fixed id and ignores
+the default-app record ([study](research/home-key-and-home-app.md#660-to-921)). Home Chooser copies
+**this device's** stock `KeyFilters/systemUi.js`, changes the Home launch target, and selects the
+copy through configd. No compositor, SAM, WAM or input-method restart is required, including at
+boot. No QML source is changed or bind mounted. webOS 5 and 10–12 use the settings record and
+system profile instead ([What is written](settings-app.md#what-is-written)).
 
 The native implementation is [homekey.c](../service/src/homekey.c), with the guarded generator in
 [homekey-generator.c](../service/src/homekey-generator.c). Both are compiled into the shared static archive and linked into
@@ -11,6 +13,22 @@ The native implementation is [homekey.c](../service/src/homekey.c), with the gua
 
 On 6–9 the [home gate](home-gate.md) also replaces the stock Home binary SAM starts, through a
 bind mount, so stock Home does not stay resident while a launcher is chosen.
+
+## Why a live configd reload
+
+These firmware facts decide the design ([study](research/home-key-and-home-app.md#key-filter-loading-660-to-921)):
+
+- The compositor loads each key filter script by path with `Qt.include`, from the
+  `com.webos.surfacemanager.keyFilters` config, and there is no QML disk cache. It re-reads the
+  list when that config value changes: configd's change notification destroys and recreates the
+  key-filter loaders, and a new JS file then runs without any QML edit.
+- Homebrew Channel runs its init.d entries after the compositor has started, so a boot-time change
+  has to be picked up live. Restarting the compositor to reload files was tried and dropped: it
+  disturbs running clients and set off LG process crashes.
+- A `setConfigs` write without `volatile` persists into `/var/preferences/configd_factory_db.json`
+  as a user override with `usrDefined` bookkeeping. A `volatile:true` write is held in memory only,
+  and a reboot returns the firmware's own list.
+- Compositor, SAM, WAM and input-method processes keep their identities across a live reload.
 
 ## Boot and watcher lifetime
 
@@ -24,28 +42,12 @@ one second between attempts and a timeout on every call. Once a launcher redirec
 best-effort `createToast` says “Your new home will start shortly”, with `sourceId: org.webosbrew.homechooser`, `noaction: true` and
 the privileged `com.webos.applicationManager` identity. Toast failure does not block apply.
 
-After the attempt, the daemon runs the native watcher in `service/src/watcher/`.
-Its settings, app-list and (11+) foreground/life subscriptions are resident
-`luna-send -a com.webos.applicationManager -i` children read through GIOChannel.
-Every one-shot request uses bounded `luna-send -n 1` children with the same identity.
-No shell or awk sits between those children and the C watcher. The 300 s timer
-remains the missed-app-event fallback. Idle residency is the daemon plus two
-subscription children (four on 11+ when preload is enabled); memory is unmeasured.
-
-The daemon does not link libluna-service2 or register an LS2 connection. The separate
-`homechooser-service` remains the on-demand app/launcher RPC executable and retains
-its role and method table. Shared code is statically linked; no shared library ships.
-
-The daemon's running image remains mapped after package removal. Restoration calls
-`homekey.c` directly, whose LS2 operations still go through luna-send. The access
-helper/common file and `homechooser-daemon` are staged in `/tmp/homechooser-runtime`
-for crash/restart recovery. On 5/10–12 the daemon and boot/access helpers are also
-staged under `/var/lib/webosbrew/homechooser/boot` for stopped-watcher recovery.
-On 6–9 recovery remains volatile. Child cancellation and EOF reap each PID, the
-children inherit the daemon group and die with their parent, and systemd cleans
-up the complete unit cgroup. The [transport decision and inventory](research/native-watcher-port.md)
-record the device permission blocker and the revised offline coverage; this change
-has not been tested on a VM or TV.
+After the attempt, the daemon runs the native watcher in `service/src/watcher/`
+([service.md](service.md#native-source-layout), [Persistence](settings-app.md#persistence)).
+The daemon's running image remains mapped after package removal, so it can still restore stock
+after an uninstall; restoration calls `homekey.c` directly. The access helper/common file and
+`homechooser-daemon` are staged in `/tmp/homechooser-runtime` for crash/restart recovery. On 6–9
+recovery is volatile and needs no persistent copy: a reboot resets the filter anyway.
 
 ## Guarded JS generation
 
@@ -68,6 +70,9 @@ Each changed version receives a fresh `systemUi-XXXXXX.js` filename under
 `/var/lib/webosbrew/homechooser/`. The service reads it back and compares SHA256 before selection.
 An unchanged choice and identical generated bytes avoid unnecessary loader recreation.
 
+Only `launchHomeApp` is edited. Long-press, voice, multiview and other sites that compare against
+the stock id keep their firmware behaviour.
+
 ## Configd transaction and restoration
 
 The service reads `com.webos.surfacemanager.keyFilters` from `getConfigs`. It saves the entire exact
@@ -84,8 +89,8 @@ Unexpected external edits to the active list cause refusal instead of overwritin
 Changing launchers invokes the same transaction immediately. Disable, missing-launcher recovery
 and uninstall restore the exact saved stock array **before** removing generated files. Restoration
 uses an exact stock-list volatile write, rather than relying on unverified `null`-override semantics.
-There are no non-volatile writes: those create persistent overrides and `usrDefined` bookkeeping in
-`/var/preferences/configd_factory_db.json`.
+There are no non-volatile writes. After a verified restore with no choice, `keyfilters-stock.json`
+and `keyfilter.lock` are removed, and the state directory with them when nothing else is in it.
 
 If the package and its watcher are both absent, the volatile filter still references an existing
 file outside the package; reboot resets it to firmware defaults without a recovery executable.
@@ -113,29 +118,15 @@ The native ARM transaction test runs under qemu with real firmware libraries and
 readiness, failed toast, list metadata/order, live changes, missing apps, failed writes/readbacks,
 verified restoration, retained files on recovery failure and empty-list refusal.
 
-The E2E runner expects the first apply to be live, verifies Home after boot and treats every crash,
-including the previously exempt legacy-broadcast crash, as an acceptance failure. A crash dialog may
-be dismissed for recovery, but cannot turn the run into a pass.
+The E2E runner expects the first apply to be live and verifies Home after boot; see
+[`e2e/README.md`](../e2e/README.md).
 
-## Evidence and portability
+## Known LG crash on 9.2.4
 
-[Native implementation validation](research/home-key-live-filter-validation.md) records this change’s
-7.6.0 device trials, local test results and final cleanup.
-
-The 2026-10-30 7.6.0 feasibility investigation is recorded in
-`/home/mariotaku/scratch/hc-live-reload/report.md` and `source-matrix.json`; the independent restart
-crash analysis is `/tmp/maliit-verify/sol-conclusion.md`.
-
-**Verified by that investigation:** configd notification destroys/recreates the key-filter loaders;
-new JS executes through Shell/Qt.include without QML edits; HOME opens the chosen app while core
-process identities stay stable. A stock-to-volatile boot apply also succeeded without replacing
-existing GUI clients. Ordinary setConfigs persisted into the factory database; volatile writes did
-not. That study removed its volatile value before reboot, so reboot loss was explicitly unverified
-there. Its stock suspend control reproduced the general tvpowerd/legacybroadcast standby dialog.
-
-**Source evidence:** the available 6/7/8/9 controllers share the subscription and loader recreation
-path. Similar source structure supports portability, but is not live certification for 6.x, 8.x,
-9.x or retail TVs. Those releases still need boot/readiness, permissions, caching, HOME semantics,
-live switch, removal, crash and reboot-persistence device coverage. The configured 6.3.1 corpus
-root is missing. Long-press, voice, multiview and launcher-specific home-window behavior remain
-firmware behavior outside this narrow JS edit.
+On webOS 9.2.4, LG's `legacy-broadcast-dvb` process intermittently crashes at
+`API_SI_GetLinkageUriInfo+0x197` early in a boot (about 1 boot in 10 on a VM), and LG shows a
+"[crash] Fault Occured" popup. It was first seen with the compositor restart that earlier Home
+Chooser builds made at boot, which the live reload replaced. It is LG's fault and an accepted
+limitation: the E2E runner records exactly that crash (crashd's `legacy-broadcas.<pid>` line confirmed
+by a faultmanager entry of the same pid at that location) as a note, not a failure, and dismisses its
+popup with BACK at most once. Any other crash still fails the run.
