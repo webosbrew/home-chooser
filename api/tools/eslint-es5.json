@@ -1,0 +1,7 @@
+{
+	"root": true,
+	"parserOptions": {"ecmaVersion": 5},
+	"env": {"browser": true, "commonjs": true},
+	"globals": {"Promise": "readonly"},
+	"extends": "eslint:recommended"
+}

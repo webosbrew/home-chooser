@@ -10,8 +10,10 @@
 #   test-launcher-contract  the real launcher API handlers on a fake hub, against api/launcher-v1.openrpc.json
 #                      (ARM program test-launcher-contract, driven by launcher-spec.py)
 #   test-launcher-spec the launcher API description against the OpenRPC meta-schema (python3 only)
+#   test-launcher-client     api/client is what api/tools/gen-client.py makes from the spec (python3 only)
+#   test-launcher-client-js  the client and mock in node against a fake bridge (when node is found)
 # The ARM programs run against KEYFILTER_ROOTFS's libraries (and its systemUi.js); the paths are in
-# ../cmake/settings.cmake. -DQEMU_TESTS=OFF builds and runs test-policy and test-launcher-spec alone,
+# ../cmake/settings.cmake. -DQEMU_TESTS=OFF builds and runs test-policy and the launcher API checks alone,
 # without the SDK or a firmware rootfs.
 cmake_minimum_required(VERSION 3.20)
 project(homechooser-tests LANGUAGES C)
@@ -42,6 +44,15 @@ set(launcher_spec "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/launcher-spec.py"
 set(launcher_cases "${CMAKE_CURRENT_SOURCE_DIR}/launcher-contract-cases.json")
 add_test(NAME test-launcher-spec COMMAND ${launcher_spec} lint "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
 	"${api}/vendor/openrpc-meta-schema-1.14.9.json" "${api}/vendor/json-schema-tools-meta-schema-1.8.3.json")
+# The generated client (api/client) and its copies in examples/web-launcher match the spec; with node,
+# the client and the mock run against a fake bridge and every mock reply validates against the spec.
+add_test(NAME test-launcher-client COMMAND "${PYTHON3}" -I "${api}/tools/gen-client.py" --check)
+find_program(NODE node)
+if(NODE)
+	add_test(NAME test-launcher-client-js COMMAND "${PYTHON3}" -I "${api}/tools/test-client.py" "${NODE}")
+else()
+	message(STATUS "node not found: test-launcher-client-js is not run")
+endif()
 
 if(NOT QEMU_TESTS)
 	return()
