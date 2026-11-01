@@ -212,7 +212,8 @@ All methods are on the service's root category, and all were introduced in API v
 | `closeApp` | yes | yes | yes | yes |
 | `uninstallApp` | yes | yes | yes | yes |
 
-Every method needs a caller with a valid application id (1 to 128 characters of `A-Za-z0-9._-`).
+Every method needs a caller with a valid application id: the id the platform reports for the message,
+up to its first space, must be 1 to 128 characters of `A-Za-z0-9._-`.
 When several checks fail, the first of these is reported: `forbidden`, `notRoot`, `notHome`,
 `badRequest`, `noPermission`. "The permission" is `org.webosbrew.homechooser.applications` in your installed
 `requiredPermissions`. "The selected Home" means your app id is the one Home Chooser has stored as
@@ -254,7 +255,7 @@ Lists the installed apps.
 Each app carries `id`, `title`, `icon`, `largeIcon`, `folderPath`, `version`, `vendor`, `type`,
 `removable`, `visible` and `appCategory`, when the platform has them; absent fields are omitted.
 `appCategory` is the category array as sam reports it (for example `["home"]`), so a launcher can
-find the other launchers. Within an `apiVersion` this field list only grows. `icon` and `largeIcon` are appinfo
+find the other launchers. Values are passed through as the platform gives them. Within an `apiVersion` this field list only grows. `icon` and `largeIcon` are appinfo
 paths, usually relative to `folderPath`. Use `getAppIcon` to read them from a jailed launcher.
 
 Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
@@ -268,7 +269,8 @@ Lists running apps.
 ```
 
 Each item carries `id`, `instanceId`, `processId` and `webProcessId`, when present. The service
-renames the platform's lowercase PID keys and includes PID values only when they are numeric.
+renames the platform's lowercase PID keys and includes PID values only when they are non-negative
+integers, given as numbers or numeric strings; they are normalized to JSON numbers.
 Errors: as `listApps`; `badReply` also means the platform did not return a `running` array.
 
 ### `getForegroundApp {}`
@@ -280,8 +282,8 @@ One lookup of the platform's current foreground app. This call does not subscrib
 ```
 
 `appId` is an empty string if the platform reports no foreground app. `windowId` is included when
-the platform gives it. `processId` is included only when the platform gives a numeric PID; it is
-normalized to a JSON number. A launcher overlay may not become the platform's foreground app: the
+the platform gives it. `processId` is included only when the platform gives a non-negative integer
+PID, as a number or a numeric string; it is normalized to a JSON number. A launcher overlay may not become the platform's foreground app: the
 app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of a Home
 Chooser overlay. Errors: `forbidden`,
 `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
@@ -317,8 +319,8 @@ Chooser's own conservative limit, not a platform one. On 11.x, LG Home's appinfo
 `icon.png` but has no file at that path; `getAppIcon` reports `noIcon` for it. Show a placeholder
 for this case.
 Errors: as `getAppInfo`, plus `noIcon` when no readable
-icon is referenced and `iconTooLarge` when the icon exceeds the byte limit. An invalid `size` is
-`badRequest`.
+icon is referenced and `iconTooLarge` when the icon exceeds the byte limit. Any other `size`, including
+`null`, is `badRequest`.
 
 ### `closeApp {id, force?}`
 
@@ -335,7 +337,7 @@ Homebrew Channel, LG Home and itself. Errors: `forbidden`, `notRoot`, `notHome`,
 Asks the owner to uninstall an app. Only the selected Home may call it.
 
 Home Chooser refuses Home Chooser itself, Homebrew Channel and the calling launcher with
-`protected`. It refuses a system app, an app marked `removable:false`, or one outside the
+`protected`. It refuses an app marked `removable:false`, or one outside the
 developer and store application folders with `notRemovable`
 (`/media/developer/apps/usr/palm/applications/`, `/media/cryptofs/apps/usr/palm/applications/`). An
 unknown id is `notFound`; Home Chooser resolves SAM's combined missing-id/unsupported-type error
@@ -351,8 +353,9 @@ Your launcher cannot confirm for the owner and cannot call the confirmation meth
 ```
 
 `confirmation` is `alert` or `screen`. **A pending uninstall is not a completed removal.** There is no
-second reply: the owner may cancel, ignore it (the question expires after 120 seconds) or confirm,
-and nothing tells you which. Call `listApps` again to see whether the app is gone. If neither the
+second reply: the owner may cancel, ignore it or confirm, and nothing tells you which. The LG alert
+stays until the owner answers or dismisses it; Home Chooser's own confirmation screen expires after
+120 seconds. Call `listApps` again to see whether the app is gone. If neither the
 alert nor the screen could be shown, the call fails with `confirmFailed`.
 
 Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`, `noPermission`, `lookupFailed`, `notFound`,
@@ -373,14 +376,14 @@ answers with a string `errorCode` from the table.
 | `forbidden` | The caller has no valid application id | Call from the app. A shell `luna-send` needs `-a <app id>` |
 | `notRoot` | The service is not elevated | Ask the owner to open Home Chooser |
 | `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
-| `lookupFailed` | The service could not read the caller's installed appinfo, from SAM or its file fallback | Retry later; log `errorText` |
+| `lookupFailed` | The service could not read the caller's installed appinfo, from SAM or its file fallback (a timeout or an unreadable reply in that lookup is `timeout` or `badReply`) | Retry later; log `errorText` |
 | `notHome` | Your app is not the selected Home | Send the `request` launch, wait for the owner |
 | `badRequest` | `id` is missing or not an app id, or `getAppIcon.size` is invalid | A bug in the launcher |
 | `notFound` | A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent | Refresh the list |
 | `noIcon` | `getAppIcon`: no readable icon from the requested appinfo field inside that app's folder | Show a placeholder |
 | `iconTooLarge` | `getAppIcon`: the icon exceeds 262144 bytes | Show a placeholder |
 | `protected` | `uninstallApp`: target is Home Chooser, Homebrew Channel or the caller | Do not offer uninstall for this app |
-| `notRemovable` | `uninstallApp`: target is a system app, marked `removable:false` or outside the user app folders | Do not offer uninstall for this app |
+| `notRemovable` | `uninstallApp`: target is marked `removable:false` or outside the user app folders (system apps are) | Do not offer uninstall for this app |
 | `confirmFailed` | `uninstallApp`: the owner could not be asked | Try again later; tell the user |
 | `timeout` | A bounded application manager call reached its time limit | Retry once; log `errorText` |
 | `refused` | The application manager explicitly refused an operation or target lookup for a reason other than absence | Log `errorText`; do not loop |

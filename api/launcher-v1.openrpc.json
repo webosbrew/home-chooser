@@ -23,7 +23,7 @@
     "subscriptions": false,
     "repliesPerCall": 1,
     "paramStructure": "by-name",
-    "caller": "The service takes the caller from the application id the hub reports for the message (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
+    "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
     "clientTimeoutSeconds": 70,
     "clientTimeoutReason": "uninstallApp can make two 20 second appinfo calls, an 8 second alert call and a 15 second screen launch, about 63 seconds in the worst case."
   },
@@ -85,14 +85,14 @@
     "forbidden": {"cause": "The caller has no valid application id.", "action": "Call from the app. A shell luna-send needs -a <app id>."},
     "notRoot": {"cause": "The service is not elevated.", "action": "Ask the owner to open Home Chooser."},
     "noPermission": {"cause": "The installed appinfo lacks org.webosbrew.homechooser.applications.", "action": "Fix requiredPermissions, reinstall."},
-    "lookupFailed": {"cause": "The service could not read the caller's installed appinfo, from SAM or its file fallback.", "action": "Retry later; log errorText."},
+    "lookupFailed": {"cause": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.", "action": "Retry later; log errorText."},
     "notHome": {"cause": "The app is not the selected Home.", "action": "Send the request launch, wait for the owner."},
     "badRequest": {"cause": "id is missing or not an app id, or getAppIcon.size is invalid.", "action": "A bug in the launcher."},
     "notFound": {"cause": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.", "action": "Refresh the list."},
     "noIcon": {"cause": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.", "action": "Show a placeholder."},
     "iconTooLarge": {"cause": "getAppIcon: the icon exceeds 262144 bytes.", "action": "Show a placeholder."},
     "protected": {"cause": "uninstallApp: target is Home Chooser, Homebrew Channel or the caller.", "action": "Do not offer uninstall for this app."},
-    "notRemovable": {"cause": "uninstallApp: target is a system app, marked removable:false or outside the user app folders.", "action": "Do not offer uninstall for this app."},
+    "notRemovable": {"cause": "uninstallApp: target is marked removable:false or outside the user app folders (system apps are).", "action": "Do not offer uninstall for this app."},
     "confirmFailed": {"cause": "uninstallApp: the owner could not be asked.", "action": "Try again later; tell the user."},
     "timeout": {"cause": "A bounded application manager call reached its time limit.", "action": "Retry once; log errorText."},
     "refused": {"cause": "The application manager explicitly refused an operation or target lookup for a reason other than absence.", "action": "Log errorText; do not loop."},
@@ -229,7 +229,7 @@
     {
       "name": "listRunning",
       "summary": "Lists running apps.",
-      "description": "Each item carries id, instanceId, processId and webProcessId, when present. The service renames the platform's lowercase PID keys and includes PID values only when they are numeric.",
+      "description": "Each item carries id, instanceId, processId and webProcessId, when present. The service renames the platform's lowercase PID keys and includes PID values only when they are non-negative integers, given as numbers or numeric strings, normalized to JSON numbers.",
       "paramStructure": "by-name",
       "params": [],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/ListRunningReply"}},
@@ -259,7 +259,7 @@
     {
       "name": "getForegroundApp",
       "summary": "One lookup of the platform's current foreground app.",
-      "description": "Does not subscribe to changes. appId is an empty string if the platform reports no foreground app. windowId is included when the platform gives it. processId is included only when the platform gives a numeric PID, normalized to a JSON number.",
+      "description": "Does not subscribe to changes. appId is an empty string if the platform reports no foreground app. windowId is included when the platform gives it. processId is included only when the platform gives a non-negative integer PID, as a number or a numeric string, normalized to a JSON number.",
       "paramStructure": "by-name",
       "params": [],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetForegroundAppReply"}},
@@ -356,7 +356,7 @@
       "paramStructure": "by-name",
       "params": [
         {"name": "id", "required": true, "description": "The app whose icon to read.", "schema": {"$ref": "#/components/schemas/AppId"}},
-        {"name": "size", "required": false, "description": "Which appinfo field to read; icon when absent.", "schema": {"type": "string", "enum": ["icon", "largeIcon"], "default": "icon"}}
+        {"name": "size", "required": false, "description": "Which appinfo field to read; icon when absent. Any other value, including null, is badRequest.", "schema": {"type": "string", "enum": ["icon", "largeIcon"], "default": "icon"}}
       ],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetAppIconReply"}},
       "x-needsRoot": true,
@@ -444,7 +444,7 @@
     {
       "name": "uninstallApp",
       "summary": "Asks the owner to uninstall an app. Only the selected Home may call it.",
-      "description": "Refuses Home Chooser itself, Homebrew Channel and the calling launcher with protected; a system app, an app marked removable:false, or one outside /media/developer/apps/usr/palm/applications/ and /media/cryptofs/apps/usr/palm/applications/ with notRemovable. An unknown id is notFound (SAM's combined missing-id/unsupported-type error is resolved against the installed app list); other lookup refusals are refused. The owner always confirms: an alert Uninstall <title>? with Uninstall and Cancel, or, if the alert is refused, Home Chooser's own confirmation screen. A pending uninstall is not a completed removal: there is no second reply; the owner may cancel, ignore it (the question expires after 120 seconds) or confirm. Call listApps again to see whether the app is gone.",
+      "description": "Refuses Home Chooser itself, Homebrew Channel and the calling launcher with protected; an app marked removable:false, or one outside /media/developer/apps/usr/palm/applications/ and /media/cryptofs/apps/usr/palm/applications/ with notRemovable. An unknown id is notFound (SAM's combined missing-id/unsupported-type error is resolved against the installed app list); other lookup refusals are refused. The owner always confirms: an alert Uninstall <title>? with Uninstall and Cancel, or, if the alert is refused, Home Chooser's own confirmation screen. A pending uninstall is not a completed removal: there is no second reply; the owner may cancel, ignore it or confirm. The LG alert stays until the owner answers or dismisses it; Home Chooser's own confirmation screen expires after 120 seconds. Call listApps again to see whether the app is gone.",
       "paramStructure": "by-name",
       "params": [
         {"name": "id", "required": true, "description": "The app to uninstall.", "schema": {"$ref": "#/components/schemas/AppId"}}
@@ -455,7 +455,7 @@
       "x-needsSelectedHome": true,
       "x-subscribes": false,
       "x-ownerConfirms": true,
-      "x-confirmationExpiresSeconds": 120,
+      "x-confirmationExpiresSeconds": {"alert": null, "screen": 120},
       "x-ignoredParams": ["force"],
       "x-doc": "docs/launcher-api.md#uninstallapp-id",
       "examples": [
