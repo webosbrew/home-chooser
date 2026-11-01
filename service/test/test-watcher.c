@@ -24,6 +24,9 @@ typedef struct {
     int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
     int running_dead, close_dead, running_calls, launches; /* calls left unanswered; `running` calls seen */
     const char *home_pid; /* NULL: stock Home not running */
+    const char *last_input; /* getLastInput: NULL no answer, "!refuse" returnValue false, "!none" no id */
+    int launch_fail, last_input_calls; /* launch_fail 1: refused, 2: no reply */
+    GString *launched; /* ids of every launch, each followed by a space */
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
@@ -122,8 +125,13 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
             jobject_set(r, key_buf("running"), list);
         }
     } else if (eq(method, "launch")) {
-        char *id = get_string(p, "id"); CHECK("G20 launch only stock Home", eq(id, STOCK)); g_free(id);
-        f->launches++; r = response(TRUE);
+        char *id = get_string(p, "id"); CHECK("G20 launch only stock Home", f->major >= 10 || eq(id, STOCK));
+        g_string_append_printf(f->launched, "%s ", id); g_free(id);
+        f->launches++; r = f->launch_fail == 2 ? NULL : response(!f->launch_fail);
+    } else if (eq(method, "getLastInput")) {
+        f->last_input_calls++;
+        if (eq(f->last_input, "!refuse")) r = response(FALSE);
+        else if (f->last_input) { r = response(TRUE); if (!eq(f->last_input, "!none")) put_str(r, "lastSourceAppId", f->last_input); }
     } else if (eq(method, "closeByAppId")) {
         f->closes++; r = f->close_dead ? NULL : response(TRUE); if (f->close_dead) f->close_dead--;
         char *id = get_string(p, "id"); CHECK("W16 close only stock", eq(id, STOCK)); g_free(id);
@@ -167,7 +175,7 @@ static Fixture *setup(int major, const char *id) {
     Fixture *f = g_new0(Fixture, 1); f->paths = g_ptr_array_new_with_free_func(g_free);
     f->calls = g_ptr_array_new_with_free_func(g_free); f->apps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     f->write_times = g_array_new(FALSE, FALSE, sizeof(gint64)); f->waits = g_array_new(FALSE, FALSE, sizeof(unsigned));
-    f->major = major; f->clock = 1000; f->live = TRUE;
+    f->major = major; f->clock = 1000; f->live = TRUE; f->launched = g_string_new(NULL);
     f->title = "Pretty Home";
     f->profiles = "{\"returnValue\":true,\"profiles\":{\"defaultApps\":{\"_source\":\"factory\",\"categories\":{\"home\":\"com.webos.app.home\",\"kids\":\"k.app\"},\"other\":{\"a\":[1,2]},\"_hidden\":true},"
         "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
@@ -197,7 +205,8 @@ static Fixture *setup(int major, const char *id) {
 static void teardown(Fixture *f) {
     hc_watch_free(f->w); watch_remove_tree(g_ptr_array_index(f->paths, 0));
     g_ptr_array_free(f->paths, TRUE); g_ptr_array_free(f->calls, TRUE); g_hash_table_destroy(f->apps);
-    j_release(&f->record); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE); g_free(f);
+    j_release(&f->record); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE);
+    g_string_free(f->launched, TRUE); g_free(f);
 }
 static void pump(void) {
     for (int i = 0; i < 50 && g_main_context_pending(NULL); i++) g_main_context_iteration(NULL, FALSE);
@@ -651,6 +660,82 @@ static void test_gate_ran(void) {
     f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; start(f);
     CHECK("G21 gate did not run: launch", f->closes == 1 && f->launches == 1); teardown(f);
 }
+static gboolean logged(Fixture *f, const char *text) {
+    char *log = watch_read(f->c.log); gboolean found = log && strstr(log, text); g_free(log); return found;
+}
+static gboolean input_marked(Fixture *f) {
+    char *p = g_build_filename(f->c.runtime, "last-input", NULL); gboolean m = g_file_test(p, G_FILE_TEST_EXISTS); g_free(p); return m;
+}
+/* A launcher of `window` chosen, `front` in front (NULL: no answer), last input HDMI 2, no settle. */
+static Fixture *input_setup(int major, const char *id, const char *window, const char *front) {
+    Fixture *f = setup(major, id); f->window = window; f->foreground = front; f->last_input = "com.webos.app.hdmi2";
+    f->w->c.input_settle_ms = 0; return f;
+}
+/* A new watcher in the same boot (unit restart): same fixture, same runtime dir. */
+static void input_restart(Fixture *f) {
+    HCWatchOps ops = f->w->ops; hc_watch_free(f->w); f->w = hc_watch_new(&f->c, &ops); f->w->c.input_settle_ms = 0; start(f); pump();
+}
+/* L01-L07: webOS 10+, overlay launcher: the last input once per boot (docs/settings-app.md). */
+static void test_last_input(void) {
+    for (int major = 10; major <= 12; major++) for (int alone = 0; alone <= 1; alone++) {
+        Fixture *f = input_setup(major, "my.home", "overlay", alone ? "my.home" : ""); start(f);
+        CHECK("L01 overlay, nothing full-screen in front: the last input once", f->launches == 1 && eq(f->launched->str, "com.webos.app.hdmi2 "));
+        CHECK("L01 logged", logged(f, alone ? "last input: launched com.webos.app.hdmi2 over the overlay launcher alone: {\"returnValue\":true}"
+            : "last input: launched com.webos.app.hdmi2 over an empty foreground: {\"returnValue\":true}"));
+        CHECK("L01 marker", input_marked(f) && !f->w->input_source);
+        event(f, 'F', "{\"appId\":\"com.webos.app.hdmi2\"}"); event(f, 'T', NULL); event(f, 'A', "{}");
+        choice(f, "other.home"); settings(f, "{\"home\":\"my.home\"}"); f->foreground = ""; event(f, 'A', "{}");
+        CHECK("L05 no repeat in the watcher, choice change included", f->launches == 1);
+        input_restart(f); CHECK("L05 no repeat after a restart in the same boot", f->launches == 1 && f->last_input_calls == 1);
+        teardown(f);
+    }
+    for (int major = 5; major <= 12; major++) for (int mode = 0; mode < 3; mode++) {
+        if (major >= 10 && !mode) continue;
+        Fixture *f = input_setup(major, mode == 2 ? STOCK : "my.home", mode == 1 ? NULL : "overlay", ""); start(f); pump();
+        CHECK("L02 full-screen, LG Home, before 10: nothing", !f->launches && !f->last_input_calls);
+        CHECK("L02 10+ takes the decision once, before 10 nothing", input_marked(f) == (major >= 10));
+        teardown(f);
+    }
+    const char *fronts[] = {"com.webos.app.hdmi1", HC_APP_ID, STOCK, "netflix"};
+    for (unsigned i = 0; i < G_N_ELEMENTS(fronts); i++) {
+        Fixture *f = input_setup(11, "my.home", "overlay", fronts[i]); start(f);
+        char *line = g_strdup_printf("last input: %s in front; nothing launched this boot", fronts[i]);
+        CHECK("L03 full-screen app in front: nothing", !f->launches && !f->last_input_calls && input_marked(f) && logged(f, line));
+        g_free(line); teardown(f);
+    }
+    Fixture *f = input_setup(11, "my.home", "overlay", ""); f->w->c.input_settle_ms = 100000; start(f);
+    event(f, 'F', "{\"appId\":\"my.home\"}"); CHECK("L03 the overlay itself in front: still pending", f->w->input_source && !input_marked(f));
+    event(f, 'F', "{\"appId\":\"netflix\"}");
+    CHECK("L03 an app came up during the settle: nothing", !f->w->input_source && input_marked(f) && !f->launches && logged(f, "last input: netflix came to the front; nothing launched this boot"));
+    teardown(f);
+    const char *inputs[] = {NULL, "!refuse", "!none", "", STOCK, FULLHOME, "bad id"};
+    const char *whys[] = {"eim did not answer", "eim refused", "no lastSourceAppId", "no lastSourceAppId", "lastSourceAppId is stock Home", "lastSourceAppId is stock Home", "invalid lastSourceAppId"};
+    for (unsigned i = 0; i < G_N_ELEMENTS(inputs); i++) {
+        f = input_setup(10, "my.home", "overlay", ""); f->last_input = inputs[i]; start(f);
+        char *line = g_strdup_printf("last input: %s, using com.webos.app.livetv", whys[i]);
+        CHECK("L04 fallback to Live TV, logged", f->launches == 1 && eq(f->launched->str, "com.webos.app.livetv ") && logged(f, line));
+        g_free(line); teardown(f);
+    }
+    f = input_setup(11, "my.home", "overlay", ""); file(path(f, f->c.runtime, "last-input"), "com.webos.app.livetv"); start(f); pump();
+    CHECK("L05 marker from this boot: nothing", !f->launches && !f->last_input_calls && !f->w->input_source); teardown(f);
+    for (int mode = 1; mode <= 2; mode++) {
+        f = input_setup(11, "my.home", "overlay", ""); f->launch_fail = mode; start(f);
+        CHECK("L06 failed launch logged", f->launches == 1 && input_marked(f) && logged(f, mode == 1 ?
+            "last input: launch of com.webos.app.hdmi2 failed: {\"returnValue\":false}; not retried this boot" :
+            "last input: launch of com.webos.app.hdmi2 failed: no reply; not retried this boot"));
+        event(f, 'T', NULL); event(f, 'A', "{}"); pump(); input_restart(f);
+        CHECK("L06 never retried", f->launches == 1 && hc_watch_status(f->w) == -1); teardown(f);
+    }
+    f = input_setup(11, "my.home", "overlay", NULL); start(f); for (int i = 0; i < 4; i++) pump();
+    CHECK("L06 SAM silent: bounded, nothing launched", !f->launches && input_marked(f) && f->w->input_attempts == f->c.preload_tries &&
+        logged(f, "last input: getForegroundAppInfo did not answer in 12 tries; nothing launched this boot"));
+    teardown(f);
+    f = input_setup(11, "my.home", "overlay", ""); f->w->c.input_settle_ms = 100000; hc_watch_start(f->w);
+    CHECK("L07 pending", f->w->input_source != 0);
+    hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL; pump();
+    CHECK("L07 clean stop leaves no launch", !f->launches && !input_marked(f));
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -663,6 +748,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

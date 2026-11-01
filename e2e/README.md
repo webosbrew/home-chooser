@@ -544,7 +544,10 @@ the watcher makes no preload call, so the checks only assert the policy is not d
   for a normal launcher, after the boot policy settles the stock home has no live process over
   60 s (on 10.x and later after a bounded wait of 150 s for the watcher's close: 10.x starts LG
   Home at boot), and on 10+ `idleApp` still names the launcher. For an overlay launcher the stock
-  Home state is recorded: a close waits for a later launch over a nonstock full-screen card. On 6.x to 9.x (home gate) the runner also asserts, for every launcher, that the gate is mounted,
+  Home state is recorded: a close waits for a later launch over a nonstock full-screen card. On 10+
+  with an overlay launcher the runner also asserts, within 240 s, that the watcher log of this boot has
+  exactly one `last input: launched <id>` line (no `last input: launch of <id> failed`) and that `<id>`
+  is SAM's foreground, and notes whether the overlay launcher still runs over it. On 6.x to 9.x (home gate) the runner also asserts, for every launcher, that the gate is mounted,
   the real stock Home is not running and a launcher is in front: the chosen launcher for a full-screen one, the last
   input app (anything but stock Home) for an overlay one. On 5.x there is no preload call.
 

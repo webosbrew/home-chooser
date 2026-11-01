@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "gate/gate.h"
 #include "json.h"
+#include "last-input.h"
 #include "policy.h"
 #include "proc.h"
 #include <string.h>
 
 #define SAM "luna://com.webos.applicationManager/"
-#define LIVETV "com.webos.app.livetv"
 
 static gboolean stock_id(const char *id)
 {
@@ -53,14 +53,12 @@ static gboolean preload(jvalue_ref env)
     if (jis_string(v)) return jstring_get_fast(v).m_len > 0;
     return jis_boolean(v) && jboolean_get(v, &on) == CONV_OK && on;
 }
-/* lastSourceAppId; Live TV when it is empty, stock Home, or eim does not answer. */
+/* The shared rule (last-input.c): lastSourceAppId, else Live TV. */
 static char *last_input(const HCGateConfig *c)
 {
-    jvalue_ref r = hc_gate_call(c, HC_LUNA_IDENTITY, "luna://com.webos.service.eim/getLastInput", "{}", c->query_timeout_s);
-    char *id = reply_ok(r) ? get_string(r, "lastSourceAppId") : NULL;
-    j_release(&r);
-    if (!hc_app_id_ok(id) || stock_id(id)) { g_free(id); id = g_strdup(LIVETV); }
-    return id;
+    jvalue_ref r = hc_gate_call(c, HC_LUNA_IDENTITY, HC_LAST_INPUT_URI, HC_LAST_INPUT_PAYLOAD, c->query_timeout_s);
+    char *id = hc_last_input(r, NULL);
+    j_release(&r); return id;
 }
 
 HCGateDecision hc_gate_decide(const HCGateConfig *c, const char *envelope)

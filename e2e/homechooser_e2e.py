@@ -118,6 +118,11 @@ GATE_LINE = 'home gate mounted'
 GATE_TARGET = '/usr/bin/com.webos.app.home'
 PRELOAD_SETTLE = 60   # seconds to wait after a switch/boot before sampling
 PRELOAD_SAMPLE = 60   # seconds the stock home is watched for
+# 10+, overlay launcher: once per boot the watcher launches the last input (service/src/watcher/input.c),
+# about 20 s after it starts, longer while SAM does not answer (retries every 10 s, 12 at most).
+BOOT_INPUT_LAUNCHED = 'last input: launched '
+BOOT_INPUT_FAILED = 'last input: launch of '
+BOOT_INPUT_WAIT = 240  # seconds after the boot checks start
 FULLHOME = 'com.webos.app.fullhome'
 
 
@@ -147,6 +152,8 @@ TEXT_SOURCES = [
     (REBOOT_PROMPT['remove'], 'service/src/policy.c'),
     (REMOVAL_ALERT, 'service/src/watcher/notify.c'),
     (UNINSTALL_TOAST, 'service/src/watcher/restore.c'),
+    (BOOT_INPUT_LAUNCHED, 'service/src/watcher/input.c'),
+    (BOOT_INPUT_FAILED, 'service/src/watcher/input.c'),
 ]
 
 
@@ -170,6 +177,32 @@ def closes_stock_home(major):
     """10.x and later: the watcher closes LG Home once per boot and per choice, after the chosen launcher
     is in front (service/src/watcher/preload.c); idleApp keeps sam from bringing it back."""
     return major >= 10
+
+
+def boot_input_launches(lines):
+    """The watcher's last-input launches in a log (service/src/watcher/input.c): [(app id, accepted)]."""
+    out = []
+    for line in lines:
+        for prefix, accepted in ((BOOT_INPUT_LAUNCHED, True), (BOOT_INPUT_FAILED, False)):
+            at = line.find(prefix)
+            if at >= 0:
+                rest = line[at + len(prefix):].split()
+                out.append((rest[0] if rest else '', accepted))
+    return out
+
+
+def boot_input_verdict(lines, foreground):
+    """(ok, detail) after a boot with an overlay launcher on 10+: this boot's watcher log has exactly one
+    last-input launch, accepted, and that app is SAM's foreground (the overlay is not named there)."""
+    launches = boot_input_launches(lines)
+    if len(launches) != 1:
+        return False, '%d last-input launches in the log, want 1: %r' % (len(launches), launches)
+    app, accepted = launches[0]
+    if not accepted:
+        return False, 'the launch of %s failed' % app
+    if foreground != app:
+        return False, 'foreground %r, not the launched %s' % (foreground, app)
+    return True, '%s launched once and in front' % app
 
 
 def profile_idle_app(text):
@@ -4141,6 +4174,19 @@ class Scenario:
         r.check(label + ': the gate is mounted and the real stock Home is not running',
                 self.gate_mount_count() >= 1 and STOCK not in self.running_ids(), repr(self.running_ids()))
 
+    def check_boot_input(self, label):
+        """10+ after a boot with an overlay launcher: the watcher launched the last input once
+        (service/src/watcher/input.c), so a full-screen input app is in front beneath the overlay."""
+        r = self.rec
+        verdict = lambda: boot_input_verdict(self.log_lines(), self.dev.foreground()[0])
+        self.wait(lambda: verdict()[0], BOOT_INPUT_WAIT, 5)
+        ok, why = verdict()
+        lines = [l for l in self.log_lines() if 'last input:' in l]
+        r.check(label + ': the watcher launched the last input once and the input is in front (overlay launcher; the launch closes the overlay)', ok,
+                why + '\n' + '\n'.join(lines))
+        r.note(label + ': the overlay launcher over the input', '%s running=%s' % (
+            self.launcher, self.launcher in self.running_ids()))
+
     def verify_reboot_apply(self):
         r, d = self.rec, self.dev
         if self.uses_home_key_hook():
@@ -4163,6 +4209,8 @@ class Scenario:
         self.log_mark = 0  # a new boot, a new /tmp log
         if self.uses_override():
             self.check_idle_chosen('after the reboot')
+            if self.L.overlay:
+                self.check_boot_input('after the reboot')
         self.check_preload_off('after the reboot', settle=30)
         if uses_home_gate(self.major):
             self.check_gate_front('after the reboot')

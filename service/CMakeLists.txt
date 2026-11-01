@@ -53,11 +53,11 @@ include_directories(
 	"${SYSROOT}/usr/include/glib-2.0"
 	"${SYSROOT}/usr/lib/glib-2.0/include")
 
-set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c)
+set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c)
 set(SERVICE_SOURCES src/main.c src/apps.c src/bootlink.c src/notify.c
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c
 	src/service/run.c src/service/launcher.c src/service/system.c)
-set(WATCHER_SOURCES src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c)
+set(WATCHER_SOURCES src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c src/watcher/input.c)
 set(DAEMON_SOURCES src/daemon-main.c src/homekey-main.c src/luna-child.c src/watcher/main.c ${WATCHER_SOURCES})
 set(GATE_LIB_SOURCES src/gate/decide.c src/gate/run.c)
 set(GATE_SOURCES src/gate/main.c ${GATE_LIB_SOURCES})
@@ -87,13 +87,13 @@ endfunction()
 # The same native JSON/transaction code with a fake Luna transport.
 hc_test_program(test-homekey SOURCES test/test-homekey.c src/homekey.c src/homekey-generator.c LIBS pbnjson_c glib-2.0)
 hc_test_program(test-watcher
-	SOURCES test/test-watcher.c ${WATCHER_SOURCES} src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c
+	SOURCES test/test-watcher.c ${WATCHER_SOURCES} src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c
 	LIBS pbnjson_c glib-2.0)
 hc_test_program(test-watcher-luna
-	SOURCES test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c ${WATCHER_SOURCES} src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c
+	SOURCES test/test-watcher-luna.c src/luna.c src/luna-child.c src/watcher/main.c ${WATCHER_SOURCES} src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c
 	LIBS ${DAEMON_LIBS})
 # The gate's decision table through real luna-send children (the fake one).
-hc_test_program(test-gate SOURCES test/test-gate.c ${GATE_LIB_SOURCES} src/json.c src/proc.c src/policy.c src/fs.c src/gate-mount.c LIBS ${DAEMON_LIBS})
+hc_test_program(test-gate SOURCES test/test-gate.c ${GATE_LIB_SOURCES} src/json.c src/proc.c src/policy.c src/fs.c src/gate-mount.c src/last-input.c LIBS ${DAEMON_LIBS})
 # The daemon's mount/unmount decisions with the mount syscalls and mountinfo faked.
 hc_test_program(test-gate-mount SOURCES test/test-gate-mount.c src/gate-mount.c src/json.c src/fs.c src/policy.c LIBS pbnjson_c glib-2.0)
 # The real launcher API handlers on a fake hub (test/fake-ls2.c), for the contract test of

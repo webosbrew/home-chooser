@@ -16,7 +16,9 @@ Scope: webOS 6.x to 9.x only, where stock Home is native at `file:///usr/bin/com
 On 5.x the visible home is `com.webos.app.fullhome` (`com.webos.app.home` never shows), and on
 10.x and later Home is a Flutter app folder, so neither has a binary to replace. 5.x is
 unchanged; 10.x and later close LG Home once the launcher is in front instead
-([settings-app.md](settings-app.md#the-stock-home-is-not-preloaded)).
+([settings-app.md](settings-app.md#the-stock-home-is-not-preloaded)), and under an overlay launcher the
+watcher opens the last input once after each boot by the same rule as the gate
+([settings-app.md](settings-app.md#the-last-input-after-a-boot-webos-10-and-later)).
 
 ## The gate program
 
@@ -41,8 +43,9 @@ full-screen; the watcher's 10+ close logic and the profile override's `idleApp` 
 - The foreground is only asked for an overlay launcher; a full-screen launcher always opens.
 - Launches use `luna-send -a com.webos.app.home luna://com.webos.applicationManager/launch {"id":…}`.
 - Last input is `lastSourceAppId` from `luna-send -a com.webos.applicationManager
-  luna://com.webos.service.eim/getLastInput {}`. An empty value, stock Home, or no answer gives
-  `com.webos.app.livetv`.
+  luna://com.webos.service.eim/getLastInput {}`. An empty or invalid value, stock Home, a refusal or no
+  answer gives `com.webos.app.livetv`. The rule is `hc_last_input()` in
+  [last-input.c](../service/src/last-input.c), shared with the watcher's 10+ boot launch.
 - A failed or timed-out launch also falls back to real stock Home.
 - An envelope carrying `preload` (a background preload, e.g. `"preload":"full"`) opens nothing and
   exits 0. Launching would bring something to the front. The watcher turns the stock Home preload
