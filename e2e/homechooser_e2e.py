@@ -5307,8 +5307,17 @@ class Scenario:
                'within the launcher\'s confirmation)', '\n'.join(alerts) or 'none')
         r.note('watcher log', d.sh('tail -n 20 /tmp/homechooser-home.log')[1])
         # The last app closes: SAM opens idleApp (10+) or the stock home; a removed launcher would leave it black.
-        self.front_app()
-        rc, out = d.close('org.webosbrew.hbchannel')
+        hbc = 'org.webosbrew.hbchannel'
+        in_front = lambda: (lambda x: x if x[0] == hbc else None)(d.foreground())
+        fg = None
+        for attempt in range(2):  # the first launch after the removals can be slow to reach the front
+            rc, out = d.launch(hbc)
+            fg = self.wait(in_front, 45, 2)
+            if fg:
+                break
+        r.check('Homebrew Channel in front before it is closed', bool(fg), (fg or d.foreground())[1][:300])
+        sleep(3)
+        rc, out = d.close(hbc)
         r.check('close Homebrew Channel, the only app in front', rc == 0, out.strip()[-300:])
         fg = self.wait(lambda: (lambda x: x if x[0] and x[0] != 'org.webosbrew.hbchannel' else None)(d.foreground()), 30, 2)
         sleep(3)
