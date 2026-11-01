@@ -591,7 +591,7 @@ Without the variable you get a launcher with no permission, which is the control
 configured for root access. Install Home Chooser first, or pass its ipk with `--hc-ipk`. The
 ares-only compatibility kit installs a permission-declaring web fixture and a disposable control
 app, checks the v1 API before and after choosing the fixture, then restores LG Home and removes
-the test apps. It does not reboot and needs no emulator. It requires LG Home to be the
+the test apps. It does not reboot the TV. It requires LG Home to be the
 starting choice so cleanup can restore it.
 
 ```sh
