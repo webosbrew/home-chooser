@@ -79,10 +79,10 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 
 | Release | Settings record `general/defaultApps` | System profile | After |
 | --- | --- | --- | --- |
-| 5.x | `setSystemSettings` with the existing entries and `home` | - | close previous custom home |
-| 6.x to 8.x | same | - | close previous custom home; reload the volatile JS filter |
-| 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | close previous custom home |
-| 10.x to 12.x | `setDefaultApp` as on 9.x | override file with `home` and `idleApp`, `debug/rescan`, read back | close previous custom home |
+| 5.x | `setSystemSettings` with the existing entries and `home` | - | previous launcher noted for a later close |
+| 6.x to 8.x | same | - | previous launcher noted; reload the volatile JS filter |
+| 9.x | `applicationManager/setDefaultApp`; on `Unknown method`, the `setSystemSettings` write | - | previous launcher noted; reload the volatile JS filter |
+| 10.x to 12.x | `setDefaultApp` as on 9.x | override file with `home` and `idleApp`, `debug/rescan`, read back | previous launcher noted |
 
 * `setSystemSettings` replaces the whole `defaultApps` object, so the other entries (11.2.0 ships
   `kidsApp` in it) are read first and written back. `setDefaultApp` changes only `home`
@@ -114,11 +114,13 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   included, is removed and the profile rescanned whenever the launcher goes missing, LG Home is
   chosen, Home Chooser is uninstalled or a leftover is repaired. After the rescan the app warns if
   `getProfiles` shows another `idleApp`.
-* The previous home is the record's `home`, else the profile's, else `com.webos.app.home`. If it
-  is a custom launcher, the app closes it with `closeByAppId {"forceMode": true}` and reports a
-  failure as a warning. The app never closes a stock home (`home`, `fullhome`, `kidshome`,
-  `seniorhome`, and the other stock ids), on any release. On 10.x and later the watcher can close
-  `com.webos.app.home` later, after the chosen launcher is in front; see
+* The app closes nothing, on any release. The previous homes (the record's `home` and, on 10.x
+  and later, the profile's) that are custom launchers are written to
+  `/var/lib/webosbrew/homechooser/previous`, and the watcher closes them once Home Chooser is off
+  screen; see [The previous launcher](#the-previous-launcher). A stock home (`home`, `fullhome`,
+  `kidshome`, `seniorhome`, and the other stock ids) is never closed as a previous launcher. On 10.x
+  and later the watcher closes `com.webos.app.home` later, after the chosen launcher is in front,
+  and on 6–9 it closes a real stock Home once the gate is mounted; see
   [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
 * On 6.x–9.x, the filter launches an explicit chosen app ID. This avoids SAM's first-write
   `defaultApps` subscription issue on webOS 6
@@ -126,8 +128,63 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   stock source, writes the flag and boot entry, then applies the filter live; restoring LG Home
   restores the exact stock list before removing generated files.
 
-Before these writes `apply` stores the choice, and afterward it ensures the boot entry and watcher
-are in place, closes a previous custom Home if necessary, and refreshes the live filter on 6–9.
+Before these writes `apply` stores the choice and writes the `previous` file, and afterward it
+ensures the boot entry and watcher are in place and refreshes the live filter on 6–9.
+
+### The previous launcher
+
+The rule: while Home Chooser is on screen, applying a choice does nothing that can empty the
+screen or bring a full-screen app up beneath the panel. Closing the launcher in front would do
+both: with nothing full-screen left SAM relaunches its idle app (on 6–9 the home gate, which opens
+the last input for an overlay launcher; on 10.x and later the profile's `idleApp`), and
+surface-manager then closes the panel (`windowPolicy`) 1.5 to 3 s after the click, before or during
+its "Done" toast (seen on 9.2.4 and 8.3.0 when the app still closed the previous launcher itself).
+
+* **What the app writes.** At every change of Home, right after the choice file and before any
+  platform write, the app writes `/var/lib/webosbrew/homechooser/previous`: the custom launchers
+  the change replaces, one id a line, with any ids already there, never the new choice or a stock
+  home. A change from LG Home writes it empty. Choosing LG Home (the restore) writes it after the
+  restore, and starts the watcher when it names a launcher.
+* **The hold.** While the file is fresh, the watcher closes nothing: not the previous launcher, not
+  the 6–9 gate's real stock Home, not the 10.x LG Home, and the 10.x last-input check of the boot
+  records "Home Chooser" and launches nothing (a change made in the panel is an app launch, so
+  SAM's own fallback already works). The app's one-off `homekey refresh` mounts the 6–9 gate but
+  leaves the stock Home close to the watcher whenever the file exists. The hold ends when Home
+  Chooser is off screen: its own `close`, `stop` or `background` life event; a foreground event
+  naming an app other than the one in front when the hold began (a full-screen app coming up
+  closes the panel anyway); or, at the 5-minute check, Home Chooser missing from SAM's `running`
+  list. The held stock Home closes then follow their own rules.
+* **The close.** After the hold, each previous launcher is closed with `closeByAppId
+  {"forceMode": true}` the first time SAM names a full-screen app in front (`getAppInfo`
+  `defaultWindowType` not `overlay`) that is neither that launcher nor Home Chooser. Closing an app
+  that is not the one in front cannot empty the foreground, so nothing is relaunched and the screen
+  does not change. Looked at on every foreground event, life event and app-list event, and at the
+  5-minute check. The id leaves the list (and the file) before the call, so it is closed at most
+  once per change; with the list empty the file is removed.
+* **What closes it, per switch.** From a full-screen launcher the panel sits over that launcher, so
+  when the panel closes the old launcher is still in front and stays; it is closed when the owner
+  presses Home and a full-screen launcher comes up, or opens any other full-screen app (an overlay
+  launcher draws over the old one, which stays in front until then). From an overlay launcher the
+  panel sits over the input or app beneath, so the old launcher is closed as soon as the panel
+  closes. Every release (5.x included) subscribes to the foreground and life events for this.
+* **Never closed.** The launcher chosen now (also when the owner switches back before the close), a
+  stock home (`com.webos.app.*home`), Home Chooser, and an invalid id. A launcher the owner opens
+  again (`launch` or `relaunch`), one that closes by itself, and one that is uninstalled are dropped
+  from the list.
+* **Restarts and reboots.** The file is the pending list, so a watcher restart reads it again and
+  holds again until the next of the events above, then closes what is left; a launcher already
+  closed is not in the file any more. A file written before the current boot (its mtime before
+  `btime` in `/proc/stat`) is dropped at the next look: what it names is not running after a boot.
+* **LG Home chosen.** With no choice stored and a launcher left to close, the watcher stays only for
+  that: no record, override, filter, gate or preload work. It exits 0 once the list is empty (closed,
+  dropped or uninstalled), and becomes the full watcher if a launcher is chosen meanwhile.
+
+The log lines start with `previous launcher:`, for example `previous launcher: Home changed in
+Home Chooser; to close later: <id>; closes wait until Home Chooser is off screen (in front: <id>)`,
+`previous launcher: Home Chooser is off screen (its close event); held closes may go ahead`,
+`previous launcher: <id> is in front; closed once another full-screen app is` and `previous
+launcher: closeByAppId <id> with <front> in front: {"returnValue":true}`. The 6–9 gate logs `home
+gate: stock Home close waits until Home Chooser is off screen` while it holds.
 
 ### Live changes on webOS 6–9
 
@@ -184,6 +241,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
     [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
   * On 10.x and later, with an overlay launcher chosen, it opens the last input once per boot; see
     [The last input after a boot](#the-last-input-after-a-boot-webos-10-and-later).
+  * It closes the launcher a change of Home replaced, once Home Chooser is off screen, and holds
+    its other closes until then; see [The previous launcher](#the-previous-launcher).
   * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends. Started without a usable choice it makes the one
@@ -207,7 +266,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
 Tests: `ctest --test-dir build/service-host -R '^test-watcher'` runs the C policy and
 child-transport/runtime tests under qemu-arm with firmware libraries and a fake transport. It
 covers record merging, backoff, per-version restore, package removal, notifications, preload
-retry/settle, foreground safety and the 10+ last-input launch (L01–L07).
+retry/settle, foreground safety, the 10+ last-input launch (L01–L07) and the previous-launcher
+hold and close on every release (P01–P14).
 `service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
 
 ### The last input after a boot, webOS 10 and later
@@ -226,7 +286,8 @@ overlay launcher with nothing in front:
   front, no answer) is written to that marker before anything is launched. `/tmp` is tmpfs, so the
   marker is gone after a reboot; a watcher restart, a choice change or an app-list event later in the
   same boot launch nothing. A choice changed mid-session needs no launch: it is made in Home Chooser
-  or from a launcher, which is an app launch, so SAM's fallback is already working.
+  or from a launcher, which is an app launch, so SAM's fallback is already working. A check that
+  falls inside the [previous-launcher hold](#the-previous-launcher) launches nothing for that reason.
 * **Only for an overlay launcher** that is installed and is not LG Home (`getAppInfo`
   `defaultWindowType` `overlay`), on 10.x and later. A full-screen launcher, LG Home and releases
   before 10 get nothing (on 6–9 the gate does this job).
@@ -432,7 +493,7 @@ What happens to a stock home that is already running depends on the release:
 | Release | Stock home while a launcher is chosen |
 | --- | --- |
 | 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
-| 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted |
+| 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted, after Home Chooser left the screen when the change was made there ([The previous launcher](#the-previous-launcher)) |
 | 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot. Under an overlay launcher the watcher opens the last input once after boot ([above](#the-last-input-after-a-boot-webos-10-and-later)), which is the full-screen app the close waits for |
 
 * **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
@@ -473,12 +534,13 @@ What happens to a stock home that is already running depends on the release:
   `getForegroundAppInfo` and `getAppLifeEvents`. A normal launcher qualifies when SAM reports it
   as foreground. An overlay qualifies only on its own launch event and only if SAM reports a
   nonstock full-screen card beneath it. With LG Home or a blank foreground beneath an overlay,
-  the close is skipped. The watcher makes at most one close attempt per boot or choice change.
+  the close is skipped. The watcher makes at most one close attempt per boot or choice change, and
+  none during the [previous-launcher hold](#the-previous-launcher).
   If SAM relaunches LG Home, it logs that event and does not close it again in that boot.
 
   The close has to wait because of the idle fallback: the foreground must not empty because of
   it, and closing LG Home beneath an overlay also closes the overlay. Closing it during selection would let the compositor close Home Chooser's own panel
-  before its completion toast. With a nonstock full-screen app in front, or beneath the overlay,
+  before its completion toast, which is why the hold also covers it. With a nonstock full-screen app in front, or beneath the overlay,
   the close sticks.
 
 ## Restoring the stock home
@@ -500,7 +562,9 @@ What happens to a stock home that is already running depends on the release:
 * 10.x and later: the record is written with `"home": null` (same function), the override file is removed and the
   profile rescanned; the profile's `home` is the fallback, and its `idleApp` is the stock one again.
 
-The custom home is then closed; a stock home is never closed.
+The custom home is not closed here: it goes to the `previous` file and the watcher, started for
+it, closes it once Home Chooser is off screen and then exits ([The previous
+launcher](#the-previous-launcher)). A stock home is never closed.
 
 ## Step log
 
