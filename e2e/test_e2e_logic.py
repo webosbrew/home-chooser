@@ -1527,6 +1527,35 @@ class FaultPopups(unittest.TestCase):
                                    '[general]/tmp/faultmanager/general/keyCheck2_4629_sysfaultdetector(none)'))
 
 
+class StockCloseBeforeHomeProof(unittest.TestCase):
+    """The Home proof starts LG Home for the close rule only while the watcher has not closed it yet."""
+
+    def scenario(self, log):
+        from unittest.mock import Mock
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.rec, s.launcher = Mock(), 'org.x.web.overlay'
+        s.dev = Mock()
+        s.dev.foreground.return_value = ('a', '{}')
+        s.dev.sh.side_effect = lambda cmd, *a, **k: (0, log if 'homechooser-home.log' in cmd else '1')
+        s.dev.launch.return_value = (0, 'Launched')
+        s.planned = lambda phase: True
+        s.is_owner = lambda: False
+        s.running_ids = lambda: ['org.webosbrew.hbchannel']
+        s.wait = lambda fn, *a: fn()
+        s.home_press, s.residency = Mock(), Mock()
+        return s
+
+    def test_no_restart_after_the_watcher_close(self):
+        s = self.scenario('closeByAppId com.webos.app.home after org.x.web.overlay in front: {}')
+        s.step3()
+        s.dev.launch.assert_not_called()
+
+    def test_restart_before_the_close(self):
+        s = self.scenario('2026 sam relaunched something')
+        s.step3()
+        s.dev.launch.assert_called_once_with(hc_e2e.constants.STOCK)
+
+
 class FakeRec:
     def __init__(self):
         self.checks, self.notes, self.outcomes, self.said = [], [], [], []

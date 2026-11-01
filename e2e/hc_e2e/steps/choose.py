@@ -98,9 +98,19 @@ class ChooseSteps:
         ui = self.ui() or ui
         clicking = self.use_click()
         if clicking:
-            self.click_element(self.L.title, role=('text', 'button'), effect=lambda: bool((self.ui() or {}).get('dialog')),
-                               label='launcher row')
-        else:
+            try:
+                self.click_element(self.L.title, role=('text', 'button'),
+                                   effect=lambda: bool((self.ui() or {}).get('dialog')), label='launcher row')
+            except RuntimeError as exc:
+                if full or 'click effect not observed' not in str(exc):
+                    raise
+                # A switch over a native overlay launcher (Dock's pattern: a transparent full-screen overlay
+                # window): the overlay takes the pointer even above Home Chooser's panel, while the remote's
+                # keys reach the panel.  A user reaches it with the remote, so the keys are the path.
+                r.note('the click did not reach Home Chooser (the previous launcher\'s overlay window takes the '
+                       'pointer); choosing with the remote keys instead', str(exc))
+                clicking = False
+        if not clicking:
             # move focus to the launcher's row; a key only while our page is readable
             for _ in range(len(rows) + 2):
                 ui = self.ui()
