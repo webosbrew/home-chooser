@@ -163,8 +163,8 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
         "{\"subscribe\":true}", "{\"subscribe\":true}", "{\"subscribe\":true}"};
     guint tick = 0;
     if (hc_watch_status(r.watch) < 0) {
-        int n = r.watch->major >= 10 && c.preload ? 4 : 2;
-        for (int i = 0; i < n; i++) {
+        /* Every release: the previous-launcher close follows the foreground and life events (previous.c). */
+        for (int i = 0; i < 4; i++) {
             feeds[i].subscription = hc_luna_subscribe(r.luna, uris[i], payloads[i], subscription, &feeds[i]);
             if (!feeds[i].subscription) enqueue(&r, g_ascii_tolower(feeds[i].tag), NULL);
         }

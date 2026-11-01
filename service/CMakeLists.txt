@@ -57,7 +57,7 @@ set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/ho
 set(SERVICE_SOURCES src/main.c src/apps.c src/bootlink.c src/notify.c
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c
 	src/service/run.c src/service/launcher.c src/service/system.c)
-set(WATCHER_SOURCES src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c src/watcher/input.c)
+set(WATCHER_SOURCES src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c src/watcher/input.c src/watcher/previous.c)
 set(DAEMON_SOURCES src/daemon-main.c src/homekey-main.c src/luna-child.c src/watcher/main.c ${WATCHER_SOURCES})
 set(GATE_LIB_SOURCES src/gate/decide.c src/gate/run.c)
 set(GATE_SOURCES src/gate/main.c ${GATE_LIB_SOURCES})

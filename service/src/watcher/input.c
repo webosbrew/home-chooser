@@ -49,7 +49,12 @@ static void input_decide(HCWatch *w)
     char *id = watch_choice(w), *front = NULL;
     jvalue_ref r = NULL;
     int window = id && !stock_id(id) && !w->missing ? window_type(w, id) : -1;
-    if (window == -1) {
+    if (window != -1 && previous_holding(w)) {
+        /* A change made in Home Chooser this boot: an app launch, so SAM's fallback already works, and a
+         * launch now would close the panel. */
+        input_mark(w, "Home Chooser");
+        watch_log(w, "last input: Home was just changed in Home Chooser; nothing launched this boot");
+    } else if (window == -1) {
         input_mark(w, "no launcher");
         watch_log(w, "last input: no third-party launcher in use; nothing launched this boot");
     } else if (!window) input_retry(w, "getAppInfo");

@@ -74,7 +74,7 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"home", "previous", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);
