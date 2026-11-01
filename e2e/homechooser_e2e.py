@@ -954,6 +954,11 @@ FIXTURE_ID = 'org.webosbrew.hcfixture.%s.%s'
 # launcher API, so it always declares the permission, and the runner drives it (step 3d).
 DEMO_SPEC = 'fixture:web.demo'
 DEMO_ID = FIXTURE_ID % ('web', 'demo')
+# Step 3d opens this app, built by fixtures/disposable/build.sh with the disposable app: a plain page whose
+# title sorts before the TV's own titles in the demo's order, so OK on the demo's first tile opens it and not
+# an LG app that LG's first-use or EULA overlay holds back.
+DEMO_TARGET_ID = 'org.webosbrew.hcfixture.first'
+DEMO_TARGET_TITLE = '0 HC Fixture first'
 
 
 def demo_ascii_lower(text):
@@ -1071,6 +1076,24 @@ def api_fixture_ipks(announce=print):
     if len(have) < len(FIXTURE_WINDOWS) + 1:
         raise SystemExit('could not build the API fixtures in %s' % API_FIXTURE_DIR)
     return have
+
+
+def demo_target_ipk(announce=print):
+    """fixture:web.demo: the ipk of DEMO_TARGET_ID, built with the disposable app into build/fixtures-api/."""
+    def found():
+        g = sorted(glob.glob(os.path.join(API_FIXTURE_DIR, DEMO_TARGET_ID + '_*.ipk')))
+        return g[-1] if g and ipk_appinfo(g[-1]).get('title') == DEMO_TARGET_TITLE else None
+    ipk = found()
+    if not ipk:
+        announce('demo target missing: building %s with fixtures/disposable/build.sh into %s (offline)'
+                 % (DEMO_TARGET_ID, API_FIXTURE_DIR))
+        os.makedirs(API_FIXTURE_DIR, exist_ok=True)
+        rc, out = run(['sh', os.path.join(HERE, 'fixtures', 'disposable', 'build.sh'), API_FIXTURE_DIR], 600)
+        announce(out.strip()[-400:])
+        ipk = found()
+    if not ipk:
+        raise SystemExit('could not build %s in %s' % (DEMO_TARGET_ID, API_FIXTURE_DIR))
+    return ipk
 
 
 def make_launcher(spec, ipk_override=None, announce=print, api=False):
@@ -3590,6 +3613,10 @@ class Scenario:
             rc, out = d.install(self.a.disposable_ipk)
             r.check('--api-check: install the disposable app %s' % DISPOSABLE_ID, rc == 0 and 'Installed package' in out,
                     out.strip())
+        if getattr(self.L, 'is_demo', False):
+            rc, out = d.install(self.a.demo_target_ipk)
+            r.check('fixture:web.demo: install the app step 3d opens, %s (%r)' % (DEMO_TARGET_ID, DEMO_TARGET_TITLE),
+                    rc == 0 and 'Installed package' in out, out.strip())
         r.check('both apps are listed', APP_ID in d.installed() and self.launcher in d.installed(),
                 str(d.installed()))
         strat.prepare(d, r)
@@ -4179,6 +4206,11 @@ class Scenario:
             return
         order = [a['id'] for a in demo_order(reply['apps'], self.launcher)]
         r.note('3d: the demo\'s order (first 8 of %d); focused: %s' % (len(order), target), ', '.join(order[:8]))
+        listed = [a for a in reply['apps'] if isinstance(a, dict) and a.get('id') == DEMO_TARGET_ID]
+        if not r.check('3d: the demo focuses %s, the runner\'s app %r, first in its order'
+                       % (DEMO_TARGET_ID, DEMO_TARGET_TITLE), target == DEMO_TARGET_ID,
+                       'focused %s; %s in listApps: %s' % (target, DEMO_TARGET_ID, json.dumps(listed)[:300])):
+            return
         fg = d.foreground()
         r.note('3d: foreground before OK: %s (the demo is full-screen and was opened by the Home press)' % fg[0], fg[1][:300])
         if target in self.running_ids():
@@ -5203,7 +5235,8 @@ class Scenario:
                    'installed and the launcher chosen through its UI); the runner does not do that yet', '')
         else:
             removed_hc = False
-            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else [])
+            apps = [self.launcher, APP_ID] + ([DISPOSABLE_ID] if self.a.api_check else []) \
+                + ([DEMO_TARGET_ID] if getattr(self.L, 'is_demo', False) else [])
             try:
                 installed = d.installed()
             except RuntimeError as e:
@@ -5586,6 +5619,8 @@ def main():
     if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
         ap.error('--scenario screensaver/all requires a normal fixture launcher')
     args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
+    args.demo_target_ipk = demo_target_ipk(lambda t: print(t, flush=True)) \
+        if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
     host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
     global SLOWDOWN
     SLOWDOWN = host.slowdown

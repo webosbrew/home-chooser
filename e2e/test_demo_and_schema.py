@@ -113,16 +113,18 @@ class DemoLauncher(unittest.TestCase):
         s.launch_proof = Mock()
         return s
 
-    def test_step_demo_presses_ok_and_proves_the_first_app(self):
-        apps = [{'id': 'org.example.b', 'title': 'B'}, {'id': 'org.example.a', 'title': 'a'},
+    TARGET = {'id': e2e.DEMO_TARGET_ID, 'title': e2e.DEMO_TARGET_TITLE, 'visible': True}
+
+    def test_step_demo_presses_ok_and_proves_the_runners_app(self):
+        apps = [{'id': 'org.example.b', 'title': 'B'}, {'id': 'org.example.a', 'title': 'a'}, self.TARGET,
                 {'id': e2e.DEMO_ID, 'title': 'HC Fixture web demo'}]
-        s = self.scenario(apps, ['org.example.a'])
+        s = self.scenario(apps, [e2e.DEMO_TARGET_ID])
         with patch.object(e2e, 'sleep'):
             s.step_demo()
         s.press.assert_called_once_with('OK')
-        s.launch_proof.assert_called_once_with('3d-demo-ok', 'org.example.a', '2026-11-01T00:00:00')
+        s.launch_proof.assert_called_once_with('3d-demo-ok', e2e.DEMO_TARGET_ID, '2026-11-01T00:00:00')
         # closed before OK (it was running) and after the proof
-        self.assertEqual([c.args[0] for c in s.dev.close.call_args_list], ['org.example.a', 'org.example.a'])
+        self.assertEqual([c.args[0] for c in s.dev.close.call_args_list], [e2e.DEMO_TARGET_ID] * 2)
         self.assertTrue(all(ok for _, ok in s.rec.checks), s.rec.checks)
 
     def test_step_demo_stops_without_an_app(self):
@@ -131,6 +133,66 @@ class DemoLauncher(unittest.TestCase):
             s.step_demo()
         s.press.assert_not_called()
         self.assertEqual(s.rec.checks[-1][1], False)
+
+    def test_step_demo_stops_when_another_app_sorts_first(self):
+        # An LG app with a title before '0 ...', or the runner's app missing or hidden: no OK press, a FAIL.
+        for apps in ([{'id': 'com.example.space', 'title': ' leading space'}, self.TARGET],
+                     [{'id': 'com.webos.app.discovery', 'title': 'Apps'}],
+                     [dict(self.TARGET, visible=False), {'id': 'com.webos.app.discovery', 'title': 'Apps'}]):
+            s = self.scenario(apps + [{'id': e2e.DEMO_ID, 'title': 'HC Fixture web demo'}], [])
+            with patch.object(e2e, 'sleep'):
+                s.step_demo()
+            s.press.assert_not_called()
+            s.launch_proof.assert_not_called()
+            self.assertEqual(s.rec.checks[-1][1], False, apps)
+
+    def test_the_runners_app_sorts_before_the_tvs_own_titles(self):
+        # Titles that came first on the matrix VMs: 9.2.1 Apps, 5.6.1 Amazon Prime Video, 11.2.0 2048.
+        tv = [{'id': 'com.webos.app.discovery', 'title': 'Apps'}, {'id': 'amazon', 'title': 'Amazon Prime Video'},
+              {'id': 'com.gabrielecirulli.app2048.webos', 'title': '2048'}, {'id': 'netflix', 'title': 'Netflix'},
+              {'id': 'com.webos.app.igallery', 'title': '1 Gallery'}, {'id': 'x.notitle'}]
+        reply = {'returnValue': True, 'apiVersion': 1, 'apps': tv + [self.TARGET, {'id': e2e.DEMO_ID, 'title': 'demo'}]}
+        self.assertEqual(e2e.demo_focus(reply, e2e.DEMO_ID), e2e.DEMO_TARGET_ID)
+
+    def test_the_fixture_build_names_the_runners_app(self):
+        with open(os.path.join(HERE, 'fixtures', 'disposable', 'build.sh')) as f:
+            script = f.read()
+        self.assertIn('build %s "%s"' % (e2e.DEMO_TARGET_ID, e2e.DEMO_TARGET_TITLE), script)
+        self.assertTrue(e2e.DEMO_TARGET_ID.startswith('org.webosbrew.hcfixture.'))  # never taken for a foreign launcher
+
+    def test_demo_target_ipk_builds_once_and_checks_the_title(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            def build(argv, timeout):
+                open(os.path.join(tmp, e2e.DEMO_TARGET_ID + '_1.0.0_all.ipk'), 'w').close()
+                return 0, 'built'
+            with patch.object(e2e, 'API_FIXTURE_DIR', tmp), patch.object(e2e, 'run', side_effect=build) as run, \
+                    patch.object(e2e, 'ipk_appinfo', return_value={'title': e2e.DEMO_TARGET_TITLE}):
+                ipk = e2e.demo_target_ipk(lambda t: None)
+                self.assertEqual(ipk, os.path.join(tmp, e2e.DEMO_TARGET_ID + '_1.0.0_all.ipk'))
+                self.assertEqual(e2e.demo_target_ipk(lambda t: None), ipk)
+                self.assertEqual(run.call_count, 1)
+                self.assertTrue(run.call_args.args[0][1].endswith(os.path.join('fixtures', 'disposable', 'build.sh')))
+            with patch.object(e2e, 'API_FIXTURE_DIR', tmp), patch.object(e2e, 'run', return_value=(1, 'no')), \
+                    patch.object(e2e, 'ipk_appinfo', return_value={'title': 'an old title'}):
+                with self.assertRaises(SystemExit):
+                    e2e.demo_target_ipk(lambda t: None)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_cleanup_removes_the_runners_app(self):
+        s = e2e.Scenario.__new__(e2e.Scenario)
+        s.rec = SimpleNamespace(begin=Mock(), say=Mock(), note=Mock(), check=Mock())
+        s.insp, s.vm, s.launcher = None, 'w22h-ombre', e2e.DEMO_ID
+        s.L = SimpleNamespace(is_demo=True)
+        s.a = SimpleNamespace(api_check=False)
+        installed = {e2e.DEMO_ID, e2e.DEMO_TARGET_ID, 'org.webosbrew.hbchannel'}
+        s.dev = SimpleNamespace(installed=Mock(side_effect=lambda: sorted(installed)),
+                                remove=Mock(side_effect=lambda app: installed.discard(app) or (0, 'Removed')),
+                                sh=Mock(return_value=(0, '')))
+        s.step6()
+        self.assertEqual(installed, {'org.webosbrew.hbchannel'})
+        s.rec.check.assert_any_call('no test apps left installed', True, "['org.webosbrew.hbchannel']")
 
 
 def spec_records():

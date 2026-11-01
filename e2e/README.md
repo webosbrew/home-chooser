@@ -67,7 +67,8 @@ python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 ```
 
 Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|fixture:web.demo|<app id>` (default `fixture:web.normal`;
-`fixture:web.demo` is `examples/web-launcher` and adds step 3d, OK on the demo opens its focused app, see
+`fixture:web.demo` is `examples/web-launcher` and adds step 3d, OK on the demo opens its focused app, the runner's own
+`org.webosbrew.hcfixture.first`, installed with it; see
 `fixtures/README.md`; an app id, for a real launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
 sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
 screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`

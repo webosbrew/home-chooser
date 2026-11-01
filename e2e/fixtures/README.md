@@ -75,7 +75,10 @@ has opened it, step 3d presses OK and proves from sam, as for the launcher itsel
 The focused app is deterministic: the demo starts on the first app of its order (by title ignoring ASCII case, then by
 id, without itself and `visible: false` apps), and the runner computes the same order from `listApps` called as the
 demo (`demo_order` in `homechooser_e2e.py`, checked against the demo's own `orderApps` by
-`e2e/test_demo_and_schema.py`). The runner closes that app before OK if it is running and again afterwards.
+`e2e/test_demo_and_schema.py`). That first app must be the runner's own `org.webosbrew.hcfixture.first` (below),
+installed in step 1 and removed in cleanup; 3d fails without pressing OK if another app sorts first. A TV's own first
+app is no target: on 9.2.1 and 5.6.1 LG's first-use and EULA overlays held back the launch of `com.webos.app.discovery`
+and `amazon`. The runner closes the target before OK if it is running and again afterwards.
 
 ## disposable/
 
@@ -83,6 +86,10 @@ demo (`demo_order` in `homechooser_e2e.py`, checked against the demo's own `orde
 `requiredPermissions` (`HC_FIXTURE_PERMISSION` is ignored). `--api-check` uses it as the caller without the
 permission, as the app `closeApp` closes, and as the target of `uninstallApp`. It is never a launcher and is not part of
 the six built by `build.sh`.
+
+The same script also packages `org.webosbrew.hcfixture.first`, titled `0 HC Fixture first`, a plain visible page
+with no category and no permission. The title sorts before the TV's own titles in the demo's order, so it is the
+demo's first tile and the app step 3d opens. The runner builds both into `build/fixtures-api/` when needed.
 
 ## What the runner proves
 
