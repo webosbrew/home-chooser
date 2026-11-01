@@ -974,6 +974,30 @@ def lines_after(lines, mark):
     return lines[mark:] if mark <= len(lines) else list(lines)
 
 
+PREVIOUS_ARMED = 'previous launcher: Home changed in Home Chooser'
+PREVIOUS_RELEASED = 'previous launcher: Home Chooser is off screen'
+
+
+def closes_under_panel(lines):
+    """Watcher log lines that close something (a previous launcher, or stock Home through
+    closeByAppId) between the hold being armed by a change made in Home Chooser and its end (Home
+    Chooser off screen); docs/settings-app.md "The previous launcher".  Empty is the pass."""
+    out, held = [], False
+    for l in lines:
+        if PREVIOUS_ARMED in l:
+            held = True
+        elif PREVIOUS_RELEASED in l:
+            held = False
+        elif held and 'closeByAppId' in l:
+            out.append(l)
+    return out
+
+
+def previous_closes(lines, ident):
+    """The watcher's deferred closes of the previous launcher `ident` (closed at most once per change)."""
+    return [l for l in lines if 'previous launcher: closeByAppId %s ' % ident in l]
+
+
 def ipk_files(path):
     """{member name: bytes} of the data.tar.gz inside an ipk (an ar archive; stdlib only)."""
     raw = open(path, 'rb').read()
@@ -3692,6 +3716,12 @@ class Scenario:
             self.shot('after-confirm')
             r.note('toasts after confirming', repr(toasts))
             r.check('the toast said "%s"' % DONE_TEXT, toast == DONE_TEXT, repr(toast))
+            # the watcher closes nothing while the panel is up; a previous launcher is closed later
+            self.wait(lambda: any(PREVIOUS_ARMED in l for l in self.log_since_mark()), 60, 3)
+            since = self.log_since_mark()
+            r.check('the watcher held its closes while Home Chooser was on screen (previous-launcher hold)',
+                    any(PREVIOUS_ARMED in l for l in since) and not closes_under_panel(since),
+                    '\n'.join(l for l in since if 'previous launcher:' in l or 'closeByAppId' in l) or 'no previous-launcher line')
             if self.uses_home_key_hook():
                 # the patch was mounted already (an earlier choice in this boot): a live switch
                 self.check_no_compositor_restart('choosing with the patch mounted (a live switch)', comp0)
