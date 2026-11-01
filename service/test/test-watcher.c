@@ -21,7 +21,7 @@ typedef struct {
     int sets, defaults, scans, alerts, toasts, closes, preload_on, preload_off;
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
     int silent, flap, wait_action, wait_count, title_gets;
-    int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
+    int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice, gate_off_at_wait, stock_at_wait;
     int running_dead, close_dead, running_calls, launches; /* calls left unanswered; `running` calls seen */
     const char *home_pid; /* NULL: stock Home not running */
     const char *last_input; /* getLastInput: NULL no answer, "!refuse" returnValue false, "!none" no id */
@@ -160,6 +160,7 @@ static int fake_gate(const char *choice, void *context) {
 static gint64 now(void *context) { return ((Fixture *)context)->clock; }
 static void wait_ms(unsigned ms, void *context) {
     Fixture *f = context; f->wait_count++; f->clock += ms / 1000; g_array_append_val(f->waits, ms);
+    f->gate_off_at_wait = f->gate_off; f->stock_at_wait = f->stock_calls;
     int action = f->wait_action; f->wait_action = 0;
     if (action == 1) { installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); }
     if (action == 2) { installed(f, "my.home", 1); }
@@ -490,7 +491,8 @@ static void test_restore_races(void) {
         CHECK("W03 back-to-back removal: override dropped and rescanned then", major < 10 || f->scans == scans0 + 1);
         CHECK("W03 back-to-back removal: clean restore, toast only", hc_watch_status(f->w) == 0 && f->removes == 1
               && !f->alerts && f->toasts == 1 && home_is(f, major < 10 ? STOCK : NULL));
-        CHECK("W03 back-to-back removal: stock keyFilters before the second wait", f->stock_calls == 2 * (major >= 6 && major <= 9));
+        CHECK("W03 back-to-back removal: stock keyFilters and no home gate before Home Chooser's wait",
+              major < 6 || major > 9 || (f->stock_at_wait == 1 && f->gate_off_at_wait >= 1 && f->gate_last == 0));
         teardown(f);
         /* Home Chooser only looked gone (an update): the launcher's removal is reported after the wait. */
         f = setup(major, "my.home"); start(f);

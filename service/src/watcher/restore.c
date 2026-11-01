@@ -117,6 +117,7 @@ void check_apps(HCWatch *w, char why)
             g_free(w->missing); w->missing = g_strdup(want);
             revert_platform(w); key_refresh(w, TRUE);
             g_clear_pointer(&w->baked, g_free);
+            gate_sync(w); /* 6-9: stock Home is the real binary again, before the wait below */
         }
         check_hc(w);
         if (w->status >= 0) goto done;
