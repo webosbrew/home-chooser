@@ -19,7 +19,7 @@ where the two differ; a change to either must keep them in step.
   the permission (`x-permission`), the `appCategory: ["home"]` and `requiredPermissions` appinfo
   declarations (`x-appinfo`), the `request` launch parameter (`x-requestLaunch`), the error table
   (`x-errors`) and the order of the caller checks (`x-replyModel`). `x-luna.subscriptionModel` says
-  how the lists' `subscribe: true` works; `x-subscribes` marks the methods that take it.
+  how `subscribe: true` works; `x-subscribes` marks the methods that take it.
 * **Errors are part of the result.** A reply is a luna reply, not a JSON-RPC response: success and
   failure are both one JSON object, told apart by `returnValue`. Each method's result schema is a
   `oneOf` of the success object and the failure object (`returnValue: false`, `apiVersion`,
@@ -55,8 +55,8 @@ only). Do not edit the files by hand.
   request launch, `ownAppId()` reads the app's id from the web runtime, and `lunaCall(uri, payload)`
   makes any other luna call, such as `applicationManager/launch`. `ERROR_CODES` lists each method's
   codes. `subscribe(method, params, onReply, onError)` opens a subscription of `listApps`,
-  `listLaunchPoints` or `listInputs`: `onReply` gets every successful reply (the whole list, again
-  after each change), `onError` the `HomeChooserError` that ended it, and the returned object's
+  `listLaunchPoints`, `listInputs`, `listRunning` or `getForegroundApp`: `onReply` gets every
+  successful reply (the whole state, again after each change), `onError` the `HomeChooserError` that ended it, and the returned object's
   `cancel()` ends it.
 * [`homechooser.d.ts`](client/homechooser.d.ts): its types.
 * [`homechooser-mock.js`](client/homechooser-mock.js): the same API on fake data, for opening a
@@ -78,8 +78,9 @@ examples: the `listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getF
 `getAppIcon` and `getIcons` success examples, the caller `org.example.launcher`), applies the caller
 checks in the order of `x-replyModel`, and validates `id`, `size` and `items` as the param schemas
 do. Subscriptions answer at once, again on `HomeChooser.mock.notify(method)`, and refuse the 17th
-subscriber of a list; `?hcmock-changes=<ms>` flips the last input's `connected` every `<ms>` and
-notifies the `listInputs` subscribers. `applicationManager/launch` is logged and
+subscriber of a method; `?hcmock-changes=<ms>` flips the last input's `connected` every `<ms>`,
+brings the next app to the foreground (and into the running list), and notifies the `listInputs`,
+`getForegroundApp` and `listRunning` subscribers. `applicationManager/launch` is logged and
 succeeds. `?hcmock=<state>` in the page URL picks the `getInfo` state: `selected-home` (default),
 `before-elevation`, `not-permitted`, `not-home`, or `absent` (every call gets a platform error, as
 when Home Chooser is not installed). `HomeChooser.mock` can be changed in the console.
@@ -126,9 +127,10 @@ ctest --test-dir build/service-host --output-on-failure -R launcher
   catalog first, for the cap.
 * `test-launcher-subscribe` runs the subscriptions themselves: the real upstream `luna-send -i`
   children of `luna-child.c`, with `service/test/fake-luna-send.py` as luna-send, on the fake hub. It
-  checks the first reply, one shared upstream for two subscribers, a change sent to every subscriber
-  as a fresh full read, a burst of changes read once, an upstream that dies and comes back after the
-  backoff, the subscriber cap, and that cancelling the last subscriber kills and reaps the upstream.
+  checks, for each upstream (SAM `listApps`, `running` and `getForegroundAppInfo`), the first reply,
+  one shared upstream for two subscribers, a change sent to every subscriber as a fresh full read, a
+  burst of changes read once, an upstream that dies and comes back after the backoff, the subscriber
+  cap, and that cancelling the last subscriber kills and reaps the upstream.
 
 The driver, [`test-launcher-contract.c`](../service/test/test-launcher-contract.c), replaces the
 luna hub with [`fake-ls2.c`](../service/test/fake-ls2.c) and five functions at link time

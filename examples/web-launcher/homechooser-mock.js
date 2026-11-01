@@ -9,7 +9,8 @@
 // the service's order, and luna://com.webos.applicationManager/launch is logged and succeeds.
 // ?hcmock=<scenario> in the page URL picks the getInfo state: before-elevation, not-home, not-permitted, selected-home, absent.
 // Subscriptions answer at once and again on HomeChooser.mock.notify(method); ?hcmock-changes=<ms> also
-// flips the last input's connected state every <ms> and notifies the listInputs subscribers.
+// flips the last input's connected state every <ms>, brings the next app to the foreground (and into the
+// running list), and notifies the listInputs, getForegroundApp and listRunning subscribers.
 (function (root) {
 	'use strict';
 	var HC = root.HomeChooser;
@@ -53,7 +54,7 @@
 			"timeout": "A bounded application manager call reached its time limit.",
 			"refused": "The application manager explicitly refused an operation or target lookup for a reason other than absence.",
 			"badReply": "The application manager did not provide usable JSON, or its successful list reply lacked the expected array.",
-			"tooManySubscriptions": "A list already has 16 subscribers.",
+			"tooManySubscriptions": "The method already has 16 subscribers.",
 			"internal": "The service could not make a confirmation token."
 		},
 		"scenarios": {
@@ -202,6 +203,8 @@
 		"appIdPattern": "^[A-Za-z0-9._-]{1,128}$",
 		"subscribing": [
 			"listApps",
+			"listRunning",
+			"getForegroundApp",
 			"listLaunchPoints",
 			"listInputs"
 		],
@@ -228,13 +231,23 @@
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getForegroundApp": {
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getAppInfo": {
 				"needsRoot": true,
@@ -410,7 +423,7 @@
 		return null;
 	}
 
-	// The list reply of a subscribing method, with subscribed true on a subscription.
+	// The list reply of a method that subscribes, with subscribed true on a subscription.
 	function list(key, items, params) {
 		var fields = {};
 		if (params && params.subscribe === true) fields.subscribed = true;
@@ -459,11 +472,13 @@
 			}
 			return success({icons: icons});
 		},
-		listRunning: function () {
-			return success({running: copy(mock.running)});
+		listRunning: function (params) {
+			return list('running', mock.running, params);
 		},
-		getForegroundApp: function () {
-			return success(copy(mock.foreground));
+		getForegroundApp: function (params) {
+			var reply = success(copy(mock.foreground));
+			if (params && params.subscribe === true) reply.subscribed = true;
+			return reply;
 		},
 		getAppInfo: function (params) {
 			var app = findApp(params.id);
@@ -508,7 +523,7 @@
 		return {returnValue: false, errorCode: -1, errorText: 'Unknown service (mock: only Home Chooser and ' + DATA.launchUri + ' are faked)'};
 	}
 
-	// Subscriptions: per list method, the onMessage functions of the open ones.
+	// Subscriptions: per method, the onMessage functions of the open ones.
 	var subscribers = {};
 
 	mock.notify = function (method) {
@@ -537,12 +552,22 @@
 	});
 
 	var changes = /[?&]hcmock-changes=(\d+)/.exec((root.location && root.location.search) || '');
+	var turn = 0;
 	if (changes && Number(changes[1]) > 0) {
 		setInterval(function () {
 			var input = mock.inputs[mock.inputs.length - 1];
-			if (!input) return;
-			input.connected = !input.connected;
-			mock.notify('listInputs');
+			if (input) {
+				input.connected = !input.connected;
+				mock.notify('listInputs');
+			}
+			// The next visible app other than the caller comes to the foreground, as if the owner opened it.
+			var shown = mock.apps.filter(function (a) { return a.id !== mock.callerId && a.visible !== false; });
+			if (!shown.length) return;
+			var app = shown[turn++ % shown.length];
+			mock.foreground = {appId: app.id};
+			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
+			mock.notify('getForegroundApp');
+			mock.notify('listRunning');
 		}, Number(changes[1]));
 	}
 

@@ -224,35 +224,6 @@ static void launcher_begin(LSMessage *msg, const char *method, bool need_root, b
 	launcher_consent(op);
 }
 
-static void running_done(Call *c, jvalue_ref reply)
-{
-	LOp *op = c->ctx;
-	if (platform_failure(op, c, reply, "application manager")) {
-		/* replied */
-	} else if (!jis_array(jobject_get(reply, key_buf("running")))) {
-		send_error_for(op->msg, op->method, "badReply", "The application manager did not return an app array");
-	} else {
-		jvalue_ref o = jobject_create();
-		put_bool(o, "returnValue", true);
-		put_int(o, "apiVersion", HC_API_VERSION);
-		jobject_set(o, key_buf("running"), pick_running(jobject_get(reply, key_buf("running"))));
-		send_reply(op->msg, o);
-	}
-	op_free(op);
-}
-
-static void running_next(LOp *op)
-{
-	call_start(SAM_URI "/running", "{}", running_done, op);
-}
-
-bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	launcher_begin(msg, "listRunning", true, false, true, false, running_next);
-	return true;
-}
-
 static bool sam_failure(LOp *op, Call *c, jvalue_ref reply, bool target_lookup)
 {
 	if (reply && reply_ok(reply)) return false;
@@ -311,41 +282,7 @@ static bool check_ambiguous_target(LOp *op, jvalue_ref reply)
 	return true;
 }
 
-static void foreground_done(Call *c, jvalue_ref reply)
-{
-	LOp *op = c->ctx;
-	if (!sam_failure(op, c, reply, false)) {
-		jvalue_ref v = jobject_get(reply, key_buf("appId"));
-		if (v && jis_valid(v) && !jis_null(v) && !jis_string(v)) {
-			send_error_for(op->msg, op->method, "badReply", "The application manager returned an invalid appId");
-		} else {
-			char *app_id = get_string(reply, "appId");
-			char *window_id = get_string(reply, "windowId");
-			jvalue_ref o = jobject_create();
-			put_bool(o, "returnValue", true);
-			put_int(o, "apiVersion", HC_API_VERSION);
-			put_str(o, "appId", app_id ? app_id : "");
-			if (window_id) put_str(o, "windowId", window_id);
-			put_normalized_pid(o, "processId", reply, "processId");
-			send_reply(op->msg, o);
-			g_free(app_id);
-			g_free(window_id);
-		}
-	}
-	op_free(op);
-}
-
-static void foreground_next(LOp *op)
-{
-	call_start(SAM_URI "/getForegroundAppInfo", "{}", foreground_done, op);
-}
-
-bool on_launcher_get_foreground(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	launcher_begin(msg, "getForegroundApp", true, false, true, false, foreground_next);
-	return true;
-}
+/* listRunning and getForegroundApp are in catalog.c, with the other methods that subscribe. */
 
 static void appinfo_done(Call *c, jvalue_ref reply)
 {

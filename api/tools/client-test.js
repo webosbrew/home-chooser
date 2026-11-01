@@ -168,6 +168,15 @@ async function subscribeTests() {
 	await tick();
 	subs.forEach((s) => s.cancel());
 	out({test: 'mock-subscribe', replies, errors, over});
+	// getForegroundApp: the whole reply again after a change, with subscribed true.
+	const fg = [];
+	const fgSub = HC.subscribe('getForegroundApp', {}, (r) => fg.push(r), (e) => errors.push(describe(e)));
+	await tick();
+	HC.mock.foreground = {appId: 'org.example.other'};
+	HC.mock.notify('getForegroundApp');
+	await tick();
+	fgSub.cancel();
+	out({test: 'mock-subscribe-foreground', replies: fg, errors});
 }
 
 async function mockTests() {

@@ -10,8 +10,10 @@
 //   'platform'     the luna bus (no apiVersion): Home Chooser is absent or too old, or the permission
 //                  was not installed with your app. Call getInfo and branch.
 //   'transport'    nothing usable came back: no webOS service bridge, no reply in TIMEOUT_MS, not JSON.
-// subscribe(method, params, onReply, onError) keeps listApps, listLaunchPoints or listInputs open: the whole
-// list now and after every change, until cancel(). Home Chooser keeps no copy: cache what you draw.
+// subscribe(method, params, onReply, onError) keeps a method open that takes subscribe:
+//   listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+// It gives the whole reply now and after every change, until cancel(). Home Chooser keeps no copy:
+// cache what you draw.
 // Types: homechooser.d.ts. Fake data for a desktop browser: homechooser-mock.js.
 (function (root, factory) {
 	var api = factory(root);
@@ -129,9 +131,10 @@
 		return settle(lunaCall(SERVICE + '/' + method, params || {}));
 	}
 
-	// subscribe(method, params, onReply, onError): listApps, listLaunchPoints or listInputs with
-	// subscribe: true. onReply gets every reply with returnValue true: the whole list now, and the whole
-	// list again after each change; keep the latest and redraw. onError gets a HomeChooserError (sources
+	// subscribe(method, params, onReply, onError): a method that takes subscribe: true, that is
+	// listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+	// onReply gets every reply with returnValue true: the whole state now, and the whole state again
+	// after each change; keep the latest and redraw. onError gets a HomeChooserError (sources
 	// as above) and the subscription is over; subscribe again later if you need to. Returns {cancel}.
 	function subscribe(method, params, onReply, onError) {
 		var payload = {}, k, ended = false, stop = null;
@@ -179,16 +182,16 @@
 		return callMethod("listApps", params);
 	}
 
-	// listRunning {}: Lists running apps. Needs root, the permission.
-	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply.
-	function listRunning() {
-		return callMethod("listRunning", {});
+	// listRunning {subscribe?}: Lists running apps. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function listRunning(params) {
+		return callMethod("listRunning", params);
 	}
 
-	// getForegroundApp {}: One lookup of the platform's current foreground app. Needs root, the permission.
-	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply.
-	function getForegroundApp() {
-		return callMethod("getForegroundApp", {});
+	// getForegroundApp {subscribe?}: The platform's current foreground app, once or on every change. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function getForegroundApp(params) {
+		return callMethod("getForegroundApp", params);
 	}
 
 	// getAppInfo {id}: Fetches one installed app without refreshing the full list. Needs root, the permission.
@@ -275,7 +278,8 @@
 				"lookupFailed",
 				"timeout",
 				"refused",
-				"badReply"
+				"badReply",
+				"tooManySubscriptions"
 			],
 			"getForegroundApp": [
 				"forbidden",
@@ -284,7 +288,8 @@
 				"lookupFailed",
 				"timeout",
 				"refused",
-				"badReply"
+				"badReply",
+				"tooManySubscriptions"
 			],
 			"getAppInfo": [
 				"forbidden",

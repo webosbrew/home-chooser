@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Subscriptions of listApps, listLaunchPoints and listInputs.
+/* Subscriptions of listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp.
  *
- * Per list, one upstream luna-send -i child (luna-child.c) subscribes to the platform while the list has
- * a subscriber; it starts with the first subscriber and is killed after the last one cancels. The
+ * Per method, one upstream luna-send -i child (luna-child.c) subscribes to the platform while the method
+ * has a subscriber; it starts with the first subscriber and is killed after the last one cancels. The
  * upstream's replies are used only as a signal: each change (debounced) starts one fresh, non-blocking
- * read of the whole list (luna-send -n 1), and that full list goes to every subscriber through the hub's
- * subscription catalog. Nothing is stored between replies: a new subscriber's first reply is its own
- * fresh read (catalog.c). A dead upstream is restarted with a doubling backoff (1 s to 60 s) and its
+ * read of the whole state (luna-send -n 1), and that full reply goes to every subscriber through the
+ * hub's subscription catalog. Nothing is stored between replies: a new subscriber's first reply is its
+ * own fresh read (catalog.c). A dead upstream is restarted with a doubling backoff (1 s to 60 s) and its
  * first reply after a restart counts as a change, since something may have changed while it was down. */
 #include <string.h>
 #include "json.h"

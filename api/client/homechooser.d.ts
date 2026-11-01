@@ -120,17 +120,27 @@ declare namespace HomeChooser {
 	}
 	/** The reply of listRunning when returnValue is true. */
 	interface ListRunningResult extends Success {
+		subscribed?: true;
 		running: RunningApp[];
 	}
-	type ListRunningErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply";
+	type ListRunningErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply" | "tooManySubscriptions";
+	interface ListRunningParams {
+		/** true: keep the call open and get the whole list again after every change the application manager reports (an app started or closed) (x-luna.subscriptionModel). Anything else: one reply. */
+		subscribe?: boolean;
+	}
 	/** The reply of getForegroundApp when returnValue is true. */
 	interface GetForegroundAppResult extends Success {
+		subscribed?: true;
 		/** Empty when the platform reports no foreground app. */
 		appId: string;
 		windowId?: string;
 		processId?: number;
 	}
-	type GetForegroundAppErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply";
+	type GetForegroundAppErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply" | "tooManySubscriptions";
+	interface GetForegroundAppParams {
+		/** true: keep the call open and get the whole reply again after every change of the foreground app (x-luna.subscriptionModel). Anything else: one reply. */
+		subscribe?: boolean;
+	}
 	/** The reply of getAppInfo when returnValue is true. */
 	interface GetAppInfoResult extends Success {
 		app: {
@@ -302,9 +312,9 @@ declare namespace HomeChooser {
 	/** Lists the installed apps. Needs root, the permission. */
 	function listApps(params?: ListAppsParams): Promise<ListAppsResult>;
 	/** Lists running apps. Needs root, the permission. */
-	function listRunning(params?: {}): Promise<ListRunningResult>;
-	/** One lookup of the platform's current foreground app. Needs root, the permission. */
-	function getForegroundApp(params?: {}): Promise<GetForegroundAppResult>;
+	function listRunning(params?: ListRunningParams): Promise<ListRunningResult>;
+	/** The platform's current foreground app, once or on every change. Needs root, the permission. */
+	function getForegroundApp(params?: GetForegroundAppParams): Promise<GetForegroundAppResult>;
 	/** Fetches one installed app without refreshing the full list. Needs root, the permission. */
 	function getAppInfo(params: GetAppInfoParams): Promise<GetAppInfoResult>;
 	/** Reads an app's icon for a jailed launcher. Needs root, the permission. */
@@ -323,15 +333,23 @@ declare namespace HomeChooser {
 	interface Subscription {
 		cancel(): void;
 	}
-	/** Subscribes to listApps: onReply gets the whole list now and again after every change; onError gets the
+	/** Subscribes to listApps: onReply gets the whole reply now and again after every change; onError gets the
 	 * failure that ended it (the subscription is over then). */
 	function subscribe(method: "listApps", params: ListAppsParams | null, onReply: (reply: ListAppsResult) => void,
 		onError?: (error: HomeChooserError) => void): Subscription;
-	/** Subscribes to listLaunchPoints: onReply gets the whole list now and again after every change; onError gets the
+	/** Subscribes to listRunning: onReply gets the whole reply now and again after every change; onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "listRunning", params: ListRunningParams | null, onReply: (reply: ListRunningResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
+	/** Subscribes to getForegroundApp: onReply gets the whole reply now and again after every change; onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "getForegroundApp", params: GetForegroundAppParams | null, onReply: (reply: GetForegroundAppResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
+	/** Subscribes to listLaunchPoints: onReply gets the whole reply now and again after every change; onError gets the
 	 * failure that ended it (the subscription is over then). */
 	function subscribe(method: "listLaunchPoints", params: ListLaunchPointsParams | null, onReply: (reply: ListLaunchPointsResult) => void,
 		onError?: (error: HomeChooserError) => void): Subscription;
-	/** Subscribes to listInputs: onReply gets the whole list now and again after every change; onError gets the
+	/** Subscribes to listInputs: onReply gets the whole reply now and again after every change; onError gets the
 	 * failure that ended it (the subscription is over then). */
 	function subscribe(method: "listInputs", params: ListInputsParams | null, onReply: (reply: ListInputsResult) => void,
 		onError?: (error: HomeChooserError) => void): Subscription;
@@ -376,8 +394,8 @@ declare namespace HomeChooser {
 		icons: {[id: string]: {mimeType: string; data: string; byteLength: number}};
 		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#largeIcon") -> an icon entry. */
 		batchIcons: {[key: string]: IconEntry};
-		/** Sends the subscribers of a list method its current mock list again, as after a change. */
-		notify(method: 'listApps' | 'listLaunchPoints' | 'listInputs'): void;
+		/** Sends the subscribers of a method its current mock state again, as after a change. */
+		notify(method: 'listApps' | 'listRunning' | 'getForegroundApp' | 'listLaunchPoints' | 'listInputs'): void;
 		/** Payloads of the applicationManager/launch calls made. */
 		launches: object[];
 		delayMs: number;

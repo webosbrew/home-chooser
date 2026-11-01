@@ -101,6 +101,14 @@ def main(argv):
                   'mock subscribe: the change is not in the second reply')
             check(problems, len(r['over']) == 1 and r['over'][0]['errorCode'] == 'tooManySubscriptions',
                   'mock subscribe: the cap: %s' % r['over'])
+        elif t == 'mock-subscribe-foreground':
+            for reply in r['replies']:
+                found = reply_problems(spec, 'getForegroundApp', reply, sv)
+                replies += 1
+                check(problems, found == [] and reply.get('subscribed') is True, 'mock foreground reply: %s %s' % (found, reply))
+            check(problems, [x.get('appId') for x in r['replies']] == [
+                next(x for x in spec['methods'] if x['name'] == 'getForegroundApp')['examples'][0]['result']['value']['appId'],
+                'org.example.other'] and not r['errors'], 'mock foreground subscription: %s' % r)
         elif t == 'commonjs':
             check(problems, set(r['methods']) == {'function'}, 'CommonJS export: %s' % r['methods'])
         elif t == 'mock-inert':
@@ -132,7 +140,7 @@ def main(argv):
                     if sc == 'selected-home' and method == 'listApps' and 'subscribe' not in c['params']:
                         want = next(x for x in spec['methods'] if x['name'] == 'listApps')['examples'][0]['result']['value']
                         check(problems, res['ok'] and res['value'] == want, label + ': not the spec example')
-                    if sc == 'selected-home' and method in ('listApps', 'listLaunchPoints', 'listInputs'):
+                    if sc == 'selected-home' and methods[method].get('x-subscribes'):
                         check(problems, res['ok'] and res['value'].get('subscribed') is (True if c['params'].get('subscribe') is True else None),
                               label + ': subscribed does not follow the subscribe param')
             check(problems, r['launch']['ok'] and r['request']['ok'], 'mock %s: launch or request failed: %s' % (sc, r))

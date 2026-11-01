@@ -160,7 +160,7 @@ At start, call `getInfo`, then branch:
 ## Calling the service
 
 Calls go to `luna://org.webosbrew.homechooser.service/<method>` with a JSON object. Every call is a
-single request with a single reply, except the three lists with `"subscribe": true`
+single request with a single reply, except the methods that take `"subscribe": true`
 ([Subscriptions](#subscriptions)). The service takes the caller
 from the application id that the system reports for the message; nothing in the payload can name
 another caller, and a shell `luna-send` (no application id) is refused.
@@ -251,18 +251,27 @@ per call. An uninstall request can make two 20 second appinfo calls, an 8 second
 
 ## Subscriptions
 
-`listApps`, `listLaunchPoints` and `listInputs` take `"subscribe": true` (a JSON boolean; any other
-value is an ordinary single reply). Then:
+`listApps`, `listLaunchPoints`, `listInputs`, `listRunning` and `getForegroundApp` take
+`"subscribe": true` (a JSON boolean; any other value is an ordinary single reply). Then:
 
-* the first reply is a fresh read of the whole list, with `"subscribed": true`;
-* after every change of the platform's list, the same reply comes again: the whole list, with
-  `"subscribed": true`. Every reply is a full state, never a delta, so replace what you drew;
+* the first reply is a fresh read of the whole state, with `"subscribed": true`;
+* after every change the platform reports, the same reply comes again: the whole list (or, for
+  `getForegroundApp`, the whole `{appId, windowId?, processId?}`), with `"subscribed": true`. Every
+  reply is a full state, never a delta, so replace what you had. A reply may repeat the previous one;
 * end it with the bus's own cancel (the bridge's `cancel()`, `LSCallCancel`, or by closing the app).
-  Home Chooser stops reading the platform when a list has no subscriber left;
-* a list takes at most 16 subscribers; one more is refused with `tooManySubscriptions`. Keep one
-  subscription per list for the life of your app;
+  Home Chooser stops reading the platform when a method has no subscriber left;
+* a method takes at most 16 subscribers; one more is refused with `tooManySubscriptions`. Keep one
+  subscription per method for the life of your app;
 * a failure reply (`returnValue: false`) ends the subscription. If Home Chooser loses the platform's
-  feed it restarts it by itself, with a growing delay, and sends the whole list again when it is back.
+  feed it restarts it by itself, with a growing delay, and sends the whole state again when it is back.
+
+These are the methods whose platform call can itself be subscribed to: SAM's `listApps`,
+`listLaunchPoints`, `running` and `getForegroundAppInfo` declare `subscribe` in their schemas on
+every release whose firmware was read (5.6.1 to 11.2.0), and LG's own apps subscribe to them and to
+the input manager's `getAllInputStatus`. `getAppInfo` does not take `subscribe`, because SAM's `getAppInfo` has no
+subscription: to keep one app current, subscribe to `listApps` and pick it from the list.
+`getAppIcon` and `getIcons` read files, which nothing announces a change of: fetch an icon again
+when a subscribed list shows a new `version` (an app) or `icon` path (a launch point or an input).
 
 The client has it as `HomeChooser.subscribe(method, params, onReply, onError)`, which returns
 `{cancel}`:
@@ -360,9 +369,9 @@ list comes again after every change of the installed apps ([Subscriptions](#subs
 Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`,
 `tooManySubscriptions`.
 
-### `listRunning {}`
+### `listRunning {subscribe?}`
 
-Lists running apps.
+Lists running apps. Level 1; `subscribe` is level 2.
 
 ```json
 {"returnValue": true, "apiVersion": 2, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
@@ -370,13 +379,19 @@ Lists running apps.
 
 Each item carries `id`, `instanceId`, `processId` and `webProcessId`, when present. The service
 renames the platform's lowercase PID keys and includes PID values only when they are non-negative
-integers, given as numbers or numeric strings; they are normalized to JSON numbers.
+integers, given as numbers or numeric strings; they are normalized to JSON numbers. The list is in
+the platform's order, which is not the order of use.
+
+`{"subscribe": true}` keeps the call open: the whole list comes again after every change of the
+running apps that SAM reports (an app started or closed) ([Subscriptions](#subscriptions)).
+
 Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`
-(also when the platform did not return a `running` array).
+(also when the platform did not return a `running` array), `tooManySubscriptions`.
 
-### `getForegroundApp {}`
+### `getForegroundApp {subscribe?}`
 
-One lookup of the platform's current foreground app. This call does not subscribe to changes.
+The platform's current foreground app (SAM's `getForegroundAppInfo`). Level 1; `subscribe` is
+level 2.
 
 ```json
 {"returnValue": true, "apiVersion": 2, "appId": "org.example.app", "windowId": "window", "processId": 123}
@@ -384,10 +399,19 @@ One lookup of the platform's current foreground app. This call does not subscrib
 
 `appId` is an empty string if the platform reports no foreground app. `windowId` is included when
 the platform gives it. `processId` is included only when the platform gives a non-negative integer
-PID, as a number or a numeric string; it is normalized to a JSON number. A launcher overlay may not become the platform's foreground app: the
-app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of a Home
-Chooser overlay. Errors: `forbidden`,
-`notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`.
+PID, as a number or a numeric string; it is normalized to a JSON number.
+
+`{"subscribe": true}` keeps the call open: the first reply is the foreground app now, and the whole
+reply, `{appId, windowId?, processId?}` with `"subscribed": true`, comes again after every change of
+the foreground app that SAM reports ([Subscriptions](#subscriptions)). That is what a launcher needs
+to keep its own list of recently used apps ([Patterns](#patterns)).
+
+**Overlays.** A launcher overlay may not become the platform's foreground app: while it is up, SAM
+can go on reporting the app beneath it (on webOS 9 the stock home, on 11.x Live TV) or an empty
+`appId`. A launcher that tracks the foreground app therefore ignores its own id and `""`.
+
+Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refused`, `badReply`,
+`tooManySubscriptions`.
 
 ### `getAppInfo {id}`
 
@@ -577,7 +601,7 @@ answers with a string `errorCode` from the table.
 | `notFound` | A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent | Refresh the list |
 | `noIcon` | `getAppIcon`: no readable icon from the requested appinfo field inside that app's folder (in `getIcons`, an item's code) | Show a placeholder |
 | `iconTooLarge` | `getAppIcon`: the icon exceeds 262144 bytes (in `getIcons`, an item's code) | Show a placeholder |
-| `tooManySubscriptions` | A list already has 16 subscribers | Cancel the subscriptions you no longer need; keep one per list |
+| `tooManySubscriptions` | The method already has 16 subscribers | Cancel the subscriptions you no longer need; keep one per method |
 | `protected` | `uninstallApp`: target is Home Chooser, Homebrew Channel or the caller | Do not offer uninstall for this app |
 | `notRemovable` | `uninstallApp`: target is marked `removable:false` or outside the user app folders (system apps are) | Do not offer uninstall for this app |
 | `confirmFailed` | `uninstallApp`: the owner could not be asked | Try again later; tell the user |
@@ -843,7 +867,7 @@ a full partition makes an installation fail for an unrelated-looking reason.
 What each level added:
 
 * Level 1: the eight methods as frozen at tag `api-v1` (`getInfo`, `listApps`, `listRunning`, `getAppInfo`, `getAppIcon`, `getForegroundApp`, `closeApp`, `uninstallApp`), the permission, the `appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch parameter.
-* Level 2: `listLaunchPoints`, `listInputs` (with each input's `params` and, where the input manager has it, `signal`), `getIcons`, the `subscribe` parameter of `listApps`, `listLaunchPoints` and `listInputs`, and the `iconColor` and `bgColor` fields of `listApps` and `getAppInfo`.
+* Level 2: `listLaunchPoints`, `listInputs` (with each input's `params` and, where the input manager has it, `signal`), `getIcons`, the `subscribe` parameter of `listApps`, `listLaunchPoints`, `listInputs`, `listRunning` and `getForegroundApp`, and the `iconColor` and `bgColor` fields of `listApps` and `getAppInfo`.
 
 A machine-readable description of every level is [`api/launcher-v1.openrpc.json`](../api/launcher-v1.openrpc.json); `x-since` marks what a level added. The file name keeps `v1` as the name of the API family.
 

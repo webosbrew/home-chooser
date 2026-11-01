@@ -3,10 +3,10 @@
   "info": {
     "title": "Home Chooser launcher API",
     "version": "2.0.0",
-    "description": "The launcher API of Home Chooser's root service, API level 2 (apiVersion 2; level 1 is the freeze at tag api-v1), as documented in docs/launcher-api.md. This file describes the contract; docs/launcher-api.md is the prose and wins where the two differ. Every method takes one JSON object of named parameters and gives one JSON reply, except that listApps, listLaunchPoints and listInputs with subscribe true keep sending the whole list again after each change (see x-luna.subscriptionModel). Replies are luna replies, not JSON-RPC responses: success and failure are both a result object, told apart by returnValue (see x-replyModel).",
+    "description": "The launcher API of Home Chooser's root service, API level 2 (apiVersion 2; level 1 is the freeze at tag api-v1), as documented in docs/launcher-api.md. This file describes the contract; docs/launcher-api.md is the prose and wins where the two differ. Every method takes one JSON object of named parameters and gives one JSON reply, except that listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp with subscribe true keep sending the whole reply again after each change (see x-luna.subscriptionModel). Replies are luna replies, not JSON-RPC responses: success and failure are both a result object, told apart by returnValue (see x-replyModel).",
     "license": {"name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
     "x-apiVersion": 2,
-    "x-stability": "apiVersion is the feature level and only grows. A higher level keeps everything earlier levels documented: no method or field is removed and no meaning changes. Launchers check apiVersion >= N for what they need, never == 1, and ignore unknown fields and error codes. If a backward-incompatible change ever becomes unavoidable, it will be handled separately and announced. Level 1 is the eight methods as frozen at tag api-v1 (getInfo, listApps, listRunning, getForegroundApp, getAppInfo, getAppIcon, closeApp, uninstallApp), the permission, the appCategory [\"home\"] and requiredPermissions appinfo declarations and the request launch parameter. Level 2 adds listLaunchPoints, listInputs, getIcons, the subscribe parameter of listApps, and the iconColor and bgColor fields of App; x-since: 2 marks them. Settings-only and confirmation methods (uninstallConfirmed, call, readFile and the rest), files, status output and log ids are internal and not part of this contract.",
+    "x-stability": "apiVersion is the feature level and only grows. A higher level keeps everything earlier levels documented: no method or field is removed and no meaning changes. Launchers check apiVersion >= N for what they need, never == 1, and ignore unknown fields and error codes. If a backward-incompatible change ever becomes unavoidable, it will be handled separately and announced. Level 1 is the eight methods as frozen at tag api-v1 (getInfo, listApps, listRunning, getForegroundApp, getAppInfo, getAppIcon, closeApp, uninstallApp), the permission, the appCategory [\"home\"] and requiredPermissions appinfo declarations and the request launch parameter. Level 2 adds listLaunchPoints, listInputs, getIcons, the subscribe parameter of listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp, and the iconColor and bgColor fields of App; x-since: 2 marks them. Settings-only and confirmation methods (uninstallConfirmed, call, readFile and the rest), files, status output and log ids are internal and not part of this contract.",
     "x-doc": "docs/launcher-api.md"
   },
   "servers": [
@@ -23,7 +23,7 @@
     "subscriptions": true,
     "repliesPerCall": 1,
     "subscribersMax": 16,
-    "subscriptionModel": "listApps, listLaunchPoints and listInputs take subscribe: true (a JSON boolean; any other value is a single reply). The first reply is a fresh read of the whole list with subscribed: true; after every change of the platform's list the subscriber gets the whole list again, the same reply with subscribed: true. Every reply is a full state, never a delta. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A list takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies.",
+    "subscriptionModel": "listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp take subscribe: true (a JSON boolean; any other value is a single reply): the methods whose platform call can be subscribed to. The first reply is a fresh read of the whole state with subscribed: true; after every change the platform reports, the subscriber gets the whole state again, the same reply with subscribed: true. Every reply is a full state, never a delta, and one may repeat the previous one. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A method takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies.",
     "paramStructure": "by-name",
     "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
     "clientTimeoutSeconds": 70,
@@ -105,7 +105,7 @@
     "timeout": {"cause": "A bounded application manager call reached its time limit.", "action": "Retry once; log errorText."},
     "refused": {"cause": "The application manager explicitly refused an operation or target lookup for a reason other than absence.", "action": "Log errorText; do not loop."},
     "badReply": {"cause": "The application manager did not provide usable JSON, or its successful list reply lacked the expected array.", "action": "Log it; report it."},
-    "tooManySubscriptions": {"cause": "A list already has 16 subscribers.", "action": "Cancel a subscription you no longer need; keep one per list."},
+    "tooManySubscriptions": {"cause": "The method already has 16 subscribers.", "action": "Cancel a subscription you no longer need; keep one per method."},
     "internal": {"cause": "The service could not make a confirmation token.", "action": "Retry once."}
   },
   "x-outgoingCalls": {
@@ -130,7 +130,7 @@
     "selectedHome": "Text of the stored Home choice, or null when there is none.",
     "entropy": "Optional, default true. false: /dev/urandom cannot be opened.",
     "files": "Optional. Path -> {base64} | {text} | {zeroBytes: n} | {symlink: target}. The fixed icon directories of launch points and inputs (/usr/palm/applications, /usr/palm/plugins/inputapps/assets, ...) are read under {root}.",
-    "subscribers": "Optional, default 0. Subscribers the method's list already has before the call.",
+    "subscribers": "Optional, default 0. Subscribers the method already has before the call.",
     "calls": "The outgoing calls the handler must make, in order: uri, request (the payload, compared as JSON) and the scripted answer: reply (a JSON object luna-send prints), or stdout (raw text), and exit (luna-send's exit status, default 0; -2 is a timeout). match maps JSON pointers in request to regular expressions for values that are not deterministic.",
     "x-match": "On the pairing: JSON pointers in the result value -> regular expressions, for values that depend on the build (getInfo.version).",
     "x-knownDisagreement": "On the pairing: the example follows docs/launcher-api.md but the code does otherwise. The contract test expects it to fail and reports it; an unexpected pass fails the test so that the marker is removed."
@@ -213,7 +213,7 @@
       "x-needsPermission": true,
       "x-needsSelectedHome": false,
       "x-subscribes": true,
-      "x-doc": "docs/launcher-api.md#listapps-",
+      "x-doc": "docs/launcher-api.md#listapps-subscribe",
       "examples": [
         {
           "name": "two-apps",
@@ -264,15 +264,23 @@
     {
       "name": "listRunning",
       "summary": "Lists running apps.",
-      "description": "Each item carries id, instanceId, processId and webProcessId, when present. The service renames the platform's lowercase PID keys and includes PID values only when they are non-negative integers, given as numbers or numeric strings, normalized to JSON numbers.",
+      "description": "Each item carries id, instanceId, processId and webProcessId, when present. The service renames the platform's lowercase PID keys and includes PID values only when they are non-negative integers, given as numbers or numeric strings, normalized to JSON numbers. With subscribe true the list comes again after every change of the running apps; the list has no order of use.",
       "paramStructure": "by-name",
-      "params": [],
+      "params": [
+        {
+          "name": "subscribe",
+          "x-since": 2,
+          "required": false,
+          "description": "true: keep the call open and get the whole list again after every change the application manager reports (an app started or closed) (x-luna.subscriptionModel). Anything else: one reply.",
+          "schema": {"type": "boolean", "default": false}
+        }
+      ],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/ListRunningReply"}},
       "x-needsRoot": true,
       "x-needsPermission": true,
       "x-needsSelectedHome": false,
-      "x-subscribes": false,
-      "x-doc": "docs/launcher-api.md#listrunning-",
+      "x-subscribes": true,
+      "x-doc": "docs/launcher-api.md#listrunning-subscribe",
       "examples": [
         {
           "name": "one-app",
@@ -288,23 +296,47 @@
               {"uri": "luna://com.webos.applicationManager/running", "request": {}, "reply": {"returnValue": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processid": "123", "webprocessid": "456", "defaultWindowType": "card"}]}}
             ]
           }
+        },
+        {
+          "name": "subscribe",
+          "description": "The first reply of a subscription is a fresh read.",
+          "params": [{"name": "subscribe", "value": true}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/running", "request": {}, "reply": {"returnValue": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processid": "123", "webprocessid": "456", "defaultWindowType": "card"}]}}
+            ]
+          }
         }
       ]
     },
     {
       "name": "getForegroundApp",
-      "summary": "One lookup of the platform's current foreground app.",
-      "description": "Does not subscribe to changes. appId is an empty string if the platform reports no foreground app. windowId is included when the platform gives it. processId is included only when the platform gives a non-negative integer PID, as a number or a numeric string, normalized to a JSON number.",
+      "summary": "The platform's current foreground app, once or on every change.",
+      "description": "appId is an empty string if the platform reports no foreground app. windowId is included when the platform gives it. processId is included only when the platform gives a non-negative integer PID, as a number or a numeric string, normalized to a JSON number. With subscribe true the whole reply ({appId, windowId?, processId?}) comes again after every change of the foreground app the application manager reports.",
       "paramStructure": "by-name",
-      "params": [],
+      "params": [
+        {
+          "name": "subscribe",
+          "x-since": 2,
+          "required": false,
+          "description": "true: keep the call open and get the whole reply again after every change of the foreground app (x-luna.subscriptionModel). Anything else: one reply.",
+          "schema": {"type": "boolean", "default": false}
+        }
+      ],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetForegroundAppReply"}},
       "x-needsRoot": true,
       "x-needsPermission": true,
       "x-needsSelectedHome": false,
-      "x-subscribes": false,
-      "x-doc": "docs/launcher-api.md#getforegroundapp-",
+      "x-subscribes": true,
+      "x-doc": "docs/launcher-api.md#getforegroundapp-subscribe",
       "x-notes": [
-        "A launcher overlay may not become the platform's foreground app: the app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of an overlay."
+        "A launcher overlay may not become the platform's foreground app: the app beneath it (on webOS 9 the stock home, on 11.x Live TV) can remain reported in front of an overlay.",
+        "A subscriber keeping its own list of recently used apps ignores its own id and the empty appId: while an overlay launcher is up the application manager may report the app beneath it or \"\"."
       ],
       "examples": [
         {
@@ -332,6 +364,21 @@
             "calls": [
               {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
               {"uri": "luna://com.webos.applicationManager/getForegroundAppInfo", "request": {}, "reply": {"returnValue": true, "appId": ""}}
+            ]
+          }
+        },
+        {
+          "name": "subscribe",
+          "description": "The first reply of a subscription is a fresh read.",
+          "params": [{"name": "subscribe", "value": true}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "appId": "org.example.app", "windowId": "window", "processId": 123}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/getForegroundAppInfo", "request": {}, "reply": {"returnValue": true, "appId": "org.example.app", "windowId": "window", "processId": "123"}}
             ]
           }
         }
@@ -863,14 +910,14 @@
             "title": "ListRunningSuccess",
             "allOf": [
               {"$ref": "#/components/schemas/Success"},
-              {"required": ["running"], "properties": {"running": {"type": "array", "items": {"$ref": "#/components/schemas/RunningApp"}}}}
+              {"required": ["running"], "properties": {"subscribed": {"$ref": "#/components/schemas/Subscribed"}, "running": {"type": "array", "items": {"$ref": "#/components/schemas/RunningApp"}}}}
             ]
           },
           {
             "title": "ListRunningFailure",
             "allOf": [
               {"$ref": "#/components/schemas/Failure"},
-              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply"]}}}
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply", "tooManySubscriptions"]}}}
             ]
           }
         ]
@@ -885,6 +932,7 @@
               {
                 "required": ["appId"],
                 "properties": {
+                  "subscribed": {"$ref": "#/components/schemas/Subscribed"},
                   "appId": {"type": "string", "description": "Empty when the platform reports no foreground app."},
                   "windowId": {"type": "string"},
                   "processId": {"type": "integer", "minimum": 0}
@@ -896,7 +944,7 @@
             "title": "GetForegroundAppFailure",
             "allOf": [
               {"$ref": "#/components/schemas/Failure"},
-              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply"]}}}
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "noPermission", "lookupFailed", "timeout", "refused", "badReply", "tooManySubscriptions"]}}}
             ]
           }
         ]
