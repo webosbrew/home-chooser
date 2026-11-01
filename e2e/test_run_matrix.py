@@ -10,6 +10,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -19,7 +20,9 @@ from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import homechooser_e2e as e2e  # noqa: E402
+import hc_e2e.beanjar  # noqa: E402
+import hc_e2e.matrix  # noqa: E402
+import hc_e2e.timing  # noqa: E402
 import run_matrix  # noqa: E402
 
 # Logs "start|end|stopped <host> <vm> <time>" to $FAKE_LOG, sleeps $FAKE_SLEEP, writes results.json
@@ -119,8 +122,8 @@ class Planning(unittest.TestCase):
         self.assertEqual(list(cfg['hosts']), ['b'])
         with self.assertRaises(SystemExit):
             run_matrix.select_hosts(CFG, 'missing')
-        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', e2e.MATRIX[1][1])])
-        rk = e2e.candidates(e2e.MATRIX[1][1])[0]
+        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', hc_e2e.matrix.MATRIX[1][1])])
+        rk = hc_e2e.matrix.candidates(hc_e2e.matrix.MATRIX[1][1])[0]
         self.assertEqual(run_matrix.wanted_vms([rk]), [('6.x', rk)])
         q, problems = run_matrix.plan(run_matrix.wanted_vms(['6.x']), cfg, {'b': {rk}})
         self.assertEqual(problems, [])
@@ -146,15 +149,15 @@ class Planning(unittest.TestCase):
         self.assertEqual((problems, list(q), q['b'][0]['vm']), ([], ['b'], 'twin'))
 
     def test_a_vm_left_running_goes_last_on_its_host(self):
-        keep = next(iter(e2e.KEEP_LAUNCHER_VMS))
+        keep = next(iter(hc_e2e.matrix.KEEP_LAUNCHER_VMS))
         q, _ = run_matrix.plan([('6.x', keep), ('5.x', 'vm1')], CFG, {'a': {keep, 'vm1'}})
         self.assertEqual([r['vm'] for r in q['a']], ['vm1', keep])
 
     def test_releases_map_to_matrix_vms_once(self):
-        first9 = next(m[1] for m in e2e.MATRIX if m[0] == '9.x')
+        first9 = next(m[1] for m in hc_e2e.matrix.MATRIX if m[0] == '9.x')
         self.assertEqual(run_matrix.wanted_vms(['9.x', first9, '5.x']),
-                         [('9.x', first9), ('5.x', e2e.MATRIX[0][1])])
-        self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in e2e.MATRIX}))
+                         [('9.x', first9), ('5.x', hc_e2e.matrix.MATRIX[0][1])])
+        self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in hc_e2e.matrix.MATRIX}))
 
     def test_a_failing_host_is_reported_and_the_rest_discovered(self):
         def lister(h):
@@ -271,7 +274,7 @@ class Main(Fixture):
 
     def test_dry_run_of_the_real_matrix_runs_nothing(self):
         hosts = self.hosts_file('default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n[hosts.pc2]\nssh = "pc2"\n')
-        vms = [e2e.candidates(m[1])[-1] for m in e2e.MATRIX]
+        vms = [hc_e2e.matrix.candidates(m[1])[-1] for m in hc_e2e.matrix.MATRIX]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--reboot-check', '--results', self.tmp],
@@ -356,7 +359,11 @@ class NoDeviceList(unittest.TestCase):
     def test_runner_never_names_the_user_device_list(self):
         """VMs are reached with `beanjar ares-TOOL`, which writes its own device list; the user's own
         ~/.webos/ose/novacom-devices.json is never read or written, and no `<vm>-root` entry exists."""
-        for name in ('homechooser_e2e.py', 'run_matrix.py'):
+        package = os.path.join(HERE, 'hc_e2e')
+        names = ['homechooser_e2e.py', 'run_matrix.py'] + sorted(
+            os.path.relpath(os.path.join(d, f), HERE) for d, _, fs in os.walk(package) for f in fs if f.endswith('.py'))
+        self.assertIn(os.path.join('hc_e2e', 'device.py'), names)
+        for name in names:
             src = read(os.path.join(HERE, name))
             literals = re.findall(r'\'[^\'\n]*\'|"[^"\n]*"', src)
             self.assertEqual([x for x in literals if 'novacom-devices' in x or x in ("'-root'", '"-root"')], [], name)
@@ -365,35 +372,35 @@ class NoDeviceList(unittest.TestCase):
 class HostsConfig(unittest.TestCase):
     def test_user_at_host_and_slowdown(self):
         cfg = {'hosts': {'rk': {'ssh': 'mariotaku@rockpi4a-1.lan', 'slowdown': 1.5}}}
-        host = e2e.BeanjarHost.from_config(cfg, 'rk')
+        host = hc_e2e.beanjar.BeanjarHost.from_config(cfg, 'rk')
         self.assertEqual(host.slowdown, 1.5)
-        with patch.object(e2e, 'run', return_value=(0, '')) as command:
+        with patch.object(hc_e2e.timing, 'run', return_value=(0, '')) as command:
             host.beanjar('list', '--local', '--json')
             argv = command.call_args.args[0]
             self.assertEqual(argv[-2:], ['mariotaku@rockpi4a-1.lan', 'beanjar list --local --json'])
             self.assertTrue(host.fetch('/tmp/a.png', 'a.png'))
             self.assertEqual(command.call_args.args[0][-2:], ['mariotaku@rockpi4a-1.lan:/tmp/a.png', 'a.png'])
-        with patch.object(e2e, 'SLOWDOWN', host.slowdown), patch.object(e2e.time, 'sleep') as sleeper:
-            e2e.sleep(4)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', host.slowdown), patch.object(time, 'sleep') as sleeper:
+            hc_e2e.timing.sleep(4)
             sleeper.assert_called_once_with(6)
-            self.assertEqual(e2e.seconds(240), 360)
-        with patch.object(e2e, 'SLOWDOWN', 1.5), patch.object(e2e.subprocess, 'run') as command:
+            self.assertEqual(hc_e2e.timing.seconds(240), 360)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1.5), patch.object(subprocess, 'run') as command:
             command.return_value.returncode = 0
             command.return_value.stdout = b''
-            e2e.run(['fake'], timeout=120)
+            hc_e2e.timing.run(['fake'], timeout=120)
             self.assertEqual(command.call_args.kwargs['timeout'], 180)
-        with patch.object(e2e, 'SLOWDOWN', 1):
-            self.assertEqual(e2e.seconds(240), 240)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1):
+            self.assertEqual(hc_e2e.timing.seconds(240), 240)
 
     def test_default_is_todays_pi(self):
         with tempfile.TemporaryDirectory() as d:
-            saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
-            e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = os.path.join(d, 'none.toml'), os.path.join(d, 'none.local.toml')
+            saved = hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE
+            hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = os.path.join(d, 'none.toml'), os.path.join(d, 'none.local.toml')
             try:
-                cfg = e2e.load_hosts()
+                cfg = hc_e2e.matrix.load_hosts()
             finally:
-                e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = saved
-        h = e2e.BeanjarHost.from_config(cfg, cfg['default'])
+                hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = saved
+        h = hc_e2e.beanjar.BeanjarHost.from_config(cfg, cfg['default'])
         self.assertEqual((h.name, h.mode, h.device), ('pi', 'remote', 'raspberrypi'))
 
     def test_local_override_merges_over_the_committed_file(self):
@@ -401,23 +408,23 @@ class HostsConfig(unittest.TestCase):
             base, local = os.path.join(d, 'hosts.toml'), os.path.join(d, 'hosts.local.toml')
             write(base, 'default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n')
             write(local, '[hosts.pi]\nvms = ["w22h-ombre"]\n[hosts.box]\nlocal = true\n')
-            saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
-            e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = base, local
+            saved = hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE
+            hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = base, local
             try:
-                cfg = e2e.load_hosts()
+                cfg = hc_e2e.matrix.load_hosts()
             finally:
-                e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = saved
+                hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = saved
         self.assertEqual(cfg['hosts']['pi'], {'ssh': 'raspberrypi', 'vms': ['w22h-ombre']})
-        self.assertEqual(e2e.BeanjarHost.from_config(cfg, 'box').mode, 'local')
+        self.assertEqual(hc_e2e.beanjar.BeanjarHost.from_config(cfg, 'box').mode, 'local')
 
     def test_committed_hosts_file_parses(self):
-        cfg = e2e.load_hosts(e2e.HOSTS_FILE)
+        cfg = hc_e2e.matrix.load_hosts(hc_e2e.matrix.HOSTS_FILE)
         self.assertEqual((cfg['default'], cfg['hosts']['pi']['ssh']), ('pi', 'raspberrypi'))
 
     def test_list_vms_reads_this_machines_json_only(self):
         rows = [{'name': 'mine', 'state': 'Running', 'host': None}, {'name': 'off', 'state': 'Off', 'host': None},
                 {'name': 'theirs', 'state': 'Running', 'host': 'pc2'}]
-        h = e2e.BeanjarHost('local', 'x', 't')
+        h = hc_e2e.beanjar.BeanjarHost('local', 'x', 't')
         h.sh = lambda cmd, timeout=120: (0, 'beanjar: warning: [x]\n' + json.dumps(rows))
         self.assertEqual(h.running_vms(), ['mine'])
         h.sh = lambda cmd, timeout=120: (255, 'ssh: connect to host x: timed out')
