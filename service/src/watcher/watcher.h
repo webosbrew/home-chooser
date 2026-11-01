@@ -10,7 +10,7 @@ typedef struct {
     const char *app_dirs, *install_dirs, *luna_send;
     const char *gate_binary, *gate_dir, *proc; /* 6-9 home gate: installed binary, tmpfs runtime dir, /proc */
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
-    unsigned preload_retry_ms, preload_settle_ms, preload_tries, gate_settle_ms;
+    unsigned preload_retry_ms, preload_settle_ms, preload_tries, gate_settle_ms, input_settle_ms;
     unsigned notify_retry_ms, notify_tries, log_max;
     gboolean preload, notify;
 } HCWatchConfig;
