@@ -22,6 +22,7 @@
     "uriTemplate": "luna://org.webosbrew.homechooser.service/{method}",
     "subscriptions": true,
     "repliesPerCall": 1,
+    "subscribersMax": 16,
     "subscriptionModel": "listApps, listLaunchPoints and listInputs take subscribe: true (a JSON boolean; any other value is a single reply). The first reply is a fresh read of the whole list with subscribed: true; after every change of the platform's list the subscriber gets the whole list again, the same reply with subscribed: true. Every reply is a full state, never a delta. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A list takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies.",
     "paramStructure": "by-name",
     "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",

@@ -25,6 +25,10 @@ declare namespace HomeChooser {
 		visible?: boolean;
 		/** The category array as SAM reports it, for example ["home"]. */
 		appCategory?: string[];
+		/** The appinfo's icon colour as the platform gives it, for example "#6d757f". */
+		iconColor?: string;
+		/** The appinfo's background colour as the platform gives it, for example "#ffffff". */
+		bgColor?: string;
 	}
 	interface RunningApp {
 		id?: string;
@@ -32,6 +36,55 @@ declare namespace HomeChooser {
 		processId?: number;
 		webProcessId?: number;
 	}
+	/** One launch point as SAM reports it, cut to the published fields; a field the platform does not give, or gives as an empty string, is omitted. Within an apiVersion this field list only grows. Icon paths are absolute, as SAM gives them. */
+	interface LaunchPoint {
+		/** SAM's id of the launch point; <app id>_default for an app's own. */
+		launchPointId?: string;
+		/** The app the launch point launches. */
+		id?: AppId;
+		title?: string;
+		/** SAM's launch point type: default (an app) or bookmark (for example a browser bookmark). */
+		lptype?: string;
+		/** Absolute path. */
+		icon?: string;
+		/** Absolute path. */
+		largeIcon?: string;
+		iconColor?: string;
+		bgColor?: string;
+		/** Absolute path of the background image. */
+		bgImage?: string;
+		/** The launch parameters; pass them to applicationManager/launch. */
+		params?: {
+		};
+		removable?: boolean;
+	}
+	/** One external input as the input manager (eim getAllInputStatus) reports it. Live TV is not an input here; it is the app com.webos.app.livetv. */
+	interface Input {
+		/** The input's app, for example com.webos.app.hdmi1: launch it to switch to the input. */
+		id: AppId;
+		/** The input manager's id, for example HDMI_1; getIcons reads its icon. */
+		inputId: string;
+		label?: string;
+		port?: number;
+		/** As the input manager reports it: a device is connected. */
+		connected?: boolean;
+		/** As the input manager reports it: the input is the one in use. */
+		activate?: boolean;
+		/** Absolute path of the input manager's icon (iconPrefix + icon). */
+		icon?: string;
+	}
+	/** One getIcons item's answer, in request order: the icon, or why there is none. */
+	type IconEntry = {
+		mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/svg+xml" | "image/webp";
+		/** data:<mimeType>;base64,<file>, ready for an img src. */
+		dataUrl: string;
+		/** Decoded byte count. */
+		byteLength: number;
+	} | {
+		/** notFound: no such app, launch point or input. noIcon: no readable icon of that size in the allowed directory. iconTooLarge: over 262144 bytes. overBudget: the reply already holds 1 MiB of icons; ask again. */
+		errorCode: "notFound" | "noIcon" | "iconTooLarge" | "overBudget";
+		errorText: string;
+	};
 	/** Members of every successful reply. More may be added within v1; ignore unknown ones. */
 	interface Success {
 		returnValue: true;
@@ -52,9 +105,14 @@ declare namespace HomeChooser {
 	type GetInfoErrorCode = "forbidden";
 	/** The reply of listApps when returnValue is true. */
 	interface ListAppsResult extends Success {
+		subscribed?: true;
 		apps: App[];
 	}
-	type ListAppsErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply";
+	type ListAppsErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply" | "tooManySubscriptions";
+	interface ListAppsParams {
+		/** true: keep the call open and get the whole list again after every change (x-luna.subscriptionModel). Anything else: one reply. */
+		subscribe?: boolean;
+	}
 	/** The reply of listRunning when returnValue is true. */
 	interface ListRunningResult extends Success {
 		running: RunningApp[];
@@ -85,6 +143,10 @@ declare namespace HomeChooser {
 			visible?: boolean;
 			/** The category array as SAM reports it, for example ["home"]. */
 			appCategory?: string[];
+			/** The appinfo's icon colour as the platform gives it, for example "#6d757f". */
+			iconColor?: string;
+			/** The appinfo's background colour as the platform gives it, for example "#ffffff". */
+			bgColor?: string;
 		};
 	}
 	type GetAppInfoErrorCode = "forbidden" | "notRoot" | "badRequest" | "noPermission" | "lookupFailed" | "notFound" | "refused" | "badReply" | "timeout";
@@ -106,6 +168,44 @@ declare namespace HomeChooser {
 		id: AppId;
 		/** Which appinfo field to read; icon when absent. Any other value, including null, is badRequest. */
 		size?: "icon" | "largeIcon";
+	}
+	/** The reply of listLaunchPoints when returnValue is true. */
+	interface ListLaunchPointsResult extends Success {
+		subscribed?: true;
+		launchPoints: LaunchPoint[];
+	}
+	type ListLaunchPointsErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply" | "tooManySubscriptions";
+	interface ListLaunchPointsParams {
+		/** true: keep the call open and get the whole list again after every change (x-luna.subscriptionModel). Anything else: one reply. */
+		subscribe?: boolean;
+	}
+	/** The reply of listInputs when returnValue is true. */
+	interface ListInputsResult extends Success {
+		subscribed?: true;
+		inputs: Input[];
+	}
+	type ListInputsErrorCode = "forbidden" | "notRoot" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply" | "tooManySubscriptions";
+	interface ListInputsParams {
+		/** true: keep the call open and get the whole list again after every change (x-luna.subscriptionModel). Anything else: one reply. */
+		subscribe?: boolean;
+	}
+	/** The reply of getIcons when returnValue is true. */
+	interface GetIconsResult extends Success {
+		/** One entry per item, in request order. */
+		icons: IconEntry[];
+	}
+	type GetIconsErrorCode = "forbidden" | "notRoot" | "badRequest" | "noPermission" | "lookupFailed" | "timeout" | "refused" | "badReply";
+	interface GetIconsParams {
+		/** What to read, at most 64. */
+		items: ({
+			id: AppId;
+			size?: "icon" | "largeIcon";
+		} | {
+			launchPointId: string;
+			size?: "icon" | "largeIcon";
+		} | {
+			inputId: string;
+		})[];
 	}
 	/** The reply of closeApp when returnValue is true. */
 	interface CloseAppResult extends Success {
@@ -179,13 +279,16 @@ declare namespace HomeChooser {
 		getForegroundApp: GetForegroundAppErrorCode[];
 		getAppInfo: GetAppInfoErrorCode[];
 		getAppIcon: GetAppIconErrorCode[];
+		listLaunchPoints: ListLaunchPointsErrorCode[];
+		listInputs: ListInputsErrorCode[];
+		getIcons: GetIconsErrorCode[];
 		closeApp: CloseAppErrorCode[];
 		uninstallApp: UninstallAppErrorCode[];
 	};
 	/** Feature detection and status. Works for any app. */
 	function getInfo(params?: {}): Promise<GetInfoResult>;
 	/** Lists the installed apps. Needs root, the permission. */
-	function listApps(params?: {}): Promise<ListAppsResult>;
+	function listApps(params?: ListAppsParams): Promise<ListAppsResult>;
 	/** Lists running apps. Needs root, the permission. */
 	function listRunning(params?: {}): Promise<ListRunningResult>;
 	/** One lookup of the platform's current foreground app. Needs root, the permission. */
@@ -194,10 +297,39 @@ declare namespace HomeChooser {
 	function getAppInfo(params: GetAppInfoParams): Promise<GetAppInfoResult>;
 	/** Reads an app's icon for a jailed launcher. Needs root, the permission. */
 	function getAppIcon(params: GetAppIconParams): Promise<GetAppIconResult>;
+	/** Lists the launch points in LG's order, bookmarks included. Needs root, the permission. */
+	function listLaunchPoints(params?: ListLaunchPointsParams): Promise<ListLaunchPointsResult>;
+	/** Lists the TV's external inputs. Needs root, the permission. */
+	function listInputs(params?: ListInputsParams): Promise<ListInputsResult>;
+	/** Reads several icons in one call, for a jailed launcher. Needs root, the permission. */
+	function getIcons(params: GetIconsParams): Promise<GetIconsResult>;
 	/** Closes an app. Only the selected Home may call it. Needs root, the permission, the selected Home. */
 	function closeApp(params: CloseAppParams): Promise<CloseAppResult>;
 	/** Asks the owner to uninstall an app. Only the selected Home may call it. Needs root, the permission, the selected Home. */
 	function uninstallApp(params: UninstallAppParams): Promise<UninstallAppResult>;
+	/** What subscribe returns: cancel() ends the subscription (the bus's own cancel). */
+	interface Subscription {
+		cancel(): void;
+	}
+	/** Subscribes to listApps: onReply gets the whole list now and again after every change; onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "listApps", params: ListAppsParams | null, onReply: (reply: ListAppsResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
+	/** Subscribes to listLaunchPoints: onReply gets the whole list now and again after every change; onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "listLaunchPoints", params: ListLaunchPointsParams | null, onReply: (reply: ListLaunchPointsResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
+	/** Subscribes to listInputs: onReply gets the whole list now and again after every change; onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "listInputs", params: ListInputsParams | null, onReply: (reply: ListInputsResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
+	/**
+	 * Replaces the subscription transport (homechooser-mock.js uses it). fn(uri, payload, onMessage) starts a
+	 * call that may answer many times, calls onMessage(reply) for each reply or onMessage(null, error) when the
+	 * transport fails, and returns a function that cancels it. Pass nothing to restore the bridge.
+	 */
+	function setSubscribeTransport(transport?: (uri: string, payload: object,
+		onMessage: (reply: {[key: string]: unknown} | null, error?: unknown) => void) => () => void): void;
 	/**
 	 * Asks the owner to make an app the Home app: launches Home Chooser with {request: appId}. A request only:
 	 * the promise says whether the launch was accepted, not what the owner chose; call getInfo later and read
@@ -226,8 +358,14 @@ declare namespace HomeChooser {
 		apps: App[];
 		running: RunningApp[];
 		foreground: {appId: string; windowId?: string; processId?: number};
+		launchPoints: LaunchPoint[];
+		inputs: Input[];
 		/** App id (with "#largeIcon" for that size) -> {mimeType, data, byteLength}. */
 		icons: {[id: string]: {mimeType: string; data: string; byteLength: number}};
+		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#largeIcon") -> an icon entry. */
+		batchIcons: {[key: string]: IconEntry};
+		/** Sends the subscribers of a list method its current mock list again, as after a change. */
+		notify(method: 'listApps' | 'listLaunchPoints' | 'listInputs'): void;
 		/** Payloads of the applicationManager/launch calls made. */
 		launches: object[];
 		delayMs: number;

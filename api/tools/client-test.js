@@ -107,6 +107,61 @@ async function bridgeTests() {
 	}
 }
 
+// A bridge that answers each call with all of its scripted messages, one by one (a subscription).
+function streamBridge(script, calls) {
+	return function Bridge() {
+		this.call = (uri, payload) => {
+			calls.push({uri, payload: JSON.parse(payload)});
+			script.forEach((message, i) => setTimeout(() => { if (!this.cancelled) this.onservicecallback(message); }, 1 + i));
+		};
+		this.cancel = () => { this.cancelled = true; calls.push({cancel: true}); };
+	};
+}
+
+const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms || 5));
+
+async function subscribeTests() {
+	const listInputs = spec.methods.find((m) => m.name === 'listInputs');
+	const first = listInputs.examples.find((ex) => ex.name === 'subscribe').result.value;
+	const failure = {returnValue: false, apiVersion: 1, errorCode: 'tooManySubscriptions', errorText: 'full'};
+	for (const [label, script] of [
+		['two-replies', [first, first].map((v) => JSON.stringify(v))],
+		['refused', [JSON.stringify(failure), JSON.stringify(first)]],
+		['not-json', ['<html>']]
+	]) {
+		const calls = [], replies = [], errors = [];
+		const ctx = context({WebOSServiceBridge: streamBridge(script, calls)});
+		vm.runInContext(clientSource, ctx);
+		const sub = ctx.HomeChooser.subscribe('listInputs', {}, (r) => replies.push(r), (e) => errors.push(describe(e)));
+		await tick(20);
+		sub.cancel();
+		sub.cancel();
+		out({test: 'bridge-subscribe', label, replies, errors, calls});
+	}
+	// The mock: a fresh first reply, the list again on notify, nothing after cancel, the subscriber cap.
+	const ctx = context({location: {search: ''}});
+	vm.runInContext(clientSource, ctx);
+	vm.runInContext(mockSource, ctx);
+	const HC = ctx.HomeChooser;
+	HC.mock.delayMs = 0;
+	const replies = [], errors = [];
+	const sub = HC.subscribe('listInputs', null, (r) => replies.push(r), (e) => errors.push(describe(e)));
+	await tick();
+	HC.mock.inputs[0].connected = !HC.mock.inputs[0].connected;
+	HC.mock.notify('listInputs');
+	await tick();
+	sub.cancel();
+	HC.mock.notify('listInputs');
+	await tick();
+	const subs = [];
+	for (let i = 0; i < spec['x-luna'].subscribersMax; i++) subs.push(HC.subscribe('listApps', {}, () => {}));
+	const over = [];
+	HC.subscribe('listApps', {}, () => {}, (e) => over.push(describe(e)));
+	await tick();
+	subs.forEach((s) => s.cancel());
+	out({test: 'mock-subscribe', replies, errors, over});
+}
+
 async function mockTests() {
 	for (const scenario of ['selected-home', 'before-elevation', 'not-permitted', 'not-home', 'absent']) {
 		const ctx = context({location: {search: '?hcmock=' + scenario}});
@@ -131,6 +186,7 @@ async function mockTests() {
 
 (async () => {
 	await bridgeTests();
+	await subscribeTests();
 	await mockTests();
 	out({test: 'done'});
 })().catch((e) => { console.error(e); process.exit(1); });
