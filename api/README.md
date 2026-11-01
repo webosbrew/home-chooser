@@ -69,8 +69,10 @@ A case that follows the guide where the code does otherwise carries `x-knownDisa
 case file, `knownDisagreement`) with the reason and both locations. The contract test reports it as
 an expected failure, and fails if it passes, so that a stale marker is removed.
 
-The JSON Schema checker in `launcher-spec.py` is a draft-07 subset. It refuses any keyword it does
-not implement, so a schema cannot pass on an unchecked keyword; `format` is not checked.
+The JSON Schema checker, [`tools/launcher_schema.py`](tools/launcher_schema.py), is a draft-07
+subset shared by `launcher-spec.py`, the client generator and the `--api-check` reply validation of
+the end-to-end runner. It refuses any keyword it does not implement, so a schema cannot pass on an
+unchecked keyword; `format` is not checked.
 
 ## Vendored meta-schemas
 
