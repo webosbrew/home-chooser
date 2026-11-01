@@ -99,7 +99,9 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   empty (SAM reads it live from the system profile on 10.3.1 and 11.2.0):
   * a full-screen launcher: `{"support": true, "appId": "<launcher id>"}`;
   * an overlay launcher (`defaultWindowType` `overlay` in `getAppInfo`, the test the watcher and
-    the home gate use): `{"support": false}`, which makes SAM bring back the last input instead;
+    the home gate use): `{"support": false}`, which makes SAM bring back the last input instead
+    (after a boot the watcher opens it once; see
+    [The last input after a boot](#the-last-input-after-a-boot-webos-10-and-later));
   * LG Home: no override at all.
 
   The other keys of the current `idleApp` profile are kept, without the `_` keys and without the
@@ -180,6 +182,8 @@ Home Chooser keeps its own copy of the choice and enforces it.
     and stages restart recovery in `/tmp/homechooser-runtime/`. The running image survives package unlink.
   * It keeps the stock home from being preloaded while a third-party home is chosen; see
     [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
+  * On 10.x and later, with an overlay launcher chosen, it opens the last input once per boot; see
+    [The last input after a boot](#the-last-input-after-a-boot-webos-10-and-later).
   * It logs each action with a timestamp to `/tmp/homechooser-home.log` (trimmed to its last 200
     lines above 64 KB), exits 0 when the choice file is gone or unusable and 1 when the
     subscription ends. Started without a usable choice it makes the one
@@ -203,8 +207,53 @@ Home Chooser keeps its own copy of the choice and enforces it.
 Tests: `ctest --test-dir build/service-host -R '^test-watcher'` runs the C policy and
 child-transport/runtime tests under qemu-arm with firmware libraries and a fake transport. It
 covers record merging, backoff, per-version restore, package removal, notifications, preload
-retry/settle and foreground safety.
+retry/settle, foreground safety and the 10+ last-input launch (L01–L07).
 `service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
+
+### The last input after a boot, webOS 10 and later
+
+With an overlay launcher the override's `idleApp` is `{"support": false}`, so SAM brings back the
+last input when the foreground empties. After a boot SAM refuses that fallback until the first app
+launch of the boot (`LAUNCH_LASTINPUT_ERR {"reason":"not_in_mode"}`, `first_app_launched: false`,
+seen on 11.2.0). The overlay launcher, the boot's first app, then draws over an empty foreground and
+nothing else comes up; when surface-manager later closes the idle overlay (`userTimeout`) the
+fallback is refused again and the screensaver follows. Any app launch unlocks the fallback. So the
+watcher makes that launch itself, the same one the [home gate](home-gate.md) makes on 6–9 for an
+overlay launcher with nothing in front:
+
+* **Once per boot.** At watcher start, unless `/tmp/homechooser-runtime/last-input` exists, a check
+  is scheduled `input_settle_ms` (20 s) later. Whatever it decides (launched, not needed, an app in
+  front, no answer) is written to that marker before anything is launched. `/tmp` is tmpfs, so the
+  marker is gone after a reboot; a watcher restart, a choice change or an app-list event later in the
+  same boot launch nothing. A choice changed mid-session needs no launch: it is made in Home Chooser
+  or from a launcher, which is an app launch, so SAM's fallback is already working.
+* **Only for an overlay launcher** that is installed and is not LG Home (`getAppInfo`
+  `defaultWindowType` `overlay`), on 10.x and later. A full-screen launcher, LG Home and releases
+  before 10 get nothing (on 6–9 the gate does this job).
+* **Only when nothing full-screen is in front.** `getForegroundAppInfo` must answer with an empty
+  `appId` or the overlay launcher's own id. Any other app in front (Home Chooser, LG Home, an input,
+  an app the TV or the owner opened) is left there. A foreground event naming such an app during the
+  settle period ends the check the same way.
+* **When SAM is ready.** If `getAppInfo` or `getForegroundAppInfo` does not answer, the check runs
+  again every `preload_retry_ms` (10 s), up to `preload_tries` (12) times, then gives up for the boot
+  (`did not answer`). The 20 s settle leaves the boot's own first app time to come up, and the launch
+  still lands well inside the few minutes before surface-manager closes an idle overlay. The last
+  check starts 130 s after the watcher does (20 s and eleven 10 s retries), plus whatever the
+  unanswered calls took (5 s or 10 s bounds); with SAM answering, it is the first check, 20 s in.
+* **Which input.** `luna://com.webos.service.eim/getLastInput`'s `lastSourceAppId`, by the rule the
+  gate uses ([last-input.c](../service/src/last-input.c)): Live TV (`com.webos.app.livetv`) when eim
+  does not answer or refuses, or the id is empty, invalid or a stock Home. The fallback is logged.
+* **The launch.** `applicationManager/launch {"id": <input>}` as `com.webos.applicationManager`, with
+  a 5 s bound. A refusal or no reply is logged and never retried.
+
+The log lines start with `last input:`, for example `last input: launched com.webos.app.livetv over
+an empty foreground: {"returnValue":true}`, `last input: launch of <id> failed: no reply; not retried
+this boot`, `last input: <id> in front; nothing launched this boot` or `last input: eim did not
+answer, using com.webos.app.livetv`.
+
+The [LG Home close](#the-stock-home-is-not-preloaded) is unaffected and still fires at most once per boot or choice: for an overlay
+it waits for the overlay's own launch over a nonstock full-screen app, which the last input now
+provides. This launch never names LG Home or the launcher, and the close never names the input.
 
 ## When apps are removed
 
@@ -381,7 +430,7 @@ What happens to a stock home that is already running depends on the release:
 | --- | --- |
 | 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted |
-| 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot |
+| 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot. Under an overlay launcher the watcher opens the last input once after boot ([above](#the-last-input-after-a-boot-webos-10-and-later)), which is the full-screen app the close waits for |
 
 * **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
   (so once per boot, and once more after a restart of the unit), when the choice changes between a

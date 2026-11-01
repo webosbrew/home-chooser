@@ -50,8 +50,8 @@ The daemon applies the Home redirect and runs the C watcher on a single GLib
 thread. All daemon LS2 traffic runs as `luna-send -a com.webos.applicationManager`
 children. It never registers an LS2 client.
 
-`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c`, the Home-key transaction/generator and
-`gate-mount.c` are compiled once into `libhomechooser.a` and linked into all three programs.
+`json.c`, `luna.c`, `proc.c`, `fs.c`, `policy.c`, the Home-key transaction/generator,
+`gate-mount.c` and `last-input.c` are compiled once into `libhomechooser.a` and linked into all three programs.
 This archive is a build artifact, not part of the package.
 
 | Source under `service/src/` | Responsibility |
@@ -60,8 +60,9 @@ This archive is a build artifact, not part of the package.
 | `json.c` | pbnjson parsing, members and reply validation |
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
 | `luna-child.c` | Daemon child streams, GIOChannel JSON framing, deadlines, cancellation and reaping |
-| `watcher/{main,core,record,restore,preload,notify,gate}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices and the 6–9 home gate mount |
+| `watcher/{main,core,record,restore,preload,notify,gate,input}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount and the 10+ last-input launch after boot |
 | `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
+| `last-input.c` | The last TV input from an eim `getLastInput` reply, Live TV otherwise; used by the gate and the watcher |
 | `gate/{main,decide,run}.c` | `homechooser-home-gate`, run by SAM as `com.webos.app.home` on 6–9: decision table and self-release to stock Home |
 | `proc.c` | Process spawn, output limits, timeout and child reaping |
 | `fs.c` | Shared bounded reads, directory creation and atomic writes |
@@ -206,7 +207,8 @@ Privileged RPC workers and every daemon LS2 operation use
 The daemon never calls LSRegister or impersonates an application through its own connection.
 These privileged operations include `listApps`, `listRunning`, every
 `getAppInfo` lookup (consent, icons, uninstall, forwarding), `closeByAppId`, settings/default-app
-calls, notifications, removal and the fixed profile commands. Arguments go directly to `execve`,
+calls, notifications, removal, the fixed profile commands and, on 10+, the watcher's `eim/getLastInput`
+and last-input `launch` after boot. Arguments go directly to `execve`,
 without a shell, using allow-listed URIs and the settings payload restriction below. Watcher
 calls and subscriptions carry the same fixed identity.
 
@@ -365,7 +367,8 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
 * `test-watcher` and `test-watcher-luna`: native watcher policy and child-stream runtime with an executable
   Luna double under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
-  subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle and close guards.
+  subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle, close guards
+  and the 10+ last-input launch after boot (once per boot, overlay only, nothing full-screen in front, Live TV fallback, no retry of a failed launch).
 * `test-homekey`: native live-filter transactions with fake Luna.
 * `app/src/platform/tests`: the service client and the elevation flow against a mocked bridge.
 * `service/scripts/tests/test-homechooser-access.sh`: manifest edits, per-release permissions, repair and cleanup
