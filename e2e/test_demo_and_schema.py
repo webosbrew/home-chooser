@@ -58,7 +58,7 @@ class DemoOrder(unittest.TestCase):
         self.assertEqual(len(order), 10)
 
     def test_focus_from_a_list_reply(self):
-        reply = {'returnValue': True, 'apiVersion': 1, 'apps': APPS}
+        reply = {'returnValue': True, 'apiVersion': 2, 'apps': APPS}
         self.assertEqual(e2e.demo_focus(reply, 'org.example.self'), 'org.example.under')
         self.assertIsNone(e2e.demo_focus({'returnValue': False, 'errorCode': 'notRoot'}, 'x'))
         self.assertIsNone(e2e.demo_focus({'returnValue': True, 'apps': [{'id': 'x'}]}, 'x'))
@@ -104,7 +104,7 @@ class DemoLauncher(unittest.TestCase):
         s.L = SimpleNamespace(is_demo=True)
         s.a = SimpleNamespace(api_check=False)
         s.dev = SimpleNamespace(foreground=Mock(return_value=(e2e.DEMO_ID, '{}')), close=Mock())
-        s.api = Mock(return_value=({'returnValue': True, 'apiVersion': 1, 'apps': apps}, '{}'))
+        s.api = Mock(return_value=({'returnValue': True, 'apiVersion': 2, 'apps': apps}, '{}'))
         s.running_ids = Mock(side_effect=lambda: list(running))
         s.foreign_popup = Mock(return_value=None)
         s.life_begin, s.life_end, s.shot = Mock(), Mock(), Mock()
@@ -151,7 +151,7 @@ class DemoLauncher(unittest.TestCase):
         tv = [{'id': 'com.webos.app.discovery', 'title': 'Apps'}, {'id': 'amazon', 'title': 'Amazon Prime Video'},
               {'id': 'com.gabrielecirulli.app2048.webos', 'title': '2048'}, {'id': 'netflix', 'title': 'Netflix'},
               {'id': 'com.webos.app.igallery', 'title': '1 Gallery'}, {'id': 'x.notitle'}]
-        reply = {'returnValue': True, 'apiVersion': 1, 'apps': tv + [self.TARGET, {'id': e2e.DEMO_ID, 'title': 'demo'}]}
+        reply = {'returnValue': True, 'apiVersion': 2, 'apps': tv + [self.TARGET, {'id': e2e.DEMO_ID, 'title': 'demo'}]}
         self.assertEqual(e2e.demo_focus(reply, e2e.DEMO_ID), e2e.DEMO_TARGET_ID)
 
     def test_the_fixture_build_names_the_runners_app(self):
@@ -215,14 +215,14 @@ class SpecSchemaValidation(unittest.TestCase):
         info = next(r for m, _, r in spec_records() if m == 'getInfo' and r['returnValue'])
         self.assertTrue(e2e.spec_reply_problems('getInfo', dict(info, root='yes')))
         self.assertTrue(e2e.spec_reply_problems('getInfo', {k: v for k, v in info.items() if k != 'permitted'}))
-        self.assertTrue(e2e.spec_reply_problems('getInfo', dict(info, apiVersion=2)))
+        self.assertTrue(e2e.spec_reply_problems('getInfo', dict(info, apiVersion=0)))
         self.assertEqual(e2e.spec_reply_problems('getInfo', dict(info, futureField=1)), [])  # objects are open
-        refusal = {'returnValue': False, 'apiVersion': 1, 'errorCode': 'notHome', 'errorText': 'x'}
+        refusal = {'returnValue': False, 'apiVersion': 2, 'errorCode': 'notHome', 'errorText': 'x'}
         self.assertEqual(e2e.spec_reply_problems('closeApp', refusal), [])
         self.assertTrue(e2e.spec_reply_problems('listApps', refusal))  # listApps never sends notHome
-        icon = {'returnValue': True, 'apiVersion': 1, 'mimeType': 'image/bmp', 'data': 'AAAA', 'byteLength': 3}
+        icon = {'returnValue': True, 'apiVersion': 2, 'mimeType': 'image/bmp', 'data': 'AAAA', 'byteLength': 3}
         self.assertTrue(e2e.spec_reply_problems('getAppIcon', icon))
-        apps = {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'bad id!'}]}
+        apps = {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'bad id!'}]}
         self.assertTrue(e2e.spec_reply_problems('listApps', apps))
 
     def test_platform_replies_are_outside_the_schemas(self):

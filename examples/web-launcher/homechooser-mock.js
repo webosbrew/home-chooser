@@ -21,7 +21,7 @@
 	}
 
 	var DATA = {
-		"apiVersion": 1,
+		"apiVersion": 2,
 		"service": "luna://org.webosbrew.homechooser.service",
 		"serviceName": "org.webosbrew.homechooser.service",
 		"launchUri": "luna://com.webos.applicationManager/launch",

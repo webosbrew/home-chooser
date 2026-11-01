@@ -64,6 +64,9 @@ def main(argv):
             if r['label'] == 'platform':
                 check(problems, e.get('errorCode') == -1 and 'Unknown method' in e.get('errorText', ''),
                       'bridge platform: the bus code and text are not passed through: %s' % e)
+        elif t == 'supports':
+            check(problems, r['before'] is False and r['level1'] is True and r['level2'] is True and r['level3'] is False
+                  and r['apiVersion'] == spec['info']['x-apiVersion'], 'supports(level) after a level 2 reply: %s' % r)
         elif t == 'request':
             want = spec['x-requestLaunch']
             sent = [c for c in r['calls'] if 'uri' in c]

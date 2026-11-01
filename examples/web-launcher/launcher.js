@@ -158,10 +158,38 @@
 		return app.inputId ? {inputId: app.inputId} : {id: app.id};
 	}
 
+	// Home Chooser's apiVersion is a feature level that only grows (docs/launcher-api.md "Stability"):
+	// level 1 has getAppIcon and no listInputs or getIcons; level 2 has both.
+	var level = 1;
+
+	// Level 1: one getAppIcon call per tile, in grid order; an input has none, so it keeps the placeholder.
+	function loadIconsOneByOne(gen) {
+		var pending = [];
+		for (var i = 0; i < apps.length; i++) {
+			if (Object.prototype.hasOwnProperty.call(iconCache, iconKey(apps[i]))) showIcon(i, iconCache[iconKey(apps[i])]);
+			else if (!apps[i].inputId) pending.push(i);
+		}
+		function next() {
+			if (gen !== generation || !pending.length) return;
+			var index = pending.shift();
+			HC.getAppIcon({id: apps[index].id}).then(function (r) {
+				var url = 'data:' + r.mimeType + ';base64,' + r.data;
+				iconCache[iconKey(apps[index])] = url;
+				if (gen === generation) showIcon(index, url);
+				next();
+			}, function () {
+				iconCache[iconKey(apps[index])] = null;
+				next();
+			});
+		}
+		next();
+	}
+
 	// Icons in batches of up to 64 per getIcons call, in grid order, only for tiles not cached yet.
 	// getIcons reads the files as root, so it works for a jailed launcher too; an entry with an
 	// errorCode keeps the placeholder (overBudget is asked again by the next batch).
 	function loadIcons(gen) {
+		if (level < 2) return loadIconsOneByOne(gen);
 		var pending = [];
 		for (var i = 0; i < apps.length; i++) {
 			if (Object.prototype.hasOwnProperty.call(iconCache, iconKey(apps[i]))) showIcon(i, iconCache[iconKey(apps[i])]);
@@ -194,10 +222,11 @@
 		var gen = ++generation;
 		HC.getInfo().then(function (info) {
 			if (gen !== generation) return;
-			if (info.apiVersion !== HC.API_VERSION) {
-				banner('This launcher needs Home Chooser API version ' + HC.API_VERSION + '. Update Home Chooser.', false);
+			if (!(info.apiVersion >= 1)) {
+				banner('This launcher needs a newer Home Chooser. Update it.', false);
 				return;
 			}
+			level = info.apiVersion;
 			if (!info.root) {
 				banner('Home Chooser has not finished its setup. Open it once.', true);
 				return;
@@ -207,8 +236,8 @@
 				return;
 			}
 			banner(info.isSelectedHome ? null : 'Make this launcher the app the Home button opens?', !info.isSelectedHome);
-			// The inputs are optional: an older Home Chooser has no listInputs.
-			var inputs = HC.listInputs().then(function (r) { return r.inputs; }, function () { return []; });
+			// The inputs are optional: listInputs is level 2, so a level 1 Home Chooser gets no input tiles.
+			var inputs = level < 2 ? Promise.resolve([]) : HC.listInputs().then(function (r) { return r.inputs; }, function () { return []; });
 			return Promise.all([HC.listApps(), inputs]).then(function (results) {
 				if (gen !== generation) return;
 				apps = orderApps(results[0].apps, selfId).concat(results[1].map(function (input) {

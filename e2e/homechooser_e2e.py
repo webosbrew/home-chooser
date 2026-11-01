@@ -857,7 +857,7 @@ def split_known_crashes(lines, reply):
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
 API_GROUP = 'org.webosbrew.homechooser.applications'
-API_VERSION = 1
+API_VERSION = 2  # the level this build of Home Chooser reports; the contract itself only requires >= 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')

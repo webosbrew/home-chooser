@@ -74,6 +74,14 @@ async function bridgeTests() {
 		vm.runInContext(clientSource, ctx);
 		out({test: 'bridge-failure', label, result: await settle(ctx.HomeChooser.getInfo()), calls});
 	}
+	// supports(level): false before a reply, then the highest apiVersion a Home Chooser reply carried.
+	{
+		const ctx = context({WebOSServiceBridge: fakeBridge([JSON.stringify({returnValue: true, apiVersion: 2, version: '1', root: true, permission: 'p', permitted: true, isSelectedHome: true})], [])});
+		vm.runInContext(clientSource, ctx);
+		const before = ctx.HomeChooser.supports(1);
+		await settle(ctx.HomeChooser.getInfo());
+		out({test: 'supports', before, level1: ctx.HomeChooser.supports(1), level2: ctx.HomeChooser.supports(2), level3: ctx.HomeChooser.supports(3), apiVersion: ctx.HomeChooser.API_VERSION});
+	}
 	// requestHome: the x-requestLaunch payload, with the app id from PalmSystem.identifier by default.
 	{
 		const calls = [];
@@ -123,7 +131,7 @@ const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms || 5));
 async function subscribeTests() {
 	const listInputs = spec.methods.find((m) => m.name === 'listInputs');
 	const first = listInputs.examples.find((ex) => ex.name === 'subscribe').result.value;
-	const failure = {returnValue: false, apiVersion: 1, errorCode: 'tooManySubscriptions', errorText: 'full'};
+	const failure = {returnValue: false, apiVersion: 2, errorCode: 'tooManySubscriptions', errorText: 'full'};
 	for (const [label, script] of [
 		['two-replies', [first, first].map((v) => JSON.stringify(v))],
 		['refused', [JSON.stringify(failure), JSON.stringify(first)]],

@@ -23,6 +23,7 @@ What it does:
 * It lists the apps with `listApps`, without itself and without apps marked `visible: false`,
   sorted by title (ignoring case), then by id, and after them the TV's inputs from `listInputs`
   (HDMI 1, ...). The first app has the focus.
+* It accepts `apiVersion >= 1`. On level 1 it has no input tiles (`listInputs` is level 2) and reads icons with `getAppIcon`, one call per app; on level 2 it uses the rest of this list.
 * Icons come from `getIcons`, up to 64 in one call, cached in memory by app id and version (an input
   by its `inputId` and icon path), so a refresh asks only for new tiles. A tile without a readable
   icon (`noIcon`, `iconTooLarge`) gets a letter placeholder.

@@ -35,7 +35,7 @@
 #define HC_GATE_DIR "/tmp/homechooser-runtime/home-gate"
 
 /* The launcher-facing API (docs/launcher-api.md). */
-#define HC_API_VERSION 1
+#define HC_API_VERSION 2
 #define HC_GROUP "org.webosbrew.homechooser.applications"
 #define HC_HBC_APP_ID "org.webosbrew.hbchannel"
 #define HC_STOCK_HOME_ID "com.webos.app.home"

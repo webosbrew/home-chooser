@@ -94,7 +94,7 @@ def ts_type(spec, schema, indent):
         if name in NAMED:
             return name
         if name == 'ApiVersion':
-            return '1'
+            return 'number'
         return ts_type(spec, resolve(spec, schema), indent)
     if 'const' in schema:
         return json.dumps(schema['const'])
@@ -132,7 +132,7 @@ def ts_object(spec, props, required, indent):
 def dts(spec):
     schemas = spec['components']['schemas']
     perm = spec['x-permission']['group']
-    out = ['// Types of homechooser.js, the Home Chooser launcher API v1 client.', GENERATED,
+    out = ['// Types of homechooser.js, the Home Chooser launcher API client.', GENERATED,
            '// SPDX-License-Identifier: Apache-2.0', '',
            '// A <script> include defines the global HomeChooser; a CommonJS require returns the same object.',
            'export as namespace HomeChooser;', 'export = HomeChooser;', '', 'declare namespace HomeChooser {']
@@ -146,8 +146,8 @@ def dts(spec):
         out.append('\tinterface %s %s' % (name, ts_object(spec, props, required, 1)))
     out.append('\t/** %s */' % schemas['IconEntry']['description'])
     out.append('\ttype IconEntry = %s;' % ' | '.join(ts_type(spec, b, 1) for b in schemas['IconEntry']['oneOf']))
-    out.append('\t/** Members of every successful reply. More may be added within v1; ignore unknown ones. */')
-    out.append('\tinterface Success {\n\t\treturnValue: true;\n\t\tapiVersion: 1;\n\t}')
+    out.append('\t/** Members of every successful reply. More may be added at later levels; ignore unknown ones. */')
+    out.append('\tinterface Success {\n\t\treturnValue: true;\n\t\tapiVersion: number;\n\t}')
     for m in spec['methods']:
         ok, _ = branches(spec, m)
         props, required = flatten(spec, ok)
@@ -164,7 +164,7 @@ def dts(spec):
     out.append('''	/** A failure reply from Home Chooser (returnValue false, with apiVersion). */
 	interface Failure {
 		returnValue: false;
-		apiVersion: 1;
+		apiVersion: number;
 		errorCode: string;
 		errorText: string;
 	}
@@ -196,7 +196,14 @@ def dts(spec):
 		prototype: HomeChooserError;
 	};
 ''')
-    out.append('\tconst API_VERSION: 1;')
+    out.append('\t/** The highest apiVersion level this client was generated for. Do not compare a reply against it with ===: use supports(level). */')
+    out.append('\tconst API_VERSION: %d;' % spec['info']['x-apiVersion'])
+    out.append('''	/**
+	 * True when the apiVersion Home Chooser's replies have reported so far is at least level. Call getInfo first;
+	 * false until a reply has come. Use supports(2) for listLaunchPoints, listInputs, getIcons and subscribe,
+	 * never apiVersion === 1: levels only add.
+	 */
+	function supports(level: number): boolean;''')
     out.append('\tconst SERVICE: %s;' % json.dumps(spec['servers'][0]['url']))
     out.append('\tconst PERMISSION: %s;' % json.dumps(perm))
     out.append('\tconst HOME_CHOOSER_ID: %s;' % json.dumps(spec['x-requestLaunch']['payload']['id']))
@@ -383,16 +390,29 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 	HomeChooserError.prototype = Object.create(Error.prototype);
 	HomeChooserError.prototype.constructor = HomeChooserError;
 
+	// The highest apiVersion a Home Chooser reply has carried so far; 0 before any.
+	var seenLevel = 0;
+	function noteLevel(reply) {
+		if (typeof reply.apiVersion === 'number' && reply.apiVersion > seenLevel) {
+			seenLevel = reply.apiVersion;
+		}
+	}
+	function supports(level) {
+		return seenLevel >= level;
+	}
+
 	// Resolves with a returnValue:true reply; rejects with a HomeChooserError otherwise.
 	function settle(call) {
 		return call.then(function (reply) {
 			if (reply && typeof reply === 'object' && reply.returnValue === true) {
+				noteLevel(reply);
 				return reply;
 			}
 			if (!reply || typeof reply !== 'object') {
 				throw new HomeChooserError({returnValue: false, errorText: 'reply is not an object'}, 'transport');
 			}
 			// Every reply of Home Chooser carries apiVersion; a reply of the luna bus itself does not.
+			noteLevel(reply);
 			throw new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform');
 		}, function (error) {
 			var text = error && error.message ? error.message : String(error);
@@ -426,6 +446,7 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 				var text = error && error.message ? error.message : error ? String(error) : 'reply is not an object';
 				end(new HomeChooserError({returnValue: false, errorText: text}, 'transport', error));
 			} else if (reply.returnValue === true) {
+				noteLevel(reply);
 				onReply(reply);
 			} else {
 				end(new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform'));
@@ -467,6 +488,7 @@ CLIENT_TAIL = '''
 		ERROR_CODES: %(error_codes)s,
 		HomeChooserError: HomeChooserError,
 %(exports)s
+		supports: supports,
 		subscribe: subscribe,
 		requestHome: requestHome,
 		ownAppId: ownAppId,

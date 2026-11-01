@@ -95,16 +95,29 @@
 	HomeChooserError.prototype = Object.create(Error.prototype);
 	HomeChooserError.prototype.constructor = HomeChooserError;
 
+	// The highest apiVersion a Home Chooser reply has carried so far; 0 before any.
+	var seenLevel = 0;
+	function noteLevel(reply) {
+		if (typeof reply.apiVersion === 'number' && reply.apiVersion > seenLevel) {
+			seenLevel = reply.apiVersion;
+		}
+	}
+	function supports(level) {
+		return seenLevel >= level;
+	}
+
 	// Resolves with a returnValue:true reply; rejects with a HomeChooserError otherwise.
 	function settle(call) {
 		return call.then(function (reply) {
 			if (reply && typeof reply === 'object' && reply.returnValue === true) {
+				noteLevel(reply);
 				return reply;
 			}
 			if (!reply || typeof reply !== 'object') {
 				throw new HomeChooserError({returnValue: false, errorText: 'reply is not an object'}, 'transport');
 			}
 			// Every reply of Home Chooser carries apiVersion; a reply of the luna bus itself does not.
+			noteLevel(reply);
 			throw new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform');
 		}, function (error) {
 			var text = error && error.message ? error.message : String(error);
@@ -138,6 +151,7 @@
 				var text = error && error.message ? error.message : error ? String(error) : 'reply is not an object';
 				end(new HomeChooserError({returnValue: false, errorText: text}, 'transport', error));
 			} else if (reply.returnValue === true) {
+				noteLevel(reply);
 				onReply(reply);
 			} else {
 				end(new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform'));
@@ -235,7 +249,7 @@
 	}
 
 	var api = {
-		API_VERSION: 1,
+		API_VERSION: 2,
 		SERVICE: SERVICE,
 		PERMISSION: "org.webosbrew.homechooser.applications",
 		HOME_CHOOSER_ID: HOME_CHOOSER_ID,
@@ -366,6 +380,7 @@
 		getIcons: getIcons,
 		closeApp: closeApp,
 		uninstallApp: uninstallApp,
+		supports: supports,
 		subscribe: subscribe,
 		requestHome: requestHome,
 		ownAppId: ownAppId,
