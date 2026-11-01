@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 static unsigned checks, failures;
 #define CHECK(item, expr) do { checks++; if (!(expr)) { failures++; fprintf(stderr, "FAIL %s line %d: %s\n", item, __LINE__, #expr); } } while (0)
@@ -19,6 +20,9 @@ typedef struct {
     int sets, defaults, scans, alerts, toasts, closes, preload_on, preload_off;
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
     int silent, flap, wait_action, wait_count, title_gets;
+    int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice;
+    int running_dead, close_dead, running_calls, launches; /* calls left unanswered; `running` calls seen */
+    const char *home_pid; /* NULL: stock Home not running */
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
@@ -108,8 +112,19 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         r = response(!f->preload_fail); if (f->preload_fail > 0) f->preload_fail--;
     } else if (eq(method, "getForegroundAppInfo")) {
         if (f->foreground) { r = response(TRUE); put_str(r, "appId", f->foreground); }
+    } else if (eq(method, "running")) {
+        f->running_calls++;
+        if (f->running_dead) f->running_dead--;
+        else {
+            r = response(TRUE); jvalue_ref list = jarray_create(NULL);
+            if (f->home_pid) { jvalue_ref e = jobject_create(); put_str(e, "id", STOCK); put_str(e, "processid", f->home_pid); jarray_append(list, e); }
+            jobject_set(r, key_buf("running"), list);
+        }
+    } else if (eq(method, "launch")) {
+        char *id = get_string(p, "id"); CHECK("G20 launch only stock Home", eq(id, STOCK)); g_free(id);
+        f->launches++; r = response(TRUE);
     } else if (eq(method, "closeByAppId")) {
-        f->closes++; r = response(TRUE);
+        f->closes++; r = f->close_dead ? NULL : response(TRUE); if (f->close_dead) f->close_dead--;
         char *id = get_string(p, "id"); CHECK("W16 close only stock", eq(id, STOCK)); g_free(id);
         bool force = false; jboolean_get(member(p, "forceMode"), &force); CHECK("W16 force close", force);
     } else CHECK("known Luna method", FALSE);
@@ -125,6 +140,13 @@ static int fake_access(const char *action, void *context) {
     Fixture *f = context;
     if (eq(action, "apply")) f->applies++; else f->removes++;
     return f->access_fail;
+}
+static int fake_gate(const char *choice, void *context) {
+    Fixture *f = context;
+    if (choice) { f->gate_on++; char *id = watch_choice(f->w); CHECK("G11 gate for the stored choice", eq(choice, id)); g_free(id); }
+    else { f->gate_off++; if (g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS)) f->gate_off_with_choice++; }
+    f->gate_last = choice ? 1 : 0;
+    return f->gate_fail;
 }
 static gint64 now(void *context) { return ((Fixture *)context)->clock; }
 static void wait_ms(unsigned ms, void *context) {
@@ -153,7 +175,9 @@ static Fixture *setup(int major, const char *id) {
     f->c.app_dir = path(f, root, "hc"); f->c.override = path(f, root, "override/o.json");
     f->c.init_link = path(f, root, "init.d/homechooser"); f->c.log = path(f, root, "watch.log");
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
-    f->c.preload_retry_ms = f->c.preload_settle_ms = 0; f->c.notify_retry_ms = 3000;
+    f->c.preload_retry_ms = f->c.preload_settle_ms = f->c.gate_settle_ms = 0; f->c.notify_retry_ms = 3000;
+    f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
+    f->gate_last = -1; f->c.proc = path(f, root, "proc");
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
     char *os = g_strdup_printf("VERSION_ID=\"%d.0.0\"\n", major); file(f->c.osrelease, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
@@ -163,7 +187,7 @@ static Fixture *setup(int major, const char *id) {
     installed(f, HC_APP_ID, 1); installed(f, "my.home", 1); installed(f, "other.home", 1);
     installed(f, "gone.app", -1); installed(f, STOCK, 1); installed(f, FULLHOME, -1);
     record(f, "{\"home\":\"my.home\",\"kidsApp\":\"k.app\"}");
-    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .now = now, .wait = wait_ms, .context = f};
+    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .gate = fake_gate, .now = now, .wait = wait_ms, .context = f};
     f->w = hc_watch_new(&f->c, &ops);
     if (id) choice(f, id);
     return f;
@@ -323,6 +347,7 @@ static void test_uninstall(void) {
         CHECK("W13 access removed", f->removes == 1);
         CHECK("W13 files removed", !g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
         CHECK("W13 boot/cache/flag removed", !g_file_test(path(f, f->c.state_dir, "boot"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "homekey"), G_FILE_TEST_EXISTS));
+        CHECK("W13 key filter snapshot and lock removed", !g_file_test(path(f, f->c.state_dir, "keyfilters-stock.json"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "keyfilter.lock"), G_FILE_TEST_EXISTS));
         CHECK("W18 one uninstall toast", f->toasts == 1 && !f->alerts);
         CHECK("W13 stock refresh", f->stock_calls == (major >= 6 && major <= 9));
         teardown(f);
@@ -454,6 +479,113 @@ static void test_preload_close(void) {
     f=setup(11,STOCK); start(f); CHECK("W14 stock on",f->preload_on==1 && !f->preload_off); choice(f,"my.home"); event(f,'A',"{}");
     CHECK("W14 change off immediate ready",f->preload_off==1 && f->w->preload_ready); teardown(f);
 }
+/* G11-G15: the 6-9 home gate follows the baked Home key redirect (docs/home-gate.md). */
+static void test_gate(void) {
+    for (int major = 5; major <= 12; major++) {
+        Fixture *f = setup(major, "my.home"); start(f);
+        gboolean ranged = major >= 6 && major <= 9;
+        CHECK("G11 mounted at start on 6-9 only", ranged ? f->gate_last == 1 && f->gate_on >= 1 : !f->gate_on && !f->gate_off);
+        installed(f, "my.home", -1); event(f, 'A', "{}");
+        CHECK("G12 missing launcher unmounts", ranged ? f->gate_last == 0 : !f->gate_on && !f->gate_off);
+        installed(f, "my.home", 1); event(f, 'A', "{}");
+        CHECK("G12 launcher back mounts", ranged ? f->gate_last == 1 : !f->gate_on);
+        choice(f, "other.home"); settings(f, "{\"home\":\"my.home\"}");
+        CHECK("G13 choice change keeps it mounted", ranged ? f->gate_last == 1 : !f->gate_on);
+        choice(f, STOCK); settings(f, "{}");
+        CHECK("G13 LG Home chosen unmounts", ranged ? f->gate_last == 0 : !f->gate_off);
+        teardown(f);
+    }
+    Fixture *f = setup(8, STOCK); start(f); CHECK("G13 LG Home at start", !f->gate_on && f->gate_last == 0); teardown(f);
+    f = setup(7, "my.home"); unlink(path(f, f->c.state_dir, "homekey")); start(f);
+    CHECK("G13 redirect disabled", !f->gate_on && f->gate_last == 0); teardown(f);
+    f = setup(7, "my.home"); f->key_fail = 1; start(f);
+    CHECK("G13 no baked filter, no gate", !f->gate_on); event(f, 'A', "{}"); CHECK("G13 filter retried, gate follows", f->gate_last == 1); teardown(f);
+    for (int failing = 0; failing <= 1; failing++) {
+        f = setup(8, "my.home"); start(f); f->gate_fail = failing;
+        installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+        CHECK("G14 uninstall unmounts before the state is removed", f->gate_off_with_choice >= 1);
+        CHECK("G14 unmount failure keeps the restore pending", failing ? hc_watch_status(f->w) == 1 && g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) : hc_watch_status(f->w) == 0);
+        teardown(f);
+    }
+    f = setup(8, "my.home"); start(f); int off = f->gate_off; hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 clean stop unmounts", f->gate_off == off + 1 && f->gate_last == 0);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+    f = setup(8, "my.home"); start(f); off = f->gate_off; event(f, 's', NULL);
+    CHECK("G15 settings loss fails", hc_watch_status(f->w) == 1);
+    hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 failed watcher keeps the gate for its restart", f->gate_off == off);
+    f->w = hc_watch_new(&f->c, &ops); teardown(f);
+    f = setup(9, NULL); start(f); hc_watch_free(f->w); f->w = NULL;
+    CHECK("G15 no choice at start clears leftovers", f->gate_last == 0 && !f->gate_on);
+    f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
+/* Pid 100 is the real binary, 200 the gate (its exe is the staged copy). */
+static void proc_setup(Fixture *f) {
+    char *copy = g_build_filename(f->c.gate_dir, HC_GATE_NAME, NULL), *real = g_build_filename(f->c.proc, "100", "exe", NULL), *gate = g_build_filename(f->c.proc, "200", "exe", NULL);
+    file(copy, "gate"); file(real, "stock"); file(gate, "x"); unlink(gate);
+    char *abs = realpath(copy, NULL); CHECK("G16 gate exe link", !symlink(abs, gate)); free(abs); g_free(copy); g_free(real); g_free(gate);
+}
+/* G16-G19: a stock Home that SAM started before the mount, or while SAM could not answer, is closed. */
+static void test_gate_close(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->running_dead = 1; start(f);
+    CHECK("G16 no reply at mount, a retry closes it", f->running_calls == 2 && f->closes == 1 && !f->w->gate_pending && !f->w->gate_source);
+    event(f, 'A', "{}"); event(f, 'A', "{}");
+    CHECK("G17 confirmed close stops the retries and later syncs", f->running_calls == 2 && f->closes == 1);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->close_dead = 1; start(f);
+    CHECK("G17 a close without reply is retried", f->closes == 2 && !f->w->gate_pending); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "200"; start(f);
+    CHECK("G18 the gate's own process is not closed", !f->closes && f->w->gate_pending);
+    CHECK("G18 retries are bounded", f->running_calls == 1 + (int)f->c.preload_tries && !f->w->gate_source);
+    f->home_pid = NULL; event(f, 'A', "{}");
+    CHECK("G18 a later sync confirms once the gate is gone", !f->closes && !f->w->gate_pending && f->running_calls == 2 + (int)f->c.preload_tries);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "200"; hc_watch_start(f->w);
+    CHECK("G19 retry pending", f->w->gate_pending && f->w->gate_source); int calls = f->running_calls;
+    installed(f, "my.home", -1); event(f, 'A', "{}");
+    CHECK("G19 unmount cancels the retry", !f->w->gate_pending && !f->w->gate_source && f->running_calls == calls);
+    installed(f, "my.home", 1); event(f, 'A', "{}"); CHECK("G19 re-mount starts it afresh", f->w->gate_pending || f->running_calls > calls);
+    hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL; calls = f->running_calls; pump();
+    CHECK("G19 clean stop leaves no retry", f->running_calls == calls);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
+/* G20: a close that really closed a running stock Home, and an empty foreground afterwards (6.5.2 boot). */
+static void test_gate_relaunch(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; start(f);
+    CHECK("G20 closed Home, empty foreground: stock Home launched once", f->closes == 1 && f->launches == 1 && !f->w->gate_settle_source);
+    event(f, 'A', "{}"); event(f, 'A', "{}");
+    CHECK("G20 no second launch for the same close", f->launches == 1); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "my.home"; start(f);
+    CHECK("G20 something in front: no launch", f->closes == 1 && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; start(f);
+    CHECK("G20 foreground unknown: no launch", f->closes == 1 && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->foreground = ""; start(f);
+    CHECK("G20 Home was not running: no launch", !f->closes && !f->launches); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; f->w->c.gate_settle_ms = 100000; hc_watch_start(f->w);
+    CHECK("G20 settle pending", f->w->gate_settle_source != 0 && !f->launches);
+    installed(f, "my.home", -1); event(f, 'A', "{}");
+    CHECK("G20 unmount cancels the launch", !f->w->gate_settle_source && !f->launches);
+    teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; f->w->c.gate_settle_ms = 100000; hc_watch_start(f->w);
+    hc_watch_stop(f->w, 0, "stopped by signal"); hc_watch_free(f->w); f->w = NULL; pump();
+    CHECK("G20 clean stop leaves no launch", !f->launches);
+    HCWatchOps ops = {.call = fake_call, .context = f}; f->w = hc_watch_new(&f->c, &ops); teardown(f);
+}
+/* The gate's `decided` file, mtime `offset_s` from now: a gate run after (+) or before (-) the close. */
+static void gate_ran(Fixture *f, int offset_s) {
+    char *p = g_build_filename(f->c.gate_dir, "decided", NULL); file(p, "1");
+    time_t t = time(NULL) + offset_s; struct timeval tv[2] = {{t, 0}, {t, 0}};
+    CHECK("G21 set mtime", !utimes(p, tv)); g_free(p);
+}
+/* G21: SAM's idle relaunch already ran the gate after the close; an empty foreground then proves nothing. */
+static void test_gate_ran(void) {
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; gate_ran(f, 3600); start(f);
+    CHECK("G21 gate ran after the close: no launch", f->closes == 1 && !f->launches && !f->w->gate_settle_source); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; gate_ran(f, -3600); start(f);
+    CHECK("G21 gate ran before the close only: launch", f->closes == 1 && f->launches == 1); teardown(f);
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = ""; start(f);
+    CHECK("G21 gate did not run: launch", f->closes == 1 && f->launches == 1); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -466,6 +598,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

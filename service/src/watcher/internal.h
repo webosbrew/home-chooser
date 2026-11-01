@@ -33,6 +33,9 @@ struct HCWatch {
     gboolean preload_ready;
     unsigned preload_source, preload_attempts, preload_generation;
     GMainLoop *waiting;
+    gboolean gate_active, gate_released, gate_pending; /* pending: stock Home close unconfirmed */
+    unsigned gate_source, gate_attempts, gate_settle_source;
+    gint64 gate_closed_us; /* wall clock of the close that armed the settle check */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
@@ -60,6 +63,8 @@ void repair_leftover(HCWatch *w);
 void preload_sync(HCWatch *w, int state, char why);
 void preload_follow(HCWatch *w, const char *id, char why);
 void close_foreground(HCWatch *w);
+int gate_apply(HCWatch *w, const char *choice);
+void gate_sync(HCWatch *w);
 void handle_foreground(HCWatch *w, jvalue_ref reply);
 void handle_life(HCWatch *w, jvalue_ref reply);
 void remember_title(HCWatch *w, const char *id);

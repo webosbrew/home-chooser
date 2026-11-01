@@ -505,11 +505,14 @@ the watcher makes no preload call, so the checks only assert the policy is not d
 * after step 2 (the switch): `preloadmanager/getPreloadPolicy` shows `isEnabled:false` for
   `com.webos.app.home`. On 11.x and 12.x LG Home may still be running because the chosen launcher
   has not been brought in front yet. After step 3 opens it from an ordinary app, the runner
-  asserts that the watcher logged one deferred close and LG Home has no live process. On 6.x to 10.x, for
+  asserts that the watcher logged one deferred close and LG Home has no live process. On 10.x, for
   every launcher (8791f6e), the stock home is not closed (sam would relaunch it at once as the last-input app, 75 to
-  89 MB measured on 10.3.1, 9.2.1 and 8.3.0): the policy must still read `isEnabled:false`, the watcher log must have
-  the `webOS N: stock home left running` line and no `closeByAppId com.webos.app.home` line, and whether the stock
-  home runs is recorded, not asserted. After the `--reboot-check` boot the runner notes whether it runs and sam's
+  89 MB measured on 10.3.1): the policy must still read `isEnabled:false`, the watcher log must have
+  the `webOS 10: stock home left running` line and no `closeByAppId com.webos.app.home` line, and whether the stock
+  home runs is recorded, not asserted. On 6.x to 9.x the home gate ([../docs/home-gate.md](../docs/home-gate.md))
+  replaces that: the runner asserts the gate is mounted over `/usr/bin/com.webos.app.home` (`/proc/mounts`), stock
+  Home is not in `running` (a bounded wait of 150 s, since the watcher retries the close of a boot-started Home every
+  10 s) and the watcher log shows it manages the gate (the `home gate mounted` line, or another `home gate:` line when `homekey refresh` mounted first). After the `--reboot-check` boot the runner notes whether it runs and sam's
   launch lines for it (`snapshot-boot-components` may launch it at boot outside the preload manager: an open risk);
 * after the launcher removal (step 4) and after the Home Chooser uninstall (step 5): `isEnabled:true`;
   after the launcher is reinstalled, `isEnabled:false` again;
@@ -518,8 +521,10 @@ the watcher makes no preload call, so the checks only assert the policy is not d
   (in `/tmp`, so from this boot) shows `setPreloadPolicy ... isEnabled=false`, the policy reads false, and
   for a normal launcher, after the boot policy settles the stock home has no live process over
   60 s. For an overlay launcher the stock Home state is recorded: a close waits for a later
-  launch over a nonstock full-screen card. On 6.x to 10.x there is no close, and the running
-  state is recorded. On 5.x there is no preload call.
+  launch over a nonstock full-screen card. On 10.x there is no close, and the running
+  state is recorded. On 6.x to 9.x (home gate) the runner also asserts, for every launcher, that the gate is mounted,
+  the real stock Home is not running and a launcher is in front: the chosen launcher for a full-screen one, the last
+  input app (anything but stock Home) for an overlay one. On 5.x there is no preload call.
 
 A check that fails where the docs name a limitation is recorded `XFAIL` with the citation
 (`Recorder.check(..., expected=...)`); nothing uses it yet, since 11.x and 12.x run with
@@ -606,8 +611,8 @@ UI). The run removes your launcher at the end like any other.
 an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
 
-* **Overlay or not no longer changes the preload expectations** (8791f6e): on 6.x to 10.x the stock home is left
-  running for every launcher, on 11.x and 12.x it is closed for every launcher. `Launcher.overlay`
+* **Overlay or not no longer changes the preload expectations** (8791f6e): on 10.x the stock home is left
+  running for every launcher, on 6.x to 9.x the home gate keeps it from running, on 11.x and 12.x it is closed for every launcher. `Launcher.overlay`
   (`defaultWindowType == "overlay"` in the ipk's `appinfo.json`) is still logged and still decides how "Home opens
   the launcher" is observed (an overlay leaves the app underneath in the foreground).
 * **Launch proof** (every Home press that should open the launcher, for Dock, any `--launcher-ipk` app and the

@@ -72,6 +72,7 @@ static void restore_all(HCWatch *w)
     }
     if (!revert_platform(w)) { hc_watch_stop(w, 1, "could not restore stock Home, restore pending"); return; }
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
+    if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
     const char *names[] = {"home", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
     for (int i = 0; names[i]; i++) {
@@ -131,6 +132,7 @@ void check_apps(HCWatch *w, char why)
     if (w->status >= 0) goto done;
     preload_follow(w, want, why);
     if (why != 'T') close_foreground(w);
+    gate_sync(w);
 done:
     g_free(want);
 }

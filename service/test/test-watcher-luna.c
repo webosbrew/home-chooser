@@ -181,6 +181,8 @@ static void test_runtime(int mode) {
     char *rt=g_build_filename(root,"rt",NULL),*scripts=g_build_filename(root,"service/scripts",NULL),*access=g_build_filename(rt,"homechooser-access",NULL);
     char *binary=g_build_filename(root,"service/homechooser-daemon",NULL),*home=g_build_filename(state,"home",NULL);
     char *access_source=g_build_filename(scripts,"homechooser-access",NULL),*common=g_build_filename(scripts,"lib/common.sh",NULL);
+    char *gate_dir=g_build_filename(rt,"home-gate",NULL),*gate_binary=g_build_filename(root,"service/homechooser-home-gate",NULL);
+    config.gate_dir=gate_dir;config.gate_binary=gate_binary;
     config.state_dir=state;config.osrelease=os;config.app_dir=app;config.override=override;config.init_link=link;
     config.log=log;config.runtime=rt;config.scripts_dir=scripts;config.access_script=access;
     config.confirm_ms=config.preload_retry_ms=config.preload_settle_ms=config.notify_retry_ms=0;
@@ -222,7 +224,7 @@ static void test_runtime(int mode) {
     CHECK("W14 exit preload",count_calls("setPreloadPolicy")>=1);
     j_release(&record);j_release(&filters);fixture_close();
     watch_remove_tree(root);
-    g_free(cached);g_free(common);g_free(access_source);g_free(home);g_free(binary);g_free(access);g_free(scripts);g_free(rt);g_free(log);g_free(link);g_free(override);g_free(app);g_free(os);g_free(state);g_free(root);
+    g_free(gate_dir);g_free(gate_binary);g_free(cached);g_free(common);g_free(access_source);g_free(home);g_free(binary);g_free(access);g_free(scripts);g_free(rt);g_free(log);g_free(link);g_free(override);g_free(app);g_free(os);g_free(state);g_free(root);
 }
 int main(int argc,char **argv) {
     if(argc!=4)return 2;

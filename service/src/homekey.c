@@ -133,7 +133,7 @@ static gboolean ready(const HCKeyOps *o) {
 }
 int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GString *out) {
     int rc = 1, lock = -1;
-    char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL;
+    char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL, *lockpath = NULL;
     char *stock_file = path(o, "keyfilters-stock.json");
     char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->osrelease);
     jvalue_ref current = jinvalid(), stock = jinvalid(), next = jinvalid();
@@ -157,14 +157,28 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", generated ? "possible" : "refused");
         rc = 0; goto done;
     }
+    /* A restore with no state dir has nothing to restore (stock keyFilters are saved in it, and the
+     * uninstall removed it): do not recreate the dir and lock for a late run. apply/boot still create it. */
+    if (!g_file_test(o->state_dir, G_FILE_TEST_IS_DIR) &&
+        (!strcmp(action, "stop") || !strcmp(action, "clear") || !strcmp(action, "refresh"))) {
+        g_string_append(out, "active=no\nreboot=no\n"); rc = 0; goto done;
+    }
     if (g_mkdir_with_parents(o->state_dir, 0755)) goto done;
-    char *lockpath = path(o, "keyfilter.lock");
-    lock = open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600); g_free(lockpath);
-    if (lock < 0) goto done;
+    lockpath = path(o, "keyfilter.lock");
     unsigned tries = 0;
-    while (flock(lock, LOCK_EX | LOCK_NB)) {
+    for (;;) {
+        lock = open(lockpath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (lock < 0) goto done;
+        while (flock(lock, LOCK_EX | LOCK_NB)) {
+            if (++tries >= 50) { reason = g_strdup("another key-filter transaction is running"); goto done; }
+            g_usleep(100000);
+        }
+        /* A finished restore unlinks the lock while others may wait on it: hold only the file that is
+         * still at the path, else open the new one. */
+        struct stat held, at;
+        if (!fstat(lock, &held) && !lstat(lockpath, &at) && held.st_ino == at.st_ino && held.st_dev == at.st_dev) break;
+        close(lock); lock = -1;
         if (++tries >= 50) { reason = g_strdup("another key-filter transaction is running"); goto done; }
-        g_usleep(100000);
     }
     current = get_list(o);
     if (!jis_valid(current)) { reason = g_strdup("configd did not return a valid nonempty keyFilters list"); goto done; }
@@ -242,6 +256,11 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         goto done;
     }
     collect(o, next);
+    /* Stock restored and read back (the write above read it back, or the list already was stock) and
+     * no choice: the snapshot and the lock have no further use; the dir goes when nothing else is in it. */
+    if (restore && (!choice || !*choice)) {
+        unlink(stock_file); unlink(lockpath); rmdir(o->state_dir);
+    }
     g_string_append_printf(out, "active=%s\nreboot=no\n", restore ? "no" : "yes");
     rc = 0;
     if (reason) toast(o, "Home Chooser cannot change Home on this firmware. LG Home remains available.");
@@ -249,6 +268,6 @@ done:
     if (reason) { g_string_append_printf(out, "reason=%s\n", reason); if (boot && rc) toast(o, "Home Chooser could not start your home. LG Home remains available."); }
     if (lock >= 0) close(lock);
     j_release(&current); j_release(&stock); j_release(&next);
-    g_free(stock_file); g_free(flag); g_free(home); g_free(source); g_free(generated); g_free(reason); g_free(choice); g_free(version);
+    g_free(lockpath); g_free(stock_file); g_free(flag); g_free(home); g_free(source); g_free(generated); g_free(reason); g_free(choice); g_free(version);
     return rc;
 }

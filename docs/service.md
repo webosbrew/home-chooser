@@ -10,9 +10,9 @@ the [README](../README.md#decisions) and [Root access](settings-app.md#root-acce
 
 `ares-package dist build/service-pkg` packs the app and the service together
 (`npm run package` in `app/` builds the service with `make -C service`, stages
-`services.json`, both binaries, three entry scripts and their `scripts/lib/` helpers with
+`services.json`, the three binaries, three entry scripts and their `scripts/lib/` helpers with
 `app/scripts/stage-service.js`, then packages). The ipk holds
-`usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,homechooser-daemon,services.json,scripts/}` (binary mode
+`usr/palm/services/org.webosbrew.homechooser.service/{homechooser-service,homechooser-daemon,homechooser-home-gate,services.json,scripts/}` (binary mode
 755) next to the app. `services.json` has `"engine": "native"` and `"executable":
 "homechooser-service"`, so `ares-package` marks the ipk `arm`. The SDK and firmware paths of the
 build, and the one source of the version, are in
@@ -22,7 +22,8 @@ Both binaries are C. The service links `libluna-service2.so.3`, `libpbnjson_c.so
 `libPmLogLib.so.3`, `libglib-2.0.so.0` and `libc.so.6`. The daemon links the same
 libraries **except libluna-service2**. `make -C service check-abi` validates both
 against the oldest supported rootfs (5.6.1) and rejects any daemon LS2 dependency
-or LS registration/call symbols. No shared library is installed.
+or LS registration/call symbols. `homechooser-home-gate` ([home-gate.md](home-gate.md)) links the
+daemon's libraries, also without libluna-service2, and is checked the same way. No shared library is installed.
 
 `services.json` declares only `homechooser-service`: only that executable receives
 an LS2 service role. `homechooser-daemon` needs root for boot/state operations and
@@ -46,7 +47,9 @@ This archive is a build artifact, not part of the package.
 | `json.c` | pbnjson parsing, members and reply validation |
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
 | `luna-child.c` | Daemon child streams, GIOChannel JSON framing, deadlines, cancellation and reaping |
-| `watcher/{main,core,record,restore,preload,notify}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards and notices |
+| `watcher/{main,core,record,restore,preload,notify,gate}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices and the 6–9 home gate mount |
+| `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
+| `gate/{main,decide,run}.c` | `homechooser-home-gate`, run by SAM as `com.webos.app.home` on 6–9: decision table and self-release to stock Home |
 | `proc.c` | Process spawn, output limits, timeout and child reaping |
 | `fs.c` | Shared bounded reads, directory creation and atomic writes |
 | `policy.c` | Pure allow-lists and decision helpers |

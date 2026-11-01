@@ -8,8 +8,9 @@ typedef struct {
     const char *state_dir, *osrelease, *app_dir, *override, *init_link;
     const char *runtime, *scripts_dir, *access_script, *log, *stock_js;
     const char *app_dirs, *install_dirs, *luna_send;
+    const char *gate_binary, *gate_dir, *proc; /* 6-9 home gate: installed binary, tmpfs runtime dir, /proc */
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
-    unsigned preload_retry_ms, preload_settle_ms, preload_tries;
+    unsigned preload_retry_ms, preload_settle_ms, preload_tries, gate_settle_ms;
     unsigned notify_retry_ms, notify_tries, log_max;
     gboolean preload, notify;
 } HCWatchConfig;
@@ -18,6 +19,7 @@ typedef struct {
     /* Optional test seams. Production uses native Home-key, proc and GLib helpers. */
     int (*key)(gboolean stock, void *);
     int (*access)(const char *action, void *);
+    int (*gate)(const char *choice, void *); /* NULL unmounts; 0 ok, 1 failed */
     gint64 (*now)(void *);
     void (*wait)(unsigned ms, void *);
     void (*wake)(void *);

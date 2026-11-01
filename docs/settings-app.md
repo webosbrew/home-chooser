@@ -412,7 +412,9 @@ manager is not touched.
   during selection on any release.
 
   So on 6.x to 10.x **the stock home can stay resident after a launcher is chosen, until the next
-  reboot**. It is not a defect of the choice: the system puts it back at once whatever is done to it.
+  reboot**. On 6–9 the [home gate](home-gate.md) now replaces the binary SAM relaunches, and the
+  daemon closes stock Home once after mounting it; the rest of this paragraph describes 10.x and
+  6–9 without the gate. It is not a defect of the choice: the system puts it back at once whatever is done to it.
   After a reboot it can be gone, because the watcher turns the stock home's preload off at every boot
   (in memory only, never `permanent`) and nothing closes and reopens it any more. The 6–9 live
   filter needs no reboot; stock Home residency is independent of activation. On 5.x nothing is done (below). On 11.x and 12.x the close does stick (11.2.0 and 12.0.0, with

@@ -8,7 +8,11 @@ import time
 
 root = os.path.dirname(os.path.realpath(__file__))
 args = sys.argv[1:]
-if len(args) not in (5, 6) or args[:2] != ['-a', 'com.webos.applicationManager']:
+# The home gate launches as com.webos.app.home; everything else is the privileged identity.
+identities = ['com.webos.applicationManager']
+if len(args) == 6 and args[-2].endswith('/launch'):
+    identities.append('com.webos.app.home')
+if len(args) not in (5, 6) or args[0] != '-a' or args[1] not in identities:
     sys.exit(91)
 stream = args[2] == '-i'
 if not stream and args[2:4] != ['-n', '1']:
@@ -45,6 +49,10 @@ if stream:
 
 if payload.get('test') == 'hang':
     time.sleep(60)
+with open(root + '/state.json', encoding='utf-8') as source:
+    state = json.load(source)
+if method in state.get('hang', []):
+    time.sleep(60)
 if payload.get('test') == 'fail':
     print('{"returnValue":true}')
     sys.exit(9)
@@ -57,10 +65,13 @@ if payload.get('test') == 'no-newline':
 if payload.get('test') == 'false':
     print('{"returnValue":false,"errorText":"refused"}')
     sys.exit(0)
-with open(root + '/state.json', encoding='utf-8') as source:
-    state = json.load(source)
 reply = {'returnValue': True}
-if method == 'getAppInfo':
+if method in state.get('refuse', []):
+    reply = {'returnValue': False, 'errorText': 'refused'}
+elif method == 'getAppInfo' and 'apps' in state:
+    reply['returnValue'] = payload['id'] in state['apps']
+    reply['appInfo'] = state['apps'].get(payload['id'], {})
+elif method == 'getAppInfo':
     reply['returnValue'] = not state.get('removed') or payload['id'] != 'org.webosbrew.homechooser'
     reply['appInfo'] = {'title': 'Native Test Home'}
 elif method == 'getSystemSettings':
@@ -78,7 +89,12 @@ elif method == 'setConfigs':
 elif method == 'getProfiles':
     reply['defaultApps'] = {'categories': {'home': 'com.webos.app.home'}}
 elif method == 'getForegroundAppInfo':
-    reply['appId'] = 'my.home'
+    reply['appId'] = state.get('foreground', 'my.home')
+elif method == 'getLastInput':
+    if 'lastInput' in state:
+        reply['lastSourceAppId'] = state['lastInput']
+elif method == 'launch':
+    state.setdefault('launched', []).append([args[1], payload['id']])
 with open(root + '/state.new', 'w', encoding='utf-8') as target:
     json.dump(state, target)
 os.replace(root + '/state.new', root + '/state.json')

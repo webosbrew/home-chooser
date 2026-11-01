@@ -3,6 +3,7 @@
 #include <pbnjson.h>
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -105,6 +106,37 @@ int main(int argc, char **argv) {
     assert(run(&o,"prepare",FALSE)==2);
     starts=0; assert(run(&o,"boot",FALSE)==0);assert(jvalue_equal(current,original)); assert(starts==0);
     o.stock_js=argv[2];unlink(unknown);g_free(unknown);
+    /* A restore with no state dir (after the uninstall) must not bring the dir and lock back. */
+    char *gone=g_build_filename(argv[1],"absent-state",NULL); HCKeyOps late=o; late.state_dir=gone; late.osrelease=os;
+    const char *restores[]={"stop","clear","refresh"}; int writes=sets;
+    for(int i=0;i<3;i++){ assert(run(&late,restores[i],i==2)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); }
+    assert(run(&late,"refresh",FALSE)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); assert(sets==writes);
+    /* An apply with no choice restores stock and leaves nothing behind either. */
+    assert(run(&late,"apply",FALSE)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS));
+    /* Once stock is restored and read back with no choice, the snapshot and lock go, and the dir when empty. */
+    {
+        HCKeyOps f=o; char *fs=g_build_filename(argv[1],"fresh-state",NULL); f.state_dir=fs;
+        char *fhome=g_build_filename(fs,"home",NULL),*fflag=g_build_filename(fs,"homekey",NULL),
+            *fsnap=g_build_filename(fs,"keyfilters-stock.json",NULL),*flock=g_build_filename(fs,"keyfilter.lock",NULL);
+        assert(!g_mkdir_with_parents(fs,0755));
+        g_file_set_contents(fhome,"other.home",-1,NULL); g_file_set_contents(fflag,"",-1,NULL);
+        assert(run(&f,"apply",FALSE)==0); assert(!jvalue_equal(current,original));
+        assert(g_file_test(fsnap,G_FILE_TEST_EXISTS) && g_file_test(flock,G_FILE_TEST_EXISTS));
+        /* choice dropped, but the restore write fails: the snapshot stays (it is the only copy of stock) */
+        unlink(fhome); fails=-1; assert(run(&f,"refresh",FALSE)==1);
+        assert(g_file_test(fsnap,G_FILE_TEST_EXISTS) && g_file_test(flock,G_FILE_TEST_EXISTS));
+        /* restored and verified: snapshot and lock removed, the flag keeps the dir */
+        fails=0; assert(run(&f,"refresh",FALSE)==0); assert(jvalue_equal(current,original));
+        assert(!g_file_test(fsnap,G_FILE_TEST_EXISTS) && !g_file_test(flock,G_FILE_TEST_EXISTS));
+        assert(g_file_test(fflag,G_FILE_TEST_EXISTS) && g_file_test(fs,G_FILE_TEST_IS_DIR));
+        /* with nothing else in it the dir goes too; a later apply with a choice snapshots again */
+        unlink(fflag); g_file_set_contents(fhome,"other.home",-1,NULL); g_file_set_contents(fflag,"",-1,NULL);
+        assert(run(&f,"apply",FALSE)==0); assert(g_file_test(fsnap,G_FILE_TEST_EXISTS));
+        unlink(fhome); unlink(fflag); assert(run(&f,"stop",FALSE)==0); assert(jvalue_equal(current,original));
+        assert(!g_file_test(fs,G_FILE_TEST_EXISTS));
+        g_free(fhome); g_free(fflag); g_free(fsnap); g_free(flock); g_free(fs);
+    }
+    char *rm=g_strdup_printf("rm -rf '%s'",gone); assert(!system(rm)); g_free(rm); g_free(gone);
     j_release(&current); current=jarray_create(NULL); int before=sets; assert(run(&o,"apply",FALSE)==1); assert(sets==before);
     j_release(&current); j_release(&original); g_free(flag);g_free(home);g_free(os);
     puts("PASS native transaction: boot readiness, failed toast, exact list edits, live change, missing app, write/readback recovery, disable, empty-list refusal");
