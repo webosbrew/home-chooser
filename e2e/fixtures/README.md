@@ -1,8 +1,10 @@
 # Launcher fixtures
 
-Six minimal launchers for the end-to-end test, `{native, qml, web} x {normal, overlay}`. Each declares only what a
-real launcher declares: `appCategory: ["home"]`, plus `defaultWindowType: "overlay"` (and `transparent: true`, as Dock
-does) for the overlay ones. Nothing in them helps Home Chooser: no hint, no extra field, no cooperation with the watcher.
+Six minimal launchers for the end-to-end test, `{native, qml, web} x {normal, overlay}`, and one demo launcher. Each of
+the six declares only what a real launcher declares: `appCategory: ["home"]`, plus `defaultWindowType: "overlay"` (and
+`transparent: true`, as Dock does) for the overlay ones. They stay inert on purpose: nothing in them helps Home Chooser
+(no hint, no extra field, no cooperation with the watcher), so a pass shows that Home Chooser works for a launcher that
+does nothing for it. `web.demo` is the cooperating one: it uses the launcher API as a real launcher would.
 
 ```
 sh e2e/fixtures/build.sh [outdir]      # default build/fixtures/; offline; needs the webOS SDK and ares-package
@@ -16,10 +18,12 @@ sh e2e/fixtures/build.sh [outdir]      # default build/fixtures/; offline; needs
 | `org.webosbrew.hcfixture.qml.overlay` | HC Fixture qml overlay | transparent, one small red strip |
 | `org.webosbrew.hcfixture.web.normal` | HC Fixture web normal | opaque solid colour |
 | `org.webosbrew.hcfixture.web.overlay` | HC Fixture web overlay | transparent, one small blue strip |
+| `org.webosbrew.hcfixture.web.demo` | HC Fixture web demo | [`examples/web-launcher`](../../examples/web-launcher/README.md): full-screen app grid |
 
 Nothing on screen identifies a fixture and nothing in them writes a record: no label, counter, log line, file or
 localStorage. The runner proves a launch from sam (below), never from a picture. The runner picks one with
-`--launcher fixture:<type>.<window>` or runs all with `--launchers all-fixtures`.
+`--launcher fixture:<type>.<window>` or runs the six with `--launchers all-fixtures`; the demo is picked by name only,
+`--launcher fixture:web.demo`.
 
 ## native/
 
@@ -60,6 +64,18 @@ needs none to stay registered with sam and WAM. `build.sh` sets the body class p
 `requiredPermissions: ["org.webosbrew.homechooser.applications"]`, the launcher API's opt-in (`docs/launcher-api.md`); the runner's
 web fixture also declares a valid oversized `largeIcon` to check `getAppIcon`'s `iconTooLarge` reply.
 `--api-check` builds them so into `build/fixtures-api/`, apart from the plain ones.
+
+## web.demo
+
+`web/build.sh` also packages [`examples/web-launcher`](../../examples/web-launcher/README.md) unchanged except for
+`appinfo.json`'s `id`, `title` and `version` (`HC_FIXTURE_VERSION`, as for the other web fixtures). It always declares
+`requiredPermissions: ["org.webosbrew.homechooser.applications"]`, because it calls `getInfo`, `listApps` and
+`getAppIcon`, so it is installed with the other apps in step 1 and also serves `--api-check`. After step 3's Home press
+has opened it, step 3d presses OK and proves from sam, as for the launcher itself, that the focused app was launched.
+The focused app is deterministic: the demo starts on the first app of its order (by title ignoring ASCII case, then by
+id, without itself and `visible: false` apps), and the runner computes the same order from `listApps` called as the
+demo (`demo_order` in `homechooser_e2e.py`, checked against the demo's own `orderApps` by
+`e2e/test_demo_and_schema.py`). The runner closes that app before OK if it is running and again afterwards.
 
 ## disposable/
 
