@@ -44,6 +44,7 @@ INITD = '/var/lib/webosbrew/init.d/homechooser'
 BOOT_DIR = '/var/lib/webosbrew/homechooser/boot'
 BOOT_SCRIPT = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts/homechooser'
 OVERRIDE = '/var/webos-profile/override/org.webosbrew.homechooser.json'
+GET_PROFILES = 'luna://com.webos.service.systemprofile/getProfiles'
 APPDIR = '/media/developer/apps/usr/palm/applications/' + APP_ID
 SCRIPTS_DIR = '/media/developer/apps/usr/palm/services/' + SVC_ID + '/scripts'
 HB_ELEVATE = '/media/developer/apps/usr/palm/services/org.webosbrew.hbchannel.service/elevate-service'
@@ -106,13 +107,12 @@ MATRIX = [
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 
 # Stock-home preload policy (service/src/watcher/preload.c; docs/settings-app.md "The stock home is
-# not preloaded").  On 10.x sam relaunches a closed stock home at once as the "last input" app,
-# whatever the launcher (measured on 10.3.1, 75 to 89 MB), so since 8791f6e neither the watcher nor the
-# app closes it there: the expected result is the preload policy off, the skip line in the watcher log,
-# no closeByAppId for it, and the stock home possibly running until the next reboot.  On 6.x to 9.x the
-# home gate (docs/home-gate.md) takes its place: the gate is mounted, the watcher logs "home gate
-# mounted" and closes a stock home the boot started (a bounded retry), and none runs afterwards.
-# On 11.x and 12.x the watcher waits until the launcher has a safe foreground before closing it.
+# not preloaded").  On 6.x to 9.x the home gate (docs/home-gate.md) keeps it away: the gate is mounted,
+# the watcher logs "home gate mounted" and closes a stock home the boot started (a bounded retry), and
+# none runs afterwards.  On 10.x and later the profile override's idleApp names the launcher (support
+# false for an overlay launcher), so sam no longer relaunches LG Home as the idle app, and the watcher
+# closes it once per boot and per choice, after the launcher has a safe foreground.  The skip line is
+# only logged on 6.x to 9.x without a gate.
 SKIP_LINE = 'stock home left running'
 GATE_LINE = 'home gate mounted'
 GATE_TARGET = '/usr/bin/com.webos.app.home'
@@ -164,6 +164,35 @@ def uses_home_gate(major):
     """6.x to 9.x with a launcher chosen: the daemon binds homechooser-home-gate over stock Home's
     binary (docs/home-gate.md), so stock Home is not left running."""
     return 6 <= major <= 9
+
+
+def closes_stock_home(major):
+    """10.x and later: the watcher closes LG Home once per boot and per choice, after the chosen launcher
+    is in front (service/src/watcher/preload.c); idleApp keeps sam from bringing it back."""
+    return major >= 10
+
+
+def profile_idle_app(text):
+    """The idleApp profile in a getProfiles reply (luna-send output); None when absent or unreadable."""
+    reply = parse_luna(text) or {}
+    for node in (reply.get('profiles'), reply):
+        if isinstance(node, dict) and isinstance(node.get('idleApp'), dict):
+            return node['idleApp']
+    return None
+
+
+def idle_app_verdict(idle, launcher, overlay):
+    """(ok, what is wanted) for the system profile's idleApp with a launcher chosen on 10.x and later
+    (docs/settings-app.md "What is written"): the launcher, or support false for an overlay launcher."""
+    if overlay:
+        return isinstance(idle, dict) and idle.get('support') is False, 'support false (overlay launcher)'
+    return (isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == launcher,
+            'support true, appId ' + launcher)
+
+
+def idle_app_stock(idle):
+    """idleApp back to the stock value of every 10.3.1 / 11.2.0 device layer: LG Home, support true."""
+    return isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == STOCK
 
 
 def stock_home_id(major, fullhome_installed):
@@ -2459,13 +2488,14 @@ class Scenario:
         """The platform is back to stock.  6.x to 9.x: the record names the stock id (not null) and the
         patch stays mounted until the next boot (nothing unmounts or restarts while the TV runs);
         baked_emptied: the watcher ran `refresh stock` (a launcher removal; not after an uninstall,
-        where the worker went with the app directory).  10+: null/unset and no override."""
+        where the worker went with the app directory).  10+: null/unset, no override, idleApp stock."""
         r = self.rec
         want = {5: 'a stock launcher (%s or %s)' % (FULLHOME, STOCK)}.get(self.major) or (
             'the stock id %s, not null' % self.stock_id if self.uses_home_key_hook() else 'null or unset')
         r.check(label + ': record home is %s' % want, self.stock_record_ok(s['record_home']), s['record_raw'])
         if self.uses_override():
             r.check(label + ': profile override absent', s['override'] == 'no', 'override exists: ' + s['override'])
+            self.check_idle_stock(label)
         if self.uses_home_key_hook():
             raw = self.priv_luna('luna://com.webos.service.config/getConfigs',
                                  '{"configNames":["com.webos.surfacemanager.keyFilters"]}')
@@ -2482,6 +2512,28 @@ class Scenario:
         """A privileged luna call as root, always with the identity the watcher uses (-a com.webos.applicationManager)."""
         rc, raw, _ = self.dev.luna_as('com.webos.applicationManager', uri, payload)
         return raw
+
+    # -- the system profile's idleApp (10.x and later; docs/settings-app.md "What is written")
+    def idle_app(self):
+        """(idleApp object or None, raw reply) of getProfiles, as sam reads it."""
+        raw = self.priv_luna(GET_PROFILES, '{"names":["idleApp"]}')
+        return profile_idle_app(raw), raw
+
+    def check_idle_chosen(self, label):
+        """With the launcher chosen: idleApp names it (full-screen) or has support false (overlay)."""
+        want = idle_app_verdict(None, self.launcher, self.L.overlay)[1]
+        self.wait(lambda: idle_app_verdict(self.idle_app()[0], self.launcher, self.L.overlay)[0], 30, 3)
+        idle, raw = self.idle_app()
+        ok = idle_app_verdict(idle, self.launcher, self.L.overlay)[0]
+        self.rec.check('%s: getProfiles idleApp is %s' % (label, want), ok, raw)
+
+    def check_idle_stock(self, label):
+        """No override: idleApp is the stock one again (LG Home, support true), never a missing launcher."""
+        self.wait(lambda: idle_app_stock(self.idle_app()[0]), 30, 3)
+        idle, raw = self.idle_app()
+        baseline = getattr(self, 'stock_idle', None)
+        self.rec.check(label + ': getProfiles idleApp is back to stock (%s, support true)' % STOCK, idle_app_stock(idle),
+                       raw + ('' if baseline is None else '; before Home Chooser: %s' % json.dumps(baseline)))
 
     def popup_mark_now(self):
         """The mark foreign_popup reads from: (messages time, seconds since boot), taken when a step begins."""
@@ -2694,11 +2746,6 @@ class Scenario:
     def preload_log(self):
         return self.dev.sh("grep -E 'setPreloadPolicy|closeByAppId|%s' /tmp/homechooser-home.log 2>&1 | tail -n 6" % SKIP_LINE)[1].strip()
 
-    def stock_left_running(self):
-        """10.x, any launcher: the watcher leaves the stock home running (8791f6e).  6.x to 9.x use the
-        home gate instead (check_home_gate)."""
-        return self.major == 10
-
     def gate_mount_count(self):
         rc, out = self.dev.sh("awk '$2 == \"%s\" {n++} END {print n + 0}' /proc/mounts" % GATE_TARGET)
         try:
@@ -2769,36 +2816,6 @@ class Scenario:
     def log_since_mark(self):
         return lines_after(self.log_lines(), getattr(self, 'log_mark', 0))
 
-    def check_stock_left_running(self, label, samples):
-        """6.x to 10.x, any launcher: the watcher logged the skip and never called closeByAppId for the
-        stock home (only the log lines since the mark, i.e. since this switch or boot).  Whether the stock
-        home runs is recorded, not asserted."""
-        r = self.rec
-        self.wait(lambda: any(SKIP_LINE in l for l in self.log_since_mark()), 120, 5)
-        log = self.log_since_mark()
-        skips = [l for l in log if SKIP_LINE in l]
-        closes = [l for l in log if 'closeByAppId ' + STOCK in l]
-        r.note(label + ': watcher skip lines', '\n'.join(skips))
-        r.check(label + ': watcher log has the skip line (webOS %d: stock home left running)' % self.major,
-                bool(skips), skips[-1] if skips else 'no line containing %r' % SKIP_LINE)
-        r.check(label + ': watcher log has no closeByAppId ' + STOCK, not closes, '\n'.join(closes) or 'none')
-        running = bool(samples) and samples[-1][1]
-        detail = 'running at t=%s s of %d samples' % ([t for t, run_ in samples if run_], len(samples))
-        # "Left alone" means the watcher did not close it (the two checks above). Whether the stock home
-        # is running then is up to the platform: with the preload policy off nothing may start it again
-        # (6.5.2 after the switch, 10.x after a reboot), which only saves memory. Recorded, not asserted.
-        r.note(label + ': %s running=%s (launcher %s, defaultWindowType=%s; left alone either way)'
-               % (STOCK, running, self.launcher, self.L.appinfo.get('defaultWindowType')), detail)
-        if label.startswith('after the reboot'):
-            # Open risk (orchestrator, 2026-10-24): snapshot-boot-components may launch the stock home at
-            # boot outside the preload manager, so with no close it could stay resident after the reboot
-            # that applies the patch.  Who launched it this boot is recorded.
-            r.note('%s: stock home %s after the reboot (open risk: a boot-time launch outside the preload '
-                   'manager would keep it resident; recorded, not asserted)'
-                   % (label, 'RUNNING' if running else 'not running'),
-                   self.dev.sh(messages_command() + " | grep -E 'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|snapshot' | "
-                               "grep 'com.webos.app.home' | head -n 8")[1].strip() or 'no launch line for the stock home')
-
     def stock_running_samples(self, seconds=PRELOAD_SAMPLE, every=5):
         """Sample `running` for the stock home: list of (seconds, running)."""
         t0, out = time.time(), []
@@ -2810,9 +2827,11 @@ class Scenario:
         return out
 
     def check_preload_off(self, label, settle=PRELOAD_SETTLE):
-        """A third-party home is chosen: the watcher disabled the stock home's preload. On 11.x and 12.x
-        a close waits for a safe launcher foreground. On 6.x to 10.x it is left alone (check_stock_left_running). 5.x: the watcher leaves the policy alone (settings-app.md), so it must not
-        read false; the stock home is only observed (com.webos.app.home is not running on 5.x)."""
+        """A third-party home is chosen: the watcher disabled the stock home's preload. On 10.x and later
+        the close waits for a safe launcher foreground (once per boot and choice; a Home the boot started
+        is closed then, so a bounded wait precedes the sampling). 6.x to 9.x: the home gate. 5.x: the
+        watcher leaves the policy alone (settings-app.md), so it must not read false; the stock home is
+        only observed (com.webos.app.home is not running on 5.x)."""
         r = self.rec
         enabled, raw = self.dev.preload_policy()
         if self.major <= 5:
@@ -2825,18 +2844,18 @@ class Scenario:
         r.check(label + ': getPreloadPolicy shows isEnabled:false for ' + STOCK, enabled is False,
                 'isEnabled=%r; %s' % (enabled, raw))
         r.note(label + ': watcher log', self.preload_log())
-        if self.major >= 11 and (label == 'after the switch' or self.L.overlay):
+        if closes_stock_home(self.major) and (label == 'after the switch' or self.L.overlay):
             r.note(label + ': stock Home may still run until the launcher has a safe foreground',
                    'stock running=%s; foreground=%s' % (STOCK in self.running_ids(), self.dev.foreground()[0]))
             return
         r.say('%s: settling %d s, then sampling %s for %d s' % (label, settle, STOCK, PRELOAD_SAMPLE))
         sleep(settle)
+        if closes_stock_home(self.major):
+            # 10.x starts LG Home at boot; the watcher closes it once the launcher is in front
+            self.wait(lambda: STOCK not in self.running_ids(), 150, 5)
         samples = self.stock_running_samples()
         if uses_home_gate(self.major):
             self.check_home_gate(label)
-            return
-        if self.stock_left_running():
-            self.check_stock_left_running(label, samples)
             return
         ok = not any(run_ for _, run_ in samples)
         r.check('%s: %s is not running over %d s' % (label, STOCK, PRELOAD_SAMPLE), ok,
@@ -3429,8 +3448,8 @@ class Scenario:
             self.rec.note('S1 daemon log during screensaver', '\n'.join(delta))
             self.screensaver_require(not any('closeByAppId' in line or 'setPreloadPolicy' in line
                                             for line in delta), 'Daemon reacted during screensaver: ' + '\n'.join(delta))
-            if self.major >= 11:
-                # 11+ follows foreground/life events; ignoring the screensaver is shown by the absence of any
+            if closes_stock_home(self.major):
+                # 10+ follows foreground/life events; ignoring the screensaver is shown by the absence of any
                 # action above (the daemon logs actions, not skipped events), so only record what it logged.
                 self.rec.note('S1 daemon lines naming a screensaver app',
                               '\n'.join(line for line in delta if any(app in line for app in SCREENSAVERS)) or 'none')
@@ -3514,6 +3533,9 @@ class Scenario:
                   % (self.a.old_ref, hc, self.hc_new))
         df = d.sh('df -h /media/developer | tail -1')[1].strip()
         r.note('df /media/developer before installing', df)
+        if self.uses_override():
+            self.stock_idle, raw = self.idle_app()
+            r.note('getProfiles idleApp before Home Chooser', raw)
         rc, out = d.install(hc)
         r.check('install Home Chooser', rc == 0 and 'Installed package' in out, out.strip())
         rc, out = d.install(self.L.ipk)
@@ -3675,6 +3697,7 @@ class Scenario:
         if self.uses_override():
             r.check('profile override exists (webOS 10+)', s['override'] == 'yes', s['override'])
             r.note('override', d.sh('cat %s' % OVERRIDE)[1])
+            self.check_idle_chosen('after choosing')
         if not self.a.update_check:  # --update-check: step 1 installed the old build; checked in 3u
             self.check_device_texts()
         # open the panel again after the apply (a cut-short run left its marker): no error, the choice ticked
@@ -4085,7 +4108,7 @@ class Scenario:
                       'see screenshot 3-home-from-stock-home')
         self.home_press(self.launcher, '3-home')
         self.residency('after the Home press')
-        if self.major >= 11:
+        if closes_stock_home(self.major):
             def deferred_close():
                 return 'closeByAppId %s after %s in front' % (STOCK, self.launcher) in self.dev.sh(
                     'cat /tmp/homechooser-home.log 2>&1')[1]
@@ -4146,6 +4169,8 @@ class Scenario:
             r.check('after the boot (5.x) the watcher made no preload call', 'setPreloadPolicy' not in self.preload_log(),
                     self.preload_log())
         self.log_mark = 0  # a new boot, a new /tmp log
+        if self.uses_override():
+            self.check_idle_chosen('after the reboot')
         self.check_preload_off('after the reboot', settle=30)
         if uses_home_gate(self.major):
             self.check_gate_front('after the reboot')

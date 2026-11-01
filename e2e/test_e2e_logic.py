@@ -1391,16 +1391,48 @@ class WaitForDevice(unittest.TestCase):
         self.assertIn('no-root-ssh', said[0])
 
 
-class StockLeftRunning(unittest.TestCase):
-    """8791f6e: on 10 the stock home is left running for every launcher; 6-9 use the home gate instead;
-    11/12 close it; 5 is not touched."""
+class StockHomeByRelease(unittest.TestCase):
+    """6-9 use the home gate; 10 and later close LG Home once (idleApp keeps it away); 5 is not touched."""
 
     def test_releases(self):
-        import types
-        got = {m: e2e.Scenario.stock_left_running(types.SimpleNamespace(major=m)) for m in range(5, 13)}
-        self.assertEqual(got, {5: False, 6: False, 7: False, 8: False, 9: False, 10: True, 11: False, 12: False})
+        self.assertEqual({m: e2e.closes_stock_home(m) for m in range(5, 13)},
+                         {5: False, 6: False, 7: False, 8: False, 9: False, 10: True, 11: True, 12: True})
         self.assertEqual({m: e2e.uses_home_gate(m) for m in range(5, 13)},
                          {5: False, 6: True, 7: True, 8: True, 9: True, 10: False, 11: False, 12: False})
+        self.assertFalse(hasattr(e2e.Scenario, 'stock_left_running'))
+
+
+class IdleApp(unittest.TestCase):
+    """getProfiles idleApp on 10+ (docs/settings-app.md "What is written")."""
+    LAUNCHER = 'org.webosbrew.hcfixture.web.normal'
+    # 10.3.1 luna-send output shape, stock and with the full-screen override
+    STOCK_REPLY = ('{"returnValue":true,"profiles":{"idleApp":{"_packageIncluded":true,"_configuration":"idleApp.json",'
+                   '"support":true,"appId":"com.webos.app.home"}}}')
+
+    def test_parse(self):
+        self.assertEqual(e2e.profile_idle_app(self.STOCK_REPLY)['appId'], e2e.STOCK)
+        self.assertEqual(e2e.profile_idle_app('{"idleApp":{"support":false}}'), {'support': False})
+        self.assertIsNone(e2e.profile_idle_app('{"returnValue":false,"errorText":"Denied"}'))
+        self.assertIsNone(e2e.profile_idle_app('garbage'))
+
+    def test_full_screen(self):
+        ok, want = e2e.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, False)
+        self.assertTrue(ok)
+        self.assertIn(self.LAUNCHER, want)
+        self.assertFalse(e2e.idle_app_verdict(e2e.profile_idle_app(self.STOCK_REPLY), self.LAUNCHER, False)[0])
+        self.assertFalse(e2e.idle_app_verdict({'support': False, 'appId': self.LAUNCHER}, self.LAUNCHER, False)[0])
+        self.assertFalse(e2e.idle_app_verdict(None, self.LAUNCHER, False)[0])
+
+    def test_overlay(self):
+        # 10.3.1 merges key by key: the stock appId stays beside support false
+        self.assertTrue(e2e.idle_app_verdict({'support': False, 'appId': e2e.STOCK}, self.LAUNCHER, True)[0])
+        self.assertFalse(e2e.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, True)[0])
+
+    def test_stock(self):
+        self.assertTrue(e2e.idle_app_stock(e2e.profile_idle_app(self.STOCK_REPLY)))
+        self.assertFalse(e2e.idle_app_stock({'support': True, 'appId': self.LAUNCHER}))
+        self.assertFalse(e2e.idle_app_stock({'support': False, 'appId': e2e.STOCK}))
+        self.assertFalse(e2e.idle_app_stock(None))
 
 
 class FaultPopups(unittest.TestCase):
