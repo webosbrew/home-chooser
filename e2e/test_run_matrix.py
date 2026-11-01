@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Offline tests of the scheduler (fake hosts, a fake runner) and the ares device-file lock.
+"""Offline tests of the scheduler (fake hosts, a fake runner).
 
     python3 -I -m unittest discover -s e2e -p 'test_*.py' -v
 """
 import contextlib
 import io
 import json
-import multiprocessing
 import os
+import re
 import signal
 import sys
 import tempfile
 import textwrap
-import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -350,83 +349,16 @@ class Main(Fixture):
 
 
 # ---------------------------------------------------------------------------------------------
-# The ares device list
+# The ares device list is not the runner's
 # ---------------------------------------------------------------------------------------------
-def _add_entries(path, who, n):
-    for i in range(n):
-        with e2e.devices_file(path) as devs:
-            devs.append({'name': '%s-%d' % (who, i), 'host': '10.0.0.%d' % i})
-            time.sleep(0.001)  # widen the read-modify-write window
-
-
-def _read_forever(path, stop, bad):
-    while not stop.is_set():
-        try:
-            with open(path) as f:
-                json.load(f)
-        except ValueError:
-            bad.value += 1
-
-
-class DevicesFile(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix='hc-devices-test-')
-        self.path = os.path.join(self.tmp, 'novacom-devices.json')
-        with open(self.path, 'w') as f:
-            json.dump([{'name': 'tv', 'host': '192.168.0.2', 'port': 9922}], f)
-
-    def tearDown(self):
-        import shutil
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_parallel_writers_lose_nothing_and_readers_never_see_a_torn_file(self):
-        ctx = multiprocessing.get_context('fork')
-        stop, bad = ctx.Event(), ctx.Value('i', 0)
-        reader = ctx.Process(target=_read_forever, args=(self.path, stop, bad))
-        reader.start()
-        writers = [ctx.Process(target=_add_entries, args=(self.path, 'w%d' % k, 40)) for k in range(4)]
-        for w in writers:
-            w.start()
-        for w in writers:
-            w.join(60)
-        stop.set()
-        reader.join(10)
-        names = [d['name'] for d in json.loads(read(self.path))]
-        self.assertEqual(len(names), 1 + 4 * 40)
-        self.assertEqual(len(set(names)), len(names))
-        self.assertEqual(bad.value, 0)
-        self.assertEqual([f for f in os.listdir(self.tmp) if f.endswith('.tmp')], [])
-
-    def test_lock_is_held_for_the_whole_update(self):
-        order = []
-        with e2e.devices_file(self.path) as devs:
-            t = threading.Thread(target=lambda: (_add_entries(self.path, 'other', 1), order.append('other')))
-            t.start()
-            time.sleep(0.3)
-            order.append('first')
-            devs.append({'name': 'first'})
-        t.join(10)
-        self.assertEqual(order, ['first', 'other'])
-        self.assertEqual([d['name'] for d in json.loads(read(self.path))], ['tv', 'first', 'other-0'])
-
-    def test_unchanged_list_is_not_rewritten_and_an_error_writes_nothing(self):
-        before = os.stat(self.path).st_ino
-        with e2e.devices_file(self.path):
-            pass
-        with self.assertRaises(RuntimeError), e2e.devices_file(self.path) as devs:
-            devs.clear()
-            raise RuntimeError('boom')
-        self.assertEqual(os.stat(self.path).st_ino, before)
-        self.assertEqual(len(json.loads(read(self.path))), 1)
-
-    def test_update_devices_adds_then_fixes_the_address(self):
-        devs, said = [], []
-        e2e.update_devices(devs, 'vm1', '10.0.0.5', 'k-root', 'k-dev', said.append)
-        self.assertEqual(sorted((d['name'], d['host'], d['port'], d['username']) for d in devs),
-                         [('vm1', '10.0.0.5', 9922, 'prisoner'), ('vm1-root', '10.0.0.5', 6622, 'root')])
-        e2e.update_devices(devs, 'vm1', 'vm1.lan', 'k-root', 'k-dev', said.append)
-        self.assertEqual({d['host'] for d in devs}, {'vm1.lan'})
-        self.assertEqual(len(devs), 2)
+class NoDeviceList(unittest.TestCase):
+    def test_runner_never_names_the_user_device_list(self):
+        """VMs are reached with `beanjar ares-TOOL`, which writes its own device list; the user's own
+        ~/.webos/ose/novacom-devices.json is never read or written, and no `<vm>-root` entry exists."""
+        for name in ('homechooser_e2e.py', 'run_matrix.py'):
+            src = read(os.path.join(HERE, name))
+            literals = re.findall(r'\'[^\'\n]*\'|"[^"\n]*"', src)
+            self.assertEqual([x for x in literals if 'novacom-devices' in x or x in ("'-root'", '"-root"')], [], name)
 
 
 class HostsConfig(unittest.TestCase):

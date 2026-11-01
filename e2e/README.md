@@ -1,7 +1,8 @@
 # End-to-end test
 
 `homechooser_e2e.py` records each assertion with its raw evidence. Python 3 standard library
-only; televisions and VMs are reached with `ares-*` by device name (never raw ssh).
+only; Beanjar VMs are reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw
+ssh).
 
 ## Launcher author: your own TV
 
@@ -33,6 +34,32 @@ on `PATH`. The root ares name must support `ares-do exec` and the web inspector 
 
 This mode runs the full Home-key lifecycle on one Beanjar VM. It needs the maintainer's Beanjar
 host and VM setup in addition to ares:
+
+* Every device command goes through Beanjar's ares wrapper (Beanjar's `host/manager/README.md`, "ares
+  tools"), `beanjar ares-TOOL [--root] -d [HOST/]NAME ...`: `ares-install`, `ares-launch` and the inspector
+  forward (`ares-novacom -f`) as the developer-mode user, the way the old plain device did; shell commands,
+  luna calls, logs, mounts and key/screenshot fallbacks (`ares-shell -r`, `ares-do`) with `--root`. A VM on
+  another machine is `HOST/NAME` (the `--host` name), which Beanjar reaches with a port forward per call.
+  All of it is built in one place, the `Device` class of `homechooser_e2e.py`.
+* Root shell commands share one `beanjar ares-shell --root -d [HOST/]NAME -r sh` per VM, fed on its stdin
+  (each command `sh -c CMD </dev/null 2>&1`, then a marker line with its status). Each `beanjar ares-TOOL`
+  call to a remote VM first asks its machine for the VM and opens an ssh forward, about 2 s from this PC to
+  `rockpi4a-1`; one call per command made a step outlast webOS's 180 s screensaver timer. A timeout, a
+  reboot or a Beanjar stop/start ends the shell and the next command opens a new one.
+* So `beanjar` (this PC's multi-host CLI, with the hosts registered under the `hosts.toml` names) and the
+  Rust ares-cli (`ares-do`, `ares-shell`, `ares-install`, `ares-launch`, `ares-novacom`, on `PATH` or in
+  `~/.cargo/bin`) must be installed here.
+* The VM needs the `devmode` layer (prisoner) and a layer that forwards root SSH: `hbchannel` with
+  `devmode`, or `rootssh`. The runner adds `devmode` and `hbchannel` while the VM is off.
+* There are no ares device entries for VMs: no `<vm>` or `<vm>-root` device, no fetched keys. Beanjar
+  writes its own device list per run; the runner never reads or writes `~/.webos/ose/novacom-devices.json`.
+* A luna call whose reply is read runs under a terminal of the guest's own, `script -q -c "luna-send -n 1
+  ..." /dev/null`, and the reply's CRLF is folded. On W22O 10.3.1 `luna-send -n 1` over `ares-shell -r` printed
+  nothing to a pipe (Beanjar's measurement), though Home Chooser's daemon does get replies from a pipe, so
+  the form is probed once per device with a read-only `getForegroundAppInfo`: the `script` form, else the
+  plain one. A guest without `script` (a webOS 5 BusyBox may lack it) runs the plain form, and the log says
+  `luna-send: no script on the guest, ran without a pty`. A call that printed nothing is never repeated,
+  since a reply may have side effects (an alert, a reboot).
 
 ```
 python3 -I e2e/homechooser_e2e.py --list
@@ -68,10 +95,9 @@ Log evidence includes the retained `/var/log/messages.N.gz` archives in chronolo
 boot and service activity can rotate the active file before an assertion reads it. After each
 hook boot, the run also records the compositor's main-QML load lines and retained crash lines.
 
-Before booting, the runner stops if any VM is running on its machine. It adds the `hbchannel` layer and
-`link=lan` while the VM is off (standing permission), boots it, creates or fixes the
-`<vm>-root` ares device (root, port 6622, the VM's root key fetched from the host) and updates a
-changed LAN address. It stops the VM at the end (not `w21p-kisscurl`).
+Before booting, the runner stops if any VM is running on its machine. It adds the `devmode` and `hbchannel`
+layers and `link=lan` while the VM is off (standing permission), boots it and waits for its LAN address and
+for root SSH through `beanjar ares-shell --root`. It stops the VM at the end (not `w21p-kisscurl`).
 
 ## Home and screensaver scenario
 
@@ -239,7 +265,7 @@ and that there is no boot cache and no configd factory-db override (`step_cache`
 ## Beanjar host abstraction
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
-through Python 3, the TV screenshot through `beanjar screenshot`, fetching a key) goes through the
+through Python 3, the TV screenshot through `beanjar screenshot`) goes through the
 `BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
 `ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
 runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
@@ -304,9 +330,9 @@ and the runner refuses to boot one while any VM is running there, ours or anothe
 Different machines run at the same time.
 
 Which VMs a machine has is asked from it (`beanjar list --local --json`), so a VM needs no entry. VM
-names must be unique across the machines: the ares device entries (`<vm>`, `<vm>-root`) and the keys in
-`~/.ssh` (`beanjar-<vm>-root`, `beanjar-<vm>_devmode`) are named after the VM only. A VM that exists on
-two machines (a copied image) is not run until `vms = [...]` pins it to one of them.
+names must be unique across the machines: matrix slots, result directories and temp files are named after
+the VM only. A VM that exists on two machines (a copied image) is not run until `vms = [...]` pins it to
+one of them.
 
 To add a machine: install Beanjar on it, give it key login from this PC
 (`ssh <alias-or-user@host> beanjar list --local --json` must work without a prompt), add it with `beanjar host add <name>
@@ -363,18 +389,15 @@ python3 -I e2e/run_matrix.py --vms 5.x,9.x,11.x --launchers all-fixtures
   stops the VM it started. A second Ctrl-C kills them and names the VMs that may still be running
   (`beanjar stop <host>/<vm>`).
 * `python3 -I -m unittest discover -s e2e -p 'test_*.py'` tests the planning, the per-machine
-  serialisation, the refusals, Ctrl-C (fake machines and a fake runner) and the device-list lock, offline.
+  serialisation, the refusals and Ctrl-C (fake machines and a fake runner), offline.
 
 What runs in parallel, and why it is safe:
 
-* `~/.webos/ose/novacom-devices.json`: the runner changes it under an exclusive `flock` on
-  `novacom-devices.json.lock` and replaces it by rename, so parallel runs lose no entry and an ares command
-  reading it never sees a half-written file. ares-cli-rs writes it in place without a lock, so
-  `ares-setup-device` by hand during a matrix run is still unsafe.
-* Keys fetched to `~/.ssh` are written under a temp name and renamed.
+* Device access: each `beanjar ares-TOOL` call has its own device list and, for a remote VM, its own port
+  forward, so runs against several machines never share one; the user's ares device list is not touched.
 * Temp files on a machine carry the VM name and the runner's pid (`/tmp/e2e-tv-<vm>-<pid>.png`); the
   inspector's local port is picked per run and another is tried if the forward cannot bind it.
-* Each run has its own result directory and its own ares device entries (per VM).
+* Each run has its own result directory.
 
 Beanjar's own multi-host CLI (`beanjar host add/list`, `beanjar list` across hosts, `<host>/<vm>` for
 start, stop, info and screenshot) reaches the machines the same way, ssh per call. The runner does not
@@ -386,7 +409,7 @@ depend on it: it runs `beanjar` on each machine over ssh, which works whether or
   `elevateService`; the runner only verifies the service runs as root (`ps`).
 * `root-shell` (11.x and 12.x): Homebrew Channel refuses `elevateService` from ordinary apps there
   (README "Decisions", `Denied method call`). The runner runs Homebrew Channel's own helper as
-  root through `<vm>-root`, `…/org.webosbrew.hbchannel.service/elevate-service
+  root (`beanjar ares-shell --root`), `…/org.webosbrew.hbchannel.service/elevate-service
   org.webosbrew.homechooser.service` (what `services/service.ts` runs), then makes the service quit
   so the root instance starts, and verifies the same outcome. **This is a test-harness substitute
   for the missing luna path: the app's own elevation is not exercised on those releases.** The
@@ -538,7 +561,8 @@ stock home and the launcher running (`applicationManager/running`), pids and RSS
 
 Opt-in steps that test the contract of `docs/launcher-api.md` on the device. Every call is made as the
 launcher with root `luna-send -a <launcher id> -n 1 luna://org.webosbrew.homechooser.service/<method>`
-through `ares-do exec` (`luna-send` under `ares-shell -r` prints nothing). The hub then takes the caller to
+through `ares-do exec`, under the guest's `script` pty when that is the form that answers (see "Maintainer VM
+scenario"). The hub then takes the caller to
 be that installed app, with its own client permissions. The launcher must declare
 `requiredPermissions: ["org.webosbrew.homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
 web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh
@@ -684,5 +708,5 @@ Then steps 4 and 5 run on the updated install.
 * `audiooutputd` crash dialog (beanjar#183, closed as stock LG behaviour; Beanjar `docs/research/w22o-audiooutputd-gain-race.md`): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse threads race, and on about 7-9% of boots audiooutputd crashes about 50-56 s after boot; LG shows "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." with YES and NO, and it takes key focus. When the probe key does not move the list, the runner reads the screen (`beanjar elements`); only if the dialog text contains both "[crash] Fault Occured" and "audiooutputd" (the text decides, not the VM name or release) does it dismiss it with NO (a click on the "NO" button, or in keys mode a focus move to NO verified on screen before OK; YES is never pressed), screenshots before and after (`audiooutputd-crash-dialog-before/after`), re-reads the screen to confirm the dialog is gone, records `RECOVERED` with the OCR text and the reference, and retries the key probe once. Any other dialog (`[general]` included) or a crash fault naming another process still stops the run as before. The "no LG [crash] fault dialog or crash fault this boot" check notes an audiooutputd crash as an expected environment fault instead of failing, and an audiooutputd fault entry or crashd line no longer counts as a foreign popup; any other crashing process still fails.
 * Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then a logged capture-unavailable result if both fail. Each fallback is logged with the word FALLBACK.
 * On 5.x Home starts `com.webos.app.fullhome` as an overlay over the app in front (foreground stays the app), so step 3/4/5's "Home opens stock" looks for it running.
-* Readiness: before step 1 (and after every reboot) the runner waits up to 5 minutes until root SSH (`<vm>-root`, Homebrew Channel's Dropbear on guest port 22, host 6622) answers and `ares-install -l` lists `org.webosbrew.hbchannel`; each change of state is logged (`ready`, `no-root-ssh`, `no-hbchannel`, `down`). `no-root-ssh` (developer mode answers, root SSH never does) is Homebrew Channel's failsafe mode: its `startup.sh` sets `/var/luna/preferences/webosbrew_failsafe` at the start of a boot and clears it about 12 s after its boot work, so a boot stopped within seconds of starting leaves the flag, and the next boot runs only telnetd (no Dropbear) and clears the flag after 15 s. Seen 2026-10-24 on `w20l-jhericurl`, `w22p-mullet` and `w22o-number1` after a 9 s boot each (saved logs `20261024T0031..0038Z-stop`: `boot-done` false, dmesg ends at 8.7-9.7 s; the next boot's `ps.txt` has telnetd and no `bin/dropbear -R`); `w24g-ombre`'s short boot ran 22 s and it was unaffected. On `no-root-ssh` at setup the runner restarts the VM once and waits again.
+* Readiness: before step 1 (and after every reboot) the runner waits up to 5 minutes until root SSH (`beanjar ares-shell --root`, Homebrew Channel's Dropbear on guest port 22) answers and `ares-install -l` lists `org.webosbrew.hbchannel`; each change of state is logged (`ready`, `no-root-ssh`, `no-hbchannel`, `down`). `no-root-ssh` (developer mode answers, root SSH never does) is Homebrew Channel's failsafe mode: its `startup.sh` sets `/var/luna/preferences/webosbrew_failsafe` at the start of a boot and clears it about 12 s after its boot work, so a boot stopped within seconds of starting leaves the flag, and the next boot runs only telnetd (no Dropbear) and clears the flag after 15 s. Seen 2026-10-24 on `w20l-jhericurl`, `w22p-mullet` and `w22o-number1` after a 9 s boot each (saved logs `20261024T0031..0038Z-stop`: `boot-done` false, dmesg ends at 8.7-9.7 s; the next boot's `ps.txt` has telnetd and no `bin/dropbear -R`); `w24g-ombre`'s short boot ran 22 s and it was unaffected. On `no-root-ssh` at setup the runner restarts the VM once and waits again.
 * Home Chooser is an overlay window (appinfo `defaultWindowType`), and surface-manager closes an overlay after a stretch without key input: measured on 6.5.2 (2026-10-24), about 90 s after the launch with no key and about 120 s after the last key; a close and relaunch alone does not reset it; sam logs `getAppLifeStatus ... "reason":"userTimeout"` and WAM `killApp reason : userTimeout`. On 9.2.1 the same close was seen about 90 s after the last key. The runner presses a key only while it can read our page; before the list keys of step 2 it opens Home Chooser again (and notes the close and its reason) if the page is gone, and anywhere else it stops rather than press a key at whatever is beneath.

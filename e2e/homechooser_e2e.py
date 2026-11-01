@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end test of Home Chooser on a Beanjar VM.  See e2e/README.md.
 
-Python 3 standard library only.  The device is reached with the ares-* tools only (by device
-name); the VM host (Beanjar) through the BeanjarHost class below, locally or over
-`ssh raspberrypi` (the Pi is a Linux host, not a TV: ares-shell is for televisions only).
+Python 3 standard library only.  The device is reached with the ares-* tools only, all built by the
+Device class: a VM through `beanjar ares-TOOL [--root] -d [HOST/]NAME`, an author's TV (--device) by
+its ares device name.  The VM host (Beanjar) is driven through the BeanjarHost class below, locally
+or over `ssh raspberrypi` (the Pi is a Linux host, not a TV: ares-shell is for televisions only).
 """
 import argparse
 import base64
@@ -551,12 +552,7 @@ class RebootAlertMonitor:
         self.info = {'message': None, 'buttons': [], 'alert': None, 'alert_id': None, 'toast': None}
 
     def start(self):
-        self.proc = subprocess.Popen(
-            # ares-do exec buffers stdout until the command exits; ares-shell -r streams it.
-            ['ares-shell', '-d', self.dev.root, '-r',
-             'printf "HC_MONITOR_PID=%s\\n" "$$"; exec ls-monitor -j -f com.webos.notification'],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
-            start_new_session=True)
+        self.proc = self.dev.stream('printf "HC_MONITOR_PID=%s\\n" "$$"; exec ls-monitor -j -f com.webos.notification')
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
         self.ready.wait(timeout=5)
@@ -1149,8 +1145,9 @@ def sleep(value):
 def run(argv, timeout=120, input=None, env=None):
     """(rc, stdout+stderr) of a local process."""
     try:
+        # no input: stdin is /dev/null, never the runner's own (beanjar ares-shell passes stdin through)
         p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=seconds(timeout),
-                           input=input, env=env)
+                           input=input, env=env, stdin=None if input is not None else subprocess.DEVNULL)
         return p.returncode, p.stdout.decode('utf-8', 'replace')
     except subprocess.TimeoutExpired as e:
         return 124, (e.stdout or b'').decode('utf-8', 'replace') + '\n[timeout]'
@@ -1322,6 +1319,7 @@ class BeanjarHost:
         running = self.running_vms()
         if running:
             raise RuntimeError('refusing boot while VMs are running: %s' % running)
+        close_sessions()  # a root shell of the previous boot is gone
         result = self.beanjar('start', vm, timeout=600)
         if result[0] == 0:
             self.vnc_start(vm)
@@ -1329,6 +1327,7 @@ class BeanjarHost:
 
     def stop(self, vm):
         self.vnc_stop(vm)
+        close_sessions()  # before the VM goes, not a read that waits for a dead forward
         return self.beanjar('stop', vm, timeout=300)
 
     def remote_target(self, vm):
@@ -1436,46 +1435,272 @@ class BeanjarHost:
 
 
 # ---------------------------------------------------------------------------------------------
-# Device access (ares-* only)
+# Device access: every ares-* command line is built here (Device.argv)
 # ---------------------------------------------------------------------------------------------
+# A Beanjar VM is reached only through `beanjar ares-TOOL [--root] -d [HOST/]NAME ...`, which writes its
+# own per-run device list (prisoner on the VM's 9922; root with --root over the root SSH a layer forwards:
+# rootssh, or hbchannel with devmode) and, for a VM on another machine, a per-call ssh port forward.  The
+# runner never reads or writes ~/.webos/ose/novacom-devices.json and has no `<vm>-root` entries.  An
+# author's real TV (--device) keeps plain `ares-TOOL -d NAME` with the user's own device list.
+
+# Marks the guest's own lack of `script` (some webOS 5 BusyBox builds): the call ran without a terminal.
+NO_SCRIPT_NOTE = 'luna-send: no script on the guest, ran without a pty'
+
+
+def luna_send_command(uri, payload='{}', app=None, pty=True):
+    """The guest shell command of one root `luna-send [-a APP] -n 1 URI PAYLOAD`, stderr folded in.
+
+    With pty (the default) it runs under a terminal of the guest's own, `script -q -c CMD /dev/null`:
+    measured on W22O 10.3.1 over `ares-shell -r`, luna-send -n 1 exits 0 with its reply unwritten when
+    its stdout is not a terminal (Beanjar host/manager/README.md "ares tools").  That is narrower than
+    every pipe (Home Chooser's daemon reads replies from a pipe), so Device.luna_send also probes the
+    plain form once.  A guest without `script` runs the plain form and says so (NO_SCRIPT_NOTE)."""
+    inner = 'luna-send %s-n 1 %s %s' % (('-a %s ' % shlex.quote(app)) if app else '',
+                                        shlex.quote(uri), shlex.quote(payload))
+    if not pty:
+        return inner + ' 2>&1'
+    return ('if command -v script >/dev/null 2>&1; then script -q -c %s /dev/null 2>&1 </dev/null; '
+            'else echo %s; %s 2>&1; fi' % (shlex.quote(inner), shlex.quote(NO_SCRIPT_NOTE), inner))
+
+
+def clean_reply(text):
+    """A luna-send reply as read through a guest pty: CRLF -> LF (a lone CR too)."""
+    return (text or '').replace('\r\n', '\n').replace('\r', '\n')
+
+
+def luna_reply_text(text):
+    """The reply's JSON object as compact text when one is there (no pty or script lines around it), else
+    the cleaned output; callers json.loads() it as they did the `ares-do luna` reply."""
+    text = clean_reply(text).strip()
+    try:
+        if isinstance(json.loads(text), dict):
+            return text
+    except ValueError:
+        pass
+    v = parse_luna(text)
+    return text if v is None else json.dumps(v, separators=(',', ':'))
+
+
+class RootSession:
+    """One root shell kept open, `beanjar ares-shell --root -d T -r sh`, whose stdin takes the commands.
+
+    Each `beanjar ares-TOOL` call to a VM on another machine asks that machine for the VM (`beanjar info`)
+    and opens an ssh forward of its own: measured 2026-11-01 from this PC to rockpi4a-1, about 2 s before
+    the tool even connects, so 3 to 4 s a command where the old direct device took under 1.  At that pace
+    a step's few dozen commands outlast webOS's 180 s screensaver timer and a 6 s toast.  So shell commands
+    share one session (Beanjar documents `-r sh < script.sh`: stdin, stdout and the exit status pass
+    through): a command runs as `sh -c CMD </dev/null 2>&1` (its own stdin is never the session's), then a
+    marker line with its status.  A timeout, an exit of the session (a reboot) or a write error ends it and
+    the next command opens a new one."""
+
+    def __init__(self, argv):
+        self.argv = argv
+        self.proc = None
+        self.buf = b''
+        self.lock = threading.Lock()
+
+    def _start(self):
+        self.proc = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, start_new_session=True)
+        self.buf = b''
+
+    def close(self):
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        for stream in (proc.stdin, proc.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        if proc.poll() is None:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(proc.pid, sig)
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+
+    def run(self, cmd, timeout=60):
+        """(rc, stdout+stderr) of one command, as run() gives them for a single tool call."""
+        import select
+        with self.lock:
+            if self.proc is None or self.proc.poll() is not None:
+                self.close()
+                self._start()
+            mark = 'HC_END_%s' % os.urandom(6).hex()
+            line = "sh -c %s </dev/null 2>&1; printf '\\n%s %%d\\n' \"$?\"\n" % (shlex.quote(cmd), mark)
+            done = re.compile(b'\n' + mark.encode() + b' (\\d+)\n')
+            try:
+                self.proc.stdin.write(line.encode())
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass  # the session is gone: its output and status are read below
+            end = time.time() + seconds(timeout)
+            fd = self.proc.stdout.fileno()
+            while True:
+                m = done.search(self.buf)
+                if m:
+                    out, self.buf = self.buf[:m.start()], self.buf[m.end():]
+                    return int(m.group(1)), out.decode('utf-8', 'replace')
+                left = end - time.time()
+                if left <= 0:
+                    out = self.buf
+                    self.close()
+                    return 124, out.decode('utf-8', 'replace') + '\n[timeout]'
+                ready, _, _ = select.select([fd], [], [], min(left, 1.0))
+                if not ready:
+                    continue
+                chunk = os.read(fd, 65536)
+                if chunk:
+                    self.buf += chunk
+                    continue
+                out, proc = self.buf, self.proc
+                rc = proc.wait()
+                self.close()
+                return rc or 255, out.decode('utf-8', 'replace')
+
+
+SESSIONS = {}
+
+
+def close_sessions():
+    for session in list(SESSIONS.values()):
+        session.close()
+
+
+import atexit  # noqa: E402
+atexit.register(close_sessions)
+
+
 class Device:
-    def __init__(self, vm, root=None):
-        self.vm, self.root = vm, root or vm + '-root'
+    """One webOS device and how to reach it.  `beanjar` set: a Beanjar VM, `target` its [HOST/]NAME;
+    else a real TV by ares device name (`root_name` the root-capable one, often the same)."""
+
+    def __init__(self, target, root_name=None, beanjar=True):
+        self.target, self.beanjar = target, beanjar
+        self.root_name = root_name or target
+        self.vm = target  # what messages name
+        # where root commands go, for messages only
+        self.root = ('%s (beanjar --root)' % target) if beanjar else self.root_name
+        self.luna_pty = None  # None: not probed yet; True: through `script`; False: plain
+        self.say = print
+
+    @classmethod
+    def for_vm(cls, host, vm):
+        """A VM on a Beanjar host: HOST/NAME through this PC's multi-host CLI, a bare NAME when local."""
+        return cls(host.remote_target(vm) if host else vm)
+
+    @classmethod
+    def tv(cls, name, root_name=None):
+        return cls(name, root_name, beanjar=False)
+
+    def argv(self, tool, args=(), root=False):
+        """The local command line of `ares-<tool> ARGS` on this device, as root or as the developer-mode user."""
+        if self.beanjar:
+            return ['beanjar', 'ares-' + tool] + (['--root'] if root else []) + ['-d', self.target] + list(args)
+        return ['ares-' + tool, '-d', self.root_name if root else self.target] + list(args)
+
+    def session(self):
+        """The shared root shell of a VM (RootSession); None for a TV, whose commands keep one call each."""
+        if not self.beanjar:
+            return None
+        key = tuple(self.argv('shell', ['-r', 'sh'], root=True))
+        if key not in SESSIONS:
+            SESSIONS[key] = RootSession(list(key))
+        return SESSIONS[key]
+
+    def reset(self):
+        """Drop the root shell (the VM is stopped or rebooting); the next command opens a new one."""
+        if self.session():
+            self.session().close()
 
     def exec(self, cmd, timeout=60):
-        return run(['ares-do', '--timeout', str(timeout * 1000), 'exec', '-d', self.root, cmd], timeout + 10)
+        if self.beanjar:
+            return self.session().run(cmd, timeout)
+        return run(self.argv('do', ['--timeout', str(timeout * 1000), 'exec', cmd], root=True), timeout + 10)
 
     def sh(self, cmd, timeout=60):
-        """Root shell command; (rc, output).  ares-shell -r is not used for stdout fidelity."""
-        return run(['ares-shell', '-d', self.root, '-r', cmd], timeout)
+        """Root shell command; (rc, output)."""
+        if self.beanjar:
+            return self.session().run(cmd, timeout)
+        return run(self.argv('shell', ['-r', cmd], root=True), timeout)
+
+    def luna_send(self, uri, payload='{}', app=None, timeout=60):
+        """(rc, cleaned output) of one root `luna-send [-a app] -n 1`, through a guest pty when that is what
+        gives replies on this device (probed once with a harmless read, getForegroundAppInfo).  A call that
+        printed nothing is not repeated: replies with side effects (createAlert, reboot) must not run twice."""
+        if self.luna_pty is None:
+            self.probe_luna()
+        rc, out = self.exec(luna_send_command(uri, payload, app, pty=self.luna_pty is not False), timeout)
+        return rc, clean_reply(out)
+
+    def probe_luna(self):
+        """Pick the luna-send form that prints a reply here: the `script` pty first, else plain.  Left
+        unprobed (None) when neither answers, e.g. the device is down, so the next call probes again."""
+        uri = 'luna://com.webos.applicationManager/getForegroundAppInfo'
+        rc, out = self.exec(luna_send_command(uri), 30)
+        if NO_SCRIPT_NOTE in out:
+            self.luna_pty = False
+            self.say('luna-send on %s: %s' % (self.vm, NO_SCRIPT_NOTE))
+            return
+        if parse_luna(clean_reply(out)) is not None:
+            self.luna_pty = True
+            self.say('luna-send on %s: replies through a guest pty (script)' % self.vm)
+            return
+        rc2, out2 = self.exec(luna_send_command(uri, pty=False), 30)
+        if parse_luna(out2) is not None:
+            self.luna_pty = False
+            self.say('luna-send on %s: no reply through script (%r), the plain form answers' % (self.vm, out.strip()[-120:]))
+        else:
+            self.say('luna-send on %s: no reply either way yet (script rc=%s %r; plain rc=%s %r)'
+                     % (self.vm, rc, out.strip()[-120:], rc2, out2.strip()[-120:]))
 
     def luna(self, uri, payload='{}'):
-        rc, out = run(['ares-do', 'luna', '-d', self.root, '--allow-false', uri, payload], 60)
-        return out.strip()
+        """A root luna call with no application id; the reply text (`{...}` when there is one)."""
+        rc, out = self.luna_send(uri, payload)
+        return luna_reply_text(out)
 
     def install(self, ipk):
-        return run(['ares-install', '-d', self.vm, ipk], 300)
+        return run(self.argv('install', [ipk]), 300)
 
     def remove(self, appid):
-        return run(['ares-install', '-d', self.vm, '--remove', appid], 300)
+        return run(self.argv('install', ['--remove', appid]), 300)
 
     def installed(self):
-        rc, out = run(['ares-install', '-d', self.vm, '-l'], 60)
+        rc, out = run(self.argv('install', ['-l']), 60)
         if rc != 0 or out.startswith('Failed to connect'):
             raise RuntimeError('ares-install -l on %s failed (rc=%s): %s' % (self.vm, rc, out.strip()[-300:]))
         return out.split()
 
     def launch(self, appid, params=None):
-        return run(['ares-launch', '-d', self.vm, appid] + (['-p', json.dumps(params)] if params else []), 60)
+        return run(self.argv('launch', [appid] + (['-p', json.dumps(params)] if params else [])), 60)
 
     def close(self, appid):
-        return run(['ares-launch', '-d', self.vm, '-c', appid], 60)
+        return run(self.argv('launch', ['-c', appid]), 60)
 
     def key(self, *keys):
-        return run(['ares-do', 'key', '-d', self.root, '--delay', '300'] + list(keys), 60)
+        return run(self.argv('do', ['key', '--delay', '300'] + list(keys), root=True), 60)
 
     def screenshot(self, path):
-        return run(['ares-do', 'screenshot', '-d', self.root, path], 60)
+        return run(self.argv('do', ['screenshot', path], root=True), 60)
+
+    def forward(self, remote_port, local_port):
+        """A Popen of `ares-novacom -f` (developer-mode user, as before), its own process group."""
+        return subprocess.Popen(self.argv('novacom', ['-f', '-p', '%d:%d' % (remote_port, local_port)]),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+
+    def stream(self, cmd):
+        """A Popen of a root shell command whose stdout is read as it comes (ares-shell -r streams it;
+        ares-do exec buffers until the command exits)."""
+        return subprocess.Popen(self.argv('shell', ['-r', cmd], root=True), stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, bufsize=1,
+                                start_new_session=True)
 
     def foreground(self):
         out = self.luna('luna://com.webos.applicationManager/getForegroundAppInfo')
@@ -1517,10 +1742,8 @@ class Device:
 
     def luna_as(self, app, uri, payload='{}', timeout=60):
         """(rc, raw, parsed) of a root `luna-send -a <app>`: the hub takes the caller to be that installed app
-        with its own client permissions (docs/launcher-api.md).  app None: no application id at all.  Through
-        exec, since luna-send under ares-shell -r prints nothing."""
-        ident = ('-a %s ' % shlex.quote(app)) if app else ''
-        rc, out = self.exec('luna-send %s-n 1 %s %s 2>&1' % (ident, uri, shlex.quote(payload)), timeout)
+        with its own client permissions (docs/launcher-api.md).  app None: no application id at all."""
+        rc, out = self.luna_send(uri, payload, app, timeout)
         return rc, out.strip(), parse_luna(out)
 
     def boot_id(self):
@@ -1594,7 +1817,7 @@ ELEVATIONS = {'luna': LunaElevation, 'root-shell': RootShellElevation}
 # Inspector (CDP over a websocket, forwarded with ares-novacom)
 # ---------------------------------------------------------------------------------------------
 class Inspector:
-    def __init__(self, vm):
+    def __init__(self, dev):
         # A free port is picked and released before ares-novacom binds it, so a parallel run can take
         # it in between; then our forward exits at once and another port is tried.
         for _ in range(3):
@@ -1602,9 +1825,7 @@ class Inspector:
             s.bind(('127.0.0.1', 0))
             self.port = s.getsockname()[1]
             s.close()
-            self.proc = subprocess.Popen(['ares-novacom', '-d', vm, '-f', '-p', '9998:%d' % self.port],
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                         start_new_session=True)
+            self.proc = dev.forward(9998, self.port)
             sleep(2)
             if self.proc.poll() is None:
                 break
@@ -1807,7 +2028,8 @@ class Scenario:
         self.a, self.host, self.rec = args, host, rec
         self.L = launcher
         self.release, self.vm, self.strategy_name, self.sure, self.note = row
-        self.dev = Device(self.vm)
+        self.dev = Device.for_vm(host, self.vm)
+        self.dev.say = rec.say
         self.launcher = launcher.id
         self.shot_n = 0
         self.insp = None
@@ -2147,13 +2369,12 @@ class Scenario:
 
     # -- reboots
     def await_boot(self, label, boot0):
-        """After a reboot (any route): LAN address, device entries, Homebrew Channel, a new boot id."""
+        """After a reboot (any route): LAN address, Homebrew Channel, a new boot id."""
         r, host = self.rec, self.host
         end = time.time() + seconds(120)
         while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
             sleep(3)
-        ensure_devices(host, self.vm, r)
-        state = wait_for_device(self.vm, r)
+        state = wait_for_device(self.dev, r)
         up = state == READY
         r.check(label + ': the VM is back with Homebrew Channel', up, '%s (%s)' % (state, WAIT_STATES[state]))
         if up:
@@ -2191,11 +2412,6 @@ class Scenario:
                 continue
             if b != boot0:
                 return 'rebooted'
-            if gone:  # answering again with the old id: the address may have moved; fix the entries
-                try:
-                    ensure_devices(self.host, self.vm, self.rec)
-                except SystemExit:
-                    pass
         return 'unreachable' if not last_boot else ''
 
     def stock_record_ok(self, home):
@@ -2264,9 +2480,8 @@ class Scenario:
 
     def priv_luna(self, uri, payload='{}'):
         """A privileged luna call as root, always with the identity the watcher uses (-a com.webos.applicationManager)."""
-        # exec, not sh: luna-send under ares-shell -r exits with no output
-        rc, out = self.dev.exec("luna-send -a com.webos.applicationManager -n 1 %s '%s' 2>&1" % (uri, payload))
-        return out.strip()
+        rc, raw, _ = self.dev.luna_as('com.webos.applicationManager', uri, payload)
+        return raw
 
     def popup_mark_now(self):
         """The mark foreign_popup reads from: (messages time, seconds since boot), taken when a step begins."""
@@ -3320,7 +3535,7 @@ class Scenario:
         r.begin('2 choose the launcher through the UI')
         self.mark_log()  # the watcher log accumulates over the fixtures of a boot: later checks read only what follows
         self.residency('before selecting')
-        self.insp = Inspector(self.vm)
+        self.insp = Inspector(self.dev)
         d.launch(APP_ID)
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
         self.strat.verify(d, r)
@@ -3496,7 +3711,7 @@ class Scenario:
         recreated."""
         info = {'again': {}, 'dom': False, 'seen': [], 'launch': [], 'reads': 0, 'failed': 0, 'recreated': 0}
         if not self.insp:
-            self.insp = Inspector(self.vm)
+            self.insp = Inspector(self.dev)
         for label, fn in (('close', self.dev.close), ('launch', self.dev.launch)):
             rc, out = fn(APP_ID)
             info['launch'].append('ares-launch %s rc=%s %r' % (label, rc, (out or '').strip()[-200:]))
@@ -3505,7 +3720,7 @@ class Scenario:
         end = time.time() + seconds(timeout)
         while True:
             if self.insp is None:
-                self.insp = Inspector(self.vm)
+                self.insp = Inspector(self.dev)
             try:
                 u = self.ui()
             except Exception as exc:
@@ -3517,7 +3732,7 @@ class Scenario:
                 err = getattr(self.insp, 'last_error', None)
                 if err and self.CONNECTION_ERROR.search(str(err)) and time.time() < end:
                     self.close_insp()
-                    self.insp = Inspector(self.vm)
+                    self.insp = Inspector(self.dev)
                     info['recreated'] += 1
             else:
                 info['dom'] = True
@@ -3593,13 +3808,20 @@ class Scenario:
     def confirm_home_choice(self, clicking):
         # A successful toast lasts six seconds. Capture it while checking the click's
         # effect: a fresh OCR frame can take longer than the toast's entire lifetime.
+        # The DOM is read before and after the one device command (the choice file, not a
+        # whole state(): through a remote Beanjar host each command costs seconds).
         toasts = []
 
-        def chosen():
+        def seen():
             u = self.ui() or {}
-            if u.get('toast'):
+            if u.get('toast') and u['toast'] not in toasts:
                 toasts.append(u['toast'])
-            return self.state()['choice'] == self.launcher
+
+        def chosen():
+            seen()
+            rc, out = self.dev.sh('cat %s 2>&1' % CHOICE)
+            seen()
+            return out.strip() == self.launcher
 
         if clicking:
             self.click_element('Use as Home', effect=chosen, label='Use as Home', read_after=False)
@@ -4168,7 +4390,7 @@ class Scenario:
         while True:
             rnd += 1
             if self.insp is None:
-                self.insp = Inspector(self.vm)
+                self.insp = Inspector(self.dev)
             t0 = time.time()
             try:
                 ui = self.ui()
@@ -4183,7 +4405,7 @@ class Scenario:
             if ui is None and err and self.CONNECTION_ERROR.search(str(err)) and time.time() < end:
                 t0 = time.time()
                 self.close_insp()
-                self.insp = Inspector(self.vm)
+                self.insp = Inspector(self.dev)
                 note('inspector-recreate', t0, err)
             remaining = end - time.time()
             if remaining > 1 and (rnd - 1) % self.TOAST_OCR_EVERY == 0:
@@ -4222,7 +4444,7 @@ class Scenario:
             # never the app: the warm relaunch is a real user path.
             self.close_insp()
         if not self.insp:
-            self.insp = Inspector(self.vm)
+            self.insp = Inspector(self.dev)
         rc, out = d.launch(APP_ID, {'request': self.launcher})
         r.check('ares-launch %s -p {"request":"%s"}' % (APP_ID, self.launcher), rc == 0, out.strip())
         if selected:
@@ -4261,7 +4483,7 @@ class Scenario:
                 if pid.isdigit():
                     pids[field] = {'pid': pid, 'alive': 'alive=0' in d.sh('test -d /proc/%s; echo alive=$?' % pid)[1]}
             if not self.insp:
-                self.insp = Inspector(self.vm)
+                self.insp = Inspector(self.dev)
             try:
                 with urllib.request.urlopen('http://127.0.0.1:%d/json' % self.insp.port, timeout=5) as response:
                     pages = [x.get('url') for x in json.loads(response.read().decode()) if appid in x.get('url', '')]
@@ -4375,7 +4597,7 @@ class Scenario:
 
     def screen_dialog(self):
         if not self.insp:
-            self.insp = Inspector(self.vm)
+            self.insp = Inspector(self.dev)
         return self.wait(lambda: (lambda u: u if (u.get('dialog') or '').startswith('Uninstall ') else None)(self.ui() or {}),
                          60, 1) or {}
 
@@ -4538,7 +4760,7 @@ class Scenario:
     def open_app_check(self, label):
         """Open Home Chooser, no error toast, the chosen row ticked; close it."""
         r, d = self.rec, self.dev
-        self.insp = Inspector(self.vm)
+        self.insp = Inspector(self.dev)
         d.launch(APP_ID)
         seen = []
 
@@ -4894,7 +5116,8 @@ class DeviceApiScenario(Scenario):
 
     def __init__(self, args, rec, launcher):
         super().__init__(args, None, rec, ('device', args.device, 'luna', 'ares', 'author TV'), launcher)
-        self.dev = Device(args.device, args.device)
+        self.dev = Device.tv(args.device)
+        self.dev.say = rec.say
         self.major, os_release = self.dev.release()
         self.rec.note('device release', os_release)
         self.stock_id = stock_home_id(self.major, self.dev.app_installed(FULLHOME))
@@ -4907,7 +5130,7 @@ class DeviceApiScenario(Scenario):
         """Use the inspected Home Chooser page; keys are sent only while it has focus."""
         r, d = self.rec, self.dev
         self.close_insp()
-        self.insp = Inspector(self.vm)
+        self.insp = Inspector(self.dev)
         rc, out = d.launch(APP_ID)
         r.check('open Home Chooser to choose %s' % target, rc == 0, out.strip()[-300:])
         ui = self.wait(lambda: (lambda u: u if u and target in (u.get('rows') or []) else None)(self.ui()), 90, 1)
@@ -5002,7 +5225,7 @@ class DeviceApiScenario(Scenario):
                 return
             strategy = ELEVATIONS[self.a.elevation or ('root-shell' if self.major >= 11 else 'luna')]()
             strategy.prepare(d, r)
-            self.insp = Inspector(self.vm)
+            self.insp = Inspector(self.dev)
             d.launch(APP_ID)
             if not self.wait(lambda: (self.ui() or {}).get('rows'), 90, 1):
                 raise RuntimeError('Home Chooser UI did not load')
@@ -5037,119 +5260,8 @@ class DeviceApiScenario(Scenario):
 
 
 # ---------------------------------------------------------------------------------------------
-# VM preparation: layers, LAN, devices
+# VM preparation: layers, LAN
 # ---------------------------------------------------------------------------------------------
-def ensure_devices(host, vm, rec):
-    """A device entry `<vm>-root` (root, 6622) with the VM's root key, and `<vm>` (devmode)."""
-    info = host.info(vm)
-    addr = info.get('lan_address') or ''
-    if not addr or addr == '-':
-        raise SystemExit('VM %s has no LAN address (is it running with link=lan?)' % vm)
-    # Beanjar 0.3.1+git7 sends the VM's name as its DHCP hostname, so the LAN's DNS knows it while it
-    # runs (`beanjar info` lan_hostname). Prefer the name, so the entries survive a new lease, but only
-    # when it resolves to this lease; otherwise keep the address.
-    name = info.get('lan_hostname') or ''
-    if name and name != '-':
-        import socket
-        for cand in (name + '.lan', name):
-            try:
-                if socket.gethostbyname(cand) == addr:
-                    rec.say('VM %s resolves as %s (%s)' % (vm, cand, addr))
-                    addr = cand
-                    break
-            except OSError:
-                pass
-    keyname = 'beanjar-%s-root' % vm
-    if fetch_key(host, '%s/identity/id_ed25519' % info['dir'], keyname):
-        rec.say('fetched the root key of %s to ~/.ssh/%s' % (vm, keyname))
-    dkeyname = 'beanjar-%s_devmode' % vm
-    with devices_file() as devs:
-        # the devmode device (prisoner, 9922) uses the VM's devmode key, fetched only when it is added
-        if not any(x.get('name') == vm for x in devs) and fetch_key(host, '%s/identity/devmode_rsa' % info['dir'], dkeyname):
-            rec.say('fetched the devmode key of %s to ~/.ssh/%s' % (vm, dkeyname))
-        update_devices(devs, vm, addr, keyname, dkeyname, rec.say)
-
-
-def fetch_key(host, src, keyname):
-    """~/.ssh/<keyname> from the host unless it is there; True if fetched.  Fetched under a temp name and
-    renamed, so an interrupted copy never leaves a truncated key behind."""
-    keypath = os.path.expanduser('~/.ssh/' + keyname)
-    if os.path.exists(keypath):
-        return False
-    tmp = '%s.%d.tmp' % (keypath, os.getpid())
-    try:
-        if not host.fetch(src, tmp):
-            raise SystemExit('could not fetch %s from %s' % (src, host.name))
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, keypath)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-    return True
-
-
-DEVICES_FILE = os.path.expanduser('~/.webos/ose/novacom-devices.json')
-
-
-class devices_file:
-    """`with devices_file() as devs:` read-modify-write of the ares device list, which runs in parallel
-    share.  An exclusive flock on <file>.lock serialises our runs; the new list is written to a temp file
-    in the same directory and renamed over the old one, so an ares command reading it at that moment
-    sees the old list or the new one, never a truncated file.  ares-cli-rs itself writes the file in
-    place without a lock (common/device/src/io.rs write_in), so `ares-setup-device` by hand during a run
-    is still unsafe.  The file is rewritten only if the list changed."""
-
-    def __init__(self, path=None):
-        self.path = path or DEVICES_FILE
-
-    def __enter__(self):
-        import fcntl
-        self.lock = open(self.path + '.lock', 'a')
-        fcntl.flock(self.lock, fcntl.LOCK_EX)
-        try:
-            with open(self.path) as f:
-                self.devs = json.load(f)
-        except BaseException:
-            self.lock.close()
-            raise
-        self.before = json.dumps(self.devs)
-        return self.devs
-
-    def __exit__(self, exc_type, exc, tb):
-        try:
-            if exc_type is None and json.dumps(self.devs) != self.before:
-                tmp = '%s.%d.tmp' % (self.path, os.getpid())
-                with open(tmp, 'w') as f:
-                    json.dump(self.devs, f, indent=2)
-                os.replace(tmp, self.path)
-        finally:
-            self.lock.close()  # releases the flock
-        return False
-
-
-def update_devices(devs, vm, addr, keyname, dkeyname, say=print):
-    """Add or fix `<vm>-root` (root, 6622) and `<vm>` (devmode, prisoner, 9922) in an ares device list."""
-    byname = {x['name']: x for x in devs}
-    want = {vm + '-root': (6622, 'root', {'openSsh': keyname})}
-    for name, (port, user, key) in want.items():
-        e = byname.get(name)
-        if e is None:
-            devs.append({'profile': 'ose', 'name': name, 'host': addr, 'port': port, 'username': user,
-                         'privateKey': key, 'files': 'sftp'})
-            say('added ares device %s -> %s:%d' % (name, addr, port))
-        elif e.get('host') != addr:
-            say('updated ares device %s host %s -> %s' % (name, e.get('host'), addr))
-            e['host'] = addr
-    dv = byname.get(vm)
-    if dv is None:
-        devs.append({'profile': 'ose', 'name': vm, 'host': addr, 'port': 9922, 'username': 'prisoner',
-                     'privateKey': {'openSsh': dkeyname}, 'files': 'sftp'})
-        say('added ares device %s -> %s:9922' % (vm, addr))
-    elif dv.get('host') != addr:
-        say('updated ares device %s host %s -> %s' % (vm, dv.get('host'), addr))
-        dv['host'] = addr
-
-
 def prepare_vm(host, vm, rec):
     """Refuse a busy machine, set the VM's layers and link.  The caller starts it."""
     try:
@@ -5159,10 +5271,13 @@ def prepare_vm(host, vm, rec):
     if running:
         raise SystemExit('VMs already running on %s, not touching anything: %s' % (host.name, running))
     s = host.settings(vm)
-    layers = (s.get('layers') or '').split(',')
+    layers = [x for x in (s.get('layers') or '').split(',') if x]
     want = {}
-    if 'hbchannel' not in layers:
-        want['layers'] = ','.join(layers + ['hbchannel'])
+    # devmode: `beanjar ares-TOOL` as the developer-mode user (install, launch, the inspector forward);
+    # hbchannel with devmode forwards the guest's root SSH for `beanjar ares-TOOL --root`
+    missing = [x for x in ('devmode', 'hbchannel') if x not in layers]
+    if missing:
+        want['layers'] = ','.join(layers + missing)
     if s.get('link') != 'lan':
         want['link'] = 'lan'
     if want:
@@ -5182,10 +5297,10 @@ WAIT_STATES = {
 }
 
 
-def wait_for_device(vm, rec, timeout=300):
+def wait_for_device(dev, rec, timeout=300):
     """One of the states above: READY as soon as it is reached, else the last state seen at the timeout.
     Every change of state is said, so a timeout shows which probe never passed."""
-    dev = Device(vm)
+    vm = dev.vm
     end = time.time() + seconds(timeout)
     state = None
     while True:
@@ -5368,8 +5483,10 @@ def main():
     scenario = None
     old_tmp = None
     try:
-        if not shutil.which('ares-do'):
-            raise SystemExit('ares-do not on PATH')
+        if not shutil.which('beanjar'):
+            raise SystemExit('beanjar not on PATH (VMs are reached with beanjar ares-TOOL)')
+        if not (shutil.which('ares-do') or os.path.exists(os.path.expanduser('~/.cargo/bin/ares-do'))):
+            raise SystemExit('ares-do not on PATH or in ~/.cargo/bin')
         if args.update_check:
             args.old_ref = args.update_from or default_update_ref()
             rc, full = run(['git', '-C', REPO, 'rev-parse', '--short', args.old_ref], 30)
@@ -5383,12 +5500,13 @@ def main():
         started = True  # before the start, so a start interrupted half-way is stopped too
         rc, out = host.start(vm)
         rec.say('beanjar start: %s' % out.strip()[-200:])
-        rec.say('waiting for the VM to answer on its LAN address (device entries are created or fixed first)')
+        rec.say('waiting for the VM to answer on its LAN address')
+        dev = Device.for_vm(host, vm)
+        dev.say = rec.say
         end = time.time() + seconds(120)
         while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
             sleep(3)
-        ensure_devices(host, vm, rec)
-        state = wait_for_device(vm, rec)
+        state = wait_for_device(dev, rec)
         if state == NO_ROOT_SSH:
             rec.say(failsafe_note(vm))
             rc, out = host.stop(vm)
@@ -5398,11 +5516,10 @@ def main():
             end = time.time() + seconds(120)
             while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
                 sleep(3)
-            ensure_devices(host, vm, rec)
-            state = wait_for_device(vm, rec)
+            state = wait_for_device(dev, rec)
         if state != READY:
             raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
-        removed_launchers = clean_launchers(Device(vm), rec)
+        removed_launchers = clean_launchers(dev, rec)
         for index, launcher in enumerate(launchers):
             rec.tag = '[%s]' % launcher.spec if args.multi else ''
             rec.say('==== launcher %s (%s)' % (launcher.spec, launcher.id))
