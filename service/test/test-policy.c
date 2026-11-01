@@ -302,6 +302,7 @@ static void test_luna_run(void)
 	CHECK(hc_luna_uri_allowed("luna://com.webos.settingsservice/setSystemSettings"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/removeLaunchPoint"));
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/launch"));
+	CHECK(hc_luna_uri_allowed("luna://com.webos.service.eim/getLastInput"));
     CHECK(hc_luna_argv("luna://com.webos.service.config/getConfigs", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.service.config/setConfigs", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.surfacemanager/getCurrentState", "{}", 1, argv));
