@@ -4,6 +4,16 @@ Home Chooser is webOS homebrew for rooted LG TVs: the owner chooses which app th
 opens. It is a settings app (`app/`, Enact) and a root service (`service/`, C) that also offers a
 small luna API to launchers.
 
+## Minimum for a grid launcher
+
+* Calls: `getInfo` (branch on `root`, `permitted`, `isSelectedHome`), `listApps`, and `getIcons` for
+  the icons, up to 64 per call. Launching is the platform's `applicationManager/launch`.
+* Start from a copy of [`examples/web-launcher/`](examples/web-launcher/README.md): change the id in
+  `appinfo.json` and edit `launcher.js`.
+* Don't declare `requiredACG`; if you do, list `application.query` and `application.launcher`.
+* The app used last and "OK opens X" are the launcher's own job:
+  [Patterns](docs/launcher-api.md#patterns).
+
 ## Building a launcher that works with Home Chooser
 
 Read these, in this order:
@@ -29,7 +39,8 @@ bus refuses its calls ([Permission](docs/launcher-api.md#permission-on-5x-to-10x
 Self-test:
 
 * In a desktop browser: include `homechooser-mock.js` after `homechooser.js` and open the page;
-  `?hcmock=before-elevation|not-permitted|not-home|absent` selects other start states.
+  `?hcmock=before-elevation|not-permitted|not-home|absent` selects other start states, and
+  `?hcmock-apps=<n>` the number of apps (20 by default).
 * On a rooted TV with Home Chooser installed and an ares device configured:
   `python3 -I e2e/homechooser_e2e.py --device <device> --api-check --launcher <your id> --launcher-ipk <your ipk>`
   checks the launcher methods as your launcher, every reply against the API description

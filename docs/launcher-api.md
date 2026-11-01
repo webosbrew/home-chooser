@@ -14,7 +14,8 @@ Terms such as SAM, the watcher or the home gate are explained in the [glossary](
 
 1. **Declare the app.** In `appinfo.json`, `"appCategory": ["home"]` makes it selectable and
    `"requiredPermissions": ["org.webosbrew.homechooser.applications"]` lets it call the API
-   ([Declare the app](#1-declare-the-app)).
+   ([Declare the app](#1-declare-the-app)). Don't declare `requiredACG`; if you do, list
+   `application.query` and `application.launcher`.
 2. **Install Home Chooser first and open it once, then install your launcher.** Opening Home
    Chooser finishes its setup, which makes the permission available. A launcher installed before
    that is refused with `Not allowed permission is used`: open Home Chooser and install the
@@ -81,6 +82,7 @@ A complete, minimal web launcher `appinfo.json`:
   "main": "index.html",
   "title": "Example Launcher",
   "icon": "icon.png",
+  "disableBackHistoryAPI": true,
   "appCategory": ["home"],
   "requiredPermissions": ["org.webosbrew.homechooser.applications"]
 }
@@ -95,6 +97,13 @@ A complete, minimal web launcher `appinfo.json`:
   also declares `requiredACG`, include `application.query` and `application.launcher` there
   ([Permission](#permission-on-5x-to-10x-and-on-11x-and-12x)). Leave it out if
   you only want to be selectable. Merge both entries with your other categories and permissions.
+* **Web launchers:** `"disableBackHistoryAPI": true` makes the remote's Back arrive as a `keydown`
+  with `keyCode` 461 instead of going back in the page's history, so the launcher decides what Back
+  does ([Platform calls you'll need](#platform-calls-youll-need)). It is a field of web apps only. A
+  native or QML launcher has no such field and handles the Back key itself: a native SDL app sets
+  the `SDL_WEBOS_ACCESS_POLICY_KEYS_BACK` hint, without which the TV keeps Back for itself, and then
+  receives Back as an SDL key event (scancode 482 in the native fixture,
+  [`e2e/fixtures/native/hcfixture.c`](../e2e/fixtures/native/hcfixture.c)).
 * **A launcher that draws over the running app** (a dock, a bar) is an overlay launcher. Consider
   `"defaultWindowType": "overlay"` and, for a see-through window, `"transparent": true`. These
   are windowing advice, not part of Home Chooser's contract. Home Chooser reads
@@ -645,6 +654,48 @@ Home Chooser does not cache: every call reads the files again. Cache in your lau
 subscription reply shows as new or changed. `getAppIcon {id, size?}` stays for a single icon and
 answers as before.
 
+## Patterns
+
+Recipes for what launchers commonly want and the API leaves to them.
+
+### The app used last
+
+Home Chooser keeps no history: it reads the platform for every reply and never caches, and
+`listRunning` is in the platform's order, not the order of use. A launcher keeps its own list:
+
+1. Subscribe to `getForegroundApp` with `{"subscribe": true}` (level 2) for the life of the app.
+2. On each reply, ignore your own id and an empty `appId`. While an overlay launcher is up, the
+   platform may report the app beneath it or `""` ([`getForegroundApp`](#getforegroundapp-subscribe)).
+   Otherwise move `appId` to the front of a recency list.
+3. Also put an app at the front when you launch it yourself and the launch is accepted: that is
+   recorded even when the foreground reply is late or the overlay hides it.
+4. Keep the list across restarts: `localStorage` in a web launcher, a file in your app's own data in
+   a native one. Map the ids to your latest `listApps` (or `listInputs`) reply when you draw, so an
+   uninstalled app drops out.
+
+```js
+const KEY = 'recentApps';
+const recent = () => JSON.parse(localStorage.getItem(KEY) || '[]');
+function noteUsed(id) {
+  if (!id || id === HomeChooser.ownAppId()) return;
+  localStorage.setItem(KEY, JSON.stringify([id, ...recent().filter((x) => x !== id)].slice(0, 8)));
+}
+if (HomeChooser.supports(2)) {   // after getInfo
+  HomeChooser.subscribe('getForegroundApp', {}, (reply) => noteUsed(reply.appId),
+    (error) => console.warn('foreground ended', error.source, error.errorCode));
+}
+// and noteUsed(id) after a launch the platform accepted
+```
+
+The subscription sees changes only while your launcher runs. [`examples/web-launcher`](../examples/web-launcher/README.md)
+does this and shows the result as a Recent row.
+
+### OK opens a given app
+
+What OK opens on a fresh start is the tile that has the focus first. To make OK open a given app at
+once, such as the app used last, start with the focus on that tile; nothing else changes. The
+[example launcher's README](../examples/web-launcher/README.md#make-it-your-own) shows where.
+
 ## Platform calls you'll need
 
 These are webOS platform behaviour, not part of Home Chooser's API: Home Chooser neither
@@ -669,6 +720,23 @@ provides nor freezes them. They are here because every launcher needs them.
   `document`, and `PalmSystem.launchParams` holds the new parameters. Refresh the app list there,
   and on `visibilitychange` when the page becomes visible again.
 * **Your own id.** `PalmSystem.identifier`, up to its first space, is the app id of a web app.
+
+## Verification status
+
+What has been checked on a TV from a third-party app or a launcher page, by release. "untested"
+means not checked on that release, not that it fails there.
+
+| Call | 5.x | 6.x | 7.x | 8.x | 9.x | 10.x | 11.x | 12.x |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `applicationManager/launch` of another app | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | verified (9.2.1) | untested | untested | untested |
+| `applicationManager/launch` of an input's app with `listInputs`' `params` | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | untested | untested | untested | untested |
+| `getInfo`, `listApps`, `listLaunchPoints`, `listInputs`, `closeApp`, `uninstallApp` from a launcher page, no reboot | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
+| `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
+| `listApps {subscribe}` from a launcher page: a reply on install and on removal | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
+| `listRunning {subscribe}`, `getForegroundApp {subscribe}` | untested | untested | untested | untested | untested | untested | untested | untested |
+
+On 10.3.1, 11.2.0 and 12.0.0, one `getIcons` call for 20 apps took 40 to 160 ms, where 20 single
+`getAppIcon` calls took 720 to 2890 ms.
 
 ## Per-release notes
 
@@ -780,6 +848,14 @@ never closes a stock home while you select a launcher. Details are in
 [The stock home is not preloaded](settings-app.md#the-stock-home-is-not-preloaded).
 
 ## Testing your launcher
+
+> **Before you test on a TV**
+>
+> 1. A rooted TV with Homebrew Channel.
+> 2. Home Chooser installed and opened once.
+> 3. `getInfo` shows `root: true`. On webOS 11 and later that needs the Homebrew Channel update
+>    described in the [README](../README.md#known-limitations).
+> 4. Then install your launcher.
 
 **In a desktop browser.** Load
 [`api/client/homechooser-mock.js`](../api/client/homechooser-mock.js) after `homechooser.js`. Where
