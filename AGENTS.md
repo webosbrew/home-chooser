@@ -22,7 +22,9 @@ Read these, in this order:
 Two things that are easy to get wrong: install Home Chooser and open it once before installing the
 launcher (otherwise the install fails with `Not allowed permission is used`), and launching other
 apps, Back and `webOSRelaunch` are platform calls, not part of this API
-([Platform calls you'll need](docs/launcher-api.md#platform-calls-youll-need)).
+([Platform calls you'll need](docs/launcher-api.md#platform-calls-youll-need)). On webOS 11 and later, a launcher
+that declares `requiredACG` must list `application.query` and `application.launcher` there, or the
+bus refuses its calls ([Permission](docs/launcher-api.md#permission-on-5x-to-10x-and-on-11x-and-12x)).
 
 Self-test:
 
@@ -31,7 +33,9 @@ Self-test:
 * On a rooted TV with Home Chooser installed and an ares device configured:
   `python3 -I e2e/homechooser_e2e.py --device <device> --api-check --launcher <your id> --launcher-ipk <your ipk>`
   checks the launcher methods as your launcher, every reply against the API description
-  ([Testing your launcher](docs/launcher-api.md#testing-your-launcher)).
+  ([Testing your launcher](docs/launcher-api.md#testing-your-launcher)). It calls through `luna-send -a <your id>`,
+  which does not carry your app's bus permissions, so also open your launcher on the TV: the demo
+  shows a refused call's `errorCode` and `errorText` under its banner.
 
 ## Working on Home Chooser itself
 
