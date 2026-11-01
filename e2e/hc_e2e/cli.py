@@ -48,6 +48,8 @@ def build_parser():
                     help='updated launcher ipk for --launcher-update-check (web fixture builds version 1.0.1 automatically)')
     ap.add_argument('--restore-repair-check', action='store_true',
                     help='after selection stop the watcher, uninstall, model a partial restore, and verify reinstall repairs Home')
+    ap.add_argument('--removal-race', action='store_true',
+                    help='after step 3 remove the launcher and Home Chooser back to back (step 3r), check stock, then clean up')
     ap.add_argument('--update-check', action='store_true',
                     help='install an older Home Chooser first, choose the launcher, then install the current build over it '
                          '(step 3u) and check that everything survives')
@@ -105,6 +107,8 @@ class VmSession:
     def __init__(self, args, ap):
         if args.scenario != 'lifecycle' and (args.input != 'beanjar' or args.until != 5):
             ap.error('--scenario screensaver/all requires --input beanjar and the complete setup/cleanup')
+        if args.removal_race and (args.restore_repair_check or args.scenario != 'lifecycle' or args.until < 3):
+            ap.error('--removal-race runs after step 3 of the lifecycle scenario, alone')
         if not args.vm:
             ap.error('--vm or --device is required')
         row = entry(args.vm)

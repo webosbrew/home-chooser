@@ -13,11 +13,12 @@ import launcher_schema  # noqa: E402  (the launcher spec's own schema checker)
 # The launcher API (docs/launcher-api.md) as the runner checks it
 # ---------------------------------------------------------------------------------------------
 API_GROUP = 'org.webosbrew.homechooser.applications'
-API_VERSION = 1
+API_VERSION = 2  # the level this build of Home Chooser reports; the contract itself only requires >= 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')
-API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory')
+API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory',
+                   'iconColor', 'bgColor')
 API_RUNNING_FIELDS = ('id', 'instanceId', 'processId', 'webProcessId')
 _SPEC = None  # (spec, validator), loaded on first use by spec_reply_problems
 
@@ -124,6 +125,12 @@ def spec_reply_problems(method, reply):
         return launcher_schema.reply_problems(_SPEC[0], method, reply, _SPEC[1])
     except launcher_schema.SchemaError as e:
         return ['the spec cannot be checked: %s' % e]
+
+
+def launcher_methods():
+    """Every launcher method of api/launcher-v1.openrpc.json: what the permission grants, and getInfo."""
+    perm = launcher_schema.load_spec()['x-permission']
+    return list(perm['grants']) + list(perm['notNeededFor'])
 
 
 def api_refused(reply):

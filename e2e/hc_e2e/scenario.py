@@ -75,13 +75,12 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         r.say('plan, one boot (e2e/README.md "Scopes"):\n    ' + '\n    '.join(describe_plan(self.plan, self.launchers)))
         return {
             'baseline': self.step0, 'install': lambda: self.step1(strat), 'choose': self.step2,
-            'api-before': None,  # made by step2 while Home Chooser is open
             'screensaver': lambda: self.screensaver_selected(self.saver_baseline),
             'switch': self.step_switch, 'window-chosen': self.window_chosen, 'home-proof': self.step3,
             'qml-gate': self.step_qml_gate, 'window-home': self.window_home, 'demo': self.step_demo,
             'api-selected': self.api_selected, 'reboot': self.step_reboot, 'cache': self.step_cache,
             'update': self.step_update, 'launcher-update': self.step_launcher_update,
-            'restore-repair': self.step_restore_repair, 'removal': self.step4, 'uninstall': self.step5,
+            'restore-repair': self.step_restore_repair, 'removal-race': self.step_removal_race, 'removal': self.step4, 'uninstall': self.step5,
         }
 
     def end_run(self):

@@ -12,6 +12,7 @@
 #include "log.h"
 #include "policy.h"
 #include "service/methods.h"
+#include "service/launcher.h"
 #include "service/reply.h"
 
 /* ---- the launcher API (docs/launcher-api.md) ----
@@ -19,7 +20,6 @@
  * and uninstallConfirmed for the confirmation. The caller is the application id the hub reports. */
 
 
-#define SAM_URI "luna://com.webos.applicationManager"
 #define TOKEN_TTL_US (120 * G_USEC_PER_SEC)
 #define TOKEN_SLOTS 4
 
@@ -35,26 +35,10 @@ typedef struct {
 static UninstallToken g_tokens[TOKEN_SLOTS];
 static int g_token_next;
 
-/* One launcher request in flight. */
-typedef struct LOp {
-	LSMessage *msg;
-	const char *method;
-	char caller[130];
-	char *target;      /* the id parameter */
-	bool consent;
-	bool force;
-	bool icon_large;
-	void (*next)(struct LOp *op);
-	bool need_consent;
-	char *target_title;
-	char *target_folder;
-	char *lookup_text; /* Original SAM refusal while resolving an ambiguous target id. */
-	int target_removable;
-} LOp;
-
-static void op_free(LOp *op)
+void op_free(LOp *op)
 {
 	LSMessageUnref(op->msg);
+	j_release(&op->items);
 	g_free(op->target);
 	g_free(op->target_title);
 	g_free(op->target_folder);
@@ -157,8 +141,7 @@ static void consent_done(Call *c, jvalue_ref reply)
 	op->next(op);
 }
 
-/* Reads the caller's appinfo for its consent, then runs next(op). Takes over op. */
-static void launcher_consent(LOp *op)
+void launcher_consent(LOp *op)
 {
 	jvalue_ref q = jobject_create();
 	put_str(q, "id", op->caller);
@@ -166,19 +149,51 @@ static void launcher_consent(LOp *op)
 	j_release(&q);
 }
 
-/* Starts a launcher request: gate, optional id parameter, then the consent check. */
-static void launcher_begin(LSMessage *msg, const char *method, bool need_root, bool need_home, bool need_consent, bool need_id, void (*next)(LOp *))
+LOp *launcher_open(LSHandle *sh, LSMessage *msg, const char *method, bool need_root, bool need_home,
+	bool need_consent, void (*next)(LOp *))
 {
 	char caller[130];
-	if (!launcher_gate(msg, method, need_root, need_home, caller, sizeof caller)) return;
+	if (!launcher_gate(msg, method, need_root, need_home, caller, sizeof caller)) return NULL;
 	LOp *op = g_new0(LOp, 1);
 	op->msg = msg;
 	LSMessageRef(msg);
+	op->sh = sh;
 	op->method = method;
 	op->next = next;
 	op->need_consent = need_consent;
 	op->target_removable = -1;
 	g_strlcpy(op->caller, caller, sizeof op->caller);
+	return op;
+}
+
+bool wants_subscribe(LSMessage *msg)
+{
+	jvalue_ref req = parse_object(LSMessageGetPayload(msg));
+	jvalue_ref v = req ? jobject_get(req, key_buf("subscribe")) : NULL;
+	bool on = false;
+	if (v && jis_valid(v) && jis_boolean(v)) jboolean_get(v, &on);
+	j_release(&req);
+	return on;
+}
+
+bool platform_failure(LOp *op, Call *c, jvalue_ref reply, const char *who)
+{
+	if (reply && reply_ok(reply)) return false;
+	char *text = reply ? get_string(reply, "errorText") : NULL;
+	const char *code = !reply ? hc_unusable_reply_code(c->status) : hc_sam_refusal_code(false, text);
+	char *message = g_strdup_printf(reply ? "The %s refused the call%s%s" : "No reply from the %s%s%s", who,
+		text ? ": " : "", text ? text : "");
+	send_error_for(op->msg, op->method, code, message);
+	g_free(message);
+	g_free(text);
+	return true;
+}
+
+/* Starts a launcher request: gate, optional id parameter, then the consent check. */
+static void launcher_begin(LSMessage *msg, const char *method, bool need_root, bool need_home, bool need_consent, bool need_id, void (*next)(LOp *))
+{
+	LOp *op = launcher_open(NULL, msg, method, need_root, need_home, need_consent, next);
+	if (!op) return;
 	if (need_id) {
 		jvalue_ref req = parse_object(LSMessageGetPayload(msg));
 		op->target = req ? get_string(req, "id") : NULL;
@@ -207,59 +222,6 @@ static void launcher_begin(LSMessage *msg, const char *method, bool need_root, b
 		}
 	}
 	launcher_consent(op);
-}
-
-static void list_done(Call *c, jvalue_ref reply)
-{
-	LOp *op = c->ctx;
-	bool running = strcmp(op->method, "listRunning") == 0;
-	if (!reply || !reply_ok(reply)) {
-		char *sam_text = reply ? get_string(reply, "errorText") : NULL;
-		const char *code = !reply ? hc_unusable_reply_code(c->status) : hc_sam_refusal_code(false, sam_text);
-		char *message = g_strdup_printf("%s%s%s", reply ? "The application manager refused the call" : "No reply from the application manager", sam_text ? ": " : "", sam_text ? sam_text : "");
-		send_error_for(op->msg, op->method, code, message);
-		g_free(message);
-		g_free(sam_text);
-	} else if (!jis_array(jobject_get(reply, key_buf(running ? "running" : "apps")))) {
-		send_error_for(op->msg, op->method, "badReply", "The application manager did not return an app array");
-	} else {
-		jvalue_ref o = jobject_create();
-		put_bool(o, "returnValue", true);
-		put_int(o, "apiVersion", HC_API_VERSION);
-		jobject_set(o, key_buf(running ? "running" : "apps"), running ?
-			pick_running(jobject_get(reply, key_buf("running"))) : pick_fields(jobject_get(reply, key_buf("apps")), LIST_FIELDS));
-		send_reply(op->msg, o);
-	}
-	op_free(op);
-}
-
-static void list_next(LOp *op)
-{
-	if (strcmp(op->method, "listRunning") == 0) {
-		call_start(SAM_URI "/running", "{}", list_done, op);
-	} else {
-		/* the reply is cut to LIST_FIELDS; asking for just those keeps it small */
-		jvalue_ref q = jobject_create();
-		jvalue_ref props = jarray_create(NULL);
-		for (int i = 0; LIST_FIELDS[i]; i++) jarray_append(props, jstring_create(LIST_FIELDS[i]));
-		jobject_set(q, key_buf("properties"), props);
-		call_start(SAM_URI "/listApps", jvalue_stringify(q), list_done, op);
-		j_release(&q);
-	}
-}
-
-bool on_launcher_list_apps(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	launcher_begin(msg, "listApps", true, false, true, false, list_next);
-	return true;
-}
-
-bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	launcher_begin(msg, "listRunning", true, false, true, false, list_next);
-	return true;
 }
 
 static bool sam_failure(LOp *op, Call *c, jvalue_ref reply, bool target_lookup)
@@ -320,41 +282,7 @@ static bool check_ambiguous_target(LOp *op, jvalue_ref reply)
 	return true;
 }
 
-static void foreground_done(Call *c, jvalue_ref reply)
-{
-	LOp *op = c->ctx;
-	if (!sam_failure(op, c, reply, false)) {
-		jvalue_ref v = jobject_get(reply, key_buf("appId"));
-		if (v && jis_valid(v) && !jis_null(v) && !jis_string(v)) {
-			send_error_for(op->msg, op->method, "badReply", "The application manager returned an invalid appId");
-		} else {
-			char *app_id = get_string(reply, "appId");
-			char *window_id = get_string(reply, "windowId");
-			jvalue_ref o = jobject_create();
-			put_bool(o, "returnValue", true);
-			put_int(o, "apiVersion", HC_API_VERSION);
-			put_str(o, "appId", app_id ? app_id : "");
-			if (window_id) put_str(o, "windowId", window_id);
-			put_normalized_pid(o, "processId", reply, "processId");
-			send_reply(op->msg, o);
-			g_free(app_id);
-			g_free(window_id);
-		}
-	}
-	op_free(op);
-}
-
-static void foreground_next(LOp *op)
-{
-	call_start(SAM_URI "/getForegroundAppInfo", "{}", foreground_done, op);
-}
-
-bool on_launcher_get_foreground(LSHandle *sh, LSMessage *msg, void *ctx)
-{
-	(void)sh; (void)ctx;
-	launcher_begin(msg, "getForegroundApp", true, false, true, false, foreground_next);
-	return true;
-}
+/* listRunning and getForegroundApp are in catalog.c, with the other methods that subscribe. */
 
 static void appinfo_done(Call *c, jvalue_ref reply)
 {

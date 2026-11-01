@@ -64,6 +64,9 @@ def main(argv):
             if r['label'] == 'platform':
                 check(problems, e.get('errorCode') == -1 and 'Unknown method' in e.get('errorText', ''),
                       'bridge platform: the bus code and text are not passed through: %s' % e)
+        elif t == 'supports':
+            check(problems, r['before'] is False and r['level1'] is True and r['level2'] is True and r['level3'] is False
+                  and r['apiVersion'] == spec['info']['x-apiVersion'], 'supports(level) after a level 2 reply: %s' % r)
         elif t == 'request':
             want = spec['x-requestLaunch']
             sent = [c for c in r['calls'] if 'uri' in c]
@@ -76,6 +79,44 @@ def main(argv):
                   'requestHome(appId): %s' % sent)
         elif t == 'request-no-id':
             check(problems, r['own'] is None and r['typeError'], 'requestHome without an app id: %s' % r)
+        elif t == 'bridge-subscribe':
+            label = 'subscribe %s' % r['label']
+            sent = [c for c in r['calls'] if 'uri' in c]
+            check(problems, len(sent) == 1 and sent[0]['uri'] == service + '/listInputs' and sent[0]['payload'] == {'subscribe': True},
+                  label + ': call %s' % sent)
+            check(problems, r['calls'].count({'cancel': True}) == 1, label + ': not cancelled exactly once: %s' % r['calls'])
+            if r['label'] == 'two-replies':
+                check(problems, len(r['replies']) == 2 and not r['errors'], label + ': %s' % r)
+            else:
+                source = 'homechooser' if r['label'] == 'refused' else 'transport'
+                check(problems, not r['replies'] and len(r['errors']) == 1 and r['errors'][0]['source'] == source,
+                      label + ': not one %s error and no reply: %s' % (source, r))
+        elif t == 'mock-subscribe':
+            for reply in r['replies']:
+                found = reply_problems(spec, 'listInputs', reply, sv)
+                replies += 1
+                check(problems, found == [] and reply.get('subscribed') is True, 'mock subscribe reply: %s %s' % (found, reply))
+            check(problems, len(r['replies']) == 2 and not r['errors'], 'mock subscribe: first, notify, cancel: %s' % r)
+            check(problems, len(r['replies']) == 2 and r['replies'][0]['inputs'][0]['connected'] != r['replies'][1]['inputs'][0]['connected'],
+                  'mock subscribe: the change is not in the second reply')
+            check(problems, len(r['over']) == 1 and r['over'][0]['errorCode'] == 'tooManySubscriptions',
+                  'mock subscribe: the cap: %s' % r['over'])
+        elif t == 'mock-subscribe-foreground':
+            for reply in r['replies']:
+                found = reply_problems(spec, 'getForegroundApp', reply, sv)
+                replies += 1
+                check(problems, found == [] and reply.get('subscribed') is True, 'mock foreground reply: %s %s' % (found, reply))
+            check(problems, [x.get('appId') for x in r['replies']] == [
+                next(x for x in spec['methods'] if x['name'] == 'getForegroundApp')['examples'][0]['result']['value']['appId'],
+                'org.example.other'] and not r['errors'], 'mock foreground subscription: %s' % r)
+        elif t == 'mock-app-count':
+            for n, reply in r['replies'].items():
+                found = reply_problems(spec, 'listApps', reply, sv)
+                replies += 1
+                ids = [a['id'] for a in reply.get('apps', [])]
+                check(problems, found == [] and len(ids) == int(n) and len(set(ids)) == len(ids),
+                      'mock ?hcmock-apps=%s: %d apps, %s' % (n, len(ids), found))
+            check(problems, r['icon'].get('errorCode') == 'noIcon', 'mock getIcons of a made-up app: %s' % r['icon'])
         elif t == 'commonjs':
             check(problems, set(r['methods']) == {'function'}, 'CommonJS export: %s' % r['methods'])
         elif t == 'mock-inert':
@@ -104,9 +145,16 @@ def main(argv):
                         check(problems, not res['ok'] and res['error']['errorCode'] == 'notHome', label + ': not notHome')
                     if sc == 'not-permitted' and method == 'listApps':
                         check(problems, not res['ok'] and res['error']['errorCode'] == 'noPermission', label + ': not noPermission')
-                    if sc == 'selected-home' and method == 'listApps':
+                    if sc == 'selected-home' and method == 'listApps' and 'subscribe' not in c['params']:
                         want = next(x for x in spec['methods'] if x['name'] == 'listApps')['examples'][0]['result']['value']
-                        check(problems, res['ok'] and res['value'] == want, label + ': not the spec example')
+                        got = res['value'].get('apps', []) if res['ok'] else []
+                        check(problems, res['ok'] and got[:len(want['apps'])] == want['apps'] and len(got) == 20
+                              and sum(1 for a in got if a.get('visible') is False) == 1
+                              and any('iconColor' in a for a in got) and any('bgColor' in a for a in got),
+                              label + ': not the spec example\'s apps first, 20 in all, one invisible, some with colours')
+                    if sc == 'selected-home' and methods[method].get('x-subscribes'):
+                        check(problems, res['ok'] and res['value'].get('subscribed') is (True if c['params'].get('subscribe') is True else None),
+                              label + ': subscribed does not follow the subscribe param')
             check(problems, r['launch']['ok'] and r['request']['ok'], 'mock %s: launch or request failed: %s' % (sc, r))
             check(problems, r['own'] == spec['x-appinfo']['minimalExample']['id'], 'mock %s: ownAppId %r' % (sc, r['own']))
             check(problems, len(r['launches']) == 2 and r['launches'][1] == dict(

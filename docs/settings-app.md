@@ -354,7 +354,12 @@ Both removed, in either order and at any spacing while the watcher runs, ends at
 state (no choice file, flag or `init.d` link, the record `home` unset, the override gone, the
 unit stopped, the stock home's preload policy enabled): the watcher looks at Home Chooser first in
 every check and again after the chosen app's confirmation wait, so a Home Chooser removed during that
-wait is found whether or not its own `listApps` message arrives. It takes about 15 s per
+wait is found whether or not its own `listApps` message arrives. A chosen app confirmed gone is
+reverted before that second look, so when the owner removes the launcher and then Home Chooser seconds
+later, the record's `home` (on 10.x and later also the profile override and `idleApp`; on 6–9 the
+keyFilters list, and the home gate is unmounted) are stock about 15 s after the launcher's removal, as
+when the launcher alone is removed; they never name the removed launcher while Home
+Chooser's own confirmation runs. The cleanup and the toast follow that confirmation, about 15 s per
 removal it has to confirm, one after the other, so up to about 30 s after the second removal; a
 watcher stopped before that (a TV or VM powered off right after the second removal) leaves the
 state described below. Home Chooser first (or both at once, which is checked in that order) is the full

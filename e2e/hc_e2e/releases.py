@@ -78,6 +78,14 @@ def idle_app_stock(idle):
     return isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == STOCK
 
 
+def platform_stock(major, record_home, stock_id, override, idle):
+    """Nothing Home Chooser writes names a launcher any more: the record's home is stock (5-9: the stock id,
+    10+: null or unset) and, on 10+, the override file is gone and getProfiles' idleApp is LG Home again."""
+    if not stock_record_ok(major, record_home, stock_id):
+        return False
+    return major < 10 or (override == 'no' and idle_app_stock(idle))
+
+
 def stock_home_id(major, fullhome_installed):
     """The id restore/removal/uninstall write as `home` on 5.x to 9.x (docs/settings-app.md): fullhome
     if it is installed, else com.webos.app.home.  10+ write null: None."""

@@ -10,6 +10,10 @@
 //   'platform'     the luna bus (no apiVersion): Home Chooser is absent or too old, or the permission
 //                  was not installed with your app. Call getInfo and branch.
 //   'transport'    nothing usable came back: no webOS service bridge, no reply in TIMEOUT_MS, not JSON.
+// subscribe(method, params, onReply, onError) keeps a method open that takes subscribe:
+//   listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+// It gives the whole reply now and after every change, until cancel(). Home Chooser keeps no copy:
+// cache what you draw.
 // Types: homechooser.d.ts. Fake data for a desktop browser: homechooser-mock.js.
 (function (root, factory) {
 	var api = factory(root);
@@ -54,6 +58,30 @@
 		transport = fn || bridgeCall;
 	}
 
+	// A call that may answer many times (subscribe: true). onMessage(reply) for each reply, or
+	// onMessage(null, error) when there is no bridge or a reply is not JSON. Returns the cancel function.
+	function bridgeSubscribe(uri, payload, onMessage) {
+		var Bridge = root.WebOSServiceBridge || root.PalmServiceBridge;
+		if (!Bridge) {
+			setTimeout(function () { onMessage(null, new Error('no webOS service bridge')); }, 0);
+			return function () {};
+		}
+		var bridge = new Bridge();
+		bridge.onservicecallback = function (message) {
+			var reply;
+			try { reply = JSON.parse(message); } catch (e) { onMessage(null, e); return; }
+			onMessage(reply);
+		};
+		bridge.call(uri, JSON.stringify(payload || {}));
+		return function () { bridge.cancel(); };
+	}
+
+	var subscribeTransport = bridgeSubscribe;
+
+	function setSubscribeTransport(fn) {
+		subscribeTransport = fn || bridgeSubscribe;
+	}
+
 	function HomeChooserError(reply, source, cause) {
 		var message = reply.errorText || (source === 'homechooser' ? 'Home Chooser refused the call' : 'call failed');
 		this.name = 'HomeChooserError';
@@ -69,16 +97,29 @@
 	HomeChooserError.prototype = Object.create(Error.prototype);
 	HomeChooserError.prototype.constructor = HomeChooserError;
 
+	// The highest apiVersion a Home Chooser reply has carried so far; 0 before any.
+	var seenLevel = 0;
+	function noteLevel(reply) {
+		if (typeof reply.apiVersion === 'number' && reply.apiVersion > seenLevel) {
+			seenLevel = reply.apiVersion;
+		}
+	}
+	function supports(level) {
+		return seenLevel >= level;
+	}
+
 	// Resolves with a returnValue:true reply; rejects with a HomeChooserError otherwise.
 	function settle(call) {
 		return call.then(function (reply) {
 			if (reply && typeof reply === 'object' && reply.returnValue === true) {
+				noteLevel(reply);
 				return reply;
 			}
 			if (!reply || typeof reply !== 'object') {
 				throw new HomeChooserError({returnValue: false, errorText: 'reply is not an object'}, 'transport');
 			}
 			// Every reply of Home Chooser carries apiVersion; a reply of the luna bus itself does not.
+			noteLevel(reply);
 			throw new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform');
 		}, function (error) {
 			var text = error && error.message ? error.message : String(error);
@@ -90,28 +131,67 @@
 		return settle(lunaCall(SERVICE + '/' + method, params || {}));
 	}
 
+	// subscribe(method, params, onReply, onError): a method that takes subscribe: true, that is
+	// listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+	// onReply gets every reply with returnValue true: the whole state now, and the whole state again
+	// after each change; keep the latest and redraw. onError gets a HomeChooserError (sources
+	// as above) and the subscription is over; subscribe again later if you need to. Returns {cancel}.
+	function subscribe(method, params, onReply, onError) {
+		var payload = {}, k, ended = false, stop = null;
+		for (k in params || {}) {
+			if (Object.prototype.hasOwnProperty.call(params, k)) payload[k] = params[k];
+		}
+		payload.subscribe = true;
+		function end(error) {
+			if (ended) return;
+			ended = true;
+			if (stop) stop();
+			if (onError) onError(error);
+		}
+		stop = subscribeTransport(SERVICE + '/' + method, payload, function (reply, error) {
+			if (ended) return;
+			if (error || !reply || typeof reply !== 'object') {
+				var text = error && error.message ? error.message : error ? String(error) : 'reply is not an object';
+				end(new HomeChooserError({returnValue: false, errorText: text}, 'transport', error));
+			} else if (reply.returnValue === true) {
+				noteLevel(reply);
+				onReply(reply);
+			} else {
+				end(new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform'));
+			}
+		});
+		if (ended && stop) stop();
+		return {
+			cancel: function () {
+				if (ended) return;
+				ended = true;
+				stop();
+			}
+		};
+	}
+
 	// getInfo {}: Feature detection and status. Works for any app.
 	// Errors: forbidden.
 	function getInfo() {
 		return callMethod("getInfo", {});
 	}
 
-	// listApps {}: Lists the installed apps. Needs root, the permission.
-	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply.
-	function listApps() {
-		return callMethod("listApps", {});
+	// listApps {subscribe?}: Lists the installed apps. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function listApps(params) {
+		return callMethod("listApps", params);
 	}
 
-	// listRunning {}: Lists running apps. Needs root, the permission.
-	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply.
-	function listRunning() {
-		return callMethod("listRunning", {});
+	// listRunning {subscribe?}: Lists running apps. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function listRunning(params) {
+		return callMethod("listRunning", params);
 	}
 
-	// getForegroundApp {}: One lookup of the platform's current foreground app. Needs root, the permission.
-	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply.
-	function getForegroundApp() {
-		return callMethod("getForegroundApp", {});
+	// getForegroundApp {subscribe?}: The platform's current foreground app, once or on every change. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function getForegroundApp(params) {
+		return callMethod("getForegroundApp", params);
 	}
 
 	// getAppInfo {id}: Fetches one installed app without refreshing the full list. Needs root, the permission.
@@ -124,6 +204,24 @@
 	// Errors: forbidden, notRoot, badRequest, noPermission, lookupFailed, notFound, refused, badReply, timeout, noIcon, iconTooLarge.
 	function getAppIcon(params) {
 		return callMethod("getAppIcon", params);
+	}
+
+	// listLaunchPoints {subscribe?}: Lists the launch points in LG's order, bookmarks included. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function listLaunchPoints(params) {
+		return callMethod("listLaunchPoints", params);
+	}
+
+	// listInputs {subscribe?}: Lists the TV's external inputs. Needs root, the permission.
+	// Errors: forbidden, notRoot, noPermission, lookupFailed, timeout, refused, badReply, tooManySubscriptions.
+	function listInputs(params) {
+		return callMethod("listInputs", params);
+	}
+
+	// getIcons {items}: Reads several icons in one call, for a jailed launcher. Needs root, the permission.
+	// Errors: forbidden, notRoot, badRequest, noPermission, lookupFailed, timeout, refused, badReply.
+	function getIcons(params) {
+		return callMethod("getIcons", params);
 	}
 
 	// closeApp {id, force?}: Closes an app. Only the selected Home may call it. Needs root, the permission, the selected Home.
@@ -154,7 +252,7 @@
 	}
 
 	var api = {
-		API_VERSION: 1,
+		API_VERSION: 2,
 		SERVICE: SERVICE,
 		PERMISSION: "org.webosbrew.homechooser.applications",
 		HOME_CHOOSER_ID: HOME_CHOOSER_ID,
@@ -170,7 +268,8 @@
 				"lookupFailed",
 				"timeout",
 				"refused",
-				"badReply"
+				"badReply",
+				"tooManySubscriptions"
 			],
 			"listRunning": [
 				"forbidden",
@@ -179,7 +278,8 @@
 				"lookupFailed",
 				"timeout",
 				"refused",
-				"badReply"
+				"badReply",
+				"tooManySubscriptions"
 			],
 			"getForegroundApp": [
 				"forbidden",
@@ -188,7 +288,8 @@
 				"lookupFailed",
 				"timeout",
 				"refused",
-				"badReply"
+				"badReply",
+				"tooManySubscriptions"
 			],
 			"getAppInfo": [
 				"forbidden",
@@ -213,6 +314,36 @@
 				"timeout",
 				"noIcon",
 				"iconTooLarge"
+			],
+			"listLaunchPoints": [
+				"forbidden",
+				"notRoot",
+				"noPermission",
+				"lookupFailed",
+				"timeout",
+				"refused",
+				"badReply",
+				"tooManySubscriptions"
+			],
+			"listInputs": [
+				"forbidden",
+				"notRoot",
+				"noPermission",
+				"lookupFailed",
+				"timeout",
+				"refused",
+				"badReply",
+				"tooManySubscriptions"
+			],
+			"getIcons": [
+				"forbidden",
+				"notRoot",
+				"badRequest",
+				"noPermission",
+				"lookupFailed",
+				"timeout",
+				"refused",
+				"badReply"
 			],
 			"closeApp": [
 				"forbidden",
@@ -249,12 +380,18 @@
 		getForegroundApp: getForegroundApp,
 		getAppInfo: getAppInfo,
 		getAppIcon: getAppIcon,
+		listLaunchPoints: listLaunchPoints,
+		listInputs: listInputs,
+		getIcons: getIcons,
 		closeApp: closeApp,
 		uninstallApp: uninstallApp,
+		supports: supports,
+		subscribe: subscribe,
 		requestHome: requestHome,
 		ownAppId: ownAppId,
 		lunaCall: lunaCall,
-		setTransport: setTransport
+		setTransport: setTransport,
+		setSubscribeTransport: setSubscribeTransport
 	};
 	return api;
 }));

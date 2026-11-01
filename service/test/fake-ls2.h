@@ -13,4 +13,9 @@ LSMessage *fake_message_new(const char *app, const char *service, const char *pa
 GPtrArray *fake_message_replies(LSMessage *message);
 int fake_message_refs(LSMessage *message);
 void fake_message_free(LSMessage *message);
+/* The subscription catalog: LSSubscriptionAdd keeps a reference, LSSubscriptionReply answers every
+ * message of a key. Cancelling removes the message, drops that reference and calls the cancel
+ * function the handlers registered, as the hub does for a cancel or a subscriber that went away. */
+void fake_subscription_cancel(LSMessage *message);
+void fake_subscription_cancel_all(void);
 #endif

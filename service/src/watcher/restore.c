@@ -107,15 +107,21 @@ void check_apps(HCWatch *w, char why)
     }
     if (st == -1 && !eq(w->missing, want)) {
         watch_wait(w, w->c.confirm_ms);
-        check_hc(w);
         if (w->status >= 0) goto done;
-        if (app_state(w, want) == -1) {
+        /* A confirmed removal is reverted before Home Chooser is looked at again: when Home Chooser
+         * went in the meantime, its own confirmation wait must not keep the platform naming a
+         * removed app (idleApp, the record's home: a black screen when the last app closes). */
+        gboolean gone = app_state(w, want) == -1;
+        if (gone) {
             watch_log(w, "%s is not installed, stock Home in use until it comes back", want);
             g_free(w->missing); w->missing = g_strdup(want);
             revert_platform(w); key_refresh(w, TRUE);
             g_clear_pointer(&w->baked, g_free);
-            if (why != 's') notify_removed(w, want);
+            gate_sync(w); /* 6-9: stock Home is the real binary again, before the wait below */
         }
+        check_hc(w);
+        if (w->status >= 0) goto done;
+        if (gone && why != 's') notify_removed(w, want);
     } else if (st == 1) {
         if (w->missing) {
             watch_log(w, "%s is installed again, applying the choice", want);

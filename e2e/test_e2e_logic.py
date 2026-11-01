@@ -928,6 +928,18 @@ class StockRecord(unittest.TestCase):
             for home in (HOME, FULL, 'org.example.launcher'):
                 self.assertFalse(hc_e2e.releases.stock_record_ok(major, home), (major, home))
 
+    def test_platform_stock_after_a_removal_race(self):
+        stock_idle = {'support': True, 'appId': HOME}
+        launcher_idle = {'support': True, 'appId': 'org.example.launcher'}
+        self.assertTrue(hc_e2e.releases.platform_stock(11, None, None, 'no', stock_idle))
+        self.assertFalse(hc_e2e.releases.platform_stock(11, 'org.example.launcher', None, 'no', stock_idle))
+        self.assertFalse(hc_e2e.releases.platform_stock(11, None, None, 'yes', stock_idle), 'override still there')
+        self.assertFalse(hc_e2e.releases.platform_stock(11, None, None, 'no', launcher_idle), 'idleApp names the launcher')
+        self.assertFalse(hc_e2e.releases.platform_stock(10, None, None, 'no', None), 'idleApp unreadable')
+        self.assertTrue(hc_e2e.releases.platform_stock(9, HOME, HOME, 'no', None), 'no override or idleApp before 10')
+        self.assertFalse(hc_e2e.releases.platform_stock(9, 'org.example.launcher', HOME, 'no', None))
+        self.assertTrue(hc_e2e.releases.platform_stock(5, FULL, None, 'no', None))
+
     def test_stock_home_id_resolution(self):
         self.assertEqual(hc_e2e.releases.stock_home_id(9, True), FULL)
         self.assertEqual(hc_e2e.releases.stock_home_id(6, False), HOME)
@@ -1097,10 +1109,10 @@ class Luna(unittest.TestCase):
         self.assertIsNone(hc_e2e.evidence.parse_luna('[timeout]'))
 
     def test_get_info_contract(self):
-        ok = {'returnValue': True, 'apiVersion': 1, 'version': '0.1.0', 'root': True, 'permission': hc_e2e.api_spec.API_GROUP,
+        ok = {'returnValue': True, 'apiVersion': 2, 'version': '0.1.0', 'root': True, 'permission': hc_e2e.api_spec.API_GROUP,
               'permitted': True, 'isSelectedHome': False}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('getInfo', ok), [])
-        bad = dict(ok, apiVersion=2)
+        bad = dict(ok, apiVersion=3)
         del bad['isSelectedHome']
         p = hc_e2e.api_spec.api_reply_problems('getInfo', bad)
         self.assertTrue(any('isSelectedHome' in x for x in p) and any('apiVersion' in x for x in p), p)
@@ -1110,36 +1122,36 @@ class Luna(unittest.TestCase):
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getInfo', dict(ok, version=3)))
 
     def test_list_and_running_contract(self):
-        apps = {'returnValue': True, 'apiVersion': 1, 'apps': [
+        apps = {'returnValue': True, 'apiVersion': 2, 'apps': [
             {'id': 'a', 'title': 'A', 'icon': 'i.png', 'folderPath': '/x', 'removable': True, 'visible': True}]}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('listApps', apps), [])
-        leak = {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
+        leak = {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('listApps', leak), [])
-        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
-        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 1}))
-        run = {'returnValue': True, 'apiVersion': 1, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2}))
+        run = {'returnValue': True, 'apiVersion': 2, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
                                                                   'webProcessId': 34}]}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('listRunning', run), [])
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('listRunning', dict(run, running=[dict(run['running'][0], futureField=5)])), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('listRunning', dict(run, running=[{'id': 'a', 'processId': '12'}])))
-        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 1, 'running': [{}]}))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 2, 'running': [{}]}))
 
     def test_close_and_uninstall_reply_contract(self):
-        close = {'returnValue': True, 'apiVersion': 1, 'id': 'a'}
+        close = {'returnValue': True, 'apiVersion': 2, 'id': 'a'}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('closeApp', dict(close, later=1)), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('closeApp', {'returnValue': True, 'id': 'a'}))
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='alert')), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='bad')))
 
     def test_new_launcher_replies(self):
-        front = {'returnValue': True, 'apiVersion': 1, 'appId': '', 'processId': 123}
+        front = {'returnValue': True, 'apiVersion': 2, 'appId': '', 'processId': 123}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('getForegroundApp', dict(front, futureField=True)), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getForegroundApp', dict(front, processId='123')))
-        app = {'returnValue': True, 'apiVersion': 1,
+        app = {'returnValue': True, 'apiVersion': 2,
                'app': {'id': 'a', 'appCategory': ['home'], 'removable': True}}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('getAppInfo', dict(app, futureField=True)), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppInfo', dict(app, app={'id': 'a', 'appCategory': 'home'})))
-        icon = {'returnValue': True, 'apiVersion': 1, 'mimeType': 'image/png',
+        icon = {'returnValue': True, 'apiVersion': 2, 'mimeType': 'image/png',
                 'data': 'YWJj', 'byteLength': 3}
         self.assertEqual(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, futureField=True)), [])
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
@@ -2220,6 +2232,39 @@ class HomeAndScreensaver(unittest.TestCase):
             with patch.object(sys, 'argv', ['runner', '--list'] + choice), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(hc_e2e.cli.main(), 0)
 
+    def test_removal_race_runs_after_step_3_then_cleans_up(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s, events = self.make(), []
+        s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario='lifecycle',
+                              api_check=False, reboot_check=False, update_check=False,
+                              launcher_update_check=False, restore_repair_check=False, removal_race=True)
+        s.release, s.strategy_name, s.sure, s.note = '11.x', 'luna', 'fake', 'offline state model'
+        s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.L.id = s.launcher
+        s.host.mode = 'offline'
+        s.dev.release = lambda: (11, '11.2.0')
+        s.dev.app_installed = lambda app: False
+        s.state = lambda: {'choice': 'No such file'}
+        s.check_no_crash = Mock()
+        s.window_chosen, s.window_home = Mock(), Mock()
+        for number in range(1, 7):
+            setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
+        s.step_removal_race = lambda: events.append('3r')
+        s.run()
+        self.assertEqual(events, [1, 2, 3, '3r', 6])
+
+    def test_removal_race_is_rejected_where_it_cannot_run(self):
+        from unittest.mock import patch
+        for argv in (['--vm', '11.x', '--removal-race', '--restore-repair-check'],
+                     ['--vm', '11.x', '--removal-race', '--until', '2'],
+                     ['--vm', '11.x', '--removal-race', '--scenario', 'all']):
+            with self.subTest(argv=argv), patch.object(hc_e2e.cli, 'entry', side_effect=AssertionError('OFFLINE ONLY')), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as cm:
+                    hc_e2e.cli.main(argv)
+                self.assertEqual(cm.exception.code, 2)
+
     def test_main_recovery_failure_is_recorded_blocked_and_cleanup_still_runs(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
@@ -2929,7 +2974,7 @@ class Scopes(unittest.TestCase):
         self.assertEqual(hc_e2e.plan.PHASE['qml-gate']['scope'], hc_e2e.plan.PER_RUNTIME)
         for phase in ('window-chosen', 'window-home', 'reboot'):
             self.assertEqual(hc_e2e.plan.PHASE[phase]['scope'], hc_e2e.plan.PER_WINDOW, phase)
-        for phase in ('baseline', 'install', 'choose', 'api-before', 'api-selected', 'update', 'removal',
+        for phase in ('baseline', 'install', 'choose', 'api-selected', 'update', 'removal',
                       'uninstall', 'cleanup'):
             self.assertEqual(hc_e2e.plan.PHASE[phase]['scope'], hc_e2e.plan.PER_RELEASE, phase)
 
@@ -2937,7 +2982,7 @@ class Scopes(unittest.TestCase):
         seen = set()
         for major in (5, 9, 10, 12):
             for opts in (RELEASE_OPTS, FULL_OPTS, dict(FULL_OPTS, update=False), dict(RELEASE_OPTS, screensaver='all'),
-                         dict(RELEASE_OPTS, restore_repair=True)):
+                         dict(RELEASE_OPTS, restore_repair=True), dict(RELEASE_OPTS, removal_race=True)):
                 seen |= {p for _, p in hc_e2e.plan.run_plan(ALL6 + [('web', 'normal', True)], major, opts)}
         self.assertEqual(seen, set(hc_e2e.plan.PHASE))
         inspect = __import__('inspect')
@@ -2955,7 +3000,7 @@ class Scopes(unittest.TestCase):
                 overlay = [p for i, p in plan if i == 1]
                 self.assertEqual(overlay[:3], ['switch', 'window-chosen', 'home-proof'])
                 self.assertTrue(all(hc_e2e.plan.PHASE[p]['scope'] != hc_e2e.plan.PER_RELEASE for p in overlay), overlay)
-                for phase in ('install', 'choose', 'api-before', 'api-selected', 'removal', 'uninstall'):
+                for phase in ('install', 'choose', 'api-selected', 'removal', 'uninstall'):
                     self.assertEqual([i for i, p in plan if p == phase], [0], phase)
                 self.assertEqual([i for i, p in plan if p == 'window-chosen'], [0, 1])
                 self.assertEqual([i for i, p in plan if p == 'window-home'], [0, 1] if major >= 10 else [])
@@ -3019,7 +3064,7 @@ class Scopes(unittest.TestCase):
     def test_crash_windows_group_unguarded_phases_with_the_step_before(self):
         plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 10, RELEASE_OPTS)
         groups = [[p for _, p in g] for g in hc_e2e.plan.plan_groups([x for x in plan if x[1] != 'cleanup'])]
-        self.assertIn(['choose', 'api-before', 'window-chosen'], groups)
+        self.assertIn(['choose', 'window-chosen'], groups)
         self.assertIn(['home-proof', 'window-home'], groups)
         self.assertIn(['switch', 'window-chosen'], groups)
         self.assertTrue(all(hc_e2e.plan.PHASE[g[0]]['guard'] or g[0] == 'baseline' for g in groups), groups)

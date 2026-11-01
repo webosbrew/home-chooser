@@ -8,7 +8,7 @@ home screen. Your choice stays in place after the TV restarts, and Home Chooser 
 itself if the launcher or Home Chooser is removed.
 
 > **Not released yet.** There is no release package so far. Launcher authors can already build
-> against the [launcher API](docs/launcher-api.md): version 1 is frozen.
+> against the [launcher API](docs/launcher-api.md): `apiVersion` is a feature level that only grows and stays backward compatible.
 
 ## Requirements
 

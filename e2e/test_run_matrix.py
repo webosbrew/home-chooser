@@ -477,7 +477,7 @@ class Tiers(unittest.TestCase):
         self.assertNotIn('--api-check=full', argv)
         for flag in ('--reboot-check', '--update-check', '--uninstall-via'):
             self.assertNotIn(flag, argv)
-        self.assertIn('fixture:web.normal: baseline, install, choose, api-before, window-chosen, home-proof, '
+        self.assertIn('fixture:web.normal: baseline, install, choose, window-chosen, home-proof, '
                       'api-selected, removal, uninstall, cleanup', out)
         a = self.args('--tier', 'smoke')
         self.assertEqual(a.vms, 'w22h-ombre')  # hosts.toml's default_slot

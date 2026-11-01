@@ -4,11 +4,21 @@ Home Chooser is webOS homebrew for rooted LG TVs: the owner chooses which app th
 opens. It is a settings app (`app/`, Enact) and a root service (`service/`, C) that also offers a
 small luna API to launchers.
 
+## Minimum for a grid launcher
+
+* Calls: `getInfo` (branch on `root`, `permitted`, `isSelectedHome`), `listApps`, and `getIcons` for
+  the icons, up to 64 per call. Launching is the platform's `applicationManager/launch`.
+* Start from a copy of [`examples/web-launcher/`](examples/web-launcher/README.md): change the id in
+  `appinfo.json` and edit `launcher.js`.
+* Don't declare `requiredACG`; if you do, list `application.query` and `application.launcher`.
+* The app used last and "OK opens X" are the launcher's own job:
+  [Patterns](docs/launcher-api.md#patterns).
+
 ## Building a launcher that works with Home Chooser
 
 Read these, in this order:
 
-1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, version 1 (frozen).
+1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, `apiVersion` 2 (a feature level that only grows; check `apiVersion >= N`, never `== 1`).
    Methods, parameters, every reply and every `errorCode` as JSON Schema, with examples. The
    top-level `x-` fields hold the appinfo declarations, the permission and the request launch.
 2. [`api/client/`](api/client): `homechooser.js`, a one-file client to copy into a web launcher
@@ -22,16 +32,21 @@ Read these, in this order:
 Two things that are easy to get wrong: install Home Chooser and open it once before installing the
 launcher (otherwise the install fails with `Not allowed permission is used`), and launching other
 apps, Back and `webOSRelaunch` are platform calls, not part of this API
-([Platform calls you'll need](docs/launcher-api.md#platform-calls-youll-need)).
+([Platform calls you'll need](docs/launcher-api.md#platform-calls-youll-need)). On webOS 11 and later, a launcher
+that declares `requiredACG` must list `application.query` and `application.launcher` there, or the
+bus refuses its calls ([Permission](docs/launcher-api.md#permission-on-5x-to-10x-and-on-11x-and-12x)).
 
 Self-test:
 
 * In a desktop browser: include `homechooser-mock.js` after `homechooser.js` and open the page;
-  `?hcmock=before-elevation|not-permitted|not-home|absent` selects other start states.
+  `?hcmock=before-elevation|not-permitted|not-home|absent` selects other start states, and
+  `?hcmock-apps=<n>` the number of apps (20 by default).
 * On a rooted TV with Home Chooser installed and an ares device configured:
   `python3 -I e2e/homechooser_e2e.py --device <device> --api-check --launcher <your id> --launcher-ipk <your ipk>`
-  checks the v1 methods as your launcher, every reply against the API description
-  ([Testing your launcher](docs/launcher-api.md#testing-your-launcher)).
+  checks the launcher methods as your launcher, every reply against the API description
+  ([Testing your launcher](docs/launcher-api.md#testing-your-launcher)). It calls through `luna-send -a <your id>`,
+  which does not carry your app's bus permissions, so also open your launcher on the TV: the demo
+  shows a refused call's `errorCode` and `errorText` under its banner.
 
 ## Working on Home Chooser itself
 

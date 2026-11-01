@@ -105,6 +105,7 @@ class PhaseTests:
         self.setup_error = None
         self.error = None  # (exception, traceback) of a phase that ended the run: recorded at close(), as main()
         self.closed = False
+        self.interrupted = False  # Ctrl-C in a phase: no phase runs after it, and the run is not a pass
         self.counts = None
 
     # -- the session
@@ -168,6 +169,8 @@ class PhaseTests:
     def run_test(self, item):
         if self.setup_error:
             return self.outcome('failed', self.setup_error)
+        if self.interrupted:
+            return self.outcome('failed', 'the run was interrupted earlier; this phase did not run')
         rec, run = self.session.rec, self.run
         mark, shots = len(rec.results), self.screens()
         if item[1] == 'cleanup':
@@ -189,6 +192,12 @@ class PhaseTests:
                 run.finish()
             else:
                 own = run.run_phase(item)
+        except KeyboardInterrupt as e:  # Ctrl-C: a failure (never a pass), the cleanup still comes at close()
+            self.interrupted = True
+            self.error = (e, traceback.format_exc())
+            where = self.ids.get(run.done[-1], run.done[-1]) if run.done else item[1]
+            return self.outcome('failed', 'interrupted (Ctrl-C) in %s' % (where,), rec.results[mark:],
+                                [x for x in pending if x in run.done], shots)
         except Exception as e:  # a phase of the first launcher raised: the run ends, the cleanup comes at close()
             self.error = (e, traceback.format_exc())
             where = 'the cleanup' if item[1] == 'cleanup' else self.ids.get(run.done[-1], run.done[-1])

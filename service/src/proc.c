@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include "proc.h"
 
-#define OUTPUT_MAX_BYTES (64 * 1024)
+#define OUTPUT_MAX_BYTES (1024 * 1024)
 
 void child_setup(void *context)
 {

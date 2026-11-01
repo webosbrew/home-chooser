@@ -85,7 +85,7 @@ def cap(name):
 
 # ---- TypeScript ----
 
-NAMED = ('AppId', 'App', 'RunningApp')
+NAMED = ('AppId', 'App', 'RunningApp', 'LaunchPoint', 'Input', 'IconEntry')
 
 
 def ts_type(spec, schema, indent):
@@ -94,12 +94,14 @@ def ts_type(spec, schema, indent):
         if name in NAMED:
             return name
         if name == 'ApiVersion':
-            return '1'
+            return 'number'
         return ts_type(spec, resolve(spec, schema), indent)
     if 'const' in schema:
         return json.dumps(schema['const'])
     if 'enum' in schema:
         return ' | '.join(json.dumps(v) for v in schema['enum'])
+    if 'oneOf' in schema:
+        return '(%s)' % ' | '.join(ts_type(spec, s, indent) for s in schema['oneOf'])
     if 'allOf' in schema or schema.get('type') == 'object' or 'properties' in schema:
         props, required = flatten(spec, schema)
         return ts_object(spec, props, required, indent)
@@ -130,20 +132,22 @@ def ts_object(spec, props, required, indent):
 def dts(spec):
     schemas = spec['components']['schemas']
     perm = spec['x-permission']['group']
-    out = ['// Types of homechooser.js, the Home Chooser launcher API v1 client.', GENERATED,
+    out = ['// Types of homechooser.js, the Home Chooser launcher API client.', GENERATED,
            '// SPDX-License-Identifier: Apache-2.0', '',
            '// A <script> include defines the global HomeChooser; a CommonJS require returns the same object.',
            'export as namespace HomeChooser;', 'export = HomeChooser;', '', 'declare namespace HomeChooser {']
     out.append('\t/** %s */' % schemas['AppId']['description'])
     out.append('\ttype AppId = string;')
-    for name in ('App', 'RunningApp'):
+    for name in ('App', 'RunningApp', 'LaunchPoint', 'Input'):
         props, required = flatten(spec, schemas[name])
         doc = schemas[name].get('description')
         if doc:
             out.append('\t/** %s */' % doc)
         out.append('\tinterface %s %s' % (name, ts_object(spec, props, required, 1)))
-    out.append('\t/** Members of every successful reply. More may be added within v1; ignore unknown ones. */')
-    out.append('\tinterface Success {\n\t\treturnValue: true;\n\t\tapiVersion: 1;\n\t}')
+    out.append('\t/** %s */' % schemas['IconEntry']['description'])
+    out.append('\ttype IconEntry = %s;' % ' | '.join(ts_type(spec, b, 1) for b in schemas['IconEntry']['oneOf']))
+    out.append('\t/** Members of every successful reply. More may be added at later levels; ignore unknown ones. */')
+    out.append('\tinterface Success {\n\t\treturnValue: true;\n\t\tapiVersion: number;\n\t}')
     for m in spec['methods']:
         ok, _ = branches(spec, m)
         props, required = flatten(spec, ok)
@@ -160,7 +164,7 @@ def dts(spec):
     out.append('''	/** A failure reply from Home Chooser (returnValue false, with apiVersion). */
 	interface Failure {
 		returnValue: false;
-		apiVersion: 1;
+		apiVersion: number;
 		errorCode: string;
 		errorText: string;
 	}
@@ -192,7 +196,14 @@ def dts(spec):
 		prototype: HomeChooserError;
 	};
 ''')
-    out.append('\tconst API_VERSION: 1;')
+    out.append('\t/** The highest apiVersion level this client was generated for. Do not compare a reply against it with ===: use supports(level). */')
+    out.append('\tconst API_VERSION: %d;' % spec['info']['x-apiVersion'])
+    out.append('''	/**
+	 * True when the apiVersion Home Chooser's replies have reported so far is at least level. Call getInfo first;
+	 * false until a reply has come. Use supports(2) for listLaunchPoints, listInputs, getIcons and subscribe,
+	 * never apiVersion === 1: levels only add.
+	 */
+	function supports(level: number): boolean;''')
     out.append('\tconst SERVICE: %s;' % json.dumps(spec['servers'][0]['url']))
     out.append('\tconst PERMISSION: %s;' % json.dumps(perm))
     out.append('\tconst HOME_CHOOSER_ID: %s;' % json.dumps(spec['x-requestLaunch']['payload']['id']))
@@ -209,7 +220,19 @@ def dts(spec):
                 m['name'], '?' if optional else '', cap(m['name']), cap(m['name'])))
         else:
             out.append('\tfunction %s(params?: {}): Promise<%sResult>;' % (m['name'], cap(m['name'])))
-    out.append('''	/**
+    out.append('''	/** What subscribe returns: cancel() ends the subscription (the bus's own cancel). */
+	interface Subscription {
+		cancel(): void;
+	}
+%(subscribe)s
+	/**
+	 * Replaces the subscription transport (homechooser-mock.js uses it). fn(uri, payload, onMessage) starts a
+	 * call that may answer many times, calls onMessage(reply) for each reply or onMessage(null, error) when the
+	 * transport fails, and returns a function that cancels it. Pass nothing to restore the bridge.
+	 */
+	function setSubscribeTransport(transport?: (uri: string, payload: object,
+		onMessage: (reply: {[key: string]: unknown} | null, error?: unknown) => void) => () => void): void;
+	/**
 	 * Asks the owner to make an app the Home app: launches Home Chooser with {request: appId}. A request only:
 	 * the promise says whether the launch was accepted, not what the owner chose; call getInfo later and read
 	 * isSelectedHome. appId defaults to ownAppId(); the promise rejects with a TypeError when there is none.
@@ -237,15 +260,34 @@ def dts(spec):
 		apps: App[];
 		running: RunningApp[];
 		foreground: {appId: string; windowId?: string; processId?: number};
+		launchPoints: LaunchPoint[];
+		inputs: Input[];
 		/** App id (with "#largeIcon" for that size) -> {mimeType, data, byteLength}. */
 		icons: {[id: string]: {mimeType: string; data: string; byteLength: number}};
+		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#largeIcon") -> an icon entry. */
+		batchIcons: {[key: string]: IconEntry};
+		/** Sends the subscribers of a method its current mock state again, as after a change. */
+		notify(method: %(notify)s): void;
 		/** Payloads of the applicationManager/launch calls made. */
 		launches: object[];
 		delayMs: number;
 	}
 }
 ''')
-    return '\n'.join(out)
+    subs = ''
+    for m in spec['methods']:
+        if m.get('x-subscribes'):
+            subs += ('\t/** Subscribes to %s: onReply gets the whole reply now and again after every change; onError gets the\n'
+                     '\t * failure that ended it (the subscription is over then). */\n'
+                     '\tfunction subscribe(method: %s, params: %sParams | null, onReply: (reply: %sResult) => void,\n'
+                     '\t\tonError?: (error: HomeChooserError) => void): Subscription;\n') % (
+                m['name'], json.dumps(m['name']), cap(m['name']), cap(m['name']))
+    notify = ' | '.join("'%s'" % m['name'] for m in spec['methods'] if m.get('x-subscribes'))
+    return '\n'.join(out) % {'subscribe': subs.rstrip('\n'), 'notify': notify}
+
+
+def or_list(names):
+    return ', '.join(names[:-1]) + ' or ' + names[-1] if len(names) > 1 else ''.join(names)
 
 
 def method_needs(m):
@@ -268,6 +310,10 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 //   'platform'     the luna bus (no apiVersion): Home Chooser is absent or too old, or the permission
 //                  was not installed with your app. Call getInfo and branch.
 //   'transport'    nothing usable came back: no webOS service bridge, no reply in TIMEOUT_MS, not JSON.
+// subscribe(method, params, onReply, onError) keeps a method open that takes subscribe:
+//   %(subscribing)s.
+// It gives the whole reply now and after every change, until cancel(). Home Chooser keeps no copy:
+// cache what you draw.
 // Types: homechooser.d.ts. Fake data for a desktop browser: homechooser-mock.js.
 (function (root, factory) {
 	var api = factory(root);
@@ -312,6 +358,30 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 		transport = fn || bridgeCall;
 	}
 
+	// A call that may answer many times (subscribe: true). onMessage(reply) for each reply, or
+	// onMessage(null, error) when there is no bridge or a reply is not JSON. Returns the cancel function.
+	function bridgeSubscribe(uri, payload, onMessage) {
+		var Bridge = root.WebOSServiceBridge || root.PalmServiceBridge;
+		if (!Bridge) {
+			setTimeout(function () { onMessage(null, new Error('no webOS service bridge')); }, 0);
+			return function () {};
+		}
+		var bridge = new Bridge();
+		bridge.onservicecallback = function (message) {
+			var reply;
+			try { reply = JSON.parse(message); } catch (e) { onMessage(null, e); return; }
+			onMessage(reply);
+		};
+		bridge.call(uri, JSON.stringify(payload || {}));
+		return function () { bridge.cancel(); };
+	}
+
+	var subscribeTransport = bridgeSubscribe;
+
+	function setSubscribeTransport(fn) {
+		subscribeTransport = fn || bridgeSubscribe;
+	}
+
 	function HomeChooserError(reply, source, cause) {
 		var message = reply.errorText || (source === 'homechooser' ? 'Home Chooser refused the call' : 'call failed');
 		this.name = 'HomeChooserError';
@@ -327,16 +397,29 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 	HomeChooserError.prototype = Object.create(Error.prototype);
 	HomeChooserError.prototype.constructor = HomeChooserError;
 
+	// The highest apiVersion a Home Chooser reply has carried so far; 0 before any.
+	var seenLevel = 0;
+	function noteLevel(reply) {
+		if (typeof reply.apiVersion === 'number' && reply.apiVersion > seenLevel) {
+			seenLevel = reply.apiVersion;
+		}
+	}
+	function supports(level) {
+		return seenLevel >= level;
+	}
+
 	// Resolves with a returnValue:true reply; rejects with a HomeChooserError otherwise.
 	function settle(call) {
 		return call.then(function (reply) {
 			if (reply && typeof reply === 'object' && reply.returnValue === true) {
+				noteLevel(reply);
 				return reply;
 			}
 			if (!reply || typeof reply !== 'object') {
 				throw new HomeChooserError({returnValue: false, errorText: 'reply is not an object'}, 'transport');
 			}
 			// Every reply of Home Chooser carries apiVersion; a reply of the luna bus itself does not.
+			noteLevel(reply);
 			throw new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform');
 		}, function (error) {
 			var text = error && error.message ? error.message : String(error);
@@ -346,6 +429,45 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 
 	function callMethod(method, params) {
 		return settle(lunaCall(SERVICE + '/' + method, params || {}));
+	}
+
+	// subscribe(method, params, onReply, onError): a method that takes subscribe: true, that is
+	// %(subscribing)s.
+	// onReply gets every reply with returnValue true: the whole state now, and the whole state again
+	// after each change; keep the latest and redraw. onError gets a HomeChooserError (sources
+	// as above) and the subscription is over; subscribe again later if you need to. Returns {cancel}.
+	function subscribe(method, params, onReply, onError) {
+		var payload = {}, k, ended = false, stop = null;
+		for (k in params || {}) {
+			if (Object.prototype.hasOwnProperty.call(params, k)) payload[k] = params[k];
+		}
+		payload.subscribe = true;
+		function end(error) {
+			if (ended) return;
+			ended = true;
+			if (stop) stop();
+			if (onError) onError(error);
+		}
+		stop = subscribeTransport(SERVICE + '/' + method, payload, function (reply, error) {
+			if (ended) return;
+			if (error || !reply || typeof reply !== 'object') {
+				var text = error && error.message ? error.message : error ? String(error) : 'reply is not an object';
+				end(new HomeChooserError({returnValue: false, errorText: text}, 'transport', error));
+			} else if (reply.returnValue === true) {
+				noteLevel(reply);
+				onReply(reply);
+			} else {
+				end(new HomeChooserError(reply, 'apiVersion' in reply ? 'homechooser' : 'platform'));
+			}
+		});
+		if (ended && stop) stop();
+		return {
+			cancel: function () {
+				if (ended) return;
+				ended = true;
+				stop();
+			}
+		};
 	}
 '''
 
@@ -374,10 +496,13 @@ CLIENT_TAIL = '''
 		ERROR_CODES: %(error_codes)s,
 		HomeChooserError: HomeChooserError,
 %(exports)s
+		supports: supports,
+		subscribe: subscribe,
 		requestHome: requestHome,
 		ownAppId: ownAppId,
 		lunaCall: lunaCall,
-		setTransport: setTransport
+		setTransport: setTransport,
+		setSubscribeTransport: setSubscribeTransport
 	};
 	return api;
 }));
@@ -391,6 +516,7 @@ def client(spec):
         'hc_id': json.dumps(spec['x-requestLaunch']['payload']['id']),
         'request_uri': json.dumps(spec['x-requestLaunch']['uri']),
         'timeout': spec['x-luna']['clientTimeoutSeconds'] * 1000,
+        'subscribing': or_list([m['name'] for m in spec['methods'] if m.get('x-subscribes')]),
     }
     for m in spec['methods']:
         sig = '{%s}' % ', '.join(p['name'] + ('' if p.get('required') else '?') for p in m['params'])
@@ -421,6 +547,10 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 // Chooser methods answer from HomeChooser.mock (edit it in the console), with the caller checks in
 // the service's order, and luna://com.webos.applicationManager/launch is logged and succeeds.
 // ?hcmock=<scenario> in the page URL picks the getInfo state: %(scenarios)s.
+// ?hcmock-apps=<n> lists n apps (default %(app_count)d: the spec's example apps, then made-up ones).
+// Subscriptions answer at once and again on HomeChooser.mock.notify(method); ?hcmock-changes=<ms> also
+// flips the last input's connected state every <ms>, brings the next app to the foreground (and into the
+// running list), and notifies the listInputs, getForegroundApp and listRunning subscribers.
 (function (root) {
 	'use strict';
 	var HC = root.HomeChooser;
@@ -450,14 +580,27 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		scenario = 'selected-home';
 	}
 
+	// n apps: the example apps, the made-up ones, then numbered ones.
+	function mockApps(n) {
+		var apps = DATA.apps.concat(DATA.moreApps);
+		for (var i = apps.length + 1; apps.length < n; i++) {
+			apps.push({id: 'org.example.mock' + i, title: 'Mock App ' + i, icon: 'icon.png', removable: true});
+		}
+		return copy(apps.slice(0, n));
+	}
+	var count = /[?&]hcmock-apps=(\\d+)/.exec((root.location && root.location.search) || '');
+
 	var mock = {
 		scenario: scenario,
 		callerId: DATA.callerId,
 		info: copy(DATA.scenarios[scenario] || DATA.scenarios['selected-home']),
-		apps: copy(DATA.apps),
+		apps: mockApps(count ? Number(count[1]) : DATA.appCount),
 		running: copy(DATA.running),
 		foreground: copy(DATA.foreground),
+		launchPoints: copy(DATA.launchPoints),
+		inputs: copy(DATA.inputs),
 		icons: copy(DATA.icons),
+		batchIcons: copy(DATA.batchIcons),
 		launches: [],
 		delayMs: 30
 	};
@@ -508,18 +651,64 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		return null;
 	}
 
+	// The list reply of a method that subscribes, with subscribed true on a subscription.
+	function list(key, items, params) {
+		var fields = {};
+		if (params && params.subscribe === true) fields.subscribed = true;
+		fields[key] = copy(items);
+		return success(fields);
+	}
+
+	function iconItemKey(item) {
+		var keys = ['id', 'launchPointId', 'inputId'], found = null;
+		if (!item || typeof item !== 'object') return null;
+		for (var i = 0; i < keys.length; i++) {
+			if (Object.prototype.hasOwnProperty.call(item, keys[i])) {
+				if (found !== null || typeof item[keys[i]] !== 'string' || !item[keys[i]]) return null;
+				found = keys[i] + ':' + item[keys[i]];
+			}
+		}
+		if (found === null) return null;
+		if (Object.prototype.hasOwnProperty.call(item, 'size')) {
+			if (found.indexOf('inputId:') === 0 || (item.size !== 'icon' && item.size !== 'largeIcon')) return null;
+			if (item.size === 'largeIcon') found += '#largeIcon';
+		}
+		if (found.indexOf('id:') === 0 && !new RegExp(DATA.appIdPattern).test(item.id)) return null;
+		return found;
+	}
+
 	var handlers = {
 		getInfo: function () {
 			return success(copy(mock.info));
 		},
-		listApps: function () {
-			return success({apps: copy(mock.apps)});
+		listApps: function (params) {
+			return list('apps', mock.apps, params);
 		},
-		listRunning: function () {
-			return success({running: copy(mock.running)});
+		listLaunchPoints: function (params) {
+			return list('launchPoints', mock.launchPoints, params);
 		},
-		getForegroundApp: function () {
-			return success(copy(mock.foreground));
+		listInputs: function (params) {
+			return list('inputs', mock.inputs, params);
+		},
+		getIcons: function (params) {
+			var items = params.items, icons = [];
+			if (!items || !items.length || items.length > DATA.iconItemsMax) return fail('badRequest');
+			for (var i = 0; i < items.length; i++) {
+				var key = iconItemKey(items[i]);
+				if (!key) return fail('badRequest');
+				var known = key.indexOf('id:') === 0 && findApp(key.slice(3).split('#')[0]);
+				icons.push(copy(mock.batchIcons[key] || (known ? {errorCode: 'noIcon', errorText: 'No icon (mock)'} :
+					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
+			}
+			return success({icons: icons});
+		},
+		listRunning: function (params) {
+			return list('running', mock.running, params);
+		},
+		getForegroundApp: function (params) {
+			var reply = success(copy(mock.foreground));
+			if (params && params.subscribe === true) reply.subscribed = true;
+			return reply;
 		},
 		getAppInfo: function (params) {
 			var app = findApp(params.id);
@@ -564,6 +753,54 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		return {returnValue: false, errorCode: -1, errorText: 'Unknown service (mock: only Home Chooser and ' + DATA.launchUri + ' are faked)'};
 	}
 
+	// Subscriptions: per method, the onMessage functions of the open ones.
+	var subscribers = {};
+
+	mock.notify = function (method) {
+		var list = (subscribers[method] || []).slice();
+		for (var i = 0; i < list.length; i++) list[i](handlers[method]({subscribe: true}));
+	};
+
+	HC.setSubscribeTransport(function (uri, payload, onMessage) {
+		var request = copy(payload || {}), method = uri.slice(DATA.service.length + 1), open = true;
+		function send(reply) {
+			setTimeout(function () { if (open) onMessage(reply); }, mock.delayMs);
+		}
+		var reply = route(uri, request);
+		var subscribing = reply.returnValue === true && DATA.subscribing.indexOf(method) >= 0 && request.subscribe === true;
+		if (subscribing && (subscribers[method] || []).length >= DATA.subscribersMax) {
+			reply = fail('tooManySubscriptions');
+			subscribing = false;
+		}
+		send(reply);
+		if (!subscribing) return function () { open = false; };
+		(subscribers[method] = subscribers[method] || []).push(send);
+		return function () {
+			open = false;
+			subscribers[method] = subscribers[method].filter(function (f) { return f !== send; });
+		};
+	});
+
+	var changes = /[?&]hcmock-changes=(\\d+)/.exec((root.location && root.location.search) || '');
+	var turn = 0;
+	if (changes && Number(changes[1]) > 0) {
+		setInterval(function () {
+			var input = mock.inputs[mock.inputs.length - 1];
+			if (input) {
+				input.connected = !input.connected;
+				mock.notify('listInputs');
+			}
+			// The next visible app other than the caller comes to the foreground, as if the owner opened it.
+			var shown = mock.apps.filter(function (a) { return a.id !== mock.callerId && a.visible !== false; });
+			if (!shown.length) return;
+			var app = shown[turn++ %% shown.length];
+			mock.foreground = {appId: app.id};
+			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
+			mock.notify('getForegroundApp');
+			mock.notify('listRunning');
+		}, Number(changes[1]));
+	}
+
 	HC.setTransport(function (uri, payload) {
 		var request = copy(payload || {});
 		return new Promise(function (resolve) {
@@ -576,6 +813,43 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 	HC.mock = mock;
 }(typeof window !== 'undefined' ? window : this));
 '''
+
+
+# The mock's apps after the listApps example's: plausible apps of a TV, so that a launcher's grid,
+# focus movement and placeholders can be tried in a browser. One is visible:false, some carry the
+# appinfo colours. ?hcmock-apps=<n> picks how many apps the mock lists (default MOCK_APP_COUNT).
+MOCK_APP_COUNT = 20
+MOCK_MORE_APPS = [
+    ('weather', 'Weather', {'iconColor': '#2a7fd4'}),
+    ('photos', 'Photos', {'iconColor': '#e2584a', 'bgColor': '#ffffff'}),
+    ('music', 'Music', {}),
+    ('podcasts', 'Podcasts', {'iconColor': '#8a3fc7'}),
+    ('news', 'News Today', {}),
+    ('recipes', 'Recipes', {'bgColor': '#f4e7d3'}),
+    ('fitness', 'Fitness at Home', {'iconColor': '#1c9c6b'}),
+    ('cartoons', 'Kids Cartoons', {'iconColor': '#f2b705', 'bgColor': '#202020'}),
+    ('moviestore', 'Movie Store', {}),
+    ('radio', 'Internet Radio', {'iconColor': '#d43f6a'}),
+    ('chess', 'Chess', {}),
+    ('sports', 'Sports Live', {'iconColor': '#0e5aa7', 'bgColor': '#0e5aa7'}),
+    ('travel', 'Travel Guide', {}),
+    ('karaoke', 'Karaoke Night', {'iconColor': '#c2185b'}),
+    ('browser', 'Web Browser', {}),
+    ('gallery', 'Art Gallery', {'bgColor': '#111111'}),
+    ('yoga', 'Yoga', {'iconColor': '#6d757f'}),
+    ('helper', 'Background Helper', {'visible': False, 'removable': False}),
+]
+
+
+def mock_more_apps():
+    out = []
+    for name, title, extra in MOCK_MORE_APPS:
+        app_id = 'org.example.' + name
+        app = {'id': app_id, 'title': title, 'icon': 'icon.png', 'version': '1.0.0',
+               'folderPath': '/media/developer/apps/usr/palm/applications/' + app_id, 'removable': True}
+        app.update(extra)
+        out.append(app)
+    return out
 
 
 def first_success(spec, method):
@@ -605,6 +879,13 @@ def mock(spec):
         if v.get('returnValue') is True:
             params = {p['name']: p['value'] for p in ex['params']}
             icons[params['id'] + ('#largeIcon' if params.get('size') == 'largeIcon' else '')] = strip(v)
+    batch = {}
+    ex = next(x for x in next(m for m in spec['methods'] if m['name'] == 'getIcons')['examples']
+              if x['result']['value'].get('returnValue') is True)
+    items = next(p['value'] for p in ex['params'] if p['name'] == 'items')
+    for item, entry in zip(items, ex['result']['value']['icons']):
+        kind = next(k for k in ('id', 'launchPointId', 'inputId') if k in item)
+        batch['%s:%s%s' % (kind, item[kind], '#largeIcon' if item.get('size') == 'largeIcon' else '')] = entry
     methods = {}
     for m in spec['methods']:
         params = []
@@ -629,13 +910,22 @@ def mock(spec):
         'errors': {code: e['cause'] for code, e in spec['x-errors'].items()},
         'scenarios': info_examples,
         'apps': first_success(spec, 'listApps')['apps'],
+        'moreApps': mock_more_apps(),
+        'appCount': MOCK_APP_COUNT,
         'running': first_success(spec, 'listRunning')['running'],
         'foreground': strip(first_success(spec, 'getForegroundApp')),
         'icons': icons,
+        'launchPoints': first_success(spec, 'listLaunchPoints')['launchPoints'],
+        'inputs': first_success(spec, 'listInputs')['inputs'],
+        'batchIcons': batch,
+        'iconItemsMax': next(m for m in spec['methods'] if m['name'] == 'getIcons')['x-itemsMax'],
+        'appIdPattern': spec['components']['schemas']['AppId']['pattern'],
+        'subscribing': [m['name'] for m in spec['methods'] if m.get('x-subscribes')],
+        'subscribersMax': spec['x-luna']['subscribersMax'],
         'methods': methods,
     }
     names = ', '.join(sorted(info_examples) + ['absent'])
-    return MOCK % {'generated': GENERATED, 'scenarios': names, 'data': js(data, 1)}
+    return MOCK % {'generated': GENERATED, 'scenarios': names, 'data': js(data, 1), 'app_count': MOCK_APP_COUNT}
 
 
 def outputs(spec):

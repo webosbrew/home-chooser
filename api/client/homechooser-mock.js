@@ -8,6 +8,10 @@
 // Chooser methods answer from HomeChooser.mock (edit it in the console), with the caller checks in
 // the service's order, and luna://com.webos.applicationManager/launch is logged and succeeds.
 // ?hcmock=<scenario> in the page URL picks the getInfo state: before-elevation, not-home, not-permitted, selected-home, absent.
+// ?hcmock-apps=<n> lists n apps (default 20: the spec's example apps, then made-up ones).
+// Subscriptions answer at once and again on HomeChooser.mock.notify(method); ?hcmock-changes=<ms> also
+// flips the last input's connected state every <ms>, brings the next app to the foreground (and into the
+// running list), and notifies the listInputs, getForegroundApp and listRunning subscribers.
 (function (root) {
 	'use strict';
 	var HC = root.HomeChooser;
@@ -19,7 +23,7 @@
 	}
 
 	var DATA = {
-		"apiVersion": 1,
+		"apiVersion": 2,
 		"service": "luna://org.webosbrew.homechooser.service",
 		"serviceName": "org.webosbrew.homechooser.service",
 		"launchUri": "luna://com.webos.applicationManager/launch",
@@ -41,7 +45,7 @@
 			"noPermission": "The installed appinfo lacks org.webosbrew.homechooser.applications.",
 			"lookupFailed": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.",
 			"notHome": "The app is not the selected Home.",
-			"badRequest": "id is missing or not an app id, or getAppIcon.size is invalid.",
+			"badRequest": "id is missing or not an app id, getAppIcon.size is invalid, or getIcons.items is not 1 to 64 valid items.",
 			"notFound": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.",
 			"noIcon": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.",
 			"iconTooLarge": "getAppIcon: the icon exceeds 262144 bytes.",
@@ -51,6 +55,7 @@
 			"timeout": "A bounded application manager call reached its time limit.",
 			"refused": "The application manager explicitly refused an operation or target lookup for a reason other than absence.",
 			"badReply": "The application manager did not provide usable JSON, or its successful list reply lacked the expected array.",
+			"tooManySubscriptions": "The method already has 16 subscribers.",
 			"internal": "The service could not make a confirmation token."
 		},
 		"scenarios": {
@@ -101,6 +106,168 @@
 				"removable": true
 			}
 		],
+		"moreApps": [
+			{
+				"id": "org.example.weather",
+				"title": "Weather",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.weather",
+				"removable": true,
+				"iconColor": "#2a7fd4"
+			},
+			{
+				"id": "org.example.photos",
+				"title": "Photos",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.photos",
+				"removable": true,
+				"iconColor": "#e2584a",
+				"bgColor": "#ffffff"
+			},
+			{
+				"id": "org.example.music",
+				"title": "Music",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.music",
+				"removable": true
+			},
+			{
+				"id": "org.example.podcasts",
+				"title": "Podcasts",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.podcasts",
+				"removable": true,
+				"iconColor": "#8a3fc7"
+			},
+			{
+				"id": "org.example.news",
+				"title": "News Today",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.news",
+				"removable": true
+			},
+			{
+				"id": "org.example.recipes",
+				"title": "Recipes",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.recipes",
+				"removable": true,
+				"bgColor": "#f4e7d3"
+			},
+			{
+				"id": "org.example.fitness",
+				"title": "Fitness at Home",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.fitness",
+				"removable": true,
+				"iconColor": "#1c9c6b"
+			},
+			{
+				"id": "org.example.cartoons",
+				"title": "Kids Cartoons",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.cartoons",
+				"removable": true,
+				"iconColor": "#f2b705",
+				"bgColor": "#202020"
+			},
+			{
+				"id": "org.example.moviestore",
+				"title": "Movie Store",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.moviestore",
+				"removable": true
+			},
+			{
+				"id": "org.example.radio",
+				"title": "Internet Radio",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.radio",
+				"removable": true,
+				"iconColor": "#d43f6a"
+			},
+			{
+				"id": "org.example.chess",
+				"title": "Chess",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.chess",
+				"removable": true
+			},
+			{
+				"id": "org.example.sports",
+				"title": "Sports Live",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.sports",
+				"removable": true,
+				"iconColor": "#0e5aa7",
+				"bgColor": "#0e5aa7"
+			},
+			{
+				"id": "org.example.travel",
+				"title": "Travel Guide",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.travel",
+				"removable": true
+			},
+			{
+				"id": "org.example.karaoke",
+				"title": "Karaoke Night",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.karaoke",
+				"removable": true,
+				"iconColor": "#c2185b"
+			},
+			{
+				"id": "org.example.browser",
+				"title": "Web Browser",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.browser",
+				"removable": true
+			},
+			{
+				"id": "org.example.gallery",
+				"title": "Art Gallery",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.gallery",
+				"removable": true,
+				"bgColor": "#111111"
+			},
+			{
+				"id": "org.example.yoga",
+				"title": "Yoga",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.yoga",
+				"removable": true,
+				"iconColor": "#6d757f"
+			},
+			{
+				"id": "org.example.helper",
+				"title": "Background Helper",
+				"icon": "icon.png",
+				"version": "1.0.0",
+				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.helper",
+				"removable": false,
+				"visible": false
+			}
+		],
+		"appCount": 20,
 		"running": [
 			{
 				"id": "org.example.app",
@@ -121,6 +288,90 @@
 				"byteLength": 8
 			}
 		},
+		"launchPoints": [
+			{
+				"launchPointId": "netflix_default",
+				"id": "netflix",
+				"title": "Netflix",
+				"lptype": "default",
+				"icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png",
+				"largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png",
+				"iconColor": "#ffffff",
+				"bgColor": "#ffffff",
+				"bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png",
+				"params": {},
+				"removable": true
+			},
+			{
+				"launchPointId": "com.webos.app.browser_bookmark1",
+				"id": "com.webos.app.browser",
+				"title": "Example bookmark",
+				"lptype": "bookmark",
+				"icon": "/mnt/lg/cache/webbrowser/bookmark.png",
+				"iconColor": "#ffffff",
+				"params": {
+					"target": "https://www.example.com/"
+				},
+				"removable": true
+			}
+		],
+		"inputs": [
+			{
+				"id": "com.webos.app.externalinput.av1",
+				"inputId": "AV_1",
+				"label": "AV",
+				"port": 1,
+				"connected": false,
+				"activate": false,
+				"params": {},
+				"icon": "/usr/palm/plugins/inputapps/assets/small/av.png"
+			},
+			{
+				"id": "com.webos.app.hdmi1",
+				"inputId": "HDMI_1",
+				"label": "HDMI 1",
+				"port": 1,
+				"connected": true,
+				"activate": true,
+				"params": {},
+				"icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"
+			}
+		],
+		"batchIcons": {
+			"id:org.example.app": {
+				"mimeType": "image/png",
+				"dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+				"byteLength": 8
+			},
+			"id:org.example.gone": {
+				"errorCode": "notFound",
+				"errorText": "No such app"
+			},
+			"launchPointId:netflix_default#largeIcon": {
+				"mimeType": "image/png",
+				"dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+				"byteLength": 8
+			},
+			"inputId:HDMI_1": {
+				"mimeType": "image/png",
+				"dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+				"byteLength": 8
+			},
+			"launchPointId:com.webos.app.browser_bookmark1": {
+				"errorCode": "noIcon",
+				"errorText": "No readable icon of the requested size"
+			}
+		},
+		"iconItemsMax": 64,
+		"appIdPattern": "^[A-Za-z0-9._-]{1,128}$",
+		"subscribing": [
+			"listApps",
+			"listRunning",
+			"getForegroundApp",
+			"listLaunchPoints",
+			"listInputs"
+		],
+		"subscribersMax": 16,
 		"methods": {
 			"getInfo": {
 				"needsRoot": false,
@@ -132,19 +383,34 @@
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"listRunning": {
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getForegroundApp": {
 				"needsRoot": true,
 				"needsPermission": true,
 				"needsSelectedHome": false,
-				"params": []
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
 			},
 			"getAppInfo": {
 				"needsRoot": true,
@@ -175,6 +441,39 @@
 							"icon",
 							"largeIcon"
 						]
+					}
+				]
+			},
+			"listLaunchPoints": {
+				"needsRoot": true,
+				"needsPermission": true,
+				"needsSelectedHome": false,
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
+			},
+			"listInputs": {
+				"needsRoot": true,
+				"needsPermission": true,
+				"needsSelectedHome": false,
+				"params": [
+					{
+						"name": "subscribe",
+						"required": false
+					}
+				]
+			},
+			"getIcons": {
+				"needsRoot": true,
+				"needsPermission": true,
+				"needsSelectedHome": false,
+				"params": [
+					{
+						"name": "items",
+						"required": true
 					}
 				]
 			},
@@ -226,14 +525,27 @@
 		scenario = 'selected-home';
 	}
 
+	// n apps: the example apps, the made-up ones, then numbered ones.
+	function mockApps(n) {
+		var apps = DATA.apps.concat(DATA.moreApps);
+		for (var i = apps.length + 1; apps.length < n; i++) {
+			apps.push({id: 'org.example.mock' + i, title: 'Mock App ' + i, icon: 'icon.png', removable: true});
+		}
+		return copy(apps.slice(0, n));
+	}
+	var count = /[?&]hcmock-apps=(\d+)/.exec((root.location && root.location.search) || '');
+
 	var mock = {
 		scenario: scenario,
 		callerId: DATA.callerId,
 		info: copy(DATA.scenarios[scenario] || DATA.scenarios['selected-home']),
-		apps: copy(DATA.apps),
+		apps: mockApps(count ? Number(count[1]) : DATA.appCount),
 		running: copy(DATA.running),
 		foreground: copy(DATA.foreground),
+		launchPoints: copy(DATA.launchPoints),
+		inputs: copy(DATA.inputs),
 		icons: copy(DATA.icons),
+		batchIcons: copy(DATA.batchIcons),
 		launches: [],
 		delayMs: 30
 	};
@@ -284,18 +596,64 @@
 		return null;
 	}
 
+	// The list reply of a method that subscribes, with subscribed true on a subscription.
+	function list(key, items, params) {
+		var fields = {};
+		if (params && params.subscribe === true) fields.subscribed = true;
+		fields[key] = copy(items);
+		return success(fields);
+	}
+
+	function iconItemKey(item) {
+		var keys = ['id', 'launchPointId', 'inputId'], found = null;
+		if (!item || typeof item !== 'object') return null;
+		for (var i = 0; i < keys.length; i++) {
+			if (Object.prototype.hasOwnProperty.call(item, keys[i])) {
+				if (found !== null || typeof item[keys[i]] !== 'string' || !item[keys[i]]) return null;
+				found = keys[i] + ':' + item[keys[i]];
+			}
+		}
+		if (found === null) return null;
+		if (Object.prototype.hasOwnProperty.call(item, 'size')) {
+			if (found.indexOf('inputId:') === 0 || (item.size !== 'icon' && item.size !== 'largeIcon')) return null;
+			if (item.size === 'largeIcon') found += '#largeIcon';
+		}
+		if (found.indexOf('id:') === 0 && !new RegExp(DATA.appIdPattern).test(item.id)) return null;
+		return found;
+	}
+
 	var handlers = {
 		getInfo: function () {
 			return success(copy(mock.info));
 		},
-		listApps: function () {
-			return success({apps: copy(mock.apps)});
+		listApps: function (params) {
+			return list('apps', mock.apps, params);
 		},
-		listRunning: function () {
-			return success({running: copy(mock.running)});
+		listLaunchPoints: function (params) {
+			return list('launchPoints', mock.launchPoints, params);
 		},
-		getForegroundApp: function () {
-			return success(copy(mock.foreground));
+		listInputs: function (params) {
+			return list('inputs', mock.inputs, params);
+		},
+		getIcons: function (params) {
+			var items = params.items, icons = [];
+			if (!items || !items.length || items.length > DATA.iconItemsMax) return fail('badRequest');
+			for (var i = 0; i < items.length; i++) {
+				var key = iconItemKey(items[i]);
+				if (!key) return fail('badRequest');
+				var known = key.indexOf('id:') === 0 && findApp(key.slice(3).split('#')[0]);
+				icons.push(copy(mock.batchIcons[key] || (known ? {errorCode: 'noIcon', errorText: 'No icon (mock)'} :
+					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
+			}
+			return success({icons: icons});
+		},
+		listRunning: function (params) {
+			return list('running', mock.running, params);
+		},
+		getForegroundApp: function (params) {
+			var reply = success(copy(mock.foreground));
+			if (params && params.subscribe === true) reply.subscribed = true;
+			return reply;
 		},
 		getAppInfo: function (params) {
 			var app = findApp(params.id);
@@ -338,6 +696,54 @@
 			return {returnValue: true};
 		}
 		return {returnValue: false, errorCode: -1, errorText: 'Unknown service (mock: only Home Chooser and ' + DATA.launchUri + ' are faked)'};
+	}
+
+	// Subscriptions: per method, the onMessage functions of the open ones.
+	var subscribers = {};
+
+	mock.notify = function (method) {
+		var list = (subscribers[method] || []).slice();
+		for (var i = 0; i < list.length; i++) list[i](handlers[method]({subscribe: true}));
+	};
+
+	HC.setSubscribeTransport(function (uri, payload, onMessage) {
+		var request = copy(payload || {}), method = uri.slice(DATA.service.length + 1), open = true;
+		function send(reply) {
+			setTimeout(function () { if (open) onMessage(reply); }, mock.delayMs);
+		}
+		var reply = route(uri, request);
+		var subscribing = reply.returnValue === true && DATA.subscribing.indexOf(method) >= 0 && request.subscribe === true;
+		if (subscribing && (subscribers[method] || []).length >= DATA.subscribersMax) {
+			reply = fail('tooManySubscriptions');
+			subscribing = false;
+		}
+		send(reply);
+		if (!subscribing) return function () { open = false; };
+		(subscribers[method] = subscribers[method] || []).push(send);
+		return function () {
+			open = false;
+			subscribers[method] = subscribers[method].filter(function (f) { return f !== send; });
+		};
+	});
+
+	var changes = /[?&]hcmock-changes=(\d+)/.exec((root.location && root.location.search) || '');
+	var turn = 0;
+	if (changes && Number(changes[1]) > 0) {
+		setInterval(function () {
+			var input = mock.inputs[mock.inputs.length - 1];
+			if (input) {
+				input.connected = !input.connected;
+				mock.notify('listInputs');
+			}
+			// The next visible app other than the caller comes to the foreground, as if the owner opened it.
+			var shown = mock.apps.filter(function (a) { return a.id !== mock.callerId && a.visible !== false; });
+			if (!shown.length) return;
+			var app = shown[turn++ % shown.length];
+			mock.foreground = {appId: app.id};
+			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
+			mock.notify('getForegroundApp');
+			mock.notify('listRunning');
+		}, Number(changes[1]));
 	}
 
 	HC.setTransport(function (uri, payload) {

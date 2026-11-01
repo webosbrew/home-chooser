@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Phases api-before (2a) and api-selected (3a): the launcher API as a launcher calls it."""
+"""The launcher API as a launcher calls it: before the choice (2a, in the choose phase) and with it chosen (3a)."""
 import glob
 import json
 import os
@@ -10,7 +10,8 @@ import urllib.request
 
 from .. import timing
 from ..alerts import RebootAlertMonitor, alert_service_proof
-from ..api_spec import API_GROUP, API_VERSION, DISPOSABLE_ID, api_refused, api_reply_problems, spec_reply_problems
+from ..api_spec import (API_GROUP, API_VERSION, DISPOSABLE_ID, api_refused, api_reply_problems, launcher_methods,
+    spec_reply_problems)
 from ..constants import APP_ID, SCRIPTS_DIR, STOCK, SVC_ID
 from ..evidence import messages_command, parse_luna, service_log_command
 from ..inspector import Inspector
@@ -18,7 +19,7 @@ from ..launchers import FIXTURE_DIR, FIXTURE_ID
 
 
 class ApiSteps:
-    """Phases api-before (2a) and api-selected (3a): the launcher API as a launcher calls it."""
+    """The launcher API before the choice (2a, called by choose) and api-selected (3a)."""
 
     # -- the launcher API (--api-check; docs/launcher-api.md)
     def api(self, method, payload=None, app='launcher'):
@@ -240,10 +241,13 @@ class ApiSteps:
                     files.append(json.loads(line))
                 except ValueError:
                     pass
-            methods = {SVC_ID + '/' + name for name in
-                       ('getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo',
-                        'getAppIcon', 'closeApp', 'uninstallApp')}
-            r.check('11+: namespaced permission and ares.webos.cli grant all eight launcher methods',
+            methods = {SVC_ID + '/' + name for name in launcher_methods()}
+            writes = {SVC_ID + '/closeApp', SVC_ID + '/uninstallApp'}
+            r.check('11+: application.query provides the reading methods, application.launcher closeApp and uninstallApp',
+                    bool(files) and all(set(f.get('application.query', [])) == methods - writes
+                                        and set(f.get('application.launcher', [])) == writes
+                                        and 'default.permission' not in f for f in files), raw[:1200])
+            r.check('11+: namespaced permission and ares.webos.cli grant every launcher method',
                     bool(files) and all(set(f.get(API_GROUP, [])) == methods
                                         and set(f.get('ares.webos.cli', [])) == methods
                                         and 'homechooser.applications' not in f for f in files), raw[:1200])

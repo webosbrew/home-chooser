@@ -56,7 +56,6 @@ class DryScenario:
         self.rec.say('plan, one boot (e2e/README.md "Scopes"):\n    '
                      + '\n    '.join(describe_plan(self.plan, self.launchers)))
         runners = {p: (lambda p=p: self.phase(p)) for p in PHASE if p != 'cleanup'}
-        runners['api-before'] = None  # made inside choose, as in Scenario.begin_run
         return runners
 
     def phase(self, name):
@@ -71,6 +70,8 @@ class DryScenario:
             r.manual('dry: a check left to a person in %s' % name, '--dry-manual')
         if name in self.fail:
             r.check('dry: injected failure in %s' % name, False, '--dry-fail')
+        if 'interrupt:' + name in self.raise_:  # Ctrl-C in the phase
+            raise KeyboardInterrupt
         if name in self.raise_:
             raise RuntimeError('--dry-raise: %s raised' % name)
 

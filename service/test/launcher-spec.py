@@ -56,6 +56,7 @@ FIXTURE = {
         'root': {'type': 'boolean'},
         'selectedHome': {'type': ['string', 'null']},
         'entropy': {'type': 'boolean'},
+        'subscribers': {'type': 'integer', 'minimum': 0},
         'files': {'type': 'object', 'additionalProperties': {
             'type': 'object', 'minProperties': 1, 'maxProperties': 1, 'additionalProperties': False,
             'properties': {'base64': {'type': 'string'}, 'text': {'type': 'string'},
@@ -148,7 +149,8 @@ def lint(spec_path, cases_path, meta_paths):
 
     sv = Validator([])
     methods, records = collect(spec, cases_doc)
-    want = ['getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo', 'getAppIcon', 'closeApp', 'uninstallApp']
+    want = ['getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo', 'getAppIcon', 'closeApp', 'uninstallApp',
+            'listLaunchPoints', 'listInputs', 'getIcons']
     if sorted(methods) != sorted(want):
         problems.append('methods are %s, v1 has %s' % (sorted(methods), sorted(want)))
     # Every schema in the document, against the subset (an unsupported keyword is a problem too).
@@ -279,6 +281,10 @@ def check_case(r, out, spec, sv, timeouts):
         problems.append('%d replies, not 1: %s' % (len(replies), replies))
     if out.get('refs') != 1:
         problems.append('message references at the end: %s, not 1' % out.get('refs'))
+    # A first reply with subscribed true leaves the message in the subscription catalog, nothing else does.
+    want_subs = 1 if r['result'].get('subscribed') is True else 0
+    if out.get('subscribers', 0) != want_subs:
+        problems.append('subscribers after the reply: %s, not %d' % (out.get('subscribers'), want_subs))
     if replies:
         try:
             reply = json.loads(replies[0])
@@ -341,6 +347,7 @@ def contract(spec_path, cases_path, driver, workdir, runner):
             'name': '%s/%s' % (r['method'], r['name']), 'method': r['method'],
             'payload': json.dumps(r['params']), 'app': f['caller'], 'service': f.get('senderService'),
             'root': f['root'], 'choice': f['selectedHome'], 'entropy': f.get('entropy', True), 'calls': script,
+            'fsRoot': root, 'subscribers': f.get('subscribers', 0),
         }))
     input_path = os.path.join(cases_dir, 'input.jsonl')
     with open(input_path, 'w', encoding='utf-8') as f:

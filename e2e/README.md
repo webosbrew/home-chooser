@@ -131,7 +131,7 @@ Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older bu
 `--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
 `--reboot-check[=auto|all]` (reboot the VM with a launcher chosen and check what is re-applied at boot; `auto`, the
 bare flag: once with the full-screen launcher, plus once with the overlay launcher on 10+; `all`: once per window type
-of the run; see "Scopes"); `--reboot-via later|alert`
+of the run; see "Scopes"); `--removal-race` (after step 3, step 3r, below, then the cleanup); `--reboot-via later|alert`
 (accepted for compatibility but not used: no release asks for a restart any more, `expects_reboot_dialog()` is always false, so
 `reboot_after_choice()` is never reached; see "webOS 6-9: nothing restarts");
 `--api-check[=smoke|full]` (the launcher API, see "The launcher API check"; the bare flag is `smoke`); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
@@ -355,8 +355,7 @@ in `hc_e2e/phase_tests.py`, standard library). It needs `e2e/requirements.txt` (
   of the run prints it with the planned phases.
 * **One test per planned phase.** The tests come from `run_plan()` for the slot's release, one per `(launcher,
   phase)`, named `test_<vm>[<launcher>-<phase>]`: `test_w22o_ponytail_us[web.overlay-reboot]`; the launcher is the
-  fixture's name or an author launcher's id. `-k` matches those words: `-k reboot`, `-k api` (`api-before`,
-  `api-selected`), `-k "web.overlay and home"` (its `home-proof` and `window-home`), `-k "not cleanup"`. Without `--vm`
+  fixture's name or an author launcher's id. `-k` matches those words: `-k reboot`, `-k api` (`api-selected`; the API checks before the choice run in `choose`), `-k "web.overlay and home"` (its `home-proof` and `window-home`), `-k "not cleanup"`. Without `--vm`
   or `--tier` no device test exists, so `pytest e2e` runs the unit tests only. The run re-plans from the release it
   finds on the device; a test whose phase is not in that plan is skipped with the plan it found.
 * **Order and dependencies.** The tests run in plan order on one boot, through `PlanRun` (`hc_e2e/plan.py`), the
@@ -378,7 +377,7 @@ in `hc_e2e/phase_tests.py`, standard library). It needs `e2e/requirements.txt` (
   `--junitxml` or `--html` say otherwise.
 * **`--dry`.** The same plan, PlanRun, fixture and reports against a fake device that records its calls
   (`hc_e2e/dry.py`, `dry-calls.json`); `--dry-fail`, `--dry-manual` and `--dry-raise` (comma lists of phases;
-  `vm-start` for the VM start) inject a FAIL, a MANUAL or an exception. `e2e/test_phase_tests.py` runs it.
+  `vm-start` for the VM start; `interrupt:<phase>` for a Ctrl-C in it) inject a FAIL, a MANUAL or an exception. A Ctrl-C in a phase fails that test (pytest exit status 2, `INTERRUPTED` in the summary), runs no later phase and still runs the cleanup. `e2e/test_phase_tests.py` runs it.
 
 **The matrix with pytest.** `run_matrix.py --pytest` keeps its scheduler and runs each slot as
 `python -m pytest e2e/device --vm <vm> --host <host> --outdir <matrix>/<vm> --hc-arg=...`, with the same flags the
@@ -683,6 +682,15 @@ and Home key hook docs.
    again." on every release. The runner polls the log once a second
    for the `notification createToast:` line, takes `5-toast` at once (a toast is short-lived, so the
    reply in the log is the evidence) and checks that exactly one toast was sent and what the reply was.
+With `--removal-race` step 3 is followed by 3r and the cleanup instead of steps 4 and 5:
+
+* 3r. `ares-install --remove` the launcher and then Home Chooser at once, as an owner uninstalling both. The
+  record's `home` (and on 10+ the override, and `getProfiles` `idleApp`) must be stock within 15 s plus 8 s (the
+  8 s times the host slowdown) of the launcher's removal: one confirmation, not one per app. Then the step 5 checks (toast,
+  watcher finished, `assert_stock`, preload policy enabled), Homebrew Channel opened and closed as the only app
+  with screenshot `3r-last-app-closed` (LG Home or the last input in front, never the removed launcher), and Home
+  opens stock.
+
 6. Cleanup: remove the launcher and Home Chooser (not on `w21p-kisscurl`). When the cleanup itself
    removed Home Chooser (a run that stopped early), it waits up to 150 s for the watcher to finish the
    restore (about 15 s per removal it has to confirm) and checks the choice file, the `init.d` entry

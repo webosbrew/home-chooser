@@ -22,9 +22,9 @@ PHASES = (
                                       'the native generator accepts the firmware (6-9, when the plan has the cache phase)'),
     ('choose', PER_RELEASE, 2, True, 'the Home Chooser UI: first open, stale marker, list, dialog, Done toast, 11+ page '
                                      'stays; choice, record, watcher, init.d, key filter and flag (6-9), override (10+); '
-                                     'device texts; reopen with the row ticked'),
-    ('api-before', PER_RELEASE, 2, False, '2a, made inside choose while Home Chooser is open: the launcher API before '
-                                          'the choice (smoke or full) and the request dialog'),
+                                     'device texts; reopen with the row ticked; with --api-check, 2a, made while Home '
+                                     'Chooser is open: the launcher API before the choice (smoke or full) and the '
+                                     'request dialog'),
     ('screensaver', PER_RELEASE, 2, False, '--scenario screensaver|all: Home and the screensaver with the launcher chosen'),
     ('switch', PER_RUNTIME, 2, True, '2s, a later launcher on the same boot: install it, choose it in the list over the '
                                      'current one; Done toast, choice, record, watcher, key filter (6-9), override (10+)'),
@@ -41,6 +41,7 @@ PHASES = (
     ('update', PER_RELEASE, 3, True, '3u: the current build over the old one: no watcher restart, choice kept'),
     ('launcher-update', PER_RELEASE, 3, True, '3v: a new version of the chosen launcher stays Home'),
     ('restore-repair', PER_RELEASE, 3, True, '3f: uninstall with the watcher stopped, then repair (ends the run)'),
+    ('removal-race', PER_RELEASE, 3, True, '3r: --removal-race, the launcher and Home Chooser removed back to back (ends the run)'),
     ('removal', PER_RELEASE, 4, True, '4: launcher removed: stock restore, the alert, Home opens stock; reinstall'),
     ('uninstall', PER_RELEASE, 5, True, '5: Home Chooser removed: residue gone, the toast, Home opens stock'),
     ('cleanup', PER_RELEASE, 6, False, '6: test apps removed, the watcher finished, the final screen'),
@@ -72,7 +73,7 @@ def reboot_windows(major, windows, mode):
 
 def run_plan(shapes, major, opts):
     """The phases of one VM run on one boot, in order: [(launcher index, phase)].  shapes: launcher_shape()
-    per launcher; opts: api, reboot ('', 'auto', 'all'), update, launcher_update, restore_repair,
+    per launcher; opts: api, reboot ('', 'auto', 'all'), update, launcher_update, restore_repair, removal_race,
     screensaver ('lifecycle', 'screensaver', 'all'), until.  The first runnable launcher makes the
     per-release phases and the whole lifecycle; each later one switches in, on the same boot, and makes
     only its scopes: its window type's checks when it is the first of its type, and its launch proof."""
@@ -115,8 +116,6 @@ def run_plan(shapes, major, opts):
         if i == owner:
             plan.append((i, 'install'))
             plan.append((i, 'choose'))
-            if opts.get('api'):
-                plan.append((i, 'api-before'))
             chosen(i, plan)
             if opts.get('screensaver') in ('screensaver', 'all'):
                 plan.append((i, 'screensaver'))
@@ -130,6 +129,10 @@ def run_plan(shapes, major, opts):
                     plan.append((i, phase))
             if opts.get('restore_repair'):
                 ended = True  # it uninstalls Home Chooser: nothing else can follow on this boot
+                break
+            if opts.get('removal_race'):
+                plan.append((i, 'removal-race'))
+                ended = True  # it removes the launcher and Home Chooser: nothing else can follow
                 break
             plan.append((i, 'removal'))
         else:
@@ -151,6 +154,7 @@ def plan_options(a):
             'update': getattr(a, 'update_check', False),
             'launcher_update': getattr(a, 'launcher_update_check', False),
             'restore_repair': getattr(a, 'restore_repair_check', False),
+            'removal_race': getattr(a, 'removal_race', False),
             'screensaver': getattr(a, 'scenario', 'lifecycle'), 'until': getattr(a, 'until', 5)}
 
 

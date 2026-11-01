@@ -56,7 +56,8 @@ include_directories(
 set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c)
 set(SERVICE_SOURCES src/main.c src/apps.c src/bootlink.c src/notify.c
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c
-	src/service/run.c src/service/launcher.c src/service/system.c)
+	src/service/run.c src/service/launcher.c src/service/catalog.c src/service/subscribe.c
+	src/service/system.c src/luna-child.c)
 set(WATCHER_SOURCES src/watcher/core.c src/watcher/record.c src/watcher/restore.c src/watcher/preload.c src/watcher/notify.c src/watcher/gate.c src/watcher/input.c)
 set(DAEMON_SOURCES src/daemon-main.c src/homekey-main.c src/luna-child.c src/watcher/main.c ${WATCHER_SOURCES})
 set(GATE_LIB_SOURCES src/gate/decide.c src/gate/run.c)
@@ -101,10 +102,18 @@ hc_test_program(test-gate-mount SOURCES test/test-gate-mount.c src/gate-mount.c 
 # and /dev/urandom are the case's (see test/test-launcher-contract.c).
 hc_test_program(test-launcher-contract
 	SOURCES test/test-launcher-contract.c test/fake-ls2.c src/service/launcher.c src/service/reply.c
-		src/apps.c src/luna.c src/json.c src/fs.c src/policy.c
+		src/service/catalog.c src/service/subscribe.c src/apps.c src/luna.c src/json.c src/fs.c src/policy.c
 	LIBS ${DAEMON_LIBS})
 target_link_options(test-launcher-contract PRIVATE
-	"LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice,--wrap=open64")
+	"LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice,--wrap=open64,--wrap=hc_fs_prefix")
+# The launcher list subscriptions with the real upstream children (luna-child.c, fake luna-send) on
+# the fake hub (see test/test-launcher-subscribe.c).
+hc_test_program(test-launcher-subscribe
+	SOURCES test/test-launcher-subscribe.c test/fake-ls2.c src/service/launcher.c src/service/reply.c
+		src/service/catalog.c src/service/subscribe.c src/luna-child.c src/apps.c src/luna.c src/proc.c src/json.c
+		src/fs.c src/policy.c
+	LIBS ${DAEMON_LIBS})
+target_link_options(test-launcher-subscribe PRIVATE "LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice")
 
 set(check_abi sh "${CMAKE_CURRENT_SOURCE_DIR}/test/check-abi.sh")
 set(service "$<TARGET_FILE:homechooser-service>")

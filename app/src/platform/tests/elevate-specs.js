@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import {HBC_ELEVATE, ensureRoot, FatalError} from '../elevate';
+import {HBC_ELEVATE, ensureRoot, restartService, FatalError} from '../elevate';
 import {ServiceError} from '../errors';
 import {SERVICE_ID} from '../service';
 
@@ -98,5 +98,20 @@ describe('ensureRoot', () => {
 	test('no answer after elevation is failed', async () => {
 		const t = setup({statuses: [USER, new Error('Service does not exist')]});
 		await expect(t.run()).rejects.toMatchObject({kind: 'failed'});
+	});
+});
+
+describe('restartService', () => {
+	test('quit, then status until the new root instance answers', async () => {
+		const t = setup({statuses: [new ServiceError('timeout', 'gone'), ROOT]});
+		const run = restartService({service: t.service, sleep: async () => {}, log: (l) => t.logs.push(l), timings: FAST});
+		await expect(run).resolves.toEqual(ROOT);
+		expect(t.order).toEqual(['quit', 'status', 'status']);
+		expect(t.call).not.toHaveBeenCalled();
+	});
+	test('no root instance after the restart is fatal', async () => {
+		const t = setup({statuses: [USER]});
+		const run = restartService({service: t.service, sleep: async () => {}, log: () => {}, timings: FAST});
+		await expect(run).rejects.toEqual(expect.objectContaining({kind: 'notRoot'}));
 	});
 });

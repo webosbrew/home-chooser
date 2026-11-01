@@ -178,6 +178,8 @@ def phase_test(hc_run, hc_phase, record_property, request):
     if outcome['status'] == 'xfailed':
         pytest.xfail(outcome['message'])
     if outcome['status'] == 'failed':
+        if hc_run.interrupted:
+            request.session.shouldstop = 'interrupted (Ctrl-C): the run was cut short'  # no later phase runs
         pytest.fail(outcome['message'] + setup, pytrace=False)
 
 
@@ -208,6 +210,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         return
     tr = terminalreporter
     tr.section('hc-e2e results')
+    if tests.interrupted:
+        tr.write_line('INTERRUPTED (Ctrl-C): the run was cut short; it is reported as failed, not passed', red=True)
     tr.write_line('checks: %s' % (tests.counts or {}))
     tr.write_line('results: %s' % config.hc['args'].outdir)
     for name in ('run.log', 'results.json', 'junit.xml', 'report.html'):

@@ -48,6 +48,7 @@ The launcher API checks in `ctest` ([api/README.md](../api/README.md#how-it-is-c
 | `test-launcher-client` | `api/client/` and the copies in `examples/web-launcher/` are what `api/tools/gen-client.py` makes from the spec | python3 |
 | `test-launcher-client-js` | the client and the browser mock in node with a fake bridge; every mock reply against the spec | python3, node (skipped when CMake finds no node) |
 | `test-launcher-contract` | every example and case through the real handlers | the SDK, qemu-arm, a firmware rootfs |
+| `test-launcher-subscribe` | the subscriptions of `listApps`, `listRunning` and `getForegroundApp` with real upstream children and a fake luna-send: first reply, shared upstream, changes, restart, cap, cancel | the SDK, qemu-arm, a firmware rootfs |
 
 `e2e/test_demo_and_schema.py` (in the e2e suite) checks the demo launcher's grid order as the
 runner reproduces it (and, with node, against the demo's own code) and the `--api-check` reply

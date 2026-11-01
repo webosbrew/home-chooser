@@ -29,7 +29,7 @@ class ChooseSteps:
         first = self.ui() or {}
         r.check('first open after a fresh install: no error toast (a marker left by an earlier install is dropped)',
                 not (first.get('toast') or '').startswith("Couldn't"), 'toast: %r' % first.get('toast'))
-        if self.planned('api-before'):
+        if self.plan_options().get('api'):  # 2a, part of the choose phase
             self.api_before()
             r.begin('2 choose the launcher through the UI (continued)')
         # a marker as an earlier install's cut-short run leaves it (WAM keeps localStorage across an
