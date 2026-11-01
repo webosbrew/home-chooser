@@ -145,6 +145,15 @@ def run_plan(shapes, major, opts):
             or (p == 'cleanup' and until >= 5)]
 
 
+def plan_options(a):
+    """run_plan's opts from the parsed command line (or anything with its attribute names)."""
+    return {'api': getattr(a, 'api_check', None), 'reboot': getattr(a, 'reboot_check', None),
+            'update': getattr(a, 'update_check', False),
+            'launcher_update': getattr(a, 'launcher_update_check', False),
+            'restore_repair': getattr(a, 'restore_repair_check', False),
+            'screensaver': getattr(a, 'scenario', 'lifecycle'), 'until': getattr(a, 'until', 5)}
+
+
 def plan_groups(plan):
     """The crash windows of a plan: a guarded phase starts one, the phases without a guard join it."""
     groups = []
@@ -187,7 +196,7 @@ class PlanRun:
     def __init__(self, scenario):
         self.s = scenario
         self.runners = None
-        self.failed = set()  # later launchers one of whose phases raised
+        self.failed = {}  # later launchers one of whose phases raised: why
         self.ended = None  # why no further phase runs: the phase that raised, or the screensaver outcome
         self.done = []  # the plan items handled so far, in order (run or skipped)
         self.finished = False
@@ -233,7 +242,7 @@ class PlanRun:
         if self.ended:
             return result('skipped', self.ended)
         if index in self.failed:
-            return result('skipped', 'an earlier phase of %s raised' % getattr(s.launchers[index], 'spec', index))
+            return result('skipped', self.failed[index])
         guard = PHASE[group[0][1]]['guard']
         if pos == 0:
             s.use_launcher(index)
@@ -256,7 +265,7 @@ class PlanRun:
                 raise
             r.say('runner error in %s:\n%s' % (s.L.spec, traceback.format_exc()))
             r.check('scenario ran to the end', False, repr(e))
-            self.failed.add(index)
+            self.failed[index] = '%s of %s raised %r' % (phase, s.L.spec, e)
             return result('raised', repr(e))
         return result('ran')
 

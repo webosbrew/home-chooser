@@ -1,0 +1,13 @@
+# The pytest device tests and reports (e2e/README.md "Quick start").  The runner itself
+# (homechooser_e2e.py, run_matrix.py, hc_e2e/) is Python standard library only.
+#   python3 -m venv .venv && .venv/bin/pip install -r e2e/requirements.txt
+pytest==9.2.0
+pytest-html==4.2.0
+# their dependencies, pinned
+iniconfig==2.3.1
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+packaging==26.3
+pluggy==1.7.0
+Pygments==2.21.0
+pytest-metadata==3.1.1

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Scenario: one VM run, its launchers on one boot, and the steps it is made of (hc_e2e.steps)."""
 from .device import Device, ELEVATIONS
-from .plan import PER_RELEASE, PlanRun, describe_plan, launcher_shape, run_plan
+from .plan import PER_RELEASE, PlanRun, describe_plan, launcher_shape, plan_options, run_plan
 from .steps.api import ApiSteps
 from .steps.baseline import BaselineSteps
 from .steps.choose import ChooseSteps
@@ -41,12 +41,7 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
 
     # -- steps
     def plan_options(self):
-        a = self.a
-        return {'api': getattr(a, 'api_check', None), 'reboot': getattr(a, 'reboot_check', None),
-                'update': getattr(a, 'update_check', False),
-                'launcher_update': getattr(a, 'launcher_update_check', False),
-                'restore_repair': getattr(a, 'restore_repair_check', False),
-                'screensaver': getattr(a, 'scenario', 'lifecycle'), 'until': getattr(a, 'until', 5)}
+        return plan_options(self.a)
 
     def use_launcher(self, index):
         """Make launcher `index` of the run the one the steps act on (a switch, on the same boot)."""

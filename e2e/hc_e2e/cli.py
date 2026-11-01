@@ -131,7 +131,7 @@ class VmSession:
         timing.SLOWDOWN = host.slowdown
         args.new_ipk, args.old_ref = args.hc_ipk, None
         outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
-        os.makedirs(outdir)
+        os.makedirs(outdir, exist_ok=getattr(args, 'outdir_made', False))  # made by the pytest plugin
         rec = Recorder(outdir)
         host.input_rec = rec if args.input == 'beanjar' or args.input_mode == 'click' else None
         rec.say('artefacts: ' + outdir)

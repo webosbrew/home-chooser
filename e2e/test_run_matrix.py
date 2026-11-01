@@ -22,6 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hc_e2e.beanjar  # noqa: E402
 import hc_e2e.matrix  # noqa: E402
+import hc_e2e.tiers  # noqa: E402
 import hc_e2e.timing  # noqa: E402
 import run_matrix  # noqa: E402
 
@@ -487,7 +488,7 @@ class Tiers(unittest.TestCase):
         for vm, argv in runs.items():
             self.assertIn('--launchers fixture:web.normal,fixture:web.overlay', argv)
             self.assertIn('--api-check --reboot-check --uninstall-via alert', argv)
-            self.assertEqual('--update-check' in argv, vm == run_matrix.UPDATE_SLOT, vm)
+            self.assertEqual('--update-check' in argv, vm == hc_e2e.tiers.UPDATE_SLOT, vm)
         self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof, window-home, reboot', out)  # 10+
         self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof\n', out)                    # 5-9
 

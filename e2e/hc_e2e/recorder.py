@@ -36,6 +36,7 @@ class Recorder:
         self.tag = ''
         self.scope = ''  # the scope of the phase running (PHASES), written with every result
         self.on_fail = None  # called with the check's name after a FAIL (the scenario's screenshot)
+        self.listener = None  # called with (kind, text) for each line, step and result: the pytest live progress
         self.log = open(os.path.join(outdir, 'run.log'), 'w')
 
     def say(self, text):
@@ -44,10 +45,21 @@ class Recorder:
         print(line, flush=True)
         self.log.write(line + '\n')
         self.log.flush()
+        self.tell('say', text)
+
+    def tell(self, kind, text):
+        """The listener, if one is set: kind is 'say', 'begin', or a result status.  It never stops the run."""
+        listener = getattr(self, 'listener', None)
+        if listener:
+            try:
+                listener(kind, text)
+            except Exception:
+                pass
 
     def begin(self, step):
         self.step = (self.tag + ' ' if self.tag else '') + step
         self.say('== ' + self.step)
+        self.tell('begin', self.step)
 
     def note(self, what, evidence=''):
         self.say('note: %s\n    %s' % (what, str(evidence).replace('\n', '\n    ')))
@@ -60,6 +72,7 @@ class Recorder:
                              'evidence': str(evidence), 'expected': expected, 'scope': getattr(self, 'scope', '')})
         self.say('%s  %s\n    %s%s' % (status, name, str(evidence).replace('\n', '\n    '),
                                       '\n    expected: ' + expected if expected and not ok else ''))
+        self.tell(status, name)
         if status == 'FAIL' and getattr(self, 'on_fail', None):
             self.on_fail(name)
         return ok
@@ -72,11 +85,13 @@ class Recorder:
         self.results.append({'step': self.step, 'name': name, 'status': status,
                              'evidence': evidence, 'expected': None})
         self.say('%s  %s\n    %s' % (status, name, evidence))
+        self.tell(status, name)
 
     def manual(self, name, why):
         """A check the runner cannot make without pressing a key at a popup that is not ours: MANUAL."""
         self.results.append({'step': self.step, 'name': name, 'status': 'MANUAL', 'evidence': str(why), 'expected': None})
         self.say('MANUAL  %s\n    %s' % (name, str(why).replace('\n', '\n    ')))
+        self.tell('MANUAL', name)
 
     def finish(self):
         with open(os.path.join(self.outdir, 'results.json'), 'w') as f:
