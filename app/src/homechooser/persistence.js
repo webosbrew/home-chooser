@@ -16,6 +16,9 @@ export const STATE_DIR = '/var/lib/webosbrew/homechooser';
 export const BOOT_SCRIPT = ENTRY_SCRIPT;
 // The stored choice: the app id alone, nothing else.
 export const HOME_FILE = `${STATE_DIR}/home`;
+// The previous launchers the watcher closes once Home Chooser is off screen, one id a line; written at
+// each change of Home, empty when there is none (docs/settings-app.md, "The previous launcher").
+export const PREVIOUS_FILE = `${STATE_DIR}/previous`;
 // Exists while the Home key hook is enabled (webOS 6 to 9).
 export const HOMEKEY_FLAG = `${STATE_DIR}/homekey`;
 

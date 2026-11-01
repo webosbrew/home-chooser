@@ -2,12 +2,12 @@
 import {ServiceError} from '../../platform/errors';
 import {
 	OVERRIDE_PATH, buildIdleApp, buildOverride, createHomeChooser, extractDefaultAppsProfile, extractIdleAppProfile,
-	releaseInfo, windowOf
+	previousList, releaseInfo, windowOf
 } from '..';
 import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
 import {
-	HOME_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
+	HOME_FILE, PREVIOUS_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
 	stopWatcherCommand, BOOT_SCRIPT
 } from '../persistence';
 
@@ -42,7 +42,7 @@ const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
 // A fake TV: `record` is general/defaultApps (undefined = never written); `profile` the getProfiles reply.
 // `windows` gives an app's defaultWindowType; getAppInfo knows every id except those in `unknown`.
 // `ignoreIdle`: the rescan takes the override's defaultApps but not its idleApp.
-const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false} = {}) => {
+const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false, previous = null} = {}) => {
 	const luna = [];
 	const files = [];
 	const commands = [];
@@ -88,10 +88,18 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 				throw new Error('unexpected call ' + uri);
 		}
 	};
+	// The previous-launcher file, as the service reads it: null when absent.
+	const readFile = async (path) => {
+		calls.push(['read', path]);
+		if (failures.readFile) throw new ServiceError(failures.readFile);
+		return path === PREVIOUS_FILE ? previous : null;
+	};
 	const writeFile = async (path, text) => {
 		calls.push(['write', path]);
 		files.push([path, text]);
-		if (path === HOME_FILE) return;
+		if (path === PREVIOUS_FILE && failures.writePrevious) throw new ServiceError(failures.writePrevious);
+		if (path === PREVIOUS_FILE) previous = text;
+		if (path === HOME_FILE || path === PREVIOUS_FILE) return;
 		// the real service reads the override on rescan; 10.3.1 merges idleApp key by key onto the stock one
 		const o = JSON.parse(text);
 		profile = {returnValue: true, profiles: {defaultApps: Object.assign({}, o.defaultApps), idleApp: Object.assign({}, STOCK_IDLE, ignoreIdle ? {} : o.idleApp)}};
@@ -99,6 +107,10 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 	const removeFile = async (path) => {
 		calls.push(['remove', path]);
 		files.push(['rm', path]);
+		if (path === PREVIOUS_FILE) {
+			previous = null;
+			return;
+		}
 		profile = profileReply(STOCK);
 	};
 	const exec = async (command) => {
@@ -108,17 +120,27 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 		commands.push(command);
 		return {stdout: '', stderr: ''};
 	};
-	return {rootLuna, writeFile, removeFile, exec, luna, files, commands, calls, record: () => record};
+	return {rootLuna, readFile, writeFile, removeFile, exec, luna, files, commands, calls, record: () => record, previous: () => previous};
 };
 
 const chooser = (tv, version) => createHomeChooser({
-	rootLuna: tv.rootLuna, exec: tv.exec, writeFile: tv.writeFile, removeFile: tv.removeFile, version
+	rootLuna: tv.rootLuna, exec: tv.exec, readFile: tv.readFile, writeFile: tv.writeFile, removeFile: tv.removeFile, version
 });
 
 const GET = ['luna://com.webos.settingsservice/getSystemSettings', {category: 'general', keys: ['defaultApps']}];
 const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSettings', {category: 'general', settings: {defaultApps}}];
 const SETDEFAULT = (appId) => ['luna://com.webos.applicationManager/setDefaultApp', {category: 'home', appId}];
-const CLOSE = (id) => ['luna://com.webos.applicationManager/closeByAppId', {id, forceMode: true}];
+const CLOSAPI = 'luna://com.webos.applicationManager/closeByAppId';
+const overrideOf = (tv) => JSON.parse(tv.files.find((f) => f[0] === OVERRIDE_PATH)[1]);
+const NO_CLOSE = (tv) => expect(tv.luna.map((c) => c[0])).not.toContain(CLOSAPI);
+
+describe('previousList', () => {
+	test('merges the file and the new ids, drops stock homes, the new choice, invalid ids and repeats', () => {
+		expect(previousList('a.b\n\n com.webos.app.home \nx y\nc.d\n', ['c.d', MINE, null, 'com.webos.app.kidshome', 'e.f'], MINE))
+			.toEqual(['a.b', 'c.d', 'e.f']);
+		expect(previousList(null, [null, undefined], null)).toEqual([]);
+	});
+});
 
 describe('releaseInfo', () => {
 	test.each([
@@ -243,7 +265,7 @@ describe('apply', () => {
 		const res = await chooser(tv, [5, 6, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'})]);
-		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE], [PREVIOUS_FILE, '']]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.needsHomeKeyHook).toBe(false);
 		expect(res.restartedSam).toBe(false);
@@ -284,7 +306,8 @@ describe('apply', () => {
 	test('6.6.0, record present: no restart', async () => {
 		const tv = fakeTV({record: {home: OTHER, kidsApp: 'k'}});
 		const res = await chooser(tv, [6, 6, 0]).apply(MINE);
-		expect(tv.luna).toEqual([GET, SET({home: MINE, kidsApp: 'k'}), CLOSE(OTHER)]);
+		expect(tv.luna).toEqual([GET, SET({home: MINE, kidsApp: 'k'})]);
+		expect(tv.previous()).toBe(OTHER + '\n');
 		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 		expect(res.restartedSam).toBe(false);
 	});
@@ -296,11 +319,37 @@ describe('apply', () => {
 		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 	});
 
-	test('a failed close is a warning, not an error', async () => {
-		const tv = fakeTV({record: {home: OTHER}, failures: {closeByAppId: {returnValue: false, errorText: 'app is not running'}}});
+	test('a failed previous-launcher write is a warning, not an error', async () => {
+		const tv = fakeTV({record: {home: OTHER}, failures: {writePrevious: {returnValue: false, errorText: 'disk full'}}});
 		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(res.warnings).toEqual([`Could not close ${OTHER}: app is not running`]);
+		expect(res.warnings).toEqual(['Could not note the previous launcher, so it stays open: disk full']);
+		NO_CLOSE(tv);
+	});
+
+	test('an unreadable previous-launcher file is a warning; the list is written anew', async () => {
+		const tv = fakeTV({record: {home: OTHER}, failures: {readFile: {returnValue: false, errorText: 'readFailed'}}});
+		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(res.warnings).toEqual(['Could not read the previous launchers: readFailed']);
+		expect(tv.previous()).toBe(OTHER + '\n');
+	});
+
+	test.each([[[5, 6, 1]], [[6, 6, 0]], [[8, 3, 0]], [[9, 2, 4]], [[10, 3, 1]], [[11, 2, 0]], [[12, 0, 0]]])('%j: switching launchers closes nothing; the previous one is left to the watcher', async (version) => {
+		const tv = fakeTV({record: {home: OTHER}, profile: profileReply(OTHER)});
+		const res = await chooser(tv, version).apply(MINE);
+		expect(res.ok).toBe(true);
+		NO_CLOSE(tv);
+		expect(tv.previous()).toBe(OTHER + '\n');
+		// written right after the choice, before any platform write the watcher or the gate reacts to
+		const order = tv.calls.map((c) => c[0] + ':' + c[1].split('/').pop());
+		expect(order.indexOf('write:previous')).toBe(order.indexOf('write:home') + 2);
+	});
+
+	test('a second switch before the watcher closed the first keeps both, never the new choice', async () => {
+		const tv = fakeTV({record: {home: OTHER}, previous: `older.home\n${MINE}\n`});
+		await chooser(tv, [8, 3, 0]).apply(MINE);
+		expect(tv.previous()).toBe(`older.home\n${OTHER}\n`);
 	});
 
 	test('choosing the current home does not close it', async () => {
@@ -314,7 +363,8 @@ describe('apply', () => {
 			const tv = fakeTV({record: {home: id}, profile: profileReply()});
 			const res = await chooser(tv, [major, 0, 0]).apply(MINE);
 			expect(res.ok).toBe(true);
-			expect(tv.luna.map((call) => call[0])).not.toContain('luna://com.webos.applicationManager/closeByAppId');
+			NO_CLOSE(tv);
+			expect(tv.previous()).toBe('');
 		}
 	});
 
@@ -324,7 +374,7 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SETDEFAULT(MINE)]);
 		expect(tv.record()).toEqual({kidsApp: 'k', home: MINE});
-		expect(tv.files).toEqual([[HOME_FILE, MINE]]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE], [PREVIOUS_FILE, '']]);
 		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
 		expect(res.needsHomeKeyHook).toBe(true);
 	});
@@ -352,15 +402,16 @@ describe('apply', () => {
 		expect(res.ok).toBe(true);
 		expect(res.needsHomeKeyHook).toBe(false);
 		expect(tv.luna).toEqual([GET, GETPROFILE, APPINFO(MINE), SETDEFAULT(MINE), RESCAN, GETPROFILE]);
-		expect(tv.files).toHaveLength(2);
+		expect(tv.files).toHaveLength(3);
 		expect(tv.files[0]).toEqual([HOME_FILE, MINE]);
-		expect(tv.files[1][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
-		expect(JSON.parse(tv.files[1][1])).toEqual({
+		expect(tv.files[1]).toEqual([PREVIOUS_FILE, '']);
+		expect(tv.files[2][0]).toBe('/var/webos-profile/override/org.webosbrew.homechooser.json');
+		expect(overrideOf(tv)).toEqual({
 			defaultApps: {support: true, categories: {home: MINE, aod: 'com.webos.app.lifeonscreen'}},
 			idleApp: FULL_IDLE(MINE)
 		});
 		expect(tv.calls.map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'luna:getProfiles', 'luna:getAppInfo', 'write:home', 'luna:setDefaultApp',
+			'luna:getSystemSettings', 'luna:getProfiles', 'luna:getAppInfo', 'write:home', 'read:previous', 'write:previous', 'luna:setDefaultApp',
 			'write:org.webosbrew.homechooser.json', 'luna:rescan', 'luna:getProfiles', 'exec:' + ENSURE.split('/').pop(),
 			'exec:' + WATCH.split('/').pop()
 		]);
@@ -372,7 +423,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {}, profile: profileReply(), windows: {[MINE]: 'overlay'}});
 		const res = await chooser(tv, version).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(JSON.parse(tv.files[1][1]).idleApp).toEqual({support: false, keep: 'me'});
+		expect(overrideOf(tv).idleApp).toEqual({support: false, keep: 'me'});
 		expect(res.warnings).toEqual([]);
 	});
 
@@ -380,7 +431,7 @@ describe('apply', () => {
 		const tv = fakeTV({record: {}, profile: profileReply(OTHER, {}, {support: false, appId: STOCK, keep: 'me'})});
 		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
-		expect(JSON.parse(tv.files[1][1]).idleApp).toEqual(FULL_IDLE(MINE));
+		expect(overrideOf(tv).idleApp).toEqual(FULL_IDLE(MINE));
 	});
 
 	test('10.3.1: an id getAppInfo does not know is refused before anything is written', async () => {
@@ -437,20 +488,22 @@ describe('apply', () => {
 		const res = await chooser(tv, [12, 0, 0]).apply(MINE);
 		expect(res.ok).toBe(false);
 		expect(res.errors).toEqual(['Cannot read the defaultApps profile: profileGet: Denied method call "getProfiles" for category "/"']);
-		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE]);
+		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE, PREVIOUS_FILE]);
 		expect(tv.commands).toEqual([]);
 	});
 
-	test('10.3.1: previous home is the record home, not the profile home', async () => {
-		const tv = fakeTV({record: {home: OTHER}, profile: profileReply()});
+	test('10.3.1: the previous homes are the record home and the profile home', async () => {
+		const tv = fakeTV({record: {home: OTHER}, profile: profileReply('com.example.thirdhome')});
 		await chooser(tv, [10, 3, 1]).apply(MINE);
-		expect(tv.luna[tv.luna.length - 1]).toEqual(CLOSE(OTHER));
+		expect(tv.previous()).toBe(`${OTHER}\ncom.example.thirdhome\n`);
+		NO_CLOSE(tv);
 	});
 
 	test('10.3.1: an earlier custom profile home is the previous when the record has none', async () => {
 		const tv = fakeTV({record: {}, profile: profileReply(OTHER)});
 		await chooser(tv, [10, 3, 1]).apply(MINE);
-		expect(tv.luna[tv.luna.length - 1]).toEqual(CLOSE(OTHER));
+		expect(tv.previous()).toBe(OTHER + '\n');
+		NO_CLOSE(tv);
 	});
 
 	test('10.3.1: a profile that does not take the override is an error', async () => {
@@ -466,7 +519,7 @@ describe('apply', () => {
 		const res = await chooser(tv, [10, 3, 1]).apply(MINE);
 		expect(res.ok).toBe(false);
 		expect(res.errors[0]).toMatch(/Cannot read the defaultApps profile/);
-		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE]);
+		expect(tv.files.map((f) => f[0])).toEqual([HOME_FILE, PREVIOUS_FILE]);
 		expect(tv.commands).toEqual([]);
 	});
 
@@ -474,9 +527,9 @@ describe('apply', () => {
 		const tv = fakeTV({record: {home: OTHER}});
 		const res = await chooser(tv, [8, 3, 0]).apply(MINE);
 		expect(res.steps.map((s) => [s.kind, s.ok])).toEqual([
-			['luna', true], ['writeFile', true], ['luna', true], ['exec', true], ['exec', true], ['luna', true], ['exec', true]
+			['luna', true], ['writeFile', true], ['readFile', true], ['writeFile', true], ['luna', true], ['exec', true], ['exec', true], ['exec', true]
 		]);
-		expect(res.steps[2]).toMatchObject({uri: SET({})[0], reply: {returnValue: true}});
+		expect(res.steps[4]).toMatchObject({uri: SET({})[0], reply: {returnValue: true}});
 	});
 });
 
@@ -493,15 +546,15 @@ describe('restoreStock', () => {
 		const tv = withApps(fakeTV({record: {home: MINE, kidsApp: 'k'}}), [STOCK, 'com.webos.app.fullhome']);
 		const res = await chooser(tv, [5, 6, 1]).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome', kidsApp: 'k'}), CLOSE(MINE)]);
-		expect(tv.files).toEqual([['rm', HOME_FILE]]);
-		expect(tv.commands).toEqual([STOP]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome', kidsApp: 'k'})]);
+		expect(tv.files).toEqual([['rm', HOME_FILE], [PREVIOUS_FILE, MINE + '\n']]);
+		expect(tv.commands).toEqual([STOP, WATCH]);
 	});
 
 	test('5.x: falls back to com.webos.app.home when fullhome is not installed', async () => {
 		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
 		await chooser(tv, [5, 4, 0]).restoreStock();
-		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK})]);
 	});
 
 	test('5.x: absent record is created with the stock home; a stock home is not closed', async () => {
@@ -517,16 +570,16 @@ describe('restoreStock', () => {
 		const tv = withApps(fakeTV({record: {home: MINE, kidsApp: 'k'}}), [STOCK]);
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK, kidsApp: 'k'}), CLOSE(MINE)]);
-		expect(tv.files).toEqual([['rm', HOME_FILE]]);
-		expect(tv.commands).toEqual([STOP, REFRESH]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK, kidsApp: 'k'})]);
+		expect(tv.files).toEqual([['rm', HOME_FILE], [PREVIOUS_FILE, MINE + '\n']]);
+		expect(tv.commands).toEqual([STOP, REFRESH, WATCH]);
 		expect(JSON.stringify(tv.luna)).not.toContain('"home":null');
 	});
 
 	test.each([[[6, 6, 0]], [[7, 6, 0]], [[8, 4, 0]], [[9, 2, 4]]])('%j: fullhome is the stock id when installed', async (version) => {
 		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK, 'com.webos.app.fullhome']);
 		await chooser(tv, version).restoreStock();
-		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome'}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: 'com.webos.app.fullhome'})]);
 	});
 
 	test('6 to 9: a record without home gets the stock id; a record already stock is not written; an absent record is left absent', async () => {
@@ -544,7 +597,7 @@ describe('restoreStock', () => {
 	test('9.2.1 uses setSystemSettings, never setDefaultApp', async () => {
 		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
 		await chooser(tv, [9, 2, 1]).restoreStock();
-		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK}), CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK})]);
 		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
 	});
 
@@ -552,9 +605,9 @@ describe('restoreStock', () => {
 		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}, profile: profileReply(MINE)});
 		const res = await chooser(tv, version).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.luna).toEqual([GET, GETPROFILE, SET({home: null, kidsApp: 'k'}), RESCAN, GETPROFILE, CLOSE(MINE)]);
-		expect(tv.files).toEqual([['rm', HOME_FILE], ['rm', OVERRIDE_PATH]]);
-		expect(tv.commands).toEqual([STOP]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, SET({home: null, kidsApp: 'k'}), RESCAN, GETPROFILE]);
+		expect(tv.files).toEqual([['rm', HOME_FILE], ['rm', OVERRIDE_PATH], [PREVIOUS_FILE, MINE + '\n']]);
+		expect(tv.commands).toEqual([STOP, WATCH]);
 	});
 
 	test.each([[null], ['']])('home %j reads as unset: the stock id is written on 5.x to 9.x, nothing on 10.x', async (value) => {
@@ -579,7 +632,10 @@ describe('restoreStock', () => {
 		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
 		expect(tv.commands).toContain(STOP);
 		// LG Home: no override at all, so no idleApp of Home Chooser's
-		expect(tv.files.filter((f) => f[0] !== 'rm')).toEqual([]);
+		expect(tv.files.filter((f) => f[0] !== 'rm' && f[0] !== PREVIOUS_FILE)).toEqual([]);
+		// the launcher it replaces is closed later by the watcher, never here
+		NO_CLOSE(tv);
+		expect(tv.previous()).toBe(MINE + '\n');
 		expect(tv.files.some((f) => f[1] === OVERRIDE_PATH)).toBe(version[0] >= 10);
 	});
 
@@ -590,10 +646,40 @@ describe('restoreStock', () => {
 		expect(tv.record()).toEqual({home: 'com.webos.app.seniorhome'});
 	});
 
-	test('profile-only choice: closes the custom profile home once', async () => {
+	test('profile-only choice: the custom profile home is left to the watcher, once', async () => {
 		const tv = fakeTV({record: {}, profile: profileReply(MINE)});
 		await chooser(tv, [11, 2, 0]).restoreStock();
-		expect(tv.luna).toEqual([GET, GETPROFILE, RESCAN, GETPROFILE, CLOSE(MINE)]);
+		expect(tv.luna).toEqual([GET, GETPROFILE, RESCAN, GETPROFILE]);
+		expect(tv.previous()).toBe(MINE + '\n');
+		expect(tv.commands).toEqual([STOP, WATCH]);
+	});
+
+	test('no custom home to close: the previous-launcher file is removed and no watcher is started', async () => {
+		const tv = withApps(fakeTV({record: {home: STOCK}, previous: ''}), [STOCK]);
+		const res = await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(res.ok).toBe(true);
+		expect(tv.previous()).toBeNull();
+		expect(tv.commands).toEqual([STOP, REFRESH]);
+		NO_CLOSE(tv);
+	});
+
+	test('a launcher still waiting from an earlier switch is kept with the custom home', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}, previous: `${OTHER}\n`}), [STOCK]);
+		await chooser(tv, [9, 2, 4]).restoreStock();
+		expect(tv.previous()).toBe(`${OTHER}\n${MINE}\n`);
+		expect(tv.commands).toEqual([STOP, REFRESH, WATCH]);
+	});
+
+	test('a watcher that does not start for the close is a warning', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
+		const inner = tv.exec;
+		tv.exec = async (c) => {
+			if (c === WATCH) throw new Error('systemd-run failed');
+			return inner(c);
+		};
+		const res = await chooser(tv, [8, 3, 0]).restoreStock();
+		expect(res.ok).toBe(true);
+		expect(res.warnings).toEqual([`Could not start the watcher to close ${MINE}: systemd-run failed`]);
 	});
 });
 
@@ -651,7 +737,7 @@ describe('persistence', () => {
 	test('restore on 10.x and later does not touch the Home key hook', async () => {
 		const tv = fakeTV({record: {home: MINE}, profile: profileReply(MINE)});
 		await chooser(tv, [11, 2, 0]).restoreStock();
-		expect(tv.commands).toEqual([STOP]);
+		expect(tv.commands).toEqual([STOP, WATCH]);
 	});
 
 	test('the entry is a named operation of the service, never a shell command', () => {

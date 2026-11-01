@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // What the logic layer gets from the TV: one object, built on the service client.
 //   rootLuna(uri, payload)  an allow-listed luna call, made by the root service
-//   writeFile / removeFile  the files the service allows
+//   readFile / writeFile / removeFile  the files the service allows
 //   exec(name)              a named command (see COMMANDS in service/src/policy.c, plus the
 //                           composite names handled here); resolves {stdout, stderr}
 //   osRelease()             {version: [major, minor, patch], ...} from /etc/os-release
@@ -91,6 +91,7 @@ export const createPlatform = (call = createBridgeCall()) => {
 		rootLuna: service.luna,
 		uninstallConfirmed: service.uninstallConfirmed,
 		rebootPrompt: service.rebootPrompt,
+		readFile: service.readFile,
 		writeFile: service.writeFile,
 		removeFile: service.removeFile,
 		exec: createExec(service),
