@@ -20,9 +20,19 @@ body {
 	font-size: 28px;
 }
 
+#banner-message {
+	flex: 1;
+}
+
 #banner p {
 	margin: 0;
-	flex: 1;
+}
+
+#banner-detail {
+	margin-top: 8px;
+	font-size: 18px;
+	opacity: 0.75;
+	word-break: break-all;
 }
 
 #banner button {

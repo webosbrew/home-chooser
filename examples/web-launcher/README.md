@@ -17,7 +17,9 @@ What it does:
 * At start it calls `getInfo` and branches as [the guide](../../docs/launcher-api.md#4-check-where-you-stand-then-use-the-api)
   says. Home Chooser missing or too old, setup not finished, permission missing, or this app not
   the Home app: it shows a message, and where Home Chooser can help, a button that asks the owner
-  to make this launcher the Home app (the `request` launch).
+  to make this launcher the Home app (the `request` launch). When a call fails, a line in small
+  type under the message gives the error as the client reports it: `source`, `errorCode` and
+  `errorText`.
 * It lists the apps with `listApps`, without itself and without apps marked `visible: false`,
   sorted by title (ignoring case), then by id. The first app has the focus.
 * Icons come from `getAppIcon`, one call at a time, cached in memory by app id and version. An app

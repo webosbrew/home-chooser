@@ -58,11 +58,21 @@
 	}
 
 	// A message above the grid; withAction adds the button that asks Home Chooser to make this app Home.
-	function banner(text, withAction) {
+	// detail, in small text below it, is the error as the client reported it, so that a screenshot is
+	// enough to tell a refusal of Home Chooser from one of the system.
+	function banner(text, withAction, detail) {
 		$('banner').hidden = !text;
 		$('banner-text').textContent = text || '';
+		$('banner-detail').textContent = detail || '';
+		$('banner-detail').hidden = !detail;
 		$('banner-action').hidden = !withAction;
 		if (!withAction && focus < 0) focus = 0;
+	}
+
+	// "source errorCode: errorText" of a HomeChooserError (see homechooser.js).
+	function errorDetail(e) {
+		var code = e.errorCode === undefined ? '' : ' ' + e.errorCode;
+		return (e.source || 'error') + code + ': ' + (e.errorText || e.message || String(e));
 	}
 
 	function requestHome() {
@@ -196,9 +206,10 @@
 			if (gen !== generation) return;
 			console.error('Home Chooser', e.source, e.errorCode, e.errorText);
 			if (e.source === 'homechooser') {
-				banner('Home Chooser refused the app list (' + e.errorCode + ').', e.errorCode === 'notRoot');
+				banner('Home Chooser refused the app list (' + e.errorCode + ').', e.errorCode === 'notRoot', errorDetail(e));
 			} else {
-				banner('Home Chooser is not installed or is too old. Install it from Homebrew Channel.', false);
+				banner('Home Chooser did not answer: it is not installed or is too old, or the system denied the call.',
+					false, errorDetail(e));
 			}
 		});
 	}
