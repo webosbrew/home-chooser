@@ -108,8 +108,8 @@ class ClickInput(unittest.TestCase):
         from unittest.mock import Mock
         s = e2e.Scenario.__new__(e2e.Scenario)
         s.launcher = 'fixture'
-        s.ui = Mock(side_effect=[{'toast': e2e.DONE_TEXT}, {'toast': None}])
-        s.state = Mock(return_value={'choice': s.launcher})
+        s.ui = Mock(side_effect=[{'toast': e2e.DONE_TEXT}] + [{'toast': None}] * 3)
+        s.dev = Mock(sh=Mock(return_value=(0, s.launcher + '\n')))
         s.wait = lambda fn, *args: fn()
 
         def click(text, *, effect, label, read_after):
@@ -125,12 +125,12 @@ class ClickInput(unittest.TestCase):
         s = e2e.Scenario.__new__(e2e.Scenario)
         s.launcher = 'fixture'
         s.ui = Mock(return_value={'toast': e2e.DONE_TEXT})
-        s.state = Mock(return_value={'choice': s.launcher})
+        s.dev = Mock(sh=Mock(return_value=(0, s.launcher + '\n')))
         s.wait = lambda fn, *args: fn()
         s.press = Mock()
         self.assertEqual(s.confirm_home_choice(False), [e2e.DONE_TEXT])
         s.press.assert_called_once_with('OK')
-        s.state.assert_called_once()
+        s.dev.sh.assert_called_once_with('cat %s 2>&1' % e2e.CHOICE)
 
     def retry(self, outcomes, closed=True):
         from unittest.mock import Mock
@@ -465,7 +465,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
     def test_see_toast_recreates_dead_inspector_and_reads_screen(self):
         from unittest.mock import Mock, patch
         s = e2e.Scenario.__new__(e2e.Scenario)
-        s.vm, s.rec = 'vm', Mock()
+        s.vm, s.rec, s.dev = 'vm', Mock(), Mock()
         s.host = Mock()
         s.host.remote_target.return_value = 'vm'
         s.insp = Mock(last_error='websocket handshake/read: ConnectionResetError(104)')
@@ -573,7 +573,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
     def _toast_scenario(self, ui, elements):
         from unittest.mock import Mock
         s = e2e.Scenario.__new__(e2e.Scenario)
-        s.vm, s.rec, s.host = 'vm', Mock(), Mock()
+        s.vm, s.rec, s.host, s.dev = 'vm', Mock(), Mock(), Mock()
         s.host.remote_target.return_value = 'vm'
         s.host.display_beanjar.side_effect = elements
         s.insp = Mock(last_error='websocket handshake/read: ConnectionResetError(104)')
@@ -1355,8 +1355,7 @@ class WaitForDevice(unittest.TestCase):
 
     def wait(self, root_up, apps):
         class Dev:
-            def __init__(self, vm):
-                pass
+            vm = 'vm'
 
             def sh(self, cmd, timeout=60):
                 return (0, 'up') if root_up else (255, 'connection refused')
@@ -1371,11 +1370,7 @@ class WaitForDevice(unittest.TestCase):
         class Rec:
             def say(self, t):
                 said.append(t)
-        orig, e2e.Device = e2e.Device, Dev
-        try:
-            return e2e.wait_for_device('vm', Rec(), timeout=0), said
-        finally:
-            e2e.Device = orig
+        return e2e.wait_for_device(Dev(), Rec(), timeout=0), said
 
     def test_ares_app_list_failure_does_not_mean_no_apps(self):
         import unittest.mock
@@ -1474,6 +1469,9 @@ class FakeDev:
 
     def exec(self, cmd, timeout=60):
         return 0, self.fault_reply
+
+    def luna_as(self, app, uri, payload='{}', timeout=60):
+        return 0, self.fault_reply.strip(), e2e.parse_luna(self.fault_reply)
 
     def sh(self, cmd, timeout=60):
         if cmd.startswith('date'):
@@ -2506,7 +2504,7 @@ class HostInput(unittest.TestCase):
         s.host.info = Mock(return_value={'lan_address': 'example'})
         s.dev = Mock()
         s.dev.boot_id.return_value = 'new'
-        with patch.object(e2e, 'ensure_devices'), patch.object(e2e, 'wait_for_device', return_value=e2e.READY):
+        with patch.object(e2e, 'wait_for_device', return_value=e2e.READY):
             self.assertTrue(s.await_boot('tvpower reboot', 'old'))
         s.host.display_beanjar.assert_called_once_with('vnc', 'start', 'rk1/vm', '--port', '0')
 
@@ -2529,7 +2527,7 @@ class HostInput(unittest.TestCase):
                 argv = ['runner', '--vm', '9.x', '--outdir', 'unused'] + (['--no-stop'] if no_stop else [])
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(patch.object(sys, 'argv', argv))
-                    for name in ['prepare_vm', 'ensure_devices', 'clean_launchers', 'restart_after_launcher_cleanup']:
+                    for name in ['prepare_vm', 'clean_launchers', 'restart_after_launcher_cleanup']:
                         stack.enter_context(patch.object(e2e, name))
                     stack.enter_context(patch.object(e2e, 'wait_for_device', return_value=e2e.READY))
                     stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1', 'paths': {}}))
@@ -2606,6 +2604,217 @@ class HostInput(unittest.TestCase):
             rc, output = host.sendkey('vm', 'ret')
             self.assertNotEqual(rc, 0)
             self.assertIn('QMP sendkey failed', output)
+
+
+class DeviceAccess(unittest.TestCase):
+    """Every ares command line comes from Device.argv: a VM through `beanjar ares-TOOL [--root] -d [HOST/]NAME`,
+    an author's TV through plain `ares-TOOL -d NAME`."""
+
+    def calls(self, dev, fn, reply=(0, 'ok')):
+        from unittest.mock import patch
+        with patch.object(e2e, 'run', return_value=reply) as run:
+            fn(dev)
+        return [c.args[0] for c in run.call_args_list]
+
+    def test_vm_argv(self):
+        d = e2e.Device('rk1/vm')
+        self.assertEqual(d.argv('install', ['-l']), ['beanjar', 'ares-install', '-d', 'rk1/vm', '-l'])
+        self.assertEqual(d.argv('shell', ['-r', 'id'], root=True),
+                         ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'id'])
+        # shell commands share one root shell per VM (RootSession)
+        self.assertEqual(d.session().argv, ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'sh'])
+        self.assertIs(e2e.Device('rk1/vm').session(), d.session())
+        self.assertIsNot(e2e.Device('rk2/vm').session(), d.session())
+        from unittest.mock import patch
+        with patch.object(e2e.RootSession, 'run', return_value=(0, 'up')) as session_run:
+            self.assertEqual(d.sh('echo up'), (0, 'up'))
+            d.exec('id -u', 20)
+        self.assertEqual([c.args for c in session_run.call_args_list], [('echo up', 60), ('id -u', 20)])
+        # developer-mode user (prisoner), as the plain device was before
+        self.assertEqual(self.calls(d, lambda x: x.install('/x/hc.ipk')),
+                         [['beanjar', 'ares-install', '-d', 'rk1/vm', '/x/hc.ipk']])
+        self.assertEqual(self.calls(d, lambda x: x.remove('a.b')),
+                         [['beanjar', 'ares-install', '-d', 'rk1/vm', '--remove', 'a.b']])
+        self.assertEqual(self.calls(d, lambda x: x.launch('a.b', {'request': 'c'})),
+                         [['beanjar', 'ares-launch', '-d', 'rk1/vm', 'a.b', '-p', '{"request": "c"}']])
+        self.assertEqual(self.calls(d, lambda x: x.close('a.b')),
+                         [['beanjar', 'ares-launch', '-d', 'rk1/vm', '-c', 'a.b']])
+        self.assertEqual(self.calls(d, lambda x: x.key('HOME')),
+                         [['beanjar', 'ares-do', '--root', '-d', 'rk1/vm', 'key', '--delay', '300', 'HOME']])
+        self.assertEqual(self.calls(d, lambda x: x.screenshot('/tmp/a.png')),
+                         [['beanjar', 'ares-do', '--root', '-d', 'rk1/vm', 'screenshot', '/tmp/a.png']])
+        self.assertNotIn('-root', ' '.join(d.argv('shell', root=True)).replace('--root', ''))
+
+    def test_vm_target_follows_the_host(self):
+        local = e2e.BeanjarHost('local', 'localhost', 'here')
+        remote = e2e.BeanjarHost('remote', 'mariotaku@rockpi4a-1.lan', 'rockpi4a-1')
+        self.assertEqual(e2e.Device.for_vm(local, 'vm').target, 'vm')
+        self.assertEqual(e2e.Device.for_vm(remote, 'vm').target, 'rockpi4a-1/vm')
+        self.assertEqual(e2e.Device.for_vm(remote, 'vm').vm, 'rockpi4a-1/vm')
+
+    def test_tv_argv(self):
+        d = e2e.Device.tv('tv')
+        self.assertIsNone(d.session())
+        self.assertEqual(self.calls(d, lambda x: x.sh('echo up')), [['ares-shell', '-d', 'tv', '-r', 'echo up']])
+        self.assertEqual(self.calls(d, lambda x: x.exec('id -u', 20)),
+                         [['ares-do', '-d', 'tv', '--timeout', '20000', 'exec', 'id -u']])
+        self.assertEqual(d.argv('install', ['-l']), ['ares-install', '-d', 'tv', '-l'])
+        self.assertEqual(d.argv('do', ['exec', 'id'], root=True), ['ares-do', '-d', 'tv', 'exec', 'id'])
+        split = e2e.Device.tv('tv', 'tv-root')
+        self.assertEqual(split.argv('shell', ['-r', 'id'], root=True), ['ares-shell', '-d', 'tv-root', '-r', 'id'])
+        self.assertEqual(split.argv('novacom', ['-f']), ['ares-novacom', '-d', 'tv', '-f'])
+
+    def test_forward_and_stream(self):
+        from unittest.mock import patch
+        with patch.object(e2e.subprocess, 'Popen') as popen:
+            e2e.Device('rk1/vm').forward(9998, 4321)
+            e2e.Device('rk1/vm').stream('exec ls-monitor')
+        self.assertEqual(popen.call_args_list[0].args[0],
+                         ['beanjar', 'ares-novacom', '-d', 'rk1/vm', '-f', '-p', '9998:4321'])
+        self.assertEqual(popen.call_args_list[1].args[0],
+                         ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'exec ls-monitor'])
+        for c in popen.call_args_list:
+            self.assertTrue(c.kwargs['start_new_session'])
+            self.assertEqual(c.kwargs['stdin'], e2e.subprocess.DEVNULL)
+
+    def test_run_never_hands_its_stdin_to_a_tool(self):
+        from unittest.mock import patch, Mock
+        with patch.object(e2e.subprocess, 'run', return_value=Mock(returncode=0, stdout=b'')) as r:
+            e2e.run(['true'])
+            e2e.run(['cat'], input=b'x')
+        self.assertEqual(r.call_args_list[0].kwargs['stdin'], e2e.subprocess.DEVNULL)
+        self.assertIsNone(r.call_args_list[1].kwargs['stdin'])
+
+
+class RootSessionShell(unittest.TestCase):
+    """The shared root shell, driven here with a local `sh` in place of `beanjar ares-shell --root -r sh`."""
+
+    def setUp(self):
+        self.s = e2e.RootSession(['sh'])
+        self.addCleanup(self.s.close)
+
+    def test_status_output_and_one_process(self):
+        self.assertEqual(self.s.run('echo up'), (0, 'up\n'))
+        pid = self.s.proc.pid
+        self.assertEqual(self.s.run('printf no-newline; exit 3'), (3, 'no-newline'))
+        self.assertEqual(self.s.run('echo err >&2; false'), (1, 'err\n'))
+        self.assertEqual(self.s.run("printf '%s\\n' \"it's\" 'a \"b\"'"), (0, "it's\na \"b\"\n"))
+        self.assertEqual(self.s.run('exit 0'), (0, ''))
+        self.assertEqual(self.s.proc.pid, pid)
+
+    def test_a_command_never_reads_the_session_stdin(self):
+        self.assertEqual(self.s.run('cat; echo after'), (0, 'after\n'))
+        self.assertEqual(self.s.run('echo next'), (0, 'next\n'))
+
+    def test_timeout_ends_the_session_and_the_next_command_opens_one(self):
+        from unittest.mock import patch
+        with patch.object(e2e, 'SLOWDOWN', 1.0):
+            rc, out = self.s.run('echo partial; sleep 5', timeout=1)
+        self.assertEqual(rc, 124)
+        self.assertIn('partial', out)
+        self.assertIn('[timeout]', out)
+        self.assertIsNone(self.s.proc)
+        self.assertEqual(self.s.run('echo back'), (0, 'back\n'))
+
+    def test_a_session_that_died_is_reported_then_replaced(self):
+        self.s.run('true')
+        self.s.proc.kill()
+        self.s.proc.wait()
+        self.assertEqual(self.s.run('echo again'), (0, 'again\n'))
+        dead = e2e.RootSession(['sh', '-c', 'echo "no such VM" >&2; exit 1'])
+        self.addCleanup(dead.close)
+        self.assertEqual(dead.run('echo up'), (1, 'no such VM\n'))
+
+
+class LunaThroughPty(unittest.TestCase):
+    """luna-send -n 1 printed nothing to a pipe over ares-shell -r on W22O 10.3.1; under `script` its reply
+    ends in CRLF.  The command is run here with a fake luna-send (and a fake script that turns LF into
+    CRLF, as a pty does), so the quoting is what a guest shell sees."""
+
+    REPLY = '{"returnValue":true,"appId":"com.webos.app.home"}'
+
+    def guest(self, cmd, with_script=True):
+        d = tempfile.mkdtemp(prefix='hc-luna-test-')
+        self.addCleanup(lambda: __import__('shutil').rmtree(d, ignore_errors=True))
+        with open(os.path.join(d, 'luna-send'), 'w') as f:
+            # keep the arguments it got, one per line, then print the reply
+            f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "${0%/*}/args"\n'
+                    'printf \'%s\\n\' \'' + self.REPLY + '\'\n')
+        if with_script:
+            with open(os.path.join(d, 'script'), 'w') as f:
+                f.write('#!/bin/sh\n[ "$1" = -q ] && [ "$2" = -c ] && [ "$4" = /dev/null ] || exit 64\n'
+                        'printf "Script started, output log file is \'/dev/null\'.\\r\\n"\n'
+                        '/bin/sh -c "$3" | sed "s/$/\\r/"\n')
+        for n in os.listdir(d):
+            os.chmod(os.path.join(d, n), 0o755)
+        env = {'PATH': d + ':/usr/bin:/bin'} if with_script else {'PATH': d}
+        p = subprocess.run(['/bin/sh', '-c', cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        with open(os.path.join(d, 'args')) as f:
+            self.args = f.read().splitlines()
+        return p.stdout.decode()
+
+    def test_script_form_quotes_and_parses_with_crlf_and_a_banner(self):
+        payload = '{"id":"it\'s \\"x\\"","n":1}'
+        out = self.guest(e2e.luna_send_command('luna://a.b/c', payload, 'com.webos.applicationManager'))
+        self.assertIn('\r\n', out)
+        self.assertIn('Script started', out)
+        self.assertEqual(self.args, ['-a', 'com.webos.applicationManager', '-n', '1', 'luna://a.b/c', payload])
+        self.assertEqual(e2e.parse_luna(e2e.clean_reply(out)), json.loads(self.REPLY))
+        self.assertEqual(json.loads(e2e.luna_reply_text(out)), json.loads(self.REPLY))
+        self.assertNotIn('\r', e2e.clean_reply(out))
+
+    def test_no_script_on_the_guest_runs_plainly_and_says_so(self):
+        cmd = e2e.luna_send_command('luna://a.b/c')
+        # the fake PATH holds luna-send only: `command -v` is the shell's own, so no script is found
+        out = self.guest(cmd, with_script=False)
+        self.assertIn(e2e.NO_SCRIPT_NOTE, out)
+        self.assertEqual(e2e.parse_luna(out), json.loads(self.REPLY))
+        self.assertNotIn('script', e2e.luna_send_command('luna://a.b/c', pty=False))
+
+    def test_reply_text(self):
+        self.assertEqual(e2e.luna_reply_text(self.REPLY + '\r\n'), self.REPLY)
+        self.assertEqual(json.loads(e2e.luna_reply_text('^D\x08\x08' + self.REPLY + '\r\n')), json.loads(self.REPLY))
+        self.assertEqual(e2e.luna_reply_text('[timeout]\r\n'), '[timeout]')
+        self.assertEqual(e2e.luna_reply_text(''), '')
+
+    def probe(self, replies):
+        from unittest.mock import Mock
+        d = e2e.Device('rk1/vm')
+        d.say = Mock()
+        sent = []
+        d.exec = lambda cmd, timeout=60: (sent.append(cmd), replies.pop(0))[1]
+        return d, sent
+
+    def test_probe_prefers_the_pty_and_never_repeats_a_call(self):
+        d, sent = self.probe([(0, self.REPLY + '\r\n'), (0, '\r\n')])
+        rc, raw, parsed = d.luna_as('com.webos.applicationManager', 'luna://com.webos.service.tvpower/power/reboot')
+        self.assertTrue(d.luna_pty)
+        self.assertEqual(len(sent), 2)  # probe + the call, the empty reply not retried
+        self.assertTrue(all('script -q -c' in c for c in sent))
+        self.assertIn('getForegroundAppInfo', sent[0])
+        self.assertIsNone(parsed)
+
+    def test_probe_falls_back_to_plain_when_script_prints_nothing(self):
+        d, sent = self.probe([(0, ''), (0, self.REPLY + '\n'), (0, self.REPLY + '\n')])
+        self.assertEqual(json.loads(d.luna('luna://a.b/c')), json.loads(self.REPLY))
+        self.assertIs(d.luna_pty, False)
+        self.assertIn('script -q -c', sent[0])
+        self.assertNotIn('script', sent[1] + sent[2])
+
+    def test_probe_without_script_on_the_guest(self):
+        d, sent = self.probe([(0, e2e.NO_SCRIPT_NOTE + '\n' + self.REPLY + '\n'), (0, self.REPLY + '\n')])
+        d.luna('luna://a.b/c')
+        self.assertIs(d.luna_pty, False)
+        self.assertEqual(len(sent), 2)
+        self.assertIn(e2e.NO_SCRIPT_NOTE, d.say.call_args_list[0].args[0])
+
+    def test_probe_is_retried_while_the_device_gives_no_reply(self):
+        d, sent = self.probe([(255, ''), (255, ''), (255, ''),
+                              (0, self.REPLY + '\r\n'), (0, self.REPLY + '\r\n')])
+        d.luna('luna://a.b/c')
+        self.assertIsNone(d.luna_pty)
+        self.assertEqual(json.loads(d.luna('luna://a.b/c')), json.loads(self.REPLY))
+        self.assertTrue(d.luna_pty)
 
 
 if __name__ == '__main__':
