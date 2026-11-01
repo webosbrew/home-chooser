@@ -231,9 +231,11 @@ def idle_app_stock(idle):
     return isinstance(idle, dict) and idle.get('support') is True and idle.get('appId') == STOCK
 
 
-# --removal-race: the platform must be stock within this many seconds (times the host slowdown) of the
-# launcher's removal, one confirmation (15 s) and the removal calls, not two confirmations (about 30 s).
-REMOVAL_RACE_REVERT_S = 25
+# --removal-race: the platform must be stock within one watcher confirmation (15 s of wall clock, not scaled)
+# plus this many seconds (times the host slowdown, for the removal calls and polling) of the launcher's
+# removal; two confirmations one after the other (about 30 s) must not pass.
+REMOVAL_RACE_CONFIRM_S = 15
+REMOVAL_RACE_SLACK_S = 8
 
 
 def platform_stock(major, record_home, stock_id, override, idle):
@@ -5288,7 +5290,7 @@ class Scenario:
         r.note('removal calls', 'launcher %.1f s, then Home Chooser %.1f s' % (t1 - t0, time.time() - t1))
         stock_at = self.wait(lambda: self.platform_stock_now() and time.time(), 120, 1)
         elapsed = (stock_at - t0) if stock_at else None
-        bound = seconds(REMOVAL_RACE_REVERT_S)
+        bound = REMOVAL_RACE_CONFIRM_S + seconds(REMOVAL_RACE_SLACK_S)
         r.check('platform stock again (record home%s) within %.0f s of the launcher removal'
                 % (', no override, idleApp LG Home' if self.uses_override() else '', bound),
                 elapsed is not None and elapsed <= bound,

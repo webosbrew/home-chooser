@@ -493,8 +493,8 @@ and Home key hook docs.
 With `--removal-race` step 3 is followed by 3r and the cleanup instead of steps 4 and 5:
 
 * 3r. `ares-install --remove` the launcher and then Home Chooser at once, as an owner uninstalling both. The
-  record's `home` (and on 10+ the override, and `getProfiles` `idleApp`) must be stock within 25 s (times the
-  host slowdown) of the launcher's removal: one confirmation, not one per app. Then the step 5 checks (toast,
+  record's `home` (and on 10+ the override, and `getProfiles` `idleApp`) must be stock within 15 s plus 8 s (the
+  8 s times the host slowdown) of the launcher's removal: one confirmation, not one per app. Then the step 5 checks (toast,
   watcher finished, `assert_stock`, preload policy enabled), Homebrew Channel opened and closed as the only app
   with screenshot `3r-last-app-closed` (LG Home or the last input in front, never the removed launcher), and Home
   opens stock.
