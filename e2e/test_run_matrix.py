@@ -10,6 +10,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -19,7 +20,10 @@ from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import homechooser_e2e as e2e  # noqa: E402
+import hc_e2e.beanjar  # noqa: E402
+import hc_e2e.matrix  # noqa: E402
+import hc_e2e.tiers  # noqa: E402
+import hc_e2e.timing  # noqa: E402
 import run_matrix  # noqa: E402
 
 # Logs "start|end|stopped <host> <vm> <time>" to $FAKE_LOG, sleeps $FAKE_SLEEP, writes results.json
@@ -119,8 +123,8 @@ class Planning(unittest.TestCase):
         self.assertEqual(list(cfg['hosts']), ['b'])
         with self.assertRaises(SystemExit):
             run_matrix.select_hosts(CFG, 'missing')
-        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', e2e.MATRIX[1][1])])
-        rk = e2e.candidates(e2e.MATRIX[1][1])[0]
+        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', hc_e2e.matrix.MATRIX[1][1])])
+        rk = hc_e2e.matrix.candidates(hc_e2e.matrix.MATRIX[1][1])[0]
         self.assertEqual(run_matrix.wanted_vms([rk]), [('6.x', rk)])
         q, problems = run_matrix.plan(run_matrix.wanted_vms(['6.x']), cfg, {'b': {rk}})
         self.assertEqual(problems, [])
@@ -146,15 +150,15 @@ class Planning(unittest.TestCase):
         self.assertEqual((problems, list(q), q['b'][0]['vm']), ([], ['b'], 'twin'))
 
     def test_a_vm_left_running_goes_last_on_its_host(self):
-        keep = next(iter(e2e.KEEP_LAUNCHER_VMS))
+        keep = next(iter(hc_e2e.matrix.KEEP_LAUNCHER_VMS))
         q, _ = run_matrix.plan([('6.x', keep), ('5.x', 'vm1')], CFG, {'a': {keep, 'vm1'}})
         self.assertEqual([r['vm'] for r in q['a']], ['vm1', keep])
 
     def test_releases_map_to_matrix_vms_once(self):
-        first9 = next(m[1] for m in e2e.MATRIX if m[0] == '9.x')
+        first9 = next(m[1] for m in hc_e2e.matrix.MATRIX if m[0] == '9.x')
         self.assertEqual(run_matrix.wanted_vms(['9.x', first9, '5.x']),
-                         [('9.x', first9), ('5.x', e2e.MATRIX[0][1])])
-        self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in e2e.MATRIX}))
+                         [('9.x', first9), ('5.x', hc_e2e.matrix.MATRIX[0][1])])
+        self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in hc_e2e.matrix.MATRIX}))
 
     def test_a_failing_host_is_reported_and_the_rest_discovered(self):
         def lister(h):
@@ -271,7 +275,7 @@ class Main(Fixture):
 
     def test_dry_run_of_the_real_matrix_runs_nothing(self):
         hosts = self.hosts_file('default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n[hosts.pc2]\nssh = "pc2"\n')
-        vms = [e2e.candidates(m[1])[-1] for m in e2e.MATRIX]
+        vms = [hc_e2e.matrix.candidates(m[1])[-1] for m in hc_e2e.matrix.MATRIX]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--reboot-check', '--results', self.tmp],
@@ -344,7 +348,8 @@ class Main(Fixture):
         self.assertIn('[w24g-spacebuns](w24g-spacebuns/)', md)
         argv = s['runs'][0]['argv']
         self.assertEqual(argv[argv.index('--hc-ipk') + 1], os.path.join(root, 'ipk', 'hc.ipk'))  # a private copy
-        self.assertEqual(argv[-3:], ['--wait-popup', '60', '--reboot-check'])
+        self.assertEqual(argv[-2:], ['--wait-popup', '60'])  # unknown options go through as given
+        self.assertIn('--reboot-check', argv)  # a scheduler option now (a tier sets it), passed to every run
         self.assertTrue(os.path.exists(os.path.join(root, 'w22h-ombre.console.log')))
 
 
@@ -355,7 +360,11 @@ class NoDeviceList(unittest.TestCase):
     def test_runner_never_names_the_user_device_list(self):
         """VMs are reached with `beanjar ares-TOOL`, which writes its own device list; the user's own
         ~/.webos/ose/novacom-devices.json is never read or written, and no `<vm>-root` entry exists."""
-        for name in ('homechooser_e2e.py', 'run_matrix.py'):
+        package = os.path.join(HERE, 'hc_e2e')
+        names = ['homechooser_e2e.py', 'run_matrix.py'] + sorted(
+            os.path.relpath(os.path.join(d, f), HERE) for d, _, fs in os.walk(package) for f in fs if f.endswith('.py'))
+        self.assertIn(os.path.join('hc_e2e', 'device.py'), names)
+        for name in names:
             src = read(os.path.join(HERE, name))
             literals = re.findall(r'\'[^\'\n]*\'|"[^"\n]*"', src)
             self.assertEqual([x for x in literals if 'novacom-devices' in x or x in ("'-root'", '"-root"')], [], name)
@@ -364,35 +373,35 @@ class NoDeviceList(unittest.TestCase):
 class HostsConfig(unittest.TestCase):
     def test_user_at_host_and_slowdown(self):
         cfg = {'hosts': {'rk': {'ssh': 'mariotaku@rockpi4a-1.lan', 'slowdown': 1.5}}}
-        host = e2e.BeanjarHost.from_config(cfg, 'rk')
+        host = hc_e2e.beanjar.BeanjarHost.from_config(cfg, 'rk')
         self.assertEqual(host.slowdown, 1.5)
-        with patch.object(e2e, 'run', return_value=(0, '')) as command:
+        with patch.object(hc_e2e.timing, 'run', return_value=(0, '')) as command:
             host.beanjar('list', '--local', '--json')
             argv = command.call_args.args[0]
             self.assertEqual(argv[-2:], ['mariotaku@rockpi4a-1.lan', 'beanjar list --local --json'])
             self.assertTrue(host.fetch('/tmp/a.png', 'a.png'))
             self.assertEqual(command.call_args.args[0][-2:], ['mariotaku@rockpi4a-1.lan:/tmp/a.png', 'a.png'])
-        with patch.object(e2e, 'SLOWDOWN', host.slowdown), patch.object(e2e.time, 'sleep') as sleeper:
-            e2e.sleep(4)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', host.slowdown), patch.object(time, 'sleep') as sleeper:
+            hc_e2e.timing.sleep(4)
             sleeper.assert_called_once_with(6)
-            self.assertEqual(e2e.seconds(240), 360)
-        with patch.object(e2e, 'SLOWDOWN', 1.5), patch.object(e2e.subprocess, 'run') as command:
+            self.assertEqual(hc_e2e.timing.seconds(240), 360)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1.5), patch.object(subprocess, 'run') as command:
             command.return_value.returncode = 0
             command.return_value.stdout = b''
-            e2e.run(['fake'], timeout=120)
+            hc_e2e.timing.run(['fake'], timeout=120)
             self.assertEqual(command.call_args.kwargs['timeout'], 180)
-        with patch.object(e2e, 'SLOWDOWN', 1):
-            self.assertEqual(e2e.seconds(240), 240)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1):
+            self.assertEqual(hc_e2e.timing.seconds(240), 240)
 
     def test_default_is_todays_pi(self):
         with tempfile.TemporaryDirectory() as d:
-            saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
-            e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = os.path.join(d, 'none.toml'), os.path.join(d, 'none.local.toml')
+            saved = hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE
+            hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = os.path.join(d, 'none.toml'), os.path.join(d, 'none.local.toml')
             try:
-                cfg = e2e.load_hosts()
+                cfg = hc_e2e.matrix.load_hosts()
             finally:
-                e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = saved
-        h = e2e.BeanjarHost.from_config(cfg, cfg['default'])
+                hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = saved
+        h = hc_e2e.beanjar.BeanjarHost.from_config(cfg, cfg['default'])
         self.assertEqual((h.name, h.mode, h.device), ('pi', 'remote', 'raspberrypi'))
 
     def test_local_override_merges_over_the_committed_file(self):
@@ -400,28 +409,116 @@ class HostsConfig(unittest.TestCase):
             base, local = os.path.join(d, 'hosts.toml'), os.path.join(d, 'hosts.local.toml')
             write(base, 'default = "pi"\n[hosts.pi]\nssh = "raspberrypi"\n')
             write(local, '[hosts.pi]\nvms = ["w22h-ombre"]\n[hosts.box]\nlocal = true\n')
-            saved = e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE
-            e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = base, local
+            saved = hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE
+            hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = base, local
             try:
-                cfg = e2e.load_hosts()
+                cfg = hc_e2e.matrix.load_hosts()
             finally:
-                e2e.HOSTS_FILE, e2e.HOSTS_LOCAL_FILE = saved
+                hc_e2e.matrix.HOSTS_FILE, hc_e2e.matrix.HOSTS_LOCAL_FILE = saved
         self.assertEqual(cfg['hosts']['pi'], {'ssh': 'raspberrypi', 'vms': ['w22h-ombre']})
-        self.assertEqual(e2e.BeanjarHost.from_config(cfg, 'box').mode, 'local')
+        self.assertEqual(hc_e2e.beanjar.BeanjarHost.from_config(cfg, 'box').mode, 'local')
 
     def test_committed_hosts_file_parses(self):
-        cfg = e2e.load_hosts(e2e.HOSTS_FILE)
+        cfg = hc_e2e.matrix.load_hosts(hc_e2e.matrix.HOSTS_FILE)
         self.assertEqual((cfg['default'], cfg['hosts']['pi']['ssh']), ('pi', 'raspberrypi'))
 
     def test_list_vms_reads_this_machines_json_only(self):
         rows = [{'name': 'mine', 'state': 'Running', 'host': None}, {'name': 'off', 'state': 'Off', 'host': None},
                 {'name': 'theirs', 'state': 'Running', 'host': 'pc2'}]
-        h = e2e.BeanjarHost('local', 'x', 't')
+        h = hc_e2e.beanjar.BeanjarHost('local', 'x', 't')
         h.sh = lambda cmd, timeout=120: (0, 'beanjar: warning: [x]\n' + json.dumps(rows))
         self.assertEqual(h.running_vms(), ['mine'])
         h.sh = lambda cmd, timeout=120: (255, 'ssh: connect to host x: timed out')
         with self.assertRaises(RuntimeError):
             h.running_vms()
+
+
+# ---------------------------------------------------------------------------------------------
+# Tiers (e2e/README.md "Tiers")
+# ---------------------------------------------------------------------------------------------
+TIER_VMS = {'pi': ['w24g-ombre', 'w24p-ombre', 'w22h-ombre', 'w24g-spacebuns'],
+            'rockpi4a-1': ['w20l-jhericurl-rk1', 'w21a-kisscurl-rk1', 'w22p-mullet-rk1'],
+            'rockpi4a-2': ['w22o-number1-rk2', 'w22o-ponytail-us-rk2', 'w22o-queue-us-rk2']}
+
+
+class Tiers(unittest.TestCase):
+    def dry(self, *argv, hosts_text=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            hosts = os.path.join(tmp, 'hosts.toml')
+            write(hosts, hosts_text or ('default = "pi"\ndefault_slot = "9.x"\n[hosts.pi]\nssh = "raspberrypi"\n'
+                                        '[hosts.rockpi4a-1]\nssh = "a"\nslowdown = 1.5\n'
+                                        '[hosts.rockpi4a-2]\nssh = "b"\nslowdown = 1.5\n'))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--results', tmp] + list(argv),
+                                     lister=lambda h: TIER_VMS.get(h, []))
+        self.assertEqual(rc, 0, out.getvalue())
+        runs = {}
+        for l in out.getvalue().splitlines():
+            m = re.match(r'\s+\d+\. \S+\s+(\S+)\s+(.*)$', l)
+            if m:
+                runs[m.group(1)] = m.group(2)
+        return runs, out.getvalue()
+
+    def args(self, *argv):
+        parsed = {'tier': None, 'vms': None, 'launcher': None, 'launchers': None, 'api_check': None,
+                  'reboot_check': None, 'uninstall_via': None, 'update_check': False, 'update_on': None,
+                  'launcher_update_check': False}
+        it = iter(argv)
+        for a in it:
+            parsed[a.lstrip('-').replace('-', '_')] = next(it)
+        from types import SimpleNamespace
+        return run_matrix.apply_tier(SimpleNamespace(**parsed), {'default_slot': 'w22h-ombre'})
+
+    def test_smoke_is_one_vm_web_normal_no_reboot_api_smoke(self):
+        runs, out = self.dry('--tier', 'smoke')
+        self.assertEqual(list(runs), ['w24g-ombre'])  # default_slot 9.x: its first slot
+        argv = runs['w24g-ombre']
+        self.assertIn('--launchers fixture:web.normal --api-check', argv)
+        self.assertNotIn('--api-check=full', argv)
+        for flag in ('--reboot-check', '--update-check', '--uninstall-via'):
+            self.assertNotIn(flag, argv)
+        self.assertIn('fixture:web.normal: baseline, install, choose, window-chosen, home-proof, '
+                      'api-selected, removal, uninstall, cleanup', out)
+        a = self.args('--tier', 'smoke')
+        self.assertEqual(a.vms, 'w22h-ombre')  # hosts.toml's default_slot
+
+    def test_release_every_slot_two_windows_reboot_one_update(self):
+        runs, out = self.dry('--tier', 'release')
+        self.assertEqual(len(runs), sum(len(v) for v in TIER_VMS.values()))
+        for vm, argv in runs.items():
+            self.assertIn('--launchers fixture:web.normal,fixture:web.overlay', argv)
+            self.assertIn('--api-check --reboot-check --uninstall-via alert', argv)
+            self.assertEqual('--update-check' in argv, vm == hc_e2e.tiers.UPDATE_SLOT, vm)
+        self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof, window-home, reboot', out)  # 10+
+        self.assertIn('fixture:web.overlay: switch, window-chosen, home-proof\n', out)                    # 5-9
+
+    def test_full_all_six_on_one_boot_full_api_update_everywhere(self):
+        runs, out = self.dry('--tier', 'full')
+        for vm, argv in runs.items():
+            self.assertIn('--launchers all-fixtures', argv)
+            self.assertIn('--update-check --api-check=full --reboot-check --uninstall-via alert --launcher-update-check', argv)
+        self.assertIn('fixture:qml.overlay: qml-gate', out)  # 12.x
+        self.assertIn('fixture:native.overlay: switch, home-proof', out)
+
+    def test_explicit_options_win_over_the_tier(self):
+        a = self.args('--tier', 'release', '--launchers', 'fixture:web.overlay', '--api-check', 'full',
+                      '--reboot-check', 'all', '--update-on', 'none', '--uninstall-via', 'later', '--vms', '5.x')
+        self.assertEqual((a.launchers, a.api_check, a.reboot_check, a.update_check, a.uninstall_via, a.vms),
+                         ('fixture:web.overlay', 'full', 'all', False, 'later', '5.x'))
+        a = self.args('--tier', 'release', '--update-on', '11.x')
+        self.assertTrue(a.update_check)
+        self.assertTrue(run_matrix.updates({'vm': 'w22o-queue-us-rk2', 'release': '11.x'}, a.update_on))
+        self.assertFalse(run_matrix.updates({'vm': 'w24g-ombre', 'release': '9.x'}, a.update_on))
+        a = self.args('--tier', 'smoke', '--launcher', 'org.example.launcher')
+        self.assertIsNone(a.launchers)
+
+    def test_without_a_tier_the_flags_are_as_before(self):
+        runs, out = self.dry('--vms', '9.x,11.x', '--update-check', '--api-check', '--reboot-check')
+        for argv in runs.values():
+            self.assertIn('--update-check --api-check --reboot-check', argv)
+            self.assertNotIn('--launchers', argv)
+        a = self.args()
+        self.assertEqual((a.api_check, a.reboot_check, a.update_check, a.launchers), (None, None, False, None))
 
 
 if __name__ == '__main__':

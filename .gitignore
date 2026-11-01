@@ -4,3 +4,4 @@ dist/
 *.ipk
 build/
 __pycache__/
+.venv/

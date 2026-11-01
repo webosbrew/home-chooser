@@ -16,16 +16,36 @@ import shlex
 import shutil
 import sys
 import subprocess
+import signal
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import homechooser_e2e as e2e  # noqa: E402
+import hc_e2e.alerts  # noqa: E402
+import hc_e2e.api_spec  # noqa: E402
+import hc_e2e.beanjar  # noqa: E402
+import hc_e2e.checks  # noqa: E402
+import hc_e2e.cli  # noqa: E402
+import hc_e2e.constants  # noqa: E402
+import hc_e2e.device  # noqa: E402
+import hc_e2e.evidence  # noqa: E402
+import hc_e2e.inspector  # noqa: E402
+import hc_e2e.launchers  # noqa: E402
+import hc_e2e.plan  # noqa: E402
+import hc_e2e.preflight  # noqa: E402
+import hc_e2e.recorder  # noqa: E402
+import hc_e2e.releases  # noqa: E402
+import hc_e2e.scenario  # noqa: E402
+import hc_e2e.steps.api  # noqa: E402
+import hc_e2e.steps.panel  # noqa: E402
+import hc_e2e.steps.state  # noqa: E402
+import hc_e2e.timing  # noqa: E402
 import run_matrix  # noqa: E402
 
 REPO = os.path.dirname(HERE)
-FULL, HOME = e2e.FULLHOME, e2e.STOCK
+FULL, HOME = hc_e2e.constants.FULLHOME, hc_e2e.constants.STOCK
 
 
 class ClickInput(unittest.TestCase):
@@ -35,33 +55,33 @@ class ClickInput(unittest.TestCase):
 
     def test_exact_role_region_and_centre(self):
         f = self.frame()
-        self.assertEqual(e2e.match_element(f, 'Use as Home', 'button', [0, 0, 120, 80])['centre'], [60, 40])
-        self.assertEqual(e2e.match_element(f, role='button')['text'], 'Use as Home')
+        self.assertEqual(hc_e2e.alerts.match_element(f, 'Use as Home', 'button', [0, 0, 120, 80])['centre'], [60, 40])
+        self.assertEqual(hc_e2e.alerts.match_element(f, role='button')['text'], 'Use as Home')
 
     def test_missing_ambiguous_and_nonexact(self):
         f = self.frame()
         for text in ('Use', 'use as home', 'Cancel'):
             with self.assertRaises(ValueError):
-                e2e.match_element(f, text)
+                hc_e2e.alerts.match_element(f, text)
         f['elements'] *= 2
         with self.assertRaises(ValueError):
-            e2e.match_element(f, 'Use as Home')
+            hc_e2e.alerts.match_element(f, 'Use as Home')
         with self.assertRaises(ValueError):
-            e2e.match_element(self.frame(), role='text')
+            hc_e2e.alerts.match_element(self.frame(), role='text')
         with self.assertRaises(ValueError):
-            e2e.match_element(self.frame(), role='button', region=[200, 200, 300, 300])
+            hc_e2e.alerts.match_element(self.frame(), role='button', region=[200, 200, 300, 300])
 
     def test_launcher_icon_and_label_require_role(self):
         f = self.frame()
         f['elements'].append(dict(f['elements'][0], kind='icon'))
         with self.assertRaises(ValueError):
-            e2e.match_element(f, 'Use as Home')
-        self.assertEqual(e2e.match_element(f, 'Use as Home', ('text', 'button'))['kind'], 'button')
+            hc_e2e.alerts.match_element(f, 'Use as Home')
+        self.assertEqual(hc_e2e.alerts.match_element(f, 'Use as Home', ('text', 'button'))['kind'], 'button')
 
     def test_click_command_local_and_host(self):
         from unittest.mock import Mock
         for mode, target in [('local', 'vm'), ('remote', 'pi/vm')]:
-            h = e2e.BeanjarHost(mode=mode, name='pi')
+            h = hc_e2e.beanjar.BeanjarHost(mode=mode, name='pi')
             h.display_beanjar = Mock(return_value=(0, 'ok'))
             h.remote_click('vm', [60, 40], self.frame())
             h.display_beanjar.assert_called_once_with('remote', 'click', target, '60', '40',
@@ -70,9 +90,9 @@ class ClickInput(unittest.TestCase):
     def test_unavailable_click_logs_and_caches_fallback(self):
         from unittest.mock import Mock
         from types import SimpleNamespace
-        h = e2e.BeanjarHost()
+        h = hc_e2e.beanjar.BeanjarHost()
         h.beanjar, h.input_rec = Mock(return_value=(2, 'unknown command click')), Mock()
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.a, s.host = SimpleNamespace(input_mode='click'), h
         self.assertFalse(s.use_click())
         self.assertFalse(s.use_click())
@@ -83,18 +103,18 @@ class ClickInput(unittest.TestCase):
 
     def test_coordinate_mapping_logged_once_across_scenarios(self):
         from unittest.mock import Mock
-        host = e2e.BeanjarHost()
+        host = hc_e2e.beanjar.BeanjarHost()
         host.display_beanjar = Mock(return_value=(0, json.dumps(self.frame())))
         rec = Mock()
         for _ in range(2):
-            s = e2e.Scenario.__new__(e2e.Scenario)
+            s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
             s.host, s.vm, s.rec = host, 'vm', rec
             s.elements('test')
         rec.note.assert_called_once()
 
     def test_click_effect_and_fresh_read(self):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.host, s.rec, s.vm = Mock(), Mock(), 'vm'
         s.host.remote_click.return_value = (0, 'ok')
         s.elements = Mock(return_value=self.frame())
@@ -106,9 +126,9 @@ class ClickInput(unittest.TestCase):
 
     def test_confirmation_captures_transient_toast_before_ocr(self):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.launcher = 'fixture'
-        s.ui = Mock(side_effect=[{'toast': e2e.DONE_TEXT}] + [{'toast': None}] * 3)
+        s.ui = Mock(side_effect=[{'toast': hc_e2e.constants.DONE_TEXT}] + [{'toast': None}] * 3)
         s.dev = Mock(sh=Mock(return_value=(0, s.launcher + '\n')))
         s.wait = lambda fn, *args: fn()
 
@@ -118,23 +138,23 @@ class ClickInput(unittest.TestCase):
             self.assertTrue(effect())
 
         s.click_element = click
-        self.assertEqual(s.confirm_home_choice(True), [e2e.DONE_TEXT])
+        self.assertEqual(s.confirm_home_choice(True), [hc_e2e.constants.DONE_TEXT])
 
     def test_key_confirmation_keeps_choice_and_toast_checks(self):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.launcher = 'fixture'
-        s.ui = Mock(return_value={'toast': e2e.DONE_TEXT})
+        s.ui = Mock(return_value={'toast': hc_e2e.constants.DONE_TEXT})
         s.dev = Mock(sh=Mock(return_value=(0, s.launcher + '\n')))
         s.wait = lambda fn, *args: fn()
         s.press = Mock()
-        self.assertEqual(s.confirm_home_choice(False), [e2e.DONE_TEXT])
+        self.assertEqual(s.confirm_home_choice(False), [hc_e2e.constants.DONE_TEXT])
         s.press.assert_called_once_with('OK')
-        s.dev.sh.assert_called_once_with('cat %s 2>&1' % e2e.CHOICE)
+        s.dev.sh.assert_called_once_with('cat %s 2>&1' % hc_e2e.constants.CHOICE)
 
     def retry(self, outcomes, closed=True):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.rec, s.host = Mock(), Mock()
         s.press_alert, s.use_click = Mock(return_value=True), lambda: True
         verify, request = Mock(side_effect=outcomes), Mock()
@@ -146,11 +166,11 @@ class ClickInput(unittest.TestCase):
         from types import SimpleNamespace
         with open(os.path.join(HERE, 'samples', 'reboot-alert.json')) as f:
             frame = json.load(f)
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         host = SimpleNamespace(click_available=lambda: True, remote_click=Mock(return_value=(0, 'clicked')))
         s.a, s.host, s.vm, s.rec = SimpleNamespace(input_mode='click'), host, 'vm', Mock()
         s.elements, s.press = Mock(return_value=frame), Mock()
-        self.assertTrue(s.press_alert(e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later', 'test',
+        self.assertTrue(s.press_alert(hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later', 'test',
                                      lambda: ('matching accepted service request', True)))
         host.remote_click.assert_called_once_with('vm', [916.0, 513.0], frame)
         s.press.assert_not_called()
@@ -185,41 +205,41 @@ class ClickInput(unittest.TestCase):
 class LauncherPreflight(unittest.TestCase):
     def test_candidate_rule_and_ours(self):
         for category in (['home'], ['kidsApp', 'home'], 'home'):
-            self.assertTrue(e2e.foreign_launcher({'id': 'example.launcher', 'appCategory': category}))
-        for ident in (e2e.APP_ID, 'org.webosbrew.hbchannel', 'org.webosbrew.hcfixture.web.normal'):
-            self.assertFalse(e2e.foreign_launcher({'id': ident, 'appCategory': ['home']}))
+            self.assertTrue(hc_e2e.preflight.foreign_launcher({'id': 'example.launcher', 'appCategory': category}))
+        for ident in (hc_e2e.constants.APP_ID, 'org.webosbrew.hbchannel', 'org.webosbrew.hcfixture.web.normal'):
+            self.assertFalse(hc_e2e.preflight.foreign_launcher({'id': ident, 'appCategory': ['home']}))
         for category in (None, [], ['browser'], 'homebrew'):
-            self.assertFalse(e2e.foreign_launcher({'id': 'example.app', 'appCategory': category}))
+            self.assertFalse(hc_e2e.preflight.foreign_launcher({'id': 'example.app', 'appCategory': category}))
 
     def test_known_takeover_without_home_category(self):
-        self.assertEqual(e2e.launcher_removal_reason({'id': 'com.homebrew.homeback', 'appCategory': []}),
+        self.assertEqual(hc_e2e.preflight.launcher_removal_reason({'id': 'com.homebrew.homeback', 'appCategory': []}),
                          'known HOME takeover app id')
-        self.assertIsNone(e2e.launcher_removal_reason({'id': 'example.app', 'title': 'HomeBack manual'}))
+        self.assertIsNone(hc_e2e.preflight.launcher_removal_reason({'id': 'example.app', 'title': 'HomeBack manual'}))
 
     def test_observed_partridge_launcher_without_home_category(self):
-        self.assertEqual(e2e.launcher_removal_reason({'id': 'works.partridge.webos-launcher',
+        self.assertEqual(hc_e2e.preflight.launcher_removal_reason({'id': 'works.partridge.webos-launcher',
                                                      'version': '1.0.0', 'title': 'Launcher'}),
                          'known launcher without home category')
-        self.assertIsNone(e2e.launcher_removal_reason({'id': 'example.app', 'title': 'Launcher'}))
+        self.assertIsNone(hc_e2e.preflight.launcher_removal_reason({'id': 'example.app', 'title': 'Launcher'}))
 
     def test_owned_startup_entries_only(self):
         root = '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service'
-        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'homeback', root + '/startup.sh', ''))
-        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'com.homebrew.homeback', '', 'exec ' + root + '/startup.sh'))
+        self.assertTrue(hc_e2e.preflight.startup_entry_owned('com.homebrew.homeback', 'homeback', root + '/startup.sh', ''))
+        self.assertTrue(hc_e2e.preflight.startup_entry_owned('com.homebrew.homeback', 'com.homebrew.homeback', '', 'exec ' + root + '/startup.sh'))
         for name, target, content in [('shared', '', 'exec ' + root + '/startup.sh'),
                                       ('com.homebrew.homeback', '', '# ' + root + '/startup.sh'),
                                       ('homeback', root + '.other/startup.sh', '')]:
-            self.assertFalse(e2e.startup_entry_owned('com.homebrew.homeback', name, target, content))
+            self.assertFalse(hc_e2e.preflight.startup_entry_owned('com.homebrew.homeback', name, target, content))
 
     def test_observed_homeback_remote_bootstrap_ownership(self):
         # Actual command from the retained 10.3.1 /var/lib/webosbrew/init.d/homeback.
         command = '    output=$(luna-send -n 1 -f "luna://com.homebrew.homeback.service/remote/start" \'{}\' 2>&1)\n'
-        self.assertTrue(e2e.startup_entry_owned('com.homebrew.homeback', 'homeback', '', command))
+        self.assertTrue(hc_e2e.preflight.startup_entry_owned('com.homebrew.homeback', 'homeback', '', command))
         for ident, name, content in [('example.app', 'homeback', command),
                                       ('com.homebrew.homeback', 'shared', command),
                                       ('com.homebrew.homeback', 'homeback', '# ' + command),
                                       ('com.homebrew.homeback', 'homeback', command.replace('/remote/start', '/status'))]:
-            self.assertFalse(e2e.startup_entry_owned(ident, name, '', content))
+            self.assertFalse(hc_e2e.preflight.startup_entry_owned(ident, name, '', content))
 
     def test_startup_cleanup_uses_installed_layout(self):
         from unittest.mock import Mock
@@ -228,7 +248,7 @@ class LauncherPreflight(unittest.TestCase):
         d.sh.side_effect = [(0, 'run-parts /var/lib/webosbrew/init.d 200>&-'), (0, path),
                             (0, '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service/startup.sh'),
                             (1, 'missing target'), (0, '')]
-        e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+        hc_e2e.preflight.clean_startup_entries(d, r, 'com.homebrew.homeback')
         self.assertEqual(d.sh.call_args.args[0], 'rm -- ' + path)
         self.assertTrue(r.check.call_args.args[1])
 
@@ -242,7 +262,7 @@ class LauncherPreflight(unittest.TestCase):
                             (0, path),
                             (0, '/media/developer/apps/usr/palm/services/com.homebrew.homeback.service/startup.sh'),
                             (1, 'missing target'), (0, '')]
-        e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+        hc_e2e.preflight.clean_startup_entries(d, r, 'com.homebrew.homeback')
         self.assertEqual(d.sh.call_args_list[1].args[0], 'cat ' + package)
         self.assertEqual(d.sh.call_args.args[0], 'rm -- ' + path)
 
@@ -253,19 +273,19 @@ class LauncherPreflight(unittest.TestCase):
                 d, r = Mock(), Mock()
                 d.sh.side_effect = replies
                 with self.assertRaises(RuntimeError):
-                    e2e.clean_startup_entries(d, r, 'com.homebrew.homeback')
+                    hc_e2e.preflight.clean_startup_entries(d, r, 'com.homebrew.homeback')
                 self.assertTrue(all(c.args[0].startswith('cat ') for c in d.sh.call_args_list))
 
     def test_removal_reboots_before_proceeding(self):
         from unittest.mock import Mock
         s = Mock()
-        e2e.restart_after_launcher_cleanup(s, [])
+        hc_e2e.preflight.restart_after_launcher_cleanup(s, [])
         s.beanjar_reboot.assert_not_called()
-        e2e.restart_after_launcher_cleanup(s, ['com.homebrew.homeback'])
+        hc_e2e.preflight.restart_after_launcher_cleanup(s, ['com.homebrew.homeback'])
         s.beanjar_reboot.assert_called_once()
         s.beanjar_reboot.return_value = False
         with self.assertRaises(RuntimeError):
-            e2e.restart_after_launcher_cleanup(s, ['example.launcher'])
+            hc_e2e.preflight.restart_after_launcher_cleanup(s, ['example.launcher'])
 
     def test_removal_and_retention_notes(self):
         from unittest.mock import Mock
@@ -275,8 +295,8 @@ class LauncherPreflight(unittest.TestCase):
                             (0, json.dumps({'id': 'example.browser', 'version': '2'}))]
         d.remove.return_value = (0, 'removed')
         from unittest.mock import patch
-        with patch.object(e2e, 'clean_startup_entries') as cleanup:
-            self.assertEqual(e2e.clean_launchers(d, r), ['example.launcher'])
+        with patch.object(hc_e2e.preflight, 'clean_startup_entries') as cleanup:
+            self.assertEqual(hc_e2e.preflight.clean_launchers(d, r), ['example.launcher'])
         cleanup.assert_called_once_with(d, r, 'example.launcher')
         d.remove.assert_called_once_with('example.launcher')
         self.assertTrue(r.check.call_args.args[1])
@@ -289,7 +309,7 @@ class LauncherPreflight(unittest.TestCase):
         d.sh.return_value = (0, json.dumps({'id': 'example.launcher', 'appCategory': ['home']}))
         d.remove.return_value = (1, 'refused')
         with self.assertRaises(RuntimeError):
-            e2e.clean_launchers(d, r)
+            hc_e2e.preflight.clean_launchers(d, r)
         self.assertFalse(r.check.call_args.args[1])
 
 
@@ -299,7 +319,7 @@ class AlertFocus(unittest.TestCase):
             return json.load(f)
 
     def parse(self, frame):
-        return e2e.alert_focus(frame, e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+        return hc_e2e.alerts.alert_focus(frame, hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
 
     def test_recorded_restart_default(self):
         self.assertEqual(self.parse(self.frame()), ('Later', 'UP'))
@@ -313,13 +333,13 @@ class AlertFocus(unittest.TestCase):
         self.assertEqual(self.parse(self.frame('reboot-target')), ('Reboot', 'UP'))
 
     def test_recorded_uninstall(self):
-        self.assertEqual(e2e.alert_focus(self.frame('uninstall-alert'),
+        self.assertEqual(hc_e2e.alerts.alert_focus(self.frame('uninstall-alert'),
                          'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
 
     def test_bad_ownership_or_focus_fails_closed(self):
         import copy
         base = self.frame()
-        for text in (e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later'):
+        for text in (hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later'):
             frame = copy.deepcopy(base)
             frame['elements'] = [r for r in frame['elements'] if r.get('text') != text]
             with self.subTest(missing=text), self.assertRaises(ValueError):
@@ -334,26 +354,26 @@ class AlertFocus(unittest.TestCase):
 
     def test_missing_service_proof_sends_no_key(self):
         from types import SimpleNamespace
-        scenario = e2e.Scenario.__new__(e2e.Scenario)
+        scenario = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
         scenario.press = lambda *a: self.fail('unproven service must send no key')
         scenario.shot = lambda *a: self.fail('service proof must precede screen capture')
-        self.assertFalse(scenario.press_alert(e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later',
+        self.assertFalse(scenario.press_alert(hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later',
                                              'test', lambda: ('refused', False)))
 
     def test_recorded_service_evidence(self):
         with open(os.path.join(HERE, 'samples', 'alert-service.log')) as f:
             raw = f.read()
-        reboot = lambda text: e2e.alert_service_proof(text, e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
-        uninstall = lambda text: e2e.alert_service_proof(text, 'Uninstall HC Fixture disposable?',
-                            'Uninstall', 'Cancel', e2e.DISPOSABLE_ID, 'org.webosbrew.hcfixture.web.normal')
+        reboot = lambda text: hc_e2e.alerts.alert_service_proof(text, hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later')
+        uninstall = lambda text: hc_e2e.alerts.alert_service_proof(text, 'Uninstall HC Fixture disposable?',
+                            'Uninstall', 'Cancel', hc_e2e.api_spec.DISPOSABLE_ID, 'org.webosbrew.hcfixture.web.normal')
         self.assertTrue(reboot(raw))
         self.assertTrue(uninstall(raw))
         self.assertFalse(reboot(raw.replace('accepted', 'refused')))
         self.assertFalse(reboot(raw.replace('(exit 0)', '(exit 1)')))
         self.assertFalse(reboot(raw.replace('"returnValue":true', '"returnValue":false')))
-        self.assertFalse(reboot(raw.replace(e2e.REBOOT_PROMPT['apply'], 'different prompt')))
-        self.assertFalse(uninstall(raw.replace(e2e.DISPOSABLE_ID, 'other.app')))
+        self.assertFalse(reboot(raw.replace(hc_e2e.constants.REBOOT_PROMPT['apply'], 'different prompt')))
+        self.assertFalse(uninstall(raw.replace(hc_e2e.api_spec.DISPOSABLE_ID, 'other.app')))
         self.assertFalse(uninstall(raw.replace('org.webosbrew.hcfixture.web.normal', 'other.caller')))
         self.assertFalse(uninstall(raw.replace('alert shown', 'alert refused')))
         self.assertFalse(uninstall(raw.replace('"returnValue":true', '"returnValue":false')))
@@ -372,19 +392,19 @@ class AlertFocus(unittest.TestCase):
                                       ([default, default], ['UP'], False),
                                       ([default, {}], ['UP'], False),
                                       ([default, target], ['UP', 'OK'], True)):
-            scenario = e2e.Scenario.__new__(e2e.Scenario)
+            scenario = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
             sent = []
             scenario.press = lambda *k: sent.extend(k)
             scenario.shot = lambda label: __file__
             scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
-            with patch.object(e2e, 'run', side_effect=[(0, json.dumps(f)) for f in frames]):
-                self.assertEqual(scenario.press_alert(e2e.REBOOT_PROMPT['apply'],
+            with patch.object(hc_e2e.timing, 'run', side_effect=[(0, json.dumps(f)) for f in frames]):
+                self.assertEqual(scenario.press_alert(hc_e2e.constants.REBOOT_PROMPT['apply'],
                                  'Reboot', 'Later', 'test', lambda: ('accepted service log', True)), success)
             self.assertEqual(sent, keys)
 
     def test_recorded_horizontal_5x(self):
         frame = self.frame('uninstall-alert-5x')
-        parse = lambda: e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+        parse = lambda: hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
         self.assertEqual(parse(), ('Cancel', 'LEFT'))
         buttons = {r['text']: r for r in frame['elements'] if r['kind'] == 'button'}
         buttons['Uninstall']['box'], buttons['Cancel']['box'] = buttons['Cancel']['box'], buttons['Uninstall']['box']
@@ -403,7 +423,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
     parse = AlertFocus.parse
     def test_saved_8x_and_11x_defaults(self):
         self.assertEqual(self.parse(self.frame('reboot-alert-8x')), ('Later', 'UP'))
-        self.assertEqual(e2e.alert_focus(self.frame('uninstall-alert-11x'),
+        self.assertEqual(hc_e2e.alerts.alert_focus(self.frame('uninstall-alert-11x'),
                          'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
 
     def test_swap_across_releases(self):
@@ -414,44 +434,44 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
             before = self.frame(name)
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
-                    e2e.alert_style_swap(before, before, target, safe)
+                    hc_e2e.alerts.alert_style_swap(before, before, target, safe)
                 after = copy.deepcopy(before)
                 buttons = {r['text']: r for r in after['elements'] if r.get('text') in (target, safe)}
                 buttons[target]['style'], buttons[safe]['style'] = buttons[safe]['style'], buttons[target]['style']
-                self.assertTrue(e2e.alert_style_swap(before, after, target, safe))
+                self.assertTrue(hc_e2e.alerts.alert_style_swap(before, after, target, safe))
                 # Only one side changing is not a swap.
                 buttons[safe]['style'] = buttons[target]['style']
                 with self.assertRaises(ValueError):
-                    e2e.alert_style_swap(before, after, target, safe)
+                    hc_e2e.alerts.alert_style_swap(before, after, target, safe)
 
     def test_centered_extra_control_rejected(self):
         frame = self.frame('uninstall-alert-11x')
         frame['elements'].append(dict(kind='button', text='Other', box=[510,320,600,340]))
         with self.assertRaises(ValueError):
-            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+            hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
 
     def test_busy_list_beside_alert_is_not_extra_controls(self):
         """A row title behind the dialog that OCR calls a button, sharing the band vertically but lying
         beside the dialog (w22o-queue-us-rk2 'Aerial webOS screensaver'), is not an alert control."""
         frame = self.frame('uninstall-alert-11x')
         frame['elements'].append(dict(kind='button', text='Aerial webOS screensaver', box=[118, 311, 364, 335]))
-        self.assertEqual(e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+        self.assertEqual(hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
                          ('Cancel', 'UP'))
         # the same kind of control inside the dialog rectangle still fails
         frame['elements'].append(dict(kind='button', text='Inside', box=[600, 320, 700, 340]))
         with self.assertRaises(ValueError):
-            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+            hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
 
     def test_missing_real_buttons_still_fail_with_busy_list(self):
         frame = self.frame('uninstall-alert-11x')
         frame['elements'] = [r for r in frame['elements'] if r.get('text') != 'Cancel']
         frame['elements'].append(dict(kind='button', text='Aerial webOS screensaver', box=[118, 311, 364, 335]))
         with self.assertRaises(ValueError):
-            e2e.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
+            hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel')
 
     def test_click_not_observed_takes_diagnostics_first(self):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.host, s.rec, s.vm, s.insp = Mock(), Mock(), 'vm', None
         s.host.remote_click.return_value = (0, 'ok')
         s.elements = Mock(return_value=ClickInput.frame(self))
@@ -464,7 +484,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
 
     def test_see_toast_recreates_dead_inspector_and_reads_screen(self):
         from unittest.mock import Mock, patch
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.vm, s.rec, s.dev = 'vm', Mock(), Mock()
         s.host = Mock()
         s.host.remote_target.return_value = 'vm'
@@ -473,7 +493,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         s.close_insp = Mock(side_effect=lambda: setattr(s, 'insp', None))
         s.host.display_beanjar.return_value = (0, json.dumps({'elements': [
             {'kind': 'text', 'text': 'HC Fixture is already your Home.', 'box': [1, 2, 3, 4]}]}))
-        with patch.object(e2e, 'Inspector', return_value=Mock(last_error='x')) as new, patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.steps.api, 'Inspector', return_value=Mock(last_error='x')) as new, patch.object(hc_e2e.timing, 'sleep'):
             text, source = s.see_toast('already your Home', 5)
         self.assertEqual(source, 'screen')
         self.assertIn('already your Home', text)
@@ -482,7 +502,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
 
     def test_see_toast_dom_source_and_failure(self):
         from unittest.mock import Mock, patch
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.vm, s.rec, s.host = 'vm', Mock(), Mock()
         s.host.remote_target.return_value = 'vm'
         s.host.display_beanjar.return_value = (0, json.dumps({'elements': []}))
@@ -490,14 +510,14 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         s.ui = Mock(return_value={'toast': 'X is already your Home.'})
         self.assertEqual(s.see_toast('already your Home', 5), ('X is already your Home.', 'DOM'))
         s.ui = Mock(return_value={'toast': None})
-        with patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'sleep'):
             text, source = s.see_toast('already your Home', 0)
         self.assertIsNone(text)
         self.assertTrue(source.startswith('none'))
 
     def _reopen_scenario(self, uis, launch_rc=0):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.vm, s.rec, s.launcher = 'vm', Mock(), 'org.x.launcher'
         s.dev = Mock()
         s.dev.close.return_value = (0, 'closed')
@@ -514,8 +534,8 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         from unittest.mock import Mock, patch
         dom = {'rows': ['org.x.launcher'], 'toast': None}
         s = self._reopen_scenario([None, None, dom, dom])
-        with patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(last_error=None)) as new, \
-                patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.steps.panel, 'Inspector', side_effect=lambda vm: Mock(last_error=None)) as new, \
+                patch.object(hc_e2e.timing, 'sleep'):
             info = s.reopen_panel(30)
         self.assertEqual((info['failed'], info['recreated']), (2, 1))
         self.assertEqual(new.call_count, 1)
@@ -530,35 +550,35 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         gone = {'rows': ['org.x.launcher'], 'toast': None}
         s = self._reopen_scenario([dom, gone])
         s.insp = Mock(last_error=None)
-        with patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'sleep'):
             info = s.reopen_panel(30)
-        self.assertEqual(e2e.Scenario.ticked_after_reopen(info), 'org.x.launcher')
-        self.assertIn("ticked:", e2e.FOCUS_JS)
-        self.assertEqual(e2e.Scenario.ticked_after_reopen({'again': {}}), None)
-        self.assertEqual(e2e.Scenario.ticked_after_reopen({'again': {'ticked': ''}}), None)
+        self.assertEqual(hc_e2e.scenario.Scenario.ticked_after_reopen(info), 'org.x.launcher')
+        self.assertIn("ticked:", hc_e2e.inspector.FOCUS_JS)
+        self.assertEqual(hc_e2e.scenario.Scenario.ticked_after_reopen({'again': {}}), None)
+        self.assertEqual(hc_e2e.scenario.Scenario.ticked_after_reopen({'again': {'ticked': ''}}), None)
 
     def test_gate_log_verdict(self):
         seen = {}
-        self.assertFalse(e2e.Scenario.gate_log_verdict(seen)[0])
-        e2e.Scenario.gate_log_sightings(['22:14:58 boot apply: active=no', '22:16:03 setPreloadPolicy x'], seen)
-        self.assertFalse(e2e.Scenario.gate_log_verdict(seen)[0])
+        self.assertFalse(hc_e2e.scenario.Scenario.gate_log_verdict(seen)[0])
+        hc_e2e.scenario.Scenario.gate_log_sightings(['22:14:58 boot apply: active=no', '22:16:03 setPreloadPolicy x'], seen)
+        self.assertFalse(hc_e2e.scenario.Scenario.gate_log_verdict(seen)[0])
         # the refresh mounted first: only the close / launch lines are in the watcher log
-        e2e.Scenario.gate_log_sightings(['22:16:03 home gate: closeByAppId com.webos.app.home: {}; stock Home close confirmed'], seen)
-        ok, detail = e2e.Scenario.gate_log_verdict(seen)
+        hc_e2e.scenario.Scenario.gate_log_sightings(['22:16:03 home gate: closeByAppId com.webos.app.home: {}; stock Home close confirmed'], seen)
+        ok, detail = hc_e2e.scenario.Scenario.gate_log_verdict(seen)
         self.assertTrue(ok)
         self.assertIn('closeByAppId', detail)
         # a mount line seen later wins, and the trimmed log keeps the earlier sighting
-        e2e.Scenario.gate_log_sightings(['22:24:18 home gate: home gate mounted over /usr/bin/x; '], seen)
-        self.assertEqual(e2e.Scenario.gate_log_verdict(seen), (True, '22:24:18 home gate: home gate mounted over /usr/bin/x; '))
-        e2e.Scenario.gate_log_sightings([], seen)
-        self.assertTrue(e2e.Scenario.gate_log_verdict(seen)[0])
+        hc_e2e.scenario.Scenario.gate_log_sightings(['22:24:18 home gate: home gate mounted over /usr/bin/x; '], seen)
+        self.assertEqual(hc_e2e.scenario.Scenario.gate_log_verdict(seen), (True, '22:24:18 home gate: home gate mounted over /usr/bin/x; '))
+        hc_e2e.scenario.Scenario.gate_log_sightings([], seen)
+        self.assertTrue(hc_e2e.scenario.Scenario.gate_log_verdict(seen)[0])
 
     def test_reopen_miss_evidence_without_dom(self):
         from unittest.mock import Mock, patch
         s = self._reopen_scenario([], launch_rc=1)
-        with patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(
+        with patch.object(hc_e2e.steps.panel, 'Inspector', side_effect=lambda vm: Mock(
                 last_error='no page for x; /json unreadable: ConnectionResetError')), \
-                patch.object(e2e, 'sleep'), patch.object(e2e, 'seconds', return_value=0):
+                patch.object(hc_e2e.timing, 'sleep'), patch.object(hc_e2e.timing, 'seconds', return_value=0):
             info = s.reopen_panel(5)
         self.assertFalse(info['dom'])
         self.assertGreaterEqual(info['failed'], 1)
@@ -572,7 +592,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
 
     def _toast_scenario(self, ui, elements):
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.vm, s.rec, s.host, s.dev = 'vm', Mock(), Mock(), Mock()
         s.host.remote_target.return_value = 'vm'
         s.host.display_beanjar.side_effect = elements
@@ -597,7 +617,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
 
         def fresh(vm):
             return Mock(last_error=None)
-        with patch.object(e2e, 'Inspector', side_effect=fresh) as new, patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.steps.api, 'Inspector', side_effect=fresh) as new, patch.object(hc_e2e.timing, 'sleep'):
             self.assertEqual(s.see_toast('already your Home', 30), ('X is already your Home.', 'DOM'))
         self.assertEqual(new.call_count, 4)  # not capped at two
         self.assertEqual(s.close_insp.call_count, 4)
@@ -609,14 +629,14 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         rows = json.dumps({'elements': [{'kind': 'text', 'text': 'Some other text'}, {'kind': 'button', 'text': 'B'}]})
         s.host.display_beanjar.side_effect = lambda *a, **k: (0, rows)
         clock = [1000.0]
-        with patch.object(e2e.time, 'time', side_effect=lambda: clock[0]), \
-                patch.object(e2e, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 1)):
+        with patch.object(time, 'time', side_effect=lambda: clock[0]), \
+                patch.object(hc_e2e.timing, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 1)):
             text, source = s.see_toast('already your Home', 10)
         self.assertIsNone(text)
         ocr_calls = s.host.display_beanjar.call_args_list
         self.assertTrue(0 < len(ocr_calls) < s.ui.call_count)  # OCR interleaved, DOM rounds dominate
         for c in ocr_calls:
-            self.assertLessEqual(c.kwargs['timeout'], e2e.Scenario.TOAST_OCR_TIMEOUT)
+            self.assertLessEqual(c.kwargs['timeout'], hc_e2e.scenario.Scenario.TOAST_OCR_TIMEOUT)
         self.assertIn('rows: Some other text', source)
         self.assertIn('timeline:', source)
         self.assertIn('OCR', source)
@@ -626,9 +646,9 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         from unittest.mock import Mock, patch
         s = self._toast_scenario(Mock(return_value=None), lambda *a, **k: (124, '[timeout]'))
         clock = [0.0]
-        with patch.object(e2e.time, 'time', side_effect=lambda: clock[0]), \
-                patch.object(e2e, 'Inspector', side_effect=lambda vm: Mock(last_error='no page for x in /json')), \
-                patch.object(e2e, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 2)):
+        with patch.object(time, 'time', side_effect=lambda: clock[0]), \
+                patch.object(hc_e2e.steps.api, 'Inspector', side_effect=lambda vm: Mock(last_error='no page for x in /json')), \
+                patch.object(hc_e2e.timing, 'sleep', side_effect=lambda v: clock.__setitem__(0, clock[0] + 2)):
             text, source = s.see_toast('already your Home', 6)
         self.assertIsNone(text)
         self.assertIn('inspector-recreate', source)
@@ -637,7 +657,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
 
     def test_api_request_selected_replaces_inspector_not_app(self):
         from unittest.mock import Mock, patch
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.rec, s.dev, s.vm, s.launcher = Mock(), Mock(), 'vm', 'l'
         s.state = Mock(return_value={'choice': 'l'})
         s.shot = Mock()
@@ -647,7 +667,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         s.see_toast = Mock(side_effect=lambda *a: (order.append('toast'), ('t', 'DOM'))[1])
         s.dev.launch.side_effect = lambda *a: (order.append('launch'), (0, 'ok'))[1]
         s.dev.close.side_effect = lambda *a: order.append('app-close')
-        with patch.object(e2e, 'Inspector', side_effect=lambda vm: order.append('new') or Mock()):
+        with patch.object(hc_e2e.steps.api, 'Inspector', side_effect=lambda vm: order.append('new') or Mock()):
             s.api_request(selected=True)
         self.assertEqual(order[:4], ['close', 'new', 'launch', 'toast'])
 
@@ -657,13 +677,13 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         for overlay, reply_id, ok in [(True, 'org.webosbrew.hbchannel', True),
                                       (True, 'org.webosbrew.hcfixture.web.overlay', False),
                                       (False, 'org.webosbrew.hcfixture.web.normal', True)]:
-            s = e2e.Scenario.__new__(e2e.Scenario)
+            s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
             s.rec, s.dev = Mock(), Mock()
             s.launcher = 'org.webosbrew.hcfixture.web.' + ('overlay' if overlay else 'normal')
             s.L = Mock(overlay=overlay)
             s.dev.launch.return_value = (0, 'ok')
             s.dev.foreground.return_value = ('org.webosbrew.hbchannel' if overlay else s.launcher, '{}')
-            s.api = Mock(return_value=({'returnValue': True, 'apiVersion': e2e.API_VERSION, 'appId': reply_id}, '{}'))
+            s.api = Mock(return_value=({'returnValue': True, 'apiVersion': hc_e2e.api_spec.API_VERSION, 'appId': reply_id}, '{}'))
             s.life_begin = Mock()
             s.life_events = Mock(return_value=([('foreground', overlay_event)], True))
             s.wait = lambda fn, *a: fn()
@@ -676,13 +696,13 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
     def test_ls2_owned_request_and_rejections(self):
         import copy
         for target, safe, message, app, uri, params in [
-                ('Reboot', 'Later', e2e.REBOOT_PROMPT['apply'], None,
-                 e2e.TVPOWER_REBOOT_URI, {'reason': 'remoteKey'}),
-                ('Uninstall', 'Cancel', 'Uninstall HC Fixture disposable?', e2e.DISPOSABLE_ID,
-                 'luna://com.webos.appInstallService/dev/remove', {'id': e2e.DISPOSABLE_ID, 'subscribe': True})]:
+                ('Reboot', 'Later', hc_e2e.constants.REBOOT_PROMPT['apply'], None,
+                 hc_e2e.constants.TVPOWER_REBOOT_URI, {'reason': 'remoteKey'}),
+                ('Uninstall', 'Cancel', 'Uninstall HC Fixture disposable?', hc_e2e.api_spec.DISPOSABLE_ID,
+                 'luna://com.webos.appInstallService/dev/remove', {'id': hc_e2e.api_spec.DISPOSABLE_ID, 'subscribe': True})]:
             info = dict(message=message, buttons=[target, safe], alert='accepted', alert_id='owned', actions=[
                 dict(label=target, onclick=uri, params=params), dict(label=safe, focus=True)])
-            proof = lambda observed: e2e.alert_service_proof('', message, target, safe, app, observed=observed)
+            proof = lambda observed: hc_e2e.alerts.alert_service_proof('', message, target, safe, app, observed=observed)
             self.assertTrue(proof(info))
             for field, value in [('message', 'foreign'), ('buttons', [safe, target]),
                                  ('alert', None), ('alert', 'refused'), ('alert_id', None), ('actions', [])]:
@@ -699,12 +719,12 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         from unittest.mock import patch
         from types import SimpleNamespace
         before = self.frame('uninstall-alert-11x')
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         keys = []
         s.press = lambda key: keys.append(key)
         s.shot = lambda label: __file__
         s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
-        with patch.object(e2e, 'run', return_value=(0, json.dumps(before))):
+        with patch.object(hc_e2e.timing, 'run', return_value=(0, json.dumps(before))):
             self.assertFalse(s.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
                                           'test', lambda: ('owned', True)))
         self.assertEqual(keys, ['UP'])
@@ -717,30 +737,30 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         after = copy.deepcopy(before)
         buttons = {r['text']: r for r in after['elements'] if r.get('kind') == 'button'}
         buttons['Uninstall']['style'], buttons['Cancel']['style'] = buttons['Cancel']['style'], buttons['Uninstall']['style']
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         keys, notes = [], []
         s.press = lambda key: keys.append(key)
         s.shot = lambda label: __file__
         s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: notes.append(a))
-        with patch.object(e2e, 'run', side_effect=[(0, json.dumps(f)) for f in (before, after)]):
+        with patch.object(hc_e2e.timing, 'run', side_effect=[(0, json.dumps(f)) for f in (before, after)]):
             self.assertTrue(s.press_alert('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
                                          'test', lambda: ('owned', True)))
         self.assertEqual(keys, ['UP', 'OK'])
         self.assertTrue(any('background colour' in note for note in notes))
 
     def test_monitor_binds_actions_to_reply(self):
-        monitor = e2e.RebootAlertMonitor(None)
+        monitor = hc_e2e.alerts.RebootAlertMonitor(None)
         def call(token, message):
             monitor._observe(dict(type='call', transport='TX', sender='client', token=token,
                                   destination='com.webos.notification', method='createAlert', payload=dict(
-                                      sourceId=e2e.APP_ID, title='Home Chooser', message=message, buttons=[
-                                          dict(label='Reboot', onclick=e2e.TVPOWER_REBOOT_URI, params={'reason': 'remoteKey'}),
+                                      sourceId=hc_e2e.constants.APP_ID, title='Home Chooser', message=message, buttons=[
+                                          dict(label='Reboot', onclick=hc_e2e.constants.TVPOWER_REBOOT_URI, params={'reason': 'remoteKey'}),
                                           dict(label='Later', focus=True)])))
-        call(1, e2e.REBOOT_PROMPT['apply'])
+        call(1, hc_e2e.constants.REBOOT_PROMPT['apply'])
         call(2, 'foreign prompt')
         monitor._observe(dict(type='return', transport='TX', sender='com.webos.notification',
                               destination='client', replyToken=1, payload=dict(returnValue=True, alertId='first')))
-        self.assertTrue(e2e.alert_ls2_proof(monitor.snapshot(), e2e.REBOOT_PROMPT['apply'], 'Reboot', 'Later'))
+        self.assertTrue(hc_e2e.alerts.alert_ls2_proof(monitor.snapshot(), hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later'))
 
     def test_input_diagnostics_include_other_processes(self):
         from unittest.mock import patch
@@ -749,21 +769,21 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
             with open(journal, 'w') as f:
                 f.write("#!/bin/sh\necho 'surface-manager input Home received'\n")
             os.chmod(journal, 0o755)
-            with patch.object(e2e, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 input stale' '2026-10-29T06:29:00 input current'"):
-                command = e2e.home_input_command('2026-10-29T06:28:00Z')
+            with patch.object(hc_e2e.evidence, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 input stale' '2026-10-29T06:29:00 input current'"):
+                command = hc_e2e.evidence.home_input_command('2026-10-29T06:28:00Z')
             result = subprocess.run(['sh', '-c', command], capture_output=True, text=True, check=True,
                                     env=dict(os.environ, PATH=root + os.pathsep + os.environ['PATH']))
             self.assertNotIn('stale', result.stdout)
             self.assertIn('input current', result.stdout)
             self.assertIn('surface-manager input Home received', result.stdout)
             self.assertIn('2026-10-29 06:28:00 UTC', command)
-        self.assertEqual(e2e.home_input_command(''), 'true')
+        self.assertEqual(hc_e2e.evidence.home_input_command(''), 'true')
 
     def test_failed_home_attempt_stays_failed_without_retry(self):
         from types import SimpleNamespace
-        s = e2e.Scenario.__new__(e2e.Scenario)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         keys, commands, checks, notes = [], [], [], []
-        s.launcher, s.major, s.stock_id = 'fixture.launcher', 11, e2e.STOCK
+        s.launcher, s.major, s.stock_id = 'fixture.launcher', 11, hc_e2e.constants.STOCK
         s.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: notes.append(a),
                                 check=lambda name, ok, evidence: checks.append(ok))
         s.dev = SimpleNamespace(foreground=lambda: ('other', 'other'),
@@ -775,7 +795,7 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
         s.running_ids = lambda: []
         s.shot = lambda *a: 'saved.png'
         with mock_sleep():
-            self.assertFalse(s.home_press(e2e.STOCK, 'test', from_app=False))
+            self.assertFalse(s.home_press(hc_e2e.constants.STOCK, 'test', from_app=False))
         self.assertEqual(keys, ['HOME'])
         self.assertEqual(checks, [False])
         self.assertTrue(commands)
@@ -803,7 +823,7 @@ class LogMark(unittest.TestCase):
                     log.write(content)
             with open(path, 'w') as log:
                 log.write('d current\n')
-            cmd = e2e.messages_command(path) + " | awk '$1 >= \"b\"'"
+            cmd = hc_e2e.evidence.messages_command(path) + " | awk '$1 >= \"b\"'"
             result = subprocess.run(['sh', '-c', cmd], capture_output=True, text=True, check=True, env=env)
             self.assertEqual(result.stdout, 'b REBOOT_ASK createAlert\nc crashd CRASHED\nd current\n')
 
@@ -812,7 +832,7 @@ class LogMark(unittest.TestCase):
             path = os.path.join(root, 'messages')
             with open(path, 'w') as log:
                 log.write('only current\n')
-            result = subprocess.run(['sh', '-c', e2e.messages_command(path)],
+            result = subprocess.run(['sh', '-c', hc_e2e.evidence.messages_command(path)],
                                     capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout, 'only current\n')
             self.assertEqual(result.stderr, '')
@@ -827,21 +847,21 @@ class LogMark(unittest.TestCase):
                         "echo 'HomeChooser UNINSTALL_ASK {} current'\n"
                         "echo 'Other UNINSTALL_ASK {} foreign'\n")
             os.chmod(journal, 0o755)
-            with patch.object(e2e, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 HomeChooser UNINSTALL_ASK {} stale'"):
-                command = e2e.service_log_command(mark, 'UNINSTALL_ASK')
+            with patch.object(hc_e2e.evidence, 'messages_command', return_value="printf '%s\\n' '2026-10-29T06:27:00 HomeChooser UNINSTALL_ASK {} stale'"):
+                command = hc_e2e.evidence.service_log_command(mark, 'UNINSTALL_ASK')
             result = subprocess.run(['sh', '-c', command], capture_output=True, text=True,
                                     env=dict(os.environ, PATH=root + os.pathsep + os.environ['PATH']), check=True)
             self.assertEqual(result.stdout, 'HomeChooser UNINSTALL_ASK {} current\n')
-        self.assertEqual(e2e.service_log_command('', 'UNINSTALL_ASK'), 'true')
+        self.assertEqual(hc_e2e.evidence.service_log_command('', 'UNINSTALL_ASK'), 'true')
 
     def test_only_lines_after_the_mark(self):
         log = ['a closeByAppId x', 'b', 'c']
-        self.assertEqual(e2e.lines_after(log, 2), ['c'])
-        self.assertEqual(e2e.lines_after(log, 3), [])
-        self.assertEqual(e2e.lines_after(log, 0), log)
+        self.assertEqual(hc_e2e.evidence.lines_after(log, 2), ['c'])
+        self.assertEqual(hc_e2e.evidence.lines_after(log, 3), [])
+        self.assertEqual(hc_e2e.evidence.lines_after(log, 0), log)
 
     def test_a_log_shorter_than_the_mark_is_a_new_boot(self):
-        self.assertEqual(e2e.lines_after(['x', 'y'], 50), ['x', 'y'])
+        self.assertEqual(hc_e2e.evidence.lines_after(['x', 'y'], 50), ['x', 'y'])
 
 
 class BootInput(unittest.TestCase):
@@ -851,28 +871,28 @@ class BootInput(unittest.TestCase):
     def test_launches_are_read_from_the_log(self):
         lines = ['2026-11-01 01:30:43 setPreloadPolicy com.webos.app.home isEnabled=false: no reply',
                  '2026-11-01 01:31:00 last input: eim did not answer, using com.webos.app.livetv', self.LAUNCHED, self.FAILED]
-        self.assertEqual(e2e.boot_input_launches(lines),
+        self.assertEqual(hc_e2e.releases.boot_input_launches(lines),
                          [('com.webos.app.hdmi2', True), ('com.webos.app.livetv', False)])
-        self.assertEqual(e2e.boot_input_launches(['x last input: netflix in front; nothing launched this boot']), [])
+        self.assertEqual(hc_e2e.releases.boot_input_launches(['x last input: netflix in front; nothing launched this boot']), [])
 
     def test_one_accepted_launch_in_front(self):
-        self.assertEqual(e2e.boot_input_verdict([self.LAUNCHED], 'com.webos.app.hdmi2'),
+        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], 'com.webos.app.hdmi2'),
                          (True, 'com.webos.app.hdmi2 launched once and in front'))
 
     def test_not_in_front_yet(self):
         for fg in ('', None, 'org.webosbrew.hcfixture.web.overlay', 'com.webos.app.livetv'):
-            self.assertFalse(e2e.boot_input_verdict([self.LAUNCHED], fg)[0], fg)
+            self.assertFalse(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], fg)[0], fg)
 
     def test_none_two_or_failed(self):
-        self.assertIn('0 last-input launches', e2e.boot_input_verdict([], 'com.webos.app.hdmi2')[1])
-        self.assertIn('2 last-input launches', e2e.boot_input_verdict([self.LAUNCHED, self.LAUNCHED], 'com.webos.app.hdmi2')[1])
-        self.assertEqual(e2e.boot_input_verdict([self.FAILED], 'com.webos.app.livetv'),
+        self.assertIn('0 last-input launches', hc_e2e.releases.boot_input_verdict([], 'com.webos.app.hdmi2')[1])
+        self.assertIn('2 last-input launches', hc_e2e.releases.boot_input_verdict([self.LAUNCHED, self.LAUNCHED], 'com.webos.app.hdmi2')[1])
+        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.FAILED], 'com.webos.app.livetv'),
                          (False, 'the launch of com.webos.app.livetv failed'))
 
 
 class StockRecord(unittest.TestCase):
     def test_uninstall_checks_every_owned_cache_and_access_path(self):
-        paths = e2e.uninstall_remnant_paths()
+        paths = hc_e2e.constants.uninstall_remnant_paths()
         self.assertEqual(len(paths), len(set(paths)))
         self.assertEqual(set(paths), {
             '/var/lib/webosbrew/homechooser/hook',
@@ -884,72 +904,72 @@ class StockRecord(unittest.TestCase):
 
     def test_5x_is_unchanged_a_stock_launcher(self):
         for home in (FULL, HOME):
-            self.assertTrue(e2e.stock_record_ok(5, home))
-            self.assertTrue(e2e.stock_record_ok(5, home, FULL))  # the id is not pinned on 5.x
+            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home))
+            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home, FULL))  # the id is not pinned on 5.x
         for home in (None, '', 'null', 'org.example.launcher'):
-            self.assertFalse(e2e.stock_record_ok(5, home))
+            self.assertFalse(hc_e2e.releases.stock_record_ok(5, home))
 
     def test_6_to_9_require_the_stock_id_not_null(self):
         for major in (6, 7, 8, 9):
-            self.assertTrue(e2e.stock_record_ok(major, HOME, HOME))
-            self.assertTrue(e2e.stock_record_ok(major, FULL, FULL))
-            self.assertFalse(e2e.stock_record_ok(major, FULL, HOME), 'the resolved id, exactly')
-            self.assertFalse(e2e.stock_record_ok(major, HOME, FULL))
+            self.assertTrue(hc_e2e.releases.stock_record_ok(major, HOME, HOME))
+            self.assertTrue(hc_e2e.releases.stock_record_ok(major, FULL, FULL))
+            self.assertFalse(hc_e2e.releases.stock_record_ok(major, FULL, HOME), 'the resolved id, exactly')
+            self.assertFalse(hc_e2e.releases.stock_record_ok(major, HOME, FULL))
             for home in (None, '', 'null', 'org.example.launcher'):
-                self.assertFalse(e2e.stock_record_ok(major, home, HOME), (major, home))
+                self.assertFalse(hc_e2e.releases.stock_record_ok(major, home, HOME), (major, home))
             # stock id not resolved: either stock launcher, never null
-            self.assertTrue(e2e.stock_record_ok(major, HOME))
-            self.assertFalse(e2e.stock_record_ok(major, None))
+            self.assertTrue(hc_e2e.releases.stock_record_ok(major, HOME))
+            self.assertFalse(hc_e2e.releases.stock_record_ok(major, None))
 
     def test_10_and_later_require_null_or_unset(self):
         for major in (10, 11, 12):
             for home in (None, '', 'null'):
-                self.assertTrue(e2e.stock_record_ok(major, home), (major, home))
+                self.assertTrue(hc_e2e.releases.stock_record_ok(major, home), (major, home))
             for home in (HOME, FULL, 'org.example.launcher'):
-                self.assertFalse(e2e.stock_record_ok(major, home), (major, home))
+                self.assertFalse(hc_e2e.releases.stock_record_ok(major, home), (major, home))
 
     def test_platform_stock_after_a_removal_race(self):
         stock_idle = {'support': True, 'appId': HOME}
         launcher_idle = {'support': True, 'appId': 'org.example.launcher'}
-        self.assertTrue(e2e.platform_stock(11, None, None, 'no', stock_idle))
-        self.assertFalse(e2e.platform_stock(11, 'org.example.launcher', None, 'no', stock_idle))
-        self.assertFalse(e2e.platform_stock(11, None, None, 'yes', stock_idle), 'override still there')
-        self.assertFalse(e2e.platform_stock(11, None, None, 'no', launcher_idle), 'idleApp names the launcher')
-        self.assertFalse(e2e.platform_stock(10, None, None, 'no', None), 'idleApp unreadable')
-        self.assertTrue(e2e.platform_stock(9, HOME, HOME, 'no', None), 'no override or idleApp before 10')
-        self.assertFalse(e2e.platform_stock(9, 'org.example.launcher', HOME, 'no', None))
-        self.assertTrue(e2e.platform_stock(5, FULL, None, 'no', None))
+        self.assertTrue(hc_e2e.releases.platform_stock(11, None, None, 'no', stock_idle))
+        self.assertFalse(hc_e2e.releases.platform_stock(11, 'org.example.launcher', None, 'no', stock_idle))
+        self.assertFalse(hc_e2e.releases.platform_stock(11, None, None, 'yes', stock_idle), 'override still there')
+        self.assertFalse(hc_e2e.releases.platform_stock(11, None, None, 'no', launcher_idle), 'idleApp names the launcher')
+        self.assertFalse(hc_e2e.releases.platform_stock(10, None, None, 'no', None), 'idleApp unreadable')
+        self.assertTrue(hc_e2e.releases.platform_stock(9, HOME, HOME, 'no', None), 'no override or idleApp before 10')
+        self.assertFalse(hc_e2e.releases.platform_stock(9, 'org.example.launcher', HOME, 'no', None))
+        self.assertTrue(hc_e2e.releases.platform_stock(5, FULL, None, 'no', None))
 
     def test_stock_home_id_resolution(self):
-        self.assertEqual(e2e.stock_home_id(9, True), FULL)
-        self.assertEqual(e2e.stock_home_id(6, False), HOME)
-        self.assertEqual(e2e.stock_home_id(5, True), FULL)
-        self.assertIsNone(e2e.stock_home_id(10, True))
-        self.assertIsNone(e2e.stock_home_id(12, False))
+        self.assertEqual(hc_e2e.releases.stock_home_id(9, True), FULL)
+        self.assertEqual(hc_e2e.releases.stock_home_id(6, False), HOME)
+        self.assertEqual(hc_e2e.releases.stock_home_id(5, True), FULL)
+        self.assertIsNone(hc_e2e.releases.stock_home_id(10, True))
+        self.assertIsNone(hc_e2e.releases.stock_home_id(12, False))
 
     def test_baseline_on_6_to_9_accepts_unset_or_a_left_stock_id(self):
         for home in (None, '', 'null', HOME, FULL):
-            self.assertTrue(e2e.stock_baseline_ok(8, home))
-        self.assertFalse(e2e.stock_baseline_ok(8, 'org.example.launcher'))
-        self.assertFalse(e2e.stock_baseline_ok(10, HOME))
-        self.assertFalse(e2e.stock_baseline_ok(5, None))
+            self.assertTrue(hc_e2e.releases.stock_baseline_ok(8, home))
+        self.assertFalse(hc_e2e.releases.stock_baseline_ok(8, 'org.example.launcher'))
+        self.assertFalse(hc_e2e.releases.stock_baseline_ok(10, HOME))
+        self.assertFalse(hc_e2e.releases.stock_baseline_ok(5, None))
 
 
 class RebootDialog(unittest.TestCase):
     def test_no_release_needs_a_reboot_after_apply(self):
         for major in (6, 7, 8, 9):
-            self.assertFalse(e2e.expects_reboot_dialog(major, False))
-            self.assertFalse(e2e.expects_reboot_dialog(major, True), 'mounted: a live switch')
+            self.assertFalse(hc_e2e.releases.expects_reboot_dialog(major, False))
+            self.assertFalse(hc_e2e.releases.expects_reboot_dialog(major, True), 'mounted: a live switch')
         for major in (5, 10, 11, 12):
-            self.assertFalse(e2e.expects_reboot_dialog(major, False))
+            self.assertFalse(hc_e2e.releases.expects_reboot_dialog(major, False))
 
     def test_parse_status(self):
         out = 'data=missing\nactive=no\npatch=possible\nreboot=needed\n'
-        st = e2e.parse_status(out)
+        st = hc_e2e.evidence.parse_status(out)
         self.assertEqual((st['active'], st['patch'], st['reboot']), ('no', 'possible', 'needed'))
-        st = e2e.parse_status('active=yes\npatch=possible\nreboot=no')
+        st = hc_e2e.evidence.parse_status('active=yes\npatch=possible\nreboot=no')
         self.assertEqual((st['active'], st['reboot']), ('yes', 'no'))
-        self.assertEqual(e2e.parse_status('some log line = with spaces\n'), {})
+        self.assertEqual(hc_e2e.evidence.parse_status('some log line = with spaces\n'), {})
 
 
 class Texts(unittest.TestCase):
@@ -958,31 +978,31 @@ class Texts(unittest.TestCase):
             return f.read()
 
     def test_every_asserted_text_is_in_its_source(self):
-        for text, rel in e2e.TEXT_SOURCES:
+        for text, rel in hc_e2e.constants.TEXT_SOURCES:
             self.assertIn(text, self.read(rel), '%r not in %s' % (text, rel))
 
     def test_device_text_forms_match_utf8_and_minified_unicode_escape(self):
-        note = e2e.RESTART_NOTE['apply']
-        literal, escaped = e2e.device_text_forms(note)
+        note = hc_e2e.constants.RESTART_NOTE['apply']
+        literal, escaped = hc_e2e.releases.device_text_forms(note)
         self.assertIn(' — ', literal)
         self.assertIn(' \\u2014 ', escaped)
         self.assertEqual(escaped.replace('\\u2014', '—'), literal)
-        self.assertEqual(e2e.device_text_forms(e2e.RESTART_NOTE['remove']),
-                         (e2e.RESTART_NOTE['remove'],))
+        self.assertEqual(hc_e2e.releases.device_text_forms(hc_e2e.constants.RESTART_NOTE['remove']),
+                         (hc_e2e.constants.RESTART_NOTE['remove'],))
 
     def test_the_new_texts(self):
-        self.assertEqual(e2e.UNINSTALL_TOAST, 'Home Chooser was removed. The Home button opens LG Home again.')
-        self.assertEqual(e2e.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the hook.')
-        self.assertEqual(e2e.REBOOT_PROMPT, {'apply': 'Restart the TV to finish setting up the Home button.',
+        self.assertEqual(hc_e2e.constants.UNINSTALL_TOAST, 'Home Chooser was removed. The Home button opens LG Home again.')
+        self.assertEqual(hc_e2e.constants.RESTART_NOTE['remove'], 'LG Home is on the Home button now. A restart removes the hook.')
+        self.assertEqual(hc_e2e.constants.REBOOT_PROMPT, {'apply': 'Restart the TV to finish setting up the Home button.',
                                              'remove': 'Restart the TV to finish removing the Home button patch.'})
-        self.assertNotIn('restart', (e2e.REMOVAL_ALERT % 'Launcher').lower())
-        self.assertNotIn('restart', e2e.UNINSTALL_TOAST.lower())
+        self.assertNotIn('restart', (hc_e2e.constants.REMOVAL_ALERT % 'Launcher').lower())
+        self.assertNotIn('restart', hc_e2e.constants.UNINSTALL_TOAST.lower())
 
     def test_the_old_restart_wording_is_gone_from_the_product(self):
         for rel in ('service/src/watcher/notify.c', 'service/src/watcher/restore.c', 'app/src/views/useHomeChooser.js', 'app/src/views/MainPanel.js',
                     'service/src/policy.c'):
             body = self.read(rel)
-            for old in e2e.OLD_RESTART_TEXTS:
+            for old in hc_e2e.constants.OLD_RESTART_TEXTS:
                 self.assertNotIn(old, body, '%r still in %s' % (old, rel))
 
     def test_app_has_no_restart_prompt(self):
@@ -998,42 +1018,42 @@ class Texts(unittest.TestCase):
 
 
 class RebootAsk(unittest.TestCase):
-    APPLY = e2e.REBOOT_PROMPT['apply']
+    APPLY = hc_e2e.constants.REBOOT_PROMPT['apply']
     REQUEST = ('2026-10-24T05:48:12 user.info org.webosbrew.homechooser.service [] REBOOT_ASK {} '
                'createAlert request: message: %s; buttons: Reboot (tvpower/power/reboot), Later (focused)' % APPLY)
 
     def test_accepted_alert(self):
         text = self.REQUEST + '\n' + ('2026-10-24T05:48:12 user.info svc [] REBOOT_ASK {} luna://com.webos.notification/'
                                       'createAlert accepted (exit 0): {"returnValue":true,"alertId":"com.x-1234"}')
-        got = e2e.parse_reboot_ask(text)
+        got = hc_e2e.releases.parse_reboot_ask(text)
         self.assertEqual(got['message'], self.APPLY)
         self.assertEqual(got['buttons'], ['Reboot', 'Later'])
         self.assertEqual((got['alert'], got['alert_id'], got['toast']), ('accepted', 'com.x-1234', None))
 
     def test_escaped_json_in_the_log(self):
         text = self.REQUEST + '\n' + 'REBOOT_ASK {} luna://com.webos.notification/createAlert accepted (exit 0): {\\"returnValue\\":true,\\"alertId\\":\\"a-9\\"}'
-        self.assertEqual(e2e.parse_reboot_ask(text)['alert_id'], 'a-9')
+        self.assertEqual(hc_e2e.releases.parse_reboot_ask(text)['alert_id'], 'a-9')
 
     def test_refused_alert_then_toast(self):
         text = '\n'.join([self.REQUEST,
                           'REBOOT_ASK {} luna://com.webos.notification/createAlert refused (exit 0): {"returnValue":false,"errorText":"Alert is blocked by [ system ]"}',
                           'REBOOT_ASK {} luna://com.webos.notification/createToast accepted (exit 0): {"returnValue":true,"toastId":"t1"}'])
-        got = e2e.parse_reboot_ask(text)
+        got = hc_e2e.releases.parse_reboot_ask(text)
         self.assertEqual((got['alert'], got['alert_id'], got['toast']), ('refused', None, 'accepted'))
 
     def test_nothing_logged_and_foreign_lines(self):
         for text in ('', None, 'UNINSTALL_ASK luna://com.webos.notification/createAlert accepted (exit 0): {"alertId":"u1"}'):
-            got = e2e.parse_reboot_ask(text)
+            got = hc_e2e.releases.parse_reboot_ask(text)
             self.assertEqual((got['message'], got['buttons'], got['alert'], got['alert_id'], got['toast']), (None, [], None, None, None))
 
     def test_bus_monitor_observes_alert_without_retaining_confirmation_token(self):
-        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        monitor = hc_e2e.alerts.RebootAlertMonitor(hc_e2e.device.Device('unused'))
         monitor._observe({
             'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
             'senderUniqueName': 'client-100',
             'destination': 'com.webos.notification', 'method': 'createAlert', 'token': 7,
-            'payload': {'sourceId': e2e.APP_ID, 'title': 'Home Chooser', 'message': self.APPLY,
-                        'buttons': [{'label': 'Reboot', 'onclick': e2e.TVPOWER_REBOOT_URI,
+            'payload': {'sourceId': hc_e2e.constants.APP_ID, 'title': 'Home Chooser', 'message': self.APPLY,
+                        'buttons': [{'label': 'Reboot', 'onclick': hc_e2e.constants.TVPOWER_REBOOT_URI,
                                      'params': {'reason': 'remoteKey'}},
                                     {'label': 'Later', 'focus': True}]}})
         monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
@@ -1047,7 +1067,7 @@ class RebootAsk(unittest.TestCase):
         self.assertNotIn('private-token', monitor.diagnostic())
 
     def test_bus_monitor_rejects_foreign_or_unbound_alerts(self):
-        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        monitor = hc_e2e.alerts.RebootAlertMonitor(hc_e2e.device.Device('unused'))
         monitor._observe({'type': 'return', 'transport': 'TX', 'sender': 'com.webos.notification',
                           'destination': 'com.webos.lunasend-100', 'replyToken': 9,
                           'payload': {'returnValue': True, 'alertId': 'foreign'}})
@@ -1057,12 +1077,12 @@ class RebootAsk(unittest.TestCase):
         self.assertIsNone(monitor.snapshot()['alert'])
 
     def test_bus_monitor_records_refused_alert_and_accepted_toast(self):
-        monitor = e2e.RebootAlertMonitor(e2e.Device('unused'))
+        monitor = hc_e2e.alerts.RebootAlertMonitor(hc_e2e.device.Device('unused'))
         for token, method in ((1, 'createAlert'), (2, 'createToast')):
-            payload = {'sourceId': e2e.APP_ID, 'message': self.APPLY}
+            payload = {'sourceId': hc_e2e.constants.APP_ID, 'message': self.APPLY}
             if method == 'createAlert':
                 payload.update(title='Home Chooser', message=self.APPLY, buttons=[
-                    {'label': 'Reboot', 'onclick': e2e.TVPOWER_REBOOT_URI,
+                    {'label': 'Reboot', 'onclick': hc_e2e.constants.TVPOWER_REBOOT_URI,
                      'params': {'reason': 'remoteKey'}}, {'label': 'Later', 'focus': True}])
             monitor._observe({'type': 'call', 'transport': 'TX', 'sender': 'com.webos.lunasend-100',
                               'destination': 'com.webos.notification', 'method': method,
@@ -1074,7 +1094,7 @@ class RebootAsk(unittest.TestCase):
                          ('refused', 'accepted'))
 
     def test_the_reboot_via_choices(self):
-        with open(os.path.join(REPO, 'e2e/homechooser_e2e.py'), encoding='utf-8') as f:
+        with open(os.path.join(REPO, 'e2e/hc_e2e/cli.py'), encoding='utf-8') as f:
             src = f.read()
         self.assertIn("'--reboot-via', choices=['later', 'alert'], default='later'", src)
         self.assertNotIn("'dialog'", src.split("'--reboot-via'")[1].split('add_argument')[0])
@@ -1082,67 +1102,67 @@ class RebootAsk(unittest.TestCase):
 
 class Luna(unittest.TestCase):
     def test_parse_luna(self):
-        self.assertEqual(e2e.parse_luna('{"returnValue":true}'), {'returnValue': True})
-        self.assertEqual(e2e.parse_luna('warning: x\n{"returnValue":false,"errorCode":"notHome"}\n'),
+        self.assertEqual(hc_e2e.evidence.parse_luna('{"returnValue":true}'), {'returnValue': True})
+        self.assertEqual(hc_e2e.evidence.parse_luna('warning: x\n{"returnValue":false,"errorCode":"notHome"}\n'),
                          {'returnValue': False, 'errorCode': 'notHome'})
-        self.assertIsNone(e2e.parse_luna(''))
-        self.assertIsNone(e2e.parse_luna('[timeout]'))
+        self.assertIsNone(hc_e2e.evidence.parse_luna(''))
+        self.assertIsNone(hc_e2e.evidence.parse_luna('[timeout]'))
 
     def test_get_info_contract(self):
-        ok = {'returnValue': True, 'apiVersion': 2, 'version': '0.1.0', 'root': True, 'permission': e2e.API_GROUP,
+        ok = {'returnValue': True, 'apiVersion': 2, 'version': '0.1.0', 'root': True, 'permission': hc_e2e.api_spec.API_GROUP,
               'permitted': True, 'isSelectedHome': False}
-        self.assertEqual(e2e.api_reply_problems('getInfo', ok), [])
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('getInfo', ok), [])
         bad = dict(ok, apiVersion=3)
         del bad['isSelectedHome']
-        p = e2e.api_reply_problems('getInfo', bad)
+        p = hc_e2e.api_spec.api_reply_problems('getInfo', bad)
         self.assertTrue(any('isSelectedHome' in x for x in p) and any('apiVersion' in x for x in p), p)
-        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, root='yes')))
-        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, permission='other')))
-        self.assertEqual(e2e.api_reply_problems('getInfo', dict(ok, futureField=1)), [])
-        self.assertTrue(e2e.api_reply_problems('getInfo', dict(ok, version=3)))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getInfo', dict(ok, root='yes')))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getInfo', dict(ok, permission='other')))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('getInfo', dict(ok, futureField=1)), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getInfo', dict(ok, version=3)))
 
     def test_list_and_running_contract(self):
         apps = {'returnValue': True, 'apiVersion': 2, 'apps': [
             {'id': 'a', 'title': 'A', 'icon': 'i.png', 'folderPath': '/x', 'removable': True, 'visible': True}]}
-        self.assertEqual(e2e.api_reply_problems('listApps', apps), [])
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('listApps', apps), [])
         leak = {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'requiredPermissions': []}]}
-        self.assertEqual(e2e.api_reply_problems('listApps', leak), [])
-        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
-        self.assertTrue(e2e.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2}))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('listApps', leak), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2, 'apps': [{'id': 'a', 'removable': 'yes'}]}))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': True, 'apiVersion': 2}))
         run = {'returnValue': True, 'apiVersion': 2, 'running': [{'id': 'a', 'instanceId': 'x', 'processId': 12,
                                                                   'webProcessId': 34}]}
-        self.assertEqual(e2e.api_reply_problems('listRunning', run), [])
-        self.assertEqual(e2e.api_reply_problems('listRunning', dict(run, running=[dict(run['running'][0], futureField=5)])), [])
-        self.assertTrue(e2e.api_reply_problems('listRunning', dict(run, running=[{'id': 'a', 'processId': '12'}])))
-        self.assertTrue(e2e.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 2, 'running': [{}]}))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('listRunning', run), [])
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('listRunning', dict(run, running=[dict(run['running'][0], futureField=5)])), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listRunning', dict(run, running=[{'id': 'a', 'processId': '12'}])))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listRunning', {'returnValue': True, 'apiVersion': 2, 'running': [{}]}))
 
     def test_close_and_uninstall_reply_contract(self):
         close = {'returnValue': True, 'apiVersion': 2, 'id': 'a'}
-        self.assertEqual(e2e.api_reply_problems('closeApp', dict(close, later=1)), [])
-        self.assertTrue(e2e.api_reply_problems('closeApp', {'returnValue': True, 'id': 'a'}))
-        self.assertEqual(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='alert')), [])
-        self.assertTrue(e2e.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='bad')))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('closeApp', dict(close, later=1)), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('closeApp', {'returnValue': True, 'id': 'a'}))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='alert')), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('uninstallApp', dict(close, pending=True, confirmation='bad')))
 
     def test_new_launcher_replies(self):
         front = {'returnValue': True, 'apiVersion': 2, 'appId': '', 'processId': 123}
-        self.assertEqual(e2e.api_reply_problems('getForegroundApp', dict(front, futureField=True)), [])
-        self.assertTrue(e2e.api_reply_problems('getForegroundApp', dict(front, processId='123')))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('getForegroundApp', dict(front, futureField=True)), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getForegroundApp', dict(front, processId='123')))
         app = {'returnValue': True, 'apiVersion': 2,
                'app': {'id': 'a', 'appCategory': ['home'], 'removable': True}}
-        self.assertEqual(e2e.api_reply_problems('getAppInfo', dict(app, futureField=True)), [])
-        self.assertTrue(e2e.api_reply_problems('getAppInfo', dict(app, app={'id': 'a', 'appCategory': 'home'})))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('getAppInfo', dict(app, futureField=True)), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppInfo', dict(app, app={'id': 'a', 'appCategory': 'home'})))
         icon = {'returnValue': True, 'apiVersion': 2, 'mimeType': 'image/png',
                 'data': 'YWJj', 'byteLength': 3}
-        self.assertEqual(e2e.api_reply_problems('getAppIcon', dict(icon, futureField=True)), [])
-        self.assertTrue(e2e.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
-        self.assertTrue(e2e.api_reply_problems('getAppIcon', dict(icon, data='not-base64')))
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, futureField=True)), [])
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, data='not-base64')))
 
     def test_refusals(self):
-        self.assertTrue(e2e.api_refused({'returnValue': False, 'errorCode': 'noPermission'}))
-        self.assertTrue(e2e.api_refused({'returnValue': False, 'errorCode': -1, 'errorText': 'Denied method call'}))
-        self.assertFalse(e2e.api_refused({'returnValue': True}))
-        self.assertFalse(e2e.api_refused(None), 'no reply is not a clean refusal')
-        p = e2e.api_reply_problems('listApps', {'returnValue': False, 'errorCode': 'notRoot'})
+        self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': 'noPermission'}))
+        self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': -1, 'errorText': 'Denied method call'}))
+        self.assertFalse(hc_e2e.api_spec.api_refused({'returnValue': True}))
+        self.assertFalse(hc_e2e.api_spec.api_refused(None), 'no reply is not a clean refusal')
+        p = hc_e2e.api_spec.api_reply_problems('listApps', {'returnValue': False, 'errorCode': 'notRoot'})
         self.assertTrue(p and 'notRoot' in p[0])
 
 
@@ -1154,9 +1174,9 @@ class Crashes(unittest.TestCase):
             '2026-10-24T01:00:02 host systemd[1]: webapp-mgr.service: Main process exited, code=dumped, status=11/SEGV',
             '2026-10-24T01:00:03 host sam[1]: NL_APP_LAUNCH_BEGIN',
         ])
-        got = e2e.crash_lines(log)
+        got = hc_e2e.evidence.crash_lines(log)
         self.assertEqual(len(got), 2, got)
-        self.assertEqual(e2e.crash_lines('WebAppMgr: ok\n'), [])
+        self.assertEqual(hc_e2e.evidence.crash_lines('WebAppMgr: ok\n'), [])
 
 
 class KnownDvbCrash(unittest.TestCase):
@@ -1176,36 +1196,36 @@ class KnownDvbCrash(unittest.TestCase):
         return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': len(faults), 'detectedFaults': list(faults)}})
 
     def test_known_crash_still_fails(self):
-        self.assertEqual(e2e.crash_lines(self.CRASHD), [self.CRASHD])
-        known, other = e2e.split_known_crashes([self.CRASHD], self.reply(self.NOISE, self.FAULT))
+        self.assertEqual(hc_e2e.evidence.crash_lines(self.CRASHD), [self.CRASHD])
+        known, other = hc_e2e.evidence.split_known_crashes([self.CRASHD], self.reply(self.NOISE, self.FAULT))
         self.assertEqual((known, other), ([], [self.CRASHD]))
-        self.assertEqual(list(e2e.known_fault_pids(self.reply(self.NOISE, self.FAULT))), ['4892'])
+        self.assertEqual(list(hc_e2e.evidence.known_fault_pids(self.reply(self.NOISE, self.FAULT))), ['4892'])
 
     def test_known_faultmanager_alert_is_foreign(self):
         fault = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('4892', '7453'))
-        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(fault)), ([], [self.ALERT]))
-        self.assertEqual(e2e.split_known_crashes([self.ALERT], self.reply(self.FAULT)), ([], [self.ALERT]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([self.ALERT], self.reply(fault)), ([], [self.ALERT]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([self.ALERT], self.reply(self.FAULT)), ([], [self.ALERT]))
         other = self.ALERT.replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10')
-        self.assertEqual(e2e.split_known_crashes([other], self.reply(fault)), ([], [other]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([other], self.reply(fault)), ([], [other]))
 
     def test_other_location_fails(self):
         f = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('API_SI_GetLinkageUriInfo+0x197', 'API_SI_Other+0x10'))
-        self.assertEqual(e2e.split_known_crashes([self.CRASHD], self.reply(f)), ([], [self.CRASHD]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([self.CRASHD], self.reply(f)), ([], [self.CRASHD]))
 
     def test_other_process_fails(self):
         web = '2026-10-23T04:26:50Z [194.2] user.info crashd [] crashd CRASHED {"process":"WebAppMgr.5823"}'
         f = dict(self.FAULT, faultContent=self.FAULT['faultContent'].replace('legacy-broadcas', 'WebAppMgr'))
-        self.assertEqual(e2e.split_known_crashes([web], self.reply(self.FAULT)), ([], [web]))
-        self.assertEqual(e2e.known_fault_pids(self.reply(f)), {})
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([web], self.reply(self.FAULT)), ([], [web]))
+        self.assertEqual(hc_e2e.evidence.known_fault_pids(self.reply(f)), {})
 
     def test_other_pid_or_no_fault_entry_fails(self):
         other = self.CRASHD.replace('4892', '999')
-        self.assertEqual(e2e.split_known_crashes([other], self.reply(self.FAULT)), ([], [other]))
-        self.assertEqual(e2e.split_known_crashes([self.CRASHD], 'Error: timeout'), ([], [self.CRASHD]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([other], self.reply(self.FAULT)), ([], [other]))
+        self.assertEqual(hc_e2e.evidence.split_known_crashes([self.CRASHD], 'Error: timeout'), ([], [self.CRASHD]))
 
     def test_mixed_lines(self):
         web = 'x crashd CRASHED {"process":"WebAppMgr.5823"}'
-        known, other = e2e.split_known_crashes([self.CRASHD, web], self.reply(self.FAULT))
+        known, other = hc_e2e.evidence.split_known_crashes([self.CRASHD, web], self.reply(self.FAULT))
         self.assertEqual((known, other), ([], [self.CRASHD, web]))
 
 
@@ -1263,7 +1283,7 @@ class DismissKnownPopup(unittest.TestCase):
 @contextlib.contextmanager
 def mock_sleep():
     import unittest.mock
-    with unittest.mock.patch.object(e2e.time, 'sleep', lambda *_: None):
+    with unittest.mock.patch.object(time, 'sleep', lambda *_: None):
         yield
 
 
@@ -1300,7 +1320,7 @@ class Audiooutputd183(unittest.TestCase):
         s.dev.luna = lambda uri: '{}'
 
         def click_element(text=None, role=None, frame=None, **kw):
-            e2e.match_element(frame, text, role)  # raises like the real helper when there is no unique NO
+            hc_e2e.alerts.match_element(frame, text, role)  # raises like the real helper when there is no unique NO
             s.clicked.append(text)
         s.click_element = click_element
         return s
@@ -1408,22 +1428,22 @@ class WaitForDevice(unittest.TestCase):
         class Rec:
             def say(self, t):
                 said.append(t)
-        return e2e.wait_for_device(Dev(), Rec(), timeout=0), said
+        return hc_e2e.preflight.wait_for_device(Dev(), Rec(), timeout=0), said
 
     def test_ares_app_list_failure_does_not_mean_no_apps(self):
         import unittest.mock
-        with unittest.mock.patch.object(e2e, 'run', return_value=(1, 'Failed to connect to vm: disconnected')):
+        with unittest.mock.patch.object(hc_e2e.timing, 'run', return_value=(1, 'Failed to connect to vm: disconnected')):
             with self.assertRaisesRegex(RuntimeError, 'ares-install -l on vm failed'):
-                e2e.Device('vm').installed()
+                hc_e2e.device.Device('vm').installed()
         state, _ = self.wait(False, RuntimeError('Failed to connect'))
-        self.assertEqual(state, e2e.DOWN)
+        self.assertEqual(state, hc_e2e.preflight.DOWN)
 
     def test_states(self):
         hb = ['org.webosbrew.hbchannel']
-        self.assertEqual(self.wait(True, hb)[0], e2e.READY)
-        self.assertEqual(self.wait(True, [])[0], e2e.NO_HBCHANNEL)
-        self.assertEqual(self.wait(False, hb)[0], e2e.NO_ROOT_SSH)
-        self.assertEqual(self.wait(False, [])[0], e2e.DOWN)
+        self.assertEqual(self.wait(True, hb)[0], hc_e2e.preflight.READY)
+        self.assertEqual(self.wait(True, [])[0], hc_e2e.preflight.NO_HBCHANNEL)
+        self.assertEqual(self.wait(False, hb)[0], hc_e2e.preflight.NO_ROOT_SSH)
+        self.assertEqual(self.wait(False, [])[0], hc_e2e.preflight.DOWN)
         state, said = self.wait(False, hb)
         self.assertEqual(len(said), 1)
         self.assertIn('no-root-ssh', said[0])
@@ -1433,11 +1453,11 @@ class StockHomeByRelease(unittest.TestCase):
     """6-9 use the home gate; 10 and later close LG Home once (idleApp keeps it away); 5 is not touched."""
 
     def test_releases(self):
-        self.assertEqual({m: e2e.closes_stock_home(m) for m in range(5, 13)},
+        self.assertEqual({m: hc_e2e.releases.closes_stock_home(m) for m in range(5, 13)},
                          {5: False, 6: False, 7: False, 8: False, 9: False, 10: True, 11: True, 12: True})
-        self.assertEqual({m: e2e.uses_home_gate(m) for m in range(5, 13)},
+        self.assertEqual({m: hc_e2e.releases.uses_home_gate(m) for m in range(5, 13)},
                          {5: False, 6: True, 7: True, 8: True, 9: True, 10: False, 11: False, 12: False})
-        self.assertFalse(hasattr(e2e.Scenario, 'stock_left_running'))
+        self.assertFalse(hasattr(hc_e2e.scenario.Scenario, 'stock_left_running'))
 
 
 class IdleApp(unittest.TestCase):
@@ -1448,29 +1468,29 @@ class IdleApp(unittest.TestCase):
                    '"support":true,"appId":"com.webos.app.home"}}}')
 
     def test_parse(self):
-        self.assertEqual(e2e.profile_idle_app(self.STOCK_REPLY)['appId'], e2e.STOCK)
-        self.assertEqual(e2e.profile_idle_app('{"idleApp":{"support":false}}'), {'support': False})
-        self.assertIsNone(e2e.profile_idle_app('{"returnValue":false,"errorText":"Denied"}'))
-        self.assertIsNone(e2e.profile_idle_app('garbage'))
+        self.assertEqual(hc_e2e.releases.profile_idle_app(self.STOCK_REPLY)['appId'], hc_e2e.constants.STOCK)
+        self.assertEqual(hc_e2e.releases.profile_idle_app('{"idleApp":{"support":false}}'), {'support': False})
+        self.assertIsNone(hc_e2e.releases.profile_idle_app('{"returnValue":false,"errorText":"Denied"}'))
+        self.assertIsNone(hc_e2e.releases.profile_idle_app('garbage'))
 
     def test_full_screen(self):
-        ok, want = e2e.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, False)
+        ok, want = hc_e2e.releases.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, False)
         self.assertTrue(ok)
         self.assertIn(self.LAUNCHER, want)
-        self.assertFalse(e2e.idle_app_verdict(e2e.profile_idle_app(self.STOCK_REPLY), self.LAUNCHER, False)[0])
-        self.assertFalse(e2e.idle_app_verdict({'support': False, 'appId': self.LAUNCHER}, self.LAUNCHER, False)[0])
-        self.assertFalse(e2e.idle_app_verdict(None, self.LAUNCHER, False)[0])
+        self.assertFalse(hc_e2e.releases.idle_app_verdict(hc_e2e.releases.profile_idle_app(self.STOCK_REPLY), self.LAUNCHER, False)[0])
+        self.assertFalse(hc_e2e.releases.idle_app_verdict({'support': False, 'appId': self.LAUNCHER}, self.LAUNCHER, False)[0])
+        self.assertFalse(hc_e2e.releases.idle_app_verdict(None, self.LAUNCHER, False)[0])
 
     def test_overlay(self):
         # 10.3.1 merges key by key: the stock appId stays beside support false
-        self.assertTrue(e2e.idle_app_verdict({'support': False, 'appId': e2e.STOCK}, self.LAUNCHER, True)[0])
-        self.assertFalse(e2e.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, True)[0])
+        self.assertTrue(hc_e2e.releases.idle_app_verdict({'support': False, 'appId': hc_e2e.constants.STOCK}, self.LAUNCHER, True)[0])
+        self.assertFalse(hc_e2e.releases.idle_app_verdict({'support': True, 'appId': self.LAUNCHER}, self.LAUNCHER, True)[0])
 
     def test_stock(self):
-        self.assertTrue(e2e.idle_app_stock(e2e.profile_idle_app(self.STOCK_REPLY)))
-        self.assertFalse(e2e.idle_app_stock({'support': True, 'appId': self.LAUNCHER}))
-        self.assertFalse(e2e.idle_app_stock({'support': False, 'appId': e2e.STOCK}))
-        self.assertFalse(e2e.idle_app_stock(None))
+        self.assertTrue(hc_e2e.releases.idle_app_stock(hc_e2e.releases.profile_idle_app(self.STOCK_REPLY)))
+        self.assertFalse(hc_e2e.releases.idle_app_stock({'support': True, 'appId': self.LAUNCHER}))
+        self.assertFalse(hc_e2e.releases.idle_app_stock({'support': False, 'appId': hc_e2e.constants.STOCK}))
+        self.assertFalse(hc_e2e.releases.idle_app_stock(None))
 
 
 class FaultPopups(unittest.TestCase):
@@ -1479,29 +1499,29 @@ class FaultPopups(unittest.TestCase):
                 '"general", "faultContent": "keyCheck2_4415_sysfaultdetector", "faultTime": "30.448679184" } ] } }')
 
     def test_keycheck_is_noise(self):
-        real, noise = e2e.classify_faults(self.KEYCHECK, 300.0)
+        real, noise = hc_e2e.evidence.classify_faults(self.KEYCHECK, 300.0)
         self.assertEqual(real, [])
         self.assertEqual(len(noise), 1)
         # noise even without a mark
-        self.assertEqual(e2e.classify_faults(self.KEYCHECK, None)[0], [])
+        self.assertEqual(hc_e2e.evidence.classify_faults(self.KEYCHECK, None)[0], [])
 
     def test_new_crash_counts(self):
         # 9.2.1 2026-10-23T04:26:50: crashd CRASHED WebAppMgr at [194.278], a fault entry at 194.292
         reply = json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': 2, 'detectedFaults': [
             {'faultTime': '31.319272907', 'faultType': 'general', 'faultContent': 'keyCheck2_4629_sysfaultdetector'},
             {'faultTime': '194.292195087', 'faultType': 'crash', 'faultContent': 'WebAppMgr'}]}})
-        real, noise = e2e.classify_faults(reply, 150.0)
+        real, noise = hc_e2e.evidence.classify_faults(reply, 150.0)
         self.assertEqual([f['faultContent'] for f in real], ['WebAppMgr'])
         # the same crash, raised before this step's mark: noted, not counted
-        real, noise = e2e.classify_faults(reply, 200.0)
+        real, noise = hc_e2e.evidence.classify_faults(reply, 200.0)
         self.assertEqual(real, [])
         self.assertEqual(len(noise), 2)
 
     def test_bad_reply(self):
-        self.assertEqual(e2e.classify_faults('Error: timeout', 10.0), ([], []))
+        self.assertEqual(hc_e2e.evidence.classify_faults('Error: timeout', 10.0), ([], []))
 
     def test_line_pattern(self):
-        rx = re.compile(e2e.POPUP_LINE_RE)
+        rx = re.compile(hc_e2e.evidence.POPUP_LINE_RE)
         self.assertTrue(rx.search('2026-10-23T04:26:50Z [194.2] user.info crashd [] crashd CRASHED {"process":"WebAppMgr.5823"}'))
         self.assertFalse(rx.search('2026-10-23T04:26:47Z [191.6] user.info faultmanager [] faultmanager FAULT_RESPONSE {} '
                                    '[general]/tmp/faultmanager/general/keyCheck2_4629_sysfaultdetector(none)'))
@@ -1541,7 +1561,7 @@ class FakeDev:
         return 0, self.fault_reply
 
     def luna_as(self, app, uri, payload='{}', timeout=60):
-        return 0, self.fault_reply.strip(), e2e.parse_luna(self.fault_reply)
+        return 0, self.fault_reply.strip(), hc_e2e.evidence.parse_luna(self.fault_reply)
 
     def sh(self, cmd, timeout=60):
         if cmd.startswith('date'):
@@ -1554,7 +1574,7 @@ class FakeDev:
 
 
 def scenario(major=9):
-    s = e2e.Scenario.__new__(e2e.Scenario)
+    s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
     s.rec, s.dev, s.major = FakeRec(), FakeDev(), major
     return s
 
@@ -1571,7 +1591,7 @@ class ScreensaverFakeDev(FakeDev):
         self.fg, self.previous = HOME, HOME
         self.choice, self.default_apps, self.policy = '', {'home': None, 'other': 'retained'}, True
         self.logs, self.calls, self.buttons = [], [], []
-        self.saver_app, self.log_ignore = e2e.SCREENSAVERS[0], True
+        self.saver_app, self.log_ignore = hc_e2e.constants.SCREENSAVERS[0], True
         self.boot_applied = True
         self.subprocessing, self.helper_mode = '', 'missing'
 
@@ -1586,7 +1606,7 @@ class ScreensaverFakeDev(FakeDev):
         self.fg = self.launcher
 
     def installed(self):
-        return ['org.webosbrew.hbchannel'] + ([e2e.APP_ID, self.launcher] if self.selected else [])
+        return ['org.webosbrew.hbchannel'] + ([hc_e2e.constants.APP_ID, self.launcher] if self.selected else [])
 
     def luna(self, uri, payload='{}'):
         self.calls.append(('foreground', uri, payload))
@@ -1595,7 +1615,7 @@ class ScreensaverFakeDev(FakeDev):
         return json.dumps({'returnValue': False, 'errorText': 'Unknown method'})
 
     def foreground(self):
-        return e2e.Device.foreground(self)
+        return hc_e2e.device.Device.foreground(self)
 
     def record_home(self):
         return self.default_apps['home'], json.dumps({'returnValue': True, 'settings': {'defaultApps': self.default_apps}})
@@ -1609,7 +1629,7 @@ class ScreensaverFakeDev(FakeDev):
 
     def sh(self, cmd, timeout=60):
         self.calls.append(cmd)
-        if cmd.startswith('cat ' + e2e.CHOICE):
+        if cmd.startswith('cat ' + hc_e2e.constants.CHOICE):
             return (0, self.choice) if self.selected else (1, 'No such file')
         if cmd.startswith('cat /tmp/homechooser-home.log'):
             return 0, '\n'.join(self.logs)
@@ -1661,7 +1681,7 @@ class ScreensaverFakeDev(FakeDev):
                     self.logs.append('setPreloadPolicy ' + HOME)
                 if self.broken('restart'):
                     self.units['homechooser-home'] = {'MainPID': '101', 'NRestarts': '1', 'ActiveState': 'active'}
-        elif uri == e2e.TVPOWER_REBOOT_URI:
+        elif uri == hc_e2e.constants.TVPOWER_REBOOT_URI:
             if self.broken('busy') or self.processing == 'Screen Saver Ready' or self.subprocessing == 'screen saver ready':
                 reply = {'returnValue': False, 'errorText': 'power is busy'}
             elif self.broken('reboot_refuse'):
@@ -1717,8 +1737,8 @@ class HomeAndScreensaver(unittest.TestCase):
     def make(self, major=10, fault=None):
         from types import SimpleNamespace
         from unittest.mock import Mock
-        s = e2e.Scenario.__new__(e2e.Scenario)
-        s.rec = e2e.Recorder.__new__(e2e.Recorder)
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.rec = hc_e2e.recorder.Recorder.__new__(hc_e2e.recorder.Recorder)
         s.rec.results, s.rec.step, s.rec.tag = [], '', ''
         s.rec.say = Mock()
         s.rec.note = Mock()
@@ -1739,7 +1759,7 @@ class HomeAndScreensaver(unittest.TestCase):
 
     def run_scenario(self, s, baseline='PASS'):
         from unittest.mock import patch
-        with patch.object(e2e, 'sleep'), patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')):
+        with patch.object(hc_e2e.timing, 'sleep'), patch.object(hc_e2e.timing, 'run', side_effect=AssertionError('OFFLINE ONLY')):
             if baseline == 'PASS' and not getattr(s, 'screensaver_stock', None):
                 self.assertEqual(s.screensaver_baseline(), 'PASS')
             s.dev.select()
@@ -1749,8 +1769,8 @@ class HomeAndScreensaver(unittest.TestCase):
     def test_pass_all_steps_both_screensaver_apps_and_firmware_routes(self):
         from unittest.mock import patch
         for major in (6, 7, 10, 11, 12):
-            for app in e2e.SCREENSAVERS:
-                with self.subTest(major=major, app=app), patch.object(e2e, 'sleep'):
+            for app in hc_e2e.constants.SCREENSAVERS:
+                with self.subTest(major=major, app=app), patch.object(hc_e2e.timing, 'sleep'):
                     s = self.make(major)
                     s.dev.saver_app = app
                     self.assertEqual(s.screensaver_baseline(), 'PASS')
@@ -1772,7 +1792,7 @@ class HomeAndScreensaver(unittest.TestCase):
             with self.subTest(fault=fault):
                 s = self.make(fault=(0, fault))
                 from unittest.mock import patch
-                with patch.object(e2e, 'sleep'):
+                with patch.object(hc_e2e.timing, 'sleep'):
                     self.assertEqual(s.screensaver_baseline(), expected)
                 self.assertFalse(any('setSystemSettings' in str(call) for call in s.dev.calls))
                 if fault in ('skip', 'ready', 'timeout', 'refuse'):
@@ -1804,7 +1824,7 @@ class HomeAndScreensaver(unittest.TestCase):
             with self.subTest(fault=fault):
                 s = self.make(fault=(1, fault))
                 self.assertEqual(self.run_scenario(s)[1], 'FAIL')
-                self.assertFalse(any(isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI for call in s.dev.calls))
+                self.assertFalse(any(isinstance(call, tuple) and call[1] == hc_e2e.constants.TVPOWER_REBOOT_URI for call in s.dev.calls))
 
     def test_screensaver_preload_ignores_other_apps_and_response_order(self):
         import copy
@@ -1841,7 +1861,7 @@ class HomeAndScreensaver(unittest.TestCase):
             with self.subTest(reply=reply):
                 after = copy.deepcopy(before)
                 after['preload'][1] = reply if isinstance(reply, str) else json.dumps(reply)
-                with self.assertRaises(e2e.ScreensaverOutcome):
+                with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome):
                     s.screensaver_unchanged(before, after)
 
     def test_silent_daemon_passes_on_every_release(self):
@@ -1858,7 +1878,7 @@ class HomeAndScreensaver(unittest.TestCase):
         for verb in ('start', 'stop'):
             self.assertIsNone(s.beanjar_screensaver(verb))
         s.dev.processing = 'Screen Saver Ready'
-        with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+        with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
             s.prepare_tvpower_reboot('offline Ready evidence')
         self.assertEqual(cm.exception.status, 'BLOCKED')
         s.host.screensaver.assert_not_called()
@@ -1869,14 +1889,14 @@ class HomeAndScreensaver(unittest.TestCase):
         s.dev.helper_mode = 'success'  # Even a nominally available helper must not be called.
         self.assertEqual(self.run_scenario(s)[4], 'BLOCKED')
         self.assertFalse(any(isinstance(call, tuple) and
-                             (call[0] == 'beanjar' or call[1] == e2e.TVPOWER_REBOOT_URI)
+                             (call[0] == 'beanjar' or call[1] == hc_e2e.constants.TVPOWER_REBOOT_URI)
                              for call in s.dev.calls))
         self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
 
     def test_stuck_dismissal_never_attempts_reboot(self):
         s = self.make(fault=(4, 'dismiss_ready'))
         self.assertEqual(self.run_scenario(s)[4], 'BLOCKED')
-        self.assertFalse(any(isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI for call in s.dev.calls))
+        self.assertFalse(any(isinstance(call, tuple) and call[1] == hc_e2e.constants.TVPOWER_REBOOT_URI for call in s.dev.calls))
 
     def test_reboot_refusal_and_boot_apply_failure_fail(self):
         s = self.make(fault=(4, 'reboot_refuse'))
@@ -1911,18 +1931,19 @@ class HomeAndScreensaver(unittest.TestCase):
                      ['--scenario', 'screensaver', '--vm', '10.x', '--until', '2'],
                      ['--scenario', 'screensaver', '--device', 'offline']):
             with self.subTest(argv=argv), patch.object(sys, 'argv', ['runner'] + argv), \
-                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), contextlib.redirect_stderr(io.StringIO()):
+                    patch.object(hc_e2e.timing, 'run', side_effect=AssertionError('OFFLINE ONLY')), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as cm:
-                    e2e.main()
+                    hc_e2e.cli.main()
                 self.assertEqual(cm.exception.code, 2)
 
 
     def test_selector_runs_screensaver_alone_or_with_lifecycle_and_cleans_up(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
-        for mode, expected in (('lifecycle', [1, 2, 3, 4, 5, 6]),
-                               ('screensaver', ['S0', 1, 2, 'S1-S4', 6]),
-                               ('all', ['S0', 1, 2, 'S1-S4', 3, 4, 5, 6])):
+        # W/H: the window-type phases after the choice and after the Home press (10.x, run_plan)
+        for mode, expected in (('lifecycle', [1, 2, 'W', 3, 'H', 4, 5, 6]),
+                               ('screensaver', ['S0', 1, 2, 'W', 'S1-S4', 6]),
+                               ('all', ['S0', 1, 2, 'W', 'S1-S4', 3, 'H', 4, 5, 6])):
             with self.subTest(mode=mode):
                 s, events = self.make(), []
                 s.a = SimpleNamespace(elevation=None, input='beanjar', until=5, scenario=mode,
@@ -1930,6 +1951,7 @@ class HomeAndScreensaver(unittest.TestCase):
                                       launcher_update_check=False, restore_repair_check=False)
                 s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline state model'
                 s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+                s.L.id = s.launcher
                 s.host.mode = 'offline'
                 s.dev.release = lambda: (10, '10.3.1')
                 s.dev.app_installed = lambda app: False
@@ -1937,6 +1959,8 @@ class HomeAndScreensaver(unittest.TestCase):
                 s.check_no_crash = Mock()
                 s.screensaver_baseline = lambda: events.append('S0') or 'PASS'
                 s.screensaver_selected = lambda baseline: events.append('S1-S4')
+                s.window_chosen = lambda: events.append('W')
+                s.window_home = lambda: events.append('H')
                 for number in range(1, 7):
                     setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
                 s.run()
@@ -1948,12 +1972,12 @@ class HomeAndScreensaver(unittest.TestCase):
         for fixture, overlay in ((True, True), (False, False)):
             with self.subTest(fixture=fixture, overlay=overlay), \
                     patch.object(sys, 'argv', ['runner', '--vm', '10.x', '--scenario', 'screensaver']), \
-                    patch.object(e2e, 'load_hosts', return_value={}), \
-                    patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(is_fixture=fixture, overlay=overlay)), \
-                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), \
+                    patch.object(hc_e2e.cli, 'load_hosts', return_value={}), \
+                    patch.object(hc_e2e.cli, 'make_launcher', return_value=SimpleNamespace(is_fixture=fixture, overlay=overlay)), \
+                    patch.object(hc_e2e.timing, 'run', side_effect=AssertionError('OFFLINE ONLY')), \
                     contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as cm:
-                    e2e.main()
+                    hc_e2e.cli.main()
                 self.assertEqual(cm.exception.code, 2)
 
     def test_refusal_classification_uses_precondition_reply_not_transport_error(self):
@@ -1967,14 +1991,14 @@ class HomeAndScreensaver(unittest.TestCase):
             s.dev.luna_as = lambda app, uri, *a, **k: (
                 (0, text, {'returnValue': False, 'errorText': text}) if uri.endswith('/turnOnScreenSaver')
                 else real(app, uri, *a, **k))
-            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
                 s.screensaver_start()
             self.assertEqual(cm.exception.status, expected)
         s = self.make()
         real = s.dev.luna_as
         s.dev.luna_as = lambda app, uri, *a, **k: (
             (124, 'first use timeout', None) if uri.endswith('/turnOnScreenSaver') else real(app, uri, *a, **k))
-        with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+        with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
             s.screensaver_start()
         self.assertEqual(cm.exception.status, 'FAIL')
 
@@ -2026,7 +2050,7 @@ class HomeAndScreensaver(unittest.TestCase):
             s = self.make()
             s.a.saver_start = mode
             self._start_with(s, stuck_busy=True)
-            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
                 s.screensaver_start()
             self.assertEqual(cm.exception.status, 'BLOCKED')
             self.assertIn('NEVER settled', str(cm.exception))
@@ -2052,7 +2076,7 @@ class HomeAndScreensaver(unittest.TestCase):
             s = self.make()
             s.a.saver_start = mode
             self._start_with(s, drops=2)
-            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
                 s.screensaver_start()
             self.assertEqual(cm.exception.status, 'FAIL')
             self.assertIn('attempt 1: dropped by firmware', str(cm.exception))
@@ -2086,11 +2110,11 @@ class HomeAndScreensaver(unittest.TestCase):
         self.assertNotIn('processing', evidence['after']['power'][1])
         calls = s.dev.calls
         stop = calls.index(('beanjar', 'stop', s.vm))
-        reboot = next(i for i, call in enumerate(calls) if isinstance(call, tuple) and call[1] == e2e.TVPOWER_REBOOT_URI)
+        reboot = next(i for i, call in enumerate(calls) if isinstance(call, tuple) and call[1] == hc_e2e.constants.TVPOWER_REBOOT_URI)
         self.assertLess(stop, reboot)
         state_reads = [call[1] for call in calls[stop + 1:reboot] if isinstance(call, tuple)]
-        self.assertIn(e2e.TVPOWER + 'power/getPowerState', state_reads)
-        self.assertIn(e2e.TVPOWER + 'power2/getPowerState', state_reads)
+        self.assertIn(hc_e2e.constants.TVPOWER + 'power/getPowerState', state_reads)
+        self.assertIn(hc_e2e.constants.TVPOWER + 'power2/getPowerState', state_reads)
         self.assertEqual(s.dev.buttons[-1], 'BACK')
 
     def test_s4_recovery_failure_or_persistent_ready_blocks_without_reboot(self):
@@ -2134,7 +2158,7 @@ class HomeAndScreensaver(unittest.TestCase):
         missing = [call for call in s.rec.note.call_args_list if 'subcommand missing' in call.args[0]]
         self.assertEqual(len(missing), 1)
         # Old behaviour is retained: an attempted tvpower reboot still reports busy.
-        rc, raw, reply = s.dev.luna_as(None, e2e.TVPOWER_REBOOT_URI)
+        rc, raw, reply = s.dev.luna_as(None, hc_e2e.constants.TVPOWER_REBOOT_URI)
         self.assertFalse(reply['returnValue'])
         self.assertIn('power is busy', raw)
         self.assertFalse(any(row['status'] == 'RECOVERED' for row in s.rec.results))
@@ -2149,7 +2173,7 @@ class HomeAndScreensaver(unittest.TestCase):
         s = self.make()
         s.a.saver_start = 'beanjar'
         s.dev.helper_mode = 'success'
-        with patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'sleep'):
             self.assertEqual(s.screensaver_baseline(), 'PASS')
             self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
         self.assertEqual(len([call for call in s.dev.calls if isinstance(call, tuple) and call[:2] == ('beanjar', 'start')]), 6)
@@ -2162,7 +2186,7 @@ class HomeAndScreensaver(unittest.TestCase):
                                ('stays_ready', 'FAIL')):  # accepted but never shown, twice: dropped by firmware
             s = self.make()
             s.a.saver_start, s.dev.helper_mode = 'beanjar', mode
-            with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+            with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
                 s.screensaver_start()
             self.assertEqual(cm.exception.status, expected)
 
@@ -2179,7 +2203,7 @@ class HomeAndScreensaver(unittest.TestCase):
                 return True
             s.beanjar_reboot = Mock(side_effect=restart)
             if mode == 'fail':
-                with self.assertRaises(e2e.ScreensaverOutcome) as cm:
+                with self.assertRaises(hc_e2e.beanjar.ScreensaverOutcome) as cm:
                     s.step_reboot()
                 self.assertEqual(cm.exception.status, 'BLOCKED')
                 s.beanjar_reboot.assert_not_called()
@@ -2206,7 +2230,7 @@ class HomeAndScreensaver(unittest.TestCase):
         from unittest.mock import patch
         for choice in ([], ['--saver-start', 'beanjar']):
             with patch.object(sys, 'argv', ['runner', '--list'] + choice), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(e2e.main(), 0)
+                self.assertEqual(hc_e2e.cli.main(), 0)
 
     def test_removal_race_runs_after_step_3_then_cleans_up(self):
         from types import SimpleNamespace
@@ -2217,11 +2241,13 @@ class HomeAndScreensaver(unittest.TestCase):
                               launcher_update_check=False, restore_repair_check=False, removal_race=True)
         s.release, s.strategy_name, s.sure, s.note = '11.x', 'luna', 'fake', 'offline state model'
         s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.L.id = s.launcher
         s.host.mode = 'offline'
         s.dev.release = lambda: (11, '11.2.0')
         s.dev.app_installed = lambda app: False
         s.state = lambda: {'choice': 'No such file'}
         s.check_no_crash = Mock()
+        s.window_chosen, s.window_home = Mock(), Mock()
         for number in range(1, 7):
             setattr(s, 'step%d' % number, lambda *args, n=number: events.append(n))
         s.step_removal_race = lambda: events.append('3r')
@@ -2233,10 +2259,10 @@ class HomeAndScreensaver(unittest.TestCase):
         for argv in (['--vm', '11.x', '--removal-race', '--restore-repair-check'],
                      ['--vm', '11.x', '--removal-race', '--until', '2'],
                      ['--vm', '11.x', '--removal-race', '--scenario', 'all']):
-            with self.subTest(argv=argv), patch.object(sys, 'argv', ['runner'] + argv), \
-                    patch.object(e2e, 'run', side_effect=AssertionError('OFFLINE ONLY')), contextlib.redirect_stderr(io.StringIO()):
+            with self.subTest(argv=argv), patch.object(hc_e2e.cli, 'entry', side_effect=AssertionError('OFFLINE ONLY')), \
+                    contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as cm:
-                    e2e.main()
+                    hc_e2e.cli.main(argv)
                 self.assertEqual(cm.exception.code, 2)
 
     def test_main_recovery_failure_is_recorded_blocked_and_cleanup_still_runs(self):
@@ -2248,11 +2274,13 @@ class HomeAndScreensaver(unittest.TestCase):
                               launcher_update_check=False, restore_repair_check=False)
         s.release, s.strategy_name, s.sure, s.note = '10.x', 'luna', 'fake', 'offline'
         s.L.spec, s.L.fixture, s.L.ipk = 'fixture:web.normal', ('web', 'normal'), 'offline.ipk'
+        s.L.id = s.launcher
         s.host.mode = 'offline'
         s.dev.release = lambda: (10, '10.3.1')
         s.dev.app_installed = lambda app: False
         s.state = lambda: {'choice': 'No such file'}
         s.check_no_crash = Mock()
+        s.window_chosen, s.window_home = Mock(), Mock()
         for number in range(1, 7):
             setattr(s, 'step%d' % number, Mock())
         s.step1.side_effect = lambda strategy: s.dev.select()
@@ -2274,7 +2302,7 @@ class HomeAndScreensaver(unittest.TestCase):
         # too; neither behavior is selected by a firmware-version hand list.
         for major in (6, 7, 9, 11):
             for wake_only in (True, False):
-                with self.subTest(major=major, wake_only=wake_only), patch.object(e2e, 'sleep'):
+                with self.subTest(major=major, wake_only=wake_only), patch.object(hc_e2e.timing, 'sleep'):
                     s = self.make(major)
                     s.dev.home_wakes = wake_only
                     self.assertEqual(s.screensaver_baseline(), 'PASS')
@@ -2292,7 +2320,7 @@ class HomeAndScreensaver(unittest.TestCase):
     def test_mismatched_wake_behavior_fails_against_measured_stock_baseline(self):
         from unittest.mock import patch
         for stock_wakes in (True, False):
-            with self.subTest(stock_wakes=stock_wakes), patch.object(e2e, 'sleep'):
+            with self.subTest(stock_wakes=stock_wakes), patch.object(hc_e2e.timing, 'sleep'):
                 s = self.make(9)
                 s.dev.home_wakes = stock_wakes
                 self.assertEqual(s.screensaver_baseline(), 'PASS')
@@ -2303,7 +2331,7 @@ class HomeAndScreensaver(unittest.TestCase):
         from unittest.mock import patch
         s = self.make(7)
         s.dev.back_goes_home = True
-        with patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'sleep'):
             self.assertEqual(s.screensaver_baseline(), 'PASS')
             self.assertEqual(s.screensaver_stock['BACK']['wake'][0], HOME)
             self.assertEqual(self.run_scenario(s)[3], 'PASS')
@@ -2319,7 +2347,7 @@ class HomeAndScreensaver(unittest.TestCase):
         from unittest.mock import patch
         s = self.make(9, fault=(0, 'no_home_dispatch'))
         s.dev.home_wakes = True
-        with patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'sleep'):
             self.assertEqual(s.screensaver_baseline(), 'PASS')
         self.assertEqual(s.screensaver_stock['HOME']['home'][0], 'org.webosbrew.hbchannel')
         # A measured previous-app result maps to the previous app, not a fabricated stock HOME.
@@ -2330,8 +2358,8 @@ class HomeAndScreensaver(unittest.TestCase):
         s.dev.home_wakes = True
         self.assertEqual(self.run_scenario(s), {1: 'PASS', 2: 'PASS', 3: 'PASS', 4: 'PASS'})
         calls = [call[1] for call in s.dev.calls if isinstance(call, tuple)]
-        self.assertIn(e2e.TVPOWER + 'power/getPowerState', calls)
-        self.assertIn(e2e.TVPOWER + 'power/turnOnScreenSaver', calls)
+        self.assertIn(hc_e2e.constants.TVPOWER + 'power/getPowerState', calls)
+        self.assertIn(hc_e2e.constants.TVPOWER + 'power/turnOnScreenSaver', calls)
         self.assertIn('luna://com.webos.applicationManager/getForegroundAppInfo', calls)
         self.assertFalse(any('/power2/' in uri or uri.endswith('/getForegroundApps') for uri in calls))
         self.assertIsNone(s.screensaver_power()['power2'][1])
@@ -2352,7 +2380,7 @@ class HomeAndScreensaver(unittest.TestCase):
 class BeanjarScreensaverHelper(unittest.TestCase):
     def host(self, mode='remote'):
         from unittest.mock import Mock
-        host = e2e.BeanjarHost(mode=mode, name='pi')
+        host = hc_e2e.beanjar.BeanjarHost(mode=mode, name='pi')
         host.display_beanjar = Mock(return_value=(0, 'help'))
         return host
 
@@ -2449,31 +2477,32 @@ class RestartDetection(unittest.TestCase):
 class ApiLaunchers(unittest.TestCase):
     def test_api_check_needs_a_web_fixture_or_an_author_launcher(self):
         with self.assertRaises(SystemExit):
-            e2e.make_launcher('fixture:native.normal', api=True)
+            hc_e2e.launchers.make_launcher('fixture:native.normal', api=True)
         with self.assertRaises(SystemExit):
-            e2e.make_launcher('fixture:qml.overlay', api=True)
-        orig = e2e.api_fixture_ipks
-        e2e.api_fixture_ipks = lambda announce=print: {e2e.FIXTURE_ID % ('web', 'normal'): '/nonexistent/web.ipk'}
+            hc_e2e.launchers.make_launcher('fixture:qml.overlay', api=True)
+        orig = hc_e2e.launchers.api_fixture_ipks
+        hc_e2e.launchers.api_fixture_ipks = lambda announce=print: {hc_e2e.launchers.FIXTURE_ID % ('web', 'normal'): '/nonexistent/web.ipk'}
         try:
-            L = e2e.make_launcher('fixture:web.normal', api=True)
+            L = hc_e2e.launchers.make_launcher('fixture:web.normal', api=True)
         finally:
-            e2e.api_fixture_ipks = orig
+            hc_e2e.launchers.api_fixture_ipks = orig
         self.assertEqual((L.id, L.ipk, L.is_fixture), ('org.webosbrew.hcfixture.web.normal', '/nonexistent/web.ipk', True))
-        author = e2e.make_launcher('org.example.launcher', '/nonexistent/author.ipk', api=True)
+        author = hc_e2e.launchers.make_launcher('org.example.launcher', '/nonexistent/author.ipk', api=True)
         self.assertEqual((author.id, author.is_fixture), ('org.example.launcher', False))
         self.assertEqual((author.spec, author.kind, author.tag), ('org.example.launcher', 'app', 'org.example.launcher'))
         with self.assertRaises(SystemExit):  # an app id without --launcher-ipk, and no special ids
-            e2e.make_launcher('org.webosbrew.dock')
+            hc_e2e.launchers.make_launcher('org.webosbrew.dock')
 
     def test_no_dock_special_case_is_left(self):
-        self.assertFalse(hasattr(e2e, 'DOCK_IPK') or hasattr(e2e, 'DOCK_ID'))
-        for src in (e2e.main, run_matrix.build_once, run_matrix.runner_command):
+        self.assertFalse([m for m, mod in sys.modules.items() if m.startswith('hc_e2e')
+                          and (hasattr(mod, 'DOCK_IPK') or hasattr(mod, 'DOCK_ID'))])
+        for src in (hc_e2e.cli.main, run_matrix.build_once, run_matrix.runner_command):
             self.assertNotIn('dock', __import__('inspect').getsource(src).lower())
 
     def test_disposable_fixture_declares_no_home_and_no_permission(self):
         with open(os.path.join(HERE, 'fixtures', 'disposable', 'build.sh')) as f:
             body = f.read()
-        self.assertIn(e2e.DISPOSABLE_ID, body)
+        self.assertIn(hc_e2e.api_spec.DISPOSABLE_ID, body)
         self.assertNotIn('"appCategory"', body)
         self.assertNotIn('"requiredPermissions"', body)
         self.assertNotIn('HC_FIXTURE_PERMISSION"]', body)
@@ -2496,7 +2525,7 @@ class ApiLaunchers(unittest.TestCase):
 class HostInput(unittest.TestCase):
     def test_command_quotes_arguments(self):
         from unittest.mock import Mock
-        host = e2e.BeanjarHost()
+        host = hc_e2e.beanjar.BeanjarHost()
         directory = "/tmp/vm ' $(false); space"
         key = "ret' ; $(false)"
         host._dirs['vm'] = directory
@@ -2504,7 +2533,7 @@ class HostInput(unittest.TestCase):
         self.assertEqual(host.sendkey('vm', key), (0, 'ok'))
         command, timeout = host.sh.call_args.args
         self.assertEqual(shlex.split(command),
-                         ['python3', '-c', e2e.QMP_SENDKEY, directory + '/run/qmp.sock', key])
+                         ['python3', '-c', hc_e2e.beanjar.QMP_SENDKEY, directory + '/run/qmp.sock', key])
         self.assertEqual(timeout, 30)
 
     def test_failed_press_stops_sequence_for_both_inputs(self):
@@ -2512,13 +2541,13 @@ class HostInput(unittest.TestCase):
         from unittest.mock import Mock
         for mode in ('qmp', 'ares'):
             with self.subTest(mode=mode):
-                scenario = object.__new__(e2e.Scenario)
+                scenario = object.__new__(hc_e2e.scenario.Scenario)
                 scenario.a = SimpleNamespace(input=mode)
                 scenario.vm = 'vm'
                 scenario.host = SimpleNamespace(name='rk1', sendkey=Mock(return_value=(1, 'socket refused')))
                 scenario.dev = SimpleNamespace(root='vm-root', key=Mock(return_value=(1, 'socket refused')))
                 scenario.rec = Mock()
-                with self.assertRaisesRegex(e2e.KeySendError, 'key OK.*socket refused'):
+                with self.assertRaisesRegex(hc_e2e.beanjar.KeySendError, 'key OK.*socket refused'):
                     scenario.press('OK', 'DOWN')
                 sender = scenario.host.sendkey if mode == 'qmp' else scenario.dev.key
                 self.assertEqual(sender.call_count, 1)
@@ -2526,7 +2555,7 @@ class HostInput(unittest.TestCase):
 
     def beanjar_host(self):
         from unittest.mock import Mock
-        host = e2e.BeanjarHost(mode='remote', name='rk1')
+        host = hc_e2e.beanjar.BeanjarHost(mode='remote', name='rk1')
         host.input_rec = Mock()
         keys = ['ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT'] + list('0123456789')
         layout = json.dumps({'keys': [{'name': k, 'code': i} for i, k in enumerate(keys)]})
@@ -2538,9 +2567,9 @@ class HostInput(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
         host = self.beanjar_host()
-        s = object.__new__(e2e.Scenario)
+        s = object.__new__(hc_e2e.scenario.Scenario)
         s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
-        with patch.object(e2e, 'SLOWDOWN', 1.5), patch.object(e2e, 'sleep'):
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1.5), patch.object(hc_e2e.timing, 'sleep'):
             s.press('OK', 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', *'0123456789')
         calls = [c.args for c in host.display_beanjar.call_args_list]
         self.assertEqual(calls[0], ('remote', 'layout', 'rk1/vm', '--json'))
@@ -2560,9 +2589,9 @@ class HostInput(unittest.TestCase):
             host = self.beanjar_host()
             host.display_beanjar.return_value = (0, json.dumps({'keys': rows}))
             host.display_beanjar.side_effect = None
-            s = object.__new__(e2e.Scenario)
+            s = object.__new__(hc_e2e.scenario.Scenario)
             s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
-            with self.assertRaisesRegex(e2e.KeySendError, 'rk1/vm.*missing keys.*ENTER'):
+            with self.assertRaisesRegex(hc_e2e.beanjar.KeySendError, 'rk1/vm.*missing keys.*ENTER'):
                 s.press(key)
             self.assertEqual(host.display_beanjar.call_count, 1)
             self.assertFalse(s.rec.check.call_args.args[1])
@@ -2575,9 +2604,9 @@ class HostInput(unittest.TestCase):
         host.display_beanjar.reset_mock()
         host.display_beanjar.side_effect = None
         host.display_beanjar.return_value = (1, 'display refused')
-        s = object.__new__(e2e.Scenario)
+        s = object.__new__(hc_e2e.scenario.Scenario)
         s.a, s.host, s.vm, s.rec = SimpleNamespace(input='beanjar'), host, 'vm', Mock()
-        with self.assertRaisesRegex(e2e.KeySendError, 'key OK.*ENTER.*rk1/vm.*display refused'):
+        with self.assertRaisesRegex(hc_e2e.beanjar.KeySendError, 'key OK.*ENTER.*rk1/vm.*display refused'):
             s.press('OK', 'DOWN')
         self.assertEqual(host.display_beanjar.call_count, 1)
         self.assertFalse(s.rec.check.call_args.args[1])
@@ -2601,19 +2630,19 @@ class HostInput(unittest.TestCase):
         host.vnc_start('vm')
         host.input_rec.check.assert_not_called()
         host.display_beanjar.return_value = (1, 'cannot bind')
-        with self.assertRaisesRegex(e2e.KeySendError, 'cannot bind'):
+        with self.assertRaisesRegex(hc_e2e.beanjar.KeySendError, 'cannot bind'):
             host.vnc_start('vm')
         host.stop('vm')  # even failed VNC cleanup must still stop the VM
         self.assertEqual(events[-1], ('stop', 'vm'))
 
     def test_await_boot_restarts_vnc_before_returning_to_keys(self):
         from unittest.mock import Mock, patch
-        s = object.__new__(e2e.Scenario)
+        s = object.__new__(hc_e2e.scenario.Scenario)
         s.vm, s.host, s.rec = 'vm', self.beanjar_host(), Mock()
         s.host.info = Mock(return_value={'lan_address': 'example'})
         s.dev = Mock()
         s.dev.boot_id.return_value = 'new'
-        with patch.object(e2e, 'wait_for_device', return_value=e2e.READY):
+        with patch.object(hc_e2e.steps.state, 'wait_for_device', return_value=hc_e2e.preflight.READY):
             self.assertTrue(s.await_boot('tvpower reboot', 'old'))
         s.host.display_beanjar.assert_called_once_with('vnc', 'start', 'rk1/vm', '--port', '0')
 
@@ -2637,21 +2666,21 @@ class HostInput(unittest.TestCase):
                 with contextlib.ExitStack() as stack:
                     stack.enter_context(patch.object(sys, 'argv', argv))
                     for name in ['prepare_vm', 'clean_launchers', 'restart_after_launcher_cleanup']:
-                        stack.enter_context(patch.object(e2e, name))
-                    stack.enter_context(patch.object(e2e, 'wait_for_device', return_value=e2e.READY))
-                    stack.enter_context(patch.object(e2e, 'load_hosts', return_value={'default': 'rk1'}))
-                    stack.enter_context(patch.object(e2e, 'make_launcher', return_value=SimpleNamespace(spec='test', id='test')))
-                    stack.enter_context(patch.object(e2e.BeanjarHost, 'from_config', return_value=host))
-                    stack.enter_context(patch.object(e2e, 'Recorder', return_value=rec))
-                    stack.enter_context(patch.object(e2e, 'Scenario', return_value=scenario))
-                    stack.enter_context(patch.object(e2e.os, 'makedirs'))
-                    stack.enter_context(patch.object(e2e.shutil, 'which', return_value='/fake/ares-do'))
-                    stack.enter_context(patch.object(e2e.signal, 'signal'))
+                        stack.enter_context(patch.object(hc_e2e.cli, name))
+                    stack.enter_context(patch.object(hc_e2e.cli, 'wait_for_device', return_value=hc_e2e.preflight.READY))
+                    stack.enter_context(patch.object(hc_e2e.cli, 'load_hosts', return_value={'default': 'rk1'}))
+                    stack.enter_context(patch.object(hc_e2e.cli, 'make_launcher', return_value=SimpleNamespace(spec='test', id='test')))
+                    stack.enter_context(patch.object(hc_e2e.beanjar.BeanjarHost, 'from_config', return_value=host))
+                    stack.enter_context(patch.object(hc_e2e.cli, 'Recorder', return_value=rec))
+                    stack.enter_context(patch.object(hc_e2e.cli, 'Scenario', return_value=scenario))
+                    stack.enter_context(patch.object(os, 'makedirs'))
+                    stack.enter_context(patch.object(shutil, 'which', return_value='/fake/ares-do'))
+                    stack.enter_context(patch.object(signal, 'signal'))
                     if isinstance(failure, KeyboardInterrupt):
                         with self.assertRaises(KeyboardInterrupt):
-                            e2e.main()
+                            hc_e2e.cli.main()
                     else:
-                        e2e.main()
+                        hc_e2e.cli.main()
                 self.assertEqual([e[:2] for e in events], [('start', 'w24g-ombre'),
                                  ('vnc', 'start'), ('vnc', 'stop')] +
                                  ([] if no_stop else [('stop', 'w24g-ombre')]))
@@ -2691,7 +2720,7 @@ class HostInput(unittest.TestCase):
                             errors.append(exc)
                     thread = threading.Thread(target=serve)
                     thread.start()
-                    host = e2e.BeanjarHost(mode='local')
+                    host = hc_e2e.beanjar.BeanjarHost(mode='local')
                     host._dirs['vm'] = directory
                     os.mkdir(os.path.join(directory, 'run'))
                     os.rename(path, os.path.join(directory, 'run', 'qmp.sock'))
@@ -2708,7 +2737,7 @@ class HostInput(unittest.TestCase):
 
     def test_unreachable_socket(self):
         with tempfile.TemporaryDirectory() as directory:
-            host = e2e.BeanjarHost(mode='local')
+            host = hc_e2e.beanjar.BeanjarHost(mode='local')
             host._dirs['vm'] = directory
             rc, output = host.sendkey('vm', 'ret')
             self.assertNotEqual(rc, 0)
@@ -2721,21 +2750,21 @@ class DeviceAccess(unittest.TestCase):
 
     def calls(self, dev, fn, reply=(0, 'ok')):
         from unittest.mock import patch
-        with patch.object(e2e, 'run', return_value=reply) as run:
+        with patch.object(hc_e2e.timing, 'run', return_value=reply) as run:
             fn(dev)
         return [c.args[0] for c in run.call_args_list]
 
     def test_vm_argv(self):
-        d = e2e.Device('rk1/vm')
+        d = hc_e2e.device.Device('rk1/vm')
         self.assertEqual(d.argv('install', ['-l']), ['beanjar', 'ares-install', '-d', 'rk1/vm', '-l'])
         self.assertEqual(d.argv('shell', ['-r', 'id'], root=True),
                          ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'id'])
         # shell commands share one root shell per VM (RootSession)
         self.assertEqual(d.session().argv, ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'sh'])
-        self.assertIs(e2e.Device('rk1/vm').session(), d.session())
-        self.assertIsNot(e2e.Device('rk2/vm').session(), d.session())
+        self.assertIs(hc_e2e.device.Device('rk1/vm').session(), d.session())
+        self.assertIsNot(hc_e2e.device.Device('rk2/vm').session(), d.session())
         from unittest.mock import patch
-        with patch.object(e2e.RootSession, 'run', return_value=(0, 'up')) as session_run:
+        with patch.object(hc_e2e.device.RootSession, 'run', return_value=(0, 'up')) as session_run:
             self.assertEqual(d.sh('echo up'), (0, 'up'))
             d.exec('id -u', 20)
         self.assertEqual([c.args for c in session_run.call_args_list], [('echo up', 60), ('id -u', 20)])
@@ -2755,43 +2784,43 @@ class DeviceAccess(unittest.TestCase):
         self.assertNotIn('-root', ' '.join(d.argv('shell', root=True)).replace('--root', ''))
 
     def test_vm_target_follows_the_host(self):
-        local = e2e.BeanjarHost('local', 'localhost', 'here')
-        remote = e2e.BeanjarHost('remote', 'mariotaku@rockpi4a-1.lan', 'rockpi4a-1')
-        self.assertEqual(e2e.Device.for_vm(local, 'vm').target, 'vm')
-        self.assertEqual(e2e.Device.for_vm(remote, 'vm').target, 'rockpi4a-1/vm')
-        self.assertEqual(e2e.Device.for_vm(remote, 'vm').vm, 'rockpi4a-1/vm')
+        local = hc_e2e.beanjar.BeanjarHost('local', 'localhost', 'here')
+        remote = hc_e2e.beanjar.BeanjarHost('remote', 'mariotaku@rockpi4a-1.lan', 'rockpi4a-1')
+        self.assertEqual(hc_e2e.device.Device.for_vm(local, 'vm').target, 'vm')
+        self.assertEqual(hc_e2e.device.Device.for_vm(remote, 'vm').target, 'rockpi4a-1/vm')
+        self.assertEqual(hc_e2e.device.Device.for_vm(remote, 'vm').vm, 'rockpi4a-1/vm')
 
     def test_tv_argv(self):
-        d = e2e.Device.tv('tv')
+        d = hc_e2e.device.Device.tv('tv')
         self.assertIsNone(d.session())
         self.assertEqual(self.calls(d, lambda x: x.sh('echo up')), [['ares-shell', '-d', 'tv', '-r', 'echo up']])
         self.assertEqual(self.calls(d, lambda x: x.exec('id -u', 20)),
                          [['ares-do', '-d', 'tv', '--timeout', '20000', 'exec', 'id -u']])
         self.assertEqual(d.argv('install', ['-l']), ['ares-install', '-d', 'tv', '-l'])
         self.assertEqual(d.argv('do', ['exec', 'id'], root=True), ['ares-do', '-d', 'tv', 'exec', 'id'])
-        split = e2e.Device.tv('tv', 'tv-root')
+        split = hc_e2e.device.Device.tv('tv', 'tv-root')
         self.assertEqual(split.argv('shell', ['-r', 'id'], root=True), ['ares-shell', '-d', 'tv-root', '-r', 'id'])
         self.assertEqual(split.argv('novacom', ['-f']), ['ares-novacom', '-d', 'tv', '-f'])
 
     def test_forward_and_stream(self):
         from unittest.mock import patch
-        with patch.object(e2e.subprocess, 'Popen') as popen:
-            e2e.Device('rk1/vm').forward(9998, 4321)
-            e2e.Device('rk1/vm').stream('exec ls-monitor')
+        with patch.object(subprocess, 'Popen') as popen:
+            hc_e2e.device.Device('rk1/vm').forward(9998, 4321)
+            hc_e2e.device.Device('rk1/vm').stream('exec ls-monitor')
         self.assertEqual(popen.call_args_list[0].args[0],
                          ['beanjar', 'ares-novacom', '-d', 'rk1/vm', '-f', '-p', '9998:4321'])
         self.assertEqual(popen.call_args_list[1].args[0],
                          ['beanjar', 'ares-shell', '--root', '-d', 'rk1/vm', '-r', 'exec ls-monitor'])
         for c in popen.call_args_list:
             self.assertTrue(c.kwargs['start_new_session'])
-            self.assertEqual(c.kwargs['stdin'], e2e.subprocess.DEVNULL)
+            self.assertEqual(c.kwargs['stdin'], subprocess.DEVNULL)
 
     def test_run_never_hands_its_stdin_to_a_tool(self):
         from unittest.mock import patch, Mock
-        with patch.object(e2e.subprocess, 'run', return_value=Mock(returncode=0, stdout=b'')) as r:
-            e2e.run(['true'])
-            e2e.run(['cat'], input=b'x')
-        self.assertEqual(r.call_args_list[0].kwargs['stdin'], e2e.subprocess.DEVNULL)
+        with patch.object(subprocess, 'run', return_value=Mock(returncode=0, stdout=b'')) as r:
+            hc_e2e.timing.run(['true'])
+            hc_e2e.timing.run(['cat'], input=b'x')
+        self.assertEqual(r.call_args_list[0].kwargs['stdin'], subprocess.DEVNULL)
         self.assertIsNone(r.call_args_list[1].kwargs['stdin'])
 
 
@@ -2799,7 +2828,7 @@ class RootSessionShell(unittest.TestCase):
     """The shared root shell, driven here with a local `sh` in place of `beanjar ares-shell --root -r sh`."""
 
     def setUp(self):
-        self.s = e2e.RootSession(['sh'])
+        self.s = hc_e2e.device.RootSession(['sh'])
         self.addCleanup(self.s.close)
 
     def test_status_output_and_one_process(self):
@@ -2817,7 +2846,7 @@ class RootSessionShell(unittest.TestCase):
 
     def test_timeout_ends_the_session_and_the_next_command_opens_one(self):
         from unittest.mock import patch
-        with patch.object(e2e, 'SLOWDOWN', 1.0):
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 1.0):
             rc, out = self.s.run('echo partial; sleep 5', timeout=1)
         self.assertEqual(rc, 124)
         self.assertIn('partial', out)
@@ -2830,7 +2859,7 @@ class RootSessionShell(unittest.TestCase):
         self.s.proc.kill()
         self.s.proc.wait()
         self.assertEqual(self.s.run('echo again'), (0, 'again\n'))
-        dead = e2e.RootSession(['sh', '-c', 'echo "no such VM" >&2; exit 1'])
+        dead = hc_e2e.device.RootSession(['sh', '-c', 'echo "no such VM" >&2; exit 1'])
         self.addCleanup(dead.close)
         self.assertEqual(dead.run('echo up'), (1, 'no such VM\n'))
 
@@ -2864,31 +2893,31 @@ class LunaThroughPty(unittest.TestCase):
 
     def test_script_form_quotes_and_parses_with_crlf_and_a_banner(self):
         payload = '{"id":"it\'s \\"x\\"","n":1}'
-        out = self.guest(e2e.luna_send_command('luna://a.b/c', payload, 'com.webos.applicationManager'))
+        out = self.guest(hc_e2e.device.luna_send_command('luna://a.b/c', payload, 'com.webos.applicationManager'))
         self.assertIn('\r\n', out)
         self.assertIn('Script started', out)
         self.assertEqual(self.args, ['-a', 'com.webos.applicationManager', '-n', '1', 'luna://a.b/c', payload])
-        self.assertEqual(e2e.parse_luna(e2e.clean_reply(out)), json.loads(self.REPLY))
-        self.assertEqual(json.loads(e2e.luna_reply_text(out)), json.loads(self.REPLY))
-        self.assertNotIn('\r', e2e.clean_reply(out))
+        self.assertEqual(hc_e2e.evidence.parse_luna(hc_e2e.device.clean_reply(out)), json.loads(self.REPLY))
+        self.assertEqual(json.loads(hc_e2e.device.luna_reply_text(out)), json.loads(self.REPLY))
+        self.assertNotIn('\r', hc_e2e.device.clean_reply(out))
 
     def test_no_script_on_the_guest_runs_plainly_and_says_so(self):
-        cmd = e2e.luna_send_command('luna://a.b/c')
+        cmd = hc_e2e.device.luna_send_command('luna://a.b/c')
         # the fake PATH holds luna-send only: `command -v` is the shell's own, so no script is found
         out = self.guest(cmd, with_script=False)
-        self.assertIn(e2e.NO_SCRIPT_NOTE, out)
-        self.assertEqual(e2e.parse_luna(out), json.loads(self.REPLY))
-        self.assertNotIn('script', e2e.luna_send_command('luna://a.b/c', pty=False))
+        self.assertIn(hc_e2e.device.NO_SCRIPT_NOTE, out)
+        self.assertEqual(hc_e2e.evidence.parse_luna(out), json.loads(self.REPLY))
+        self.assertNotIn('script', hc_e2e.device.luna_send_command('luna://a.b/c', pty=False))
 
     def test_reply_text(self):
-        self.assertEqual(e2e.luna_reply_text(self.REPLY + '\r\n'), self.REPLY)
-        self.assertEqual(json.loads(e2e.luna_reply_text('^D\x08\x08' + self.REPLY + '\r\n')), json.loads(self.REPLY))
-        self.assertEqual(e2e.luna_reply_text('[timeout]\r\n'), '[timeout]')
-        self.assertEqual(e2e.luna_reply_text(''), '')
+        self.assertEqual(hc_e2e.device.luna_reply_text(self.REPLY + '\r\n'), self.REPLY)
+        self.assertEqual(json.loads(hc_e2e.device.luna_reply_text('^D\x08\x08' + self.REPLY + '\r\n')), json.loads(self.REPLY))
+        self.assertEqual(hc_e2e.device.luna_reply_text('[timeout]\r\n'), '[timeout]')
+        self.assertEqual(hc_e2e.device.luna_reply_text(''), '')
 
     def probe(self, replies):
         from unittest.mock import Mock
-        d = e2e.Device('rk1/vm')
+        d = hc_e2e.device.Device('rk1/vm')
         d.say = Mock()
         sent = []
         d.exec = lambda cmd, timeout=60: (sent.append(cmd), replies.pop(0))[1]
@@ -2911,11 +2940,11 @@ class LunaThroughPty(unittest.TestCase):
         self.assertNotIn('script', sent[1] + sent[2])
 
     def test_probe_without_script_on_the_guest(self):
-        d, sent = self.probe([(0, e2e.NO_SCRIPT_NOTE + '\n' + self.REPLY + '\n'), (0, self.REPLY + '\n')])
+        d, sent = self.probe([(0, hc_e2e.device.NO_SCRIPT_NOTE + '\n' + self.REPLY + '\n'), (0, self.REPLY + '\n')])
         d.luna('luna://a.b/c')
         self.assertIs(d.luna_pty, False)
         self.assertEqual(len(sent), 2)
-        self.assertIn(e2e.NO_SCRIPT_NOTE, d.say.call_args_list[0].args[0])
+        self.assertIn(hc_e2e.device.NO_SCRIPT_NOTE, d.say.call_args_list[0].args[0])
 
     def test_probe_is_retried_while_the_device_gives_no_reply(self):
         d, sent = self.probe([(255, ''), (255, ''), (255, ''),
@@ -2924,6 +2953,350 @@ class LunaThroughPty(unittest.TestCase):
         self.assertIsNone(d.luna_pty)
         self.assertEqual(json.loads(d.luna('luna://a.b/c')), json.loads(self.REPLY))
         self.assertTrue(d.luna_pty)
+
+
+# ---------------------------------------------------------------------------------------------
+# Scopes, the run plan, screenshots and polling (e2e/README.md "Scopes", "Tiers")
+# ---------------------------------------------------------------------------------------------
+WEB_N, WEB_O = ('web', 'normal', False), ('web', 'overlay', False)
+ALL6 = [WEB_N, WEB_O, ('native', 'normal', False), ('native', 'overlay', False),
+        ('qml', 'normal', False), ('qml', 'overlay', False)]
+RELEASE_OPTS = {'api': 'smoke', 'reboot': 'auto', 'until': 5}
+FULL_OPTS = {'api': 'full', 'reboot': 'auto', 'update': True, 'launcher_update': True, 'until': 5}
+
+
+class Scopes(unittest.TestCase):
+    def test_the_table_has_one_row_per_phase_and_three_scopes(self):
+        names = [row[0] for row in hc_e2e.plan.PHASES]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual({row[1] for row in hc_e2e.plan.PHASES}, {hc_e2e.plan.PER_RELEASE, hc_e2e.plan.PER_WINDOW, hc_e2e.plan.PER_RUNTIME})
+        self.assertEqual(hc_e2e.plan.PHASE['home-proof']['scope'], hc_e2e.plan.PER_RUNTIME)
+        self.assertEqual(hc_e2e.plan.PHASE['qml-gate']['scope'], hc_e2e.plan.PER_RUNTIME)
+        for phase in ('window-chosen', 'window-home', 'reboot'):
+            self.assertEqual(hc_e2e.plan.PHASE[phase]['scope'], hc_e2e.plan.PER_WINDOW, phase)
+        for phase in ('baseline', 'install', 'choose', 'api-selected', 'update', 'removal',
+                      'uninstall', 'cleanup'):
+            self.assertEqual(hc_e2e.plan.PHASE[phase]['scope'], hc_e2e.plan.PER_RELEASE, phase)
+
+    def test_every_phase_is_planned_somewhere_and_run_knows_it(self):
+        seen = set()
+        for major in (5, 9, 10, 12):
+            for opts in (RELEASE_OPTS, FULL_OPTS, dict(FULL_OPTS, update=False), dict(RELEASE_OPTS, screensaver='all'),
+                         dict(RELEASE_OPTS, restore_repair=True), dict(RELEASE_OPTS, removal_race=True)):
+                seen |= {p for _, p in hc_e2e.plan.run_plan(ALL6 + [('web', 'normal', True)], major, opts)}
+        self.assertEqual(seen, set(hc_e2e.plan.PHASE))
+        inspect = __import__('inspect')
+        runners = inspect.getsource(hc_e2e.scenario.Scenario.begin_run)  # the phase runners
+        for phase in hc_e2e.plan.PHASE:
+            self.assertIn("'%s'" % phase, inspect.getsource(hc_e2e.scenario.Scenario.end_run)
+                          if phase == 'cleanup' else runners, phase)
+
+    def test_release_tier_plan_per_release_once_overlay_only_its_scopes(self):
+        for major in (5, 6, 9, 10, 11, 12):
+            plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], major, RELEASE_OPTS)
+            with self.subTest(major=major):
+                self.assertEqual(plan[0], (0, 'baseline'))
+                self.assertEqual(plan[-2:], [(0, 'uninstall'), (0, 'cleanup')])
+                overlay = [p for i, p in plan if i == 1]
+                self.assertEqual(overlay[:3], ['switch', 'window-chosen', 'home-proof'])
+                self.assertTrue(all(hc_e2e.plan.PHASE[p]['scope'] != hc_e2e.plan.PER_RELEASE for p in overlay), overlay)
+                for phase in ('install', 'choose', 'api-selected', 'removal', 'uninstall'):
+                    self.assertEqual([i for i, p in plan if p == phase], [0], phase)
+                self.assertEqual([i for i, p in plan if p == 'window-chosen'], [0, 1])
+                self.assertEqual([i for i, p in plan if p == 'window-home'], [0, 1] if major >= 10 else [])
+                self.assertEqual([i for i, p in plan if p == 'home-proof'], [0, 1])
+                self.assertNotIn('update', [p for _, p in plan])
+
+    def test_full_tier_six_launchers_one_boot_scopes_once(self):
+        for major in (5, 9, 10, 11, 12):
+            plan = hc_e2e.plan.run_plan(ALL6, major, FULL_OPTS)
+            with self.subTest(major=major):
+                proofs = [i for i, p in plan if p == 'home-proof']
+                gates = [i for i, p in plan if p == 'qml-gate']
+                self.assertEqual(sorted(proofs + gates), list(range(6)))
+                self.assertEqual(gates, [4, 5] if major == 12 else [])
+                self.assertEqual([i for i, p in plan if p == 'window-chosen'], [0, 1])  # web.normal, web.overlay
+                self.assertEqual([i for i, p in plan if p == 'switch'], [i for i in range(1, 6) if i not in gates])
+                # a later launcher of the same window type: switch and launch proof only
+                for i in (2, 3):
+                    self.assertEqual([p for j, p in plan if j == i], ['switch', 'home-proof'])
+                self.assertEqual([i for i, p in plan if p == 'update'], [0])
+                self.assertEqual([i for i, p in plan if p == 'launcher-update'], [0])
+
+    def test_a_later_launcher_of_a_new_window_type_owns_its_window_checks(self):
+        plan = hc_e2e.plan.run_plan([('native', 'normal', False), WEB_O, ('native', 'overlay', False)], 10, RELEASE_OPTS)
+        self.assertEqual([p for i, p in plan if i == 1], ['switch', 'window-chosen', 'home-proof', 'window-home', 'reboot'])
+        self.assertEqual([p for i, p in plan if i == 2], ['switch', 'home-proof'])
+
+    def test_reboot_plan(self):
+        n, o = 'normal', 'overlay'
+        self.assertEqual(hc_e2e.plan.reboot_windows(9, [n, o], None), [])
+        self.assertEqual(hc_e2e.plan.reboot_windows(5, [n, o], 'auto'), [n])
+        self.assertEqual(hc_e2e.plan.reboot_windows(9, [o, n], 'auto'), [n])  # the full-screen one, wherever it is
+        self.assertEqual(hc_e2e.plan.reboot_windows(9, [o], 'auto'), [o])     # a lone overlay launcher still boots
+        self.assertEqual(hc_e2e.plan.reboot_windows(10, [n, o], 'auto'), [n, o])
+        self.assertEqual(hc_e2e.plan.reboot_windows(12, [o, n], 'auto'), [o, n])
+        self.assertEqual(hc_e2e.plan.reboot_windows(9, [n, o, n], 'all'), [n, o])
+        for major in range(5, 13):
+            plan = hc_e2e.plan.run_plan(ALL6, major, FULL_OPTS)
+            reboots = [i for i, p in plan if p == 'reboot']
+            self.assertEqual(reboots, [0, 1] if major >= 10 else [0], major)
+            # the boot cache check follows the first 6-9 reboot when no update replaced the build
+            plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], major, RELEASE_OPTS)
+            self.assertEqual([i for i, p in plan if p == 'cache'], [0] if 6 <= major <= 9 else [], major)
+
+    def test_until_restore_repair_screensaver_and_a_gated_run(self):
+        plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, until=3))
+        self.assertNotIn('removal', [p for _, p in plan])
+        self.assertFalse([i for i, _ in plan if i == 1])
+        self.assertNotIn('cleanup', [p for _, p in plan])
+        plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, until=4))
+        self.assertEqual([p for _, p in plan][-3:], ['switch', 'window-chosen', 'home-proof'])
+        plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 9, dict(RELEASE_OPTS, restore_repair=True))
+        self.assertEqual([p for _, p in plan][-2:], ['restore-repair', 'cleanup'])
+        plan = hc_e2e.plan.run_plan([WEB_N], 10, {'screensaver': 'screensaver', 'until': 5})
+        self.assertEqual([p for _, p in plan], ['baseline', 'install', 'choose', 'window-chosen', 'screensaver', 'cleanup'])
+        qml = [('qml', 'normal', False), ('qml', 'overlay', False)]
+        self.assertEqual(hc_e2e.plan.run_plan(qml, 12, RELEASE_OPTS), [(0, 'baseline'), (0, 'qml-gate'), (1, 'qml-gate'), (0, 'cleanup')])
+        plan = hc_e2e.plan.run_plan([('qml', 'normal', False), WEB_N], 12, RELEASE_OPTS)
+        self.assertEqual(plan[:3], [(1, 'baseline'), (0, 'qml-gate'), (1, 'install')])
+
+    def test_crash_windows_group_unguarded_phases_with_the_step_before(self):
+        plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 10, RELEASE_OPTS)
+        groups = [[p for _, p in g] for g in hc_e2e.plan.plan_groups([x for x in plan if x[1] != 'cleanup'])]
+        self.assertIn(['choose', 'window-chosen'], groups)
+        self.assertIn(['home-proof', 'window-home'], groups)
+        self.assertIn(['switch', 'window-chosen'], groups)
+        self.assertTrue(all(hc_e2e.plan.PHASE[g[0]]['guard'] or g[0] == 'baseline' for g in groups), groups)
+
+    def test_describe_plan_and_api_build(self):
+        plan = hc_e2e.plan.run_plan([WEB_N, WEB_O], 9, RELEASE_OPTS)
+        lines = hc_e2e.plan.describe_plan(plan, ['fixture:web.normal', 'fixture:web.overlay'])
+        self.assertTrue(lines[1].startswith('fixture:web.overlay: switch'))
+        self.assertTrue(hc_e2e.launchers.api_build('fixture:native.normal', 0, 'smoke'))
+        self.assertFalse(hc_e2e.launchers.api_build('fixture:native.normal', 2, 'full'))
+        self.assertTrue(hc_e2e.launchers.api_build('fixture:web.overlay', 1, 'full'))
+        self.assertFalse(hc_e2e.launchers.api_build('fixture:web.normal', 0, None))
+        self.assertEqual(hc_e2e.launchers.FIXTURE_TYPES[0], 'web')  # all-fixtures puts a web launcher first
+        self.assertEqual(hc_e2e.launchers.fixture_specs()[:2], ['fixture:web.normal', 'fixture:web.overlay'])
+
+    def test_results_carry_the_scope_and_a_fail_calls_the_hook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rec = hc_e2e.recorder.Recorder(tmp)
+            failed = []
+            rec.on_fail = failed.append
+            rec.scope = hc_e2e.plan.PER_WINDOW
+            rec.check('a', True)
+            rec.check('b', False)
+            rec.check('c', False, expected='documented limitation')
+            rec.log.close()
+        self.assertEqual([r['scope'] for r in rec.results], [hc_e2e.plan.PER_WINDOW] * 3)
+        self.assertEqual(failed, ['b'])
+
+
+class Screenshots(unittest.TestCase):
+    def test_only_key_steps_are_taken(self):
+        for label in ('3-home-verdict', '4-home-stock-verdict', '3d-demo-ok-verdict', '3-home-first-press',
+                      'fail-2-choose', '3r-after-reboot', 'final', '4-alert', '4-alert-dismissed', '4-alert-refused',
+                      '5-toast', '3a-uninstall-alert', '3a-uninstall-alert-2-dismissed', 'keys-blocked',
+                      '3-home-foreign-popup', 'audiooutputd-crash-dialog-before', 'launcher row-click-not-observed',
+                      '3a-uninstall-alert-focus-proof', 'S1-before', '2-reboot-alert'):
+            self.assertTrue(hc_e2e.recorder.screenshot_reason(label), label)
+        for label in ('app-open', 'stale-marker', 'row-focused', 'dialog', 'after-confirm', 'reopened',
+                      '3a-request-selected', '2a-request-dialog', '3a-uninstall-screen', '3a-uninstalled', '3u-app'):
+            self.assertIsNone(hc_e2e.recorder.screenshot_reason(label), label)
+
+    def scenario(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.rec, s.shot_n, s.vm, s.capture_broken = FakeRec(), 0, 'vm', False
+        s.rec.outdir, s.rec.step = tempfile.gettempdir(), '2 choose the launcher through the UI'
+        s.a, s.L = SimpleNamespace(multi=False), SimpleNamespace(tag='t')
+        s.host = SimpleNamespace(tv_screenshot=Mock(return_value=(True, 'ok')))
+        return s
+
+    def test_a_skipped_label_takes_nothing_and_a_fail_one_picture_per_step(self):
+        s = self.scenario()
+        self.assertIsNone(s.shot('dialog'))
+        s.host.tv_screenshot.assert_not_called()
+        s.fail_shot('x')
+        s.fail_shot('y')
+        self.assertEqual(s.host.tv_screenshot.call_count, 1)
+        self.assertIn('fail-2-choose-the-launcher-through-the-UI', s.host.tv_screenshot.call_args.args[1])
+        s.rec.step = '3 Home opens the launcher'
+        s.fail_shot('z')
+        self.assertEqual(s.host.tv_screenshot.call_count, 2)
+
+
+class PreloadPolling(unittest.TestCase):
+    """The 6-9 settle and sample (a fixed 60 s, then 60 s of samples nobody read) became a poll of what
+    check_home_gate asserts, within the same 120 s bound; 10+ ends its settle at the watcher's close line."""
+
+    def test_settled_condition(self):
+        self.assertTrue(hc_e2e.checks.preload_settled(9, 1, False, False))
+        self.assertFalse(hc_e2e.checks.preload_settled(9, 0, False, False))
+        self.assertFalse(hc_e2e.checks.preload_settled(6, 1, True, False))
+        self.assertTrue(hc_e2e.checks.preload_settled(10, 0, True, True))
+        self.assertFalse(hc_e2e.checks.preload_settled(11, 1, False, False))
+
+    def scenario(self, major, polls_until_settled):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        s = scenario(major)
+        s.L = SimpleNamespace(overlay=False)
+        state = {'n': 0}
+        s.dev.preload_policy = lambda appid=hc_e2e.constants.STOCK: (False, '{"isEnabled":false}')
+        def running_ids():
+            state['n'] += 1
+            return [hc_e2e.constants.STOCK] if state['n'] <= polls_until_settled else []
+        s.running_ids = running_ids
+        s.gate_mount_count = lambda: 1
+        s.preload_log = lambda: 'closeByAppId com.webos.app.home' if state['n'] > polls_until_settled else ''
+        s.check_home_gate = Mock()
+        s.residency = Mock()
+        s.waits = []
+        def wait(cond, timeout, every=3):
+            s.waits.append(timeout)
+            for _ in range(int(timeout / every) + 1):
+                v = cond()
+                if v:
+                    return v
+            return v
+        s.wait = wait
+        s.stock_running_samples = lambda: [(0, False), (5, False)]
+        return s, state
+
+    def test_6_to_9_polls_then_checks_the_gate_without_a_fixed_sleep(self):
+        from unittest.mock import patch
+        for major in (6, 9):
+            s, state = self.scenario(major, polls_until_settled=2)
+            with patch.object(hc_e2e.timing, 'sleep') as slept:
+                s.check_preload_off('after the switch')
+            self.assertEqual([c.args for c in slept.call_args_list], [], 'no fixed wait')
+            self.assertEqual(s.waits[-1], hc_e2e.constants.PRELOAD_SETTLE + hc_e2e.constants.PRELOAD_SAMPLE)  # the same upper bound
+            self.assertEqual(state['n'], 3)  # stopped as soon as it settled
+            s.check_home_gate.assert_called_once_with('after the switch')
+
+    def test_10_after_a_boot_ends_the_settle_at_the_close_line_and_still_samples(self):
+        from unittest.mock import patch
+        s, state = self.scenario(10, polls_until_settled=0)
+        with patch.object(hc_e2e.timing, 'sleep') as slept:
+            s.check_preload_off('after the reboot', settle=30)
+        slept.assert_not_called()
+        self.assertEqual(s.waits[:2], [60, 30])  # the policy wait, then the settle bound (unchanged)
+        self.assertIn(('after the reboot: %s is not running over %d s' % (hc_e2e.constants.STOCK, hc_e2e.constants.PRELOAD_SAMPLE), True),
+                      s.rec.checks)
+        s.check_home_gate.assert_not_called()
+
+    def test_wait_closed_polls_with_the_old_bound(self):
+        s = scenario(9)
+        seen = []
+        s.wait = lambda cond, timeout, every=3: seen.append((timeout, every)) or cond()
+        s.running_ids = lambda: []
+        self.assertTrue(s.wait_closed('x', 3))
+        self.assertEqual(seen, [(3, 1)])
+
+
+class ApiModes(unittest.TestCase):
+    def test_bare_flag_is_smoke_and_full_is_the_sweep(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        for value, mode in ((True, 'smoke'), ('smoke', 'smoke'), ('full', 'full')):
+            s = scenario(9)
+            s.a = SimpleNamespace(api_check=value)
+            for name in ('api_before_selection', 'step_api', 'api_smoke_before', 'api_smoke_selected'):
+                setattr(s, name, Mock())
+            s.api_before()
+            s.api_selected()
+            self.assertEqual(s.api_mode(), mode)
+            full = mode == 'full'
+            self.assertEqual((s.api_before_selection.called, s.step_api.called), (full, full))
+            self.assertEqual((s.api_smoke_before.called, s.api_smoke_selected.called), (not full, not full))
+
+    def test_cli_modes(self):
+        from unittest.mock import patch
+        seen = {}
+        def fake(args, ap):
+            seen.update(api=args.api_check)
+            return 0
+        for argv, api in ((['--api-check'], 'smoke'), (['--api-check=full'], 'full'), (['--api-check', 'full'], 'full')):
+            with patch.object(sys, 'argv', ['runner', '--device', 'tv'] + argv), patch.object(hc_e2e.cli, 'run_device_api', fake):
+                hc_e2e.cli.main()
+            self.assertEqual(seen['api'], api)
+
+
+class PanelOpen(unittest.TestCase):
+    """Opening Home Chooser for the switch and 3u-app: in front, held, one retry, every rc logged."""
+    APP = hc_e2e.constants.APP_ID
+
+    def test_in_front(self):
+        self.assertTrue(hc_e2e.checks.panel_in_front(self.APP, False))
+        self.assertTrue(hc_e2e.checks.panel_in_front('', True))
+        self.assertTrue(hc_e2e.checks.panel_in_front(hc_e2e.constants.STOCK, True))
+        self.assertFalse(hc_e2e.checks.panel_in_front('', False))
+        self.assertFalse(hc_e2e.checks.panel_in_front(None, False))
+        self.assertFalse(hc_e2e.checks.panel_in_front('org.webosbrew.hcfixture.web.normal', False))
+        # 9.x: SAM names the card beneath our overlay while our list is on screen
+        self.assertTrue(hc_e2e.checks.panel_in_front('org.webosbrew.hcfixture.web.normal', True))
+
+    def test_verdict_holds(self):
+        ok, why = hc_e2e.checks.panel_front_verdict([(0, '', False), (1, '', True), (3, self.APP, True), (5, '', True)], 4)
+        self.assertTrue(ok)
+        self.assertIn('in front at 1 s and still at 5 s', why)
+
+    def test_verdict_closed_under_us(self):
+        # pi 9.2.4: our overlay in front at once, then the launcher's card mapped and closed it (windowPolicy)
+        ok, why = hc_e2e.checks.panel_front_verdict([(0, '', True), (1, '', True), (2, 'org.webosbrew.hcfixture.web.normal', False)], 4)
+        self.assertIs(ok, False)
+        self.assertIn('gone at 2 s', why)
+
+    def test_verdict_undecided(self):
+        self.assertIsNone(hc_e2e.checks.panel_front_verdict([], 4)[0])
+        ok, why = hc_e2e.checks.panel_front_verdict([(0, '', False), (2, 'x.card', False)], 4)
+        self.assertIsNone(ok)
+        self.assertIn('not in front after 2 s', why)
+        ok, why = hc_e2e.checks.panel_front_verdict([(0, self.APP, True), (2, self.APP, True)], 4)
+        self.assertIsNone(ok)
+        self.assertIn('held 2 of 4 s', why)
+
+    def run_open(self, fronts, attempts=2):
+        calls, said = [], []
+        fronts = list(fronts)
+
+        def launch():
+            calls.append('launch')
+            return 0, 'Launched application %s\n' % self.APP
+
+        def close():
+            calls.append('close')
+
+        def front():
+            calls.append('front')
+            return fronts.pop(0)
+        ok, notes = hc_e2e.checks.open_in_front(launch, close, front, said.append, attempts)
+        self.assertEqual(notes, said)
+        return ok, calls, said
+
+    def test_first_open(self):
+        ok, calls, said = self.run_open([(True, 'held')])
+        self.assertTrue(ok)
+        self.assertEqual(calls, ['launch', 'front'])
+        self.assertIn("ares-launch rc=0 'Launched application %s'" % self.APP, said[0])
+        self.assertIn('in front (held)', said[1])
+
+    def test_one_retry(self):
+        ok, calls, said = self.run_open([(False, 'gone at 2 s'), (True, 'held')])
+        self.assertTrue(ok)
+        self.assertEqual(calls, ['launch', 'front', 'close', 'launch', 'front'])
+        self.assertIn('NOT in front (gone at 2 s); closing it and retrying the open once', said[1])
+        self.assertTrue(said[2].startswith('open 2 of 2: ares-launch rc=0'))
+
+    def test_gives_up_after_the_retry(self):
+        ok, calls, said = self.run_open([(False, 'a'), (False, 'b')])
+        self.assertFalse(ok)
+        self.assertEqual(calls, ['launch', 'front', 'close', 'launch', 'front'])
+        self.assertTrue(said[-1].endswith('NOT in front (b)'))
 
 
 if __name__ == '__main__':

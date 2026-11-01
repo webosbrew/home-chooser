@@ -1,8 +1,57 @@
 # End-to-end test
 
-`homechooser_e2e.py` records each assertion with its raw evidence. Python 3 standard library
-only; Beanjar VMs are reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw
-ssh).
+`homechooser_e2e.py` records each assertion with its raw evidence. The runner (`homechooser_e2e.py`,
+`run_matrix.py` and the `hc_e2e/` package, see "Code layout") is Python 3 standard library only; Beanjar VMs are
+reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw ssh). pytest is optional: it
+runs the same scenario as one test per phase, with live progress and JUnit and HTML reports (see "The pytest device
+tests").
+
+## Quick start
+
+```sh
+# once, for pytest and the reports (the runner itself needs only python3)
+python3 -m venv .venv && .venv/bin/pip install -r e2e/requirements.txt
+
+# the offline unit tests, no device (about 6 s); the second line runs the same tests through pytest
+python3 -I -m unittest discover -s e2e -p 'test_*.py'
+.venv/bin/python -m pytest e2e
+
+# a device run against the fake device: the plan, the test ids and both reports, no VM (under a second)
+.venv/bin/python -m pytest e2e/device -v --vm 12.x --tier release --dry
+
+# smoke on one VM: the default slot (9.x), fixture:web.normal, the API smoke check
+# (about 6 min on the Pi, 10 min on a board)
+.venv/bin/python -m pytest e2e/device -v --tier smoke
+
+# one VM, some phases: the earlier phases they need run first, then the cleanup
+# (a late phase such as reboot takes most of a full run's time)
+.venv/bin/python -m pytest e2e/device -v --vm 10.x --tier release -k reboot
+.venv/bin/python -m pytest e2e/device -v --vm 10.x --tier release -k "web.overlay and home"
+
+# the release tier: every slot, one VM at a time per machine, machines in parallel (about 1 h with the three)
+.venv/bin/python -I e2e/run_matrix.py --build --tier release --pytest
+
+# the full tier: every slot, the six fixtures, the full API check (about 1.5 h with the three machines)
+.venv/bin/python -I e2e/run_matrix.py --build --tier full --pytest
+```
+
+Without `--pytest`, `run_matrix.py` runs `homechooser_e2e.py` per slot as before, and the plain commands below
+(`python3 -I e2e/homechooser_e2e.py --vm 9.x ...`) still work without the venv.
+
+**Where the results land.** A pytest run writes `e2e/results/<vm>-<timestamp>/` (or `--outdir`): `run.log` and
+`results.json` as the plain runner does, the screenshots, `junit.xml` and `report.html` (self-contained; each phase's
+checks, and the screenshots of a failing phase embedded). The terminal summary ends with the counts and these paths.
+A matrix run writes `e2e/results/matrix-<timestamp>/`: `summary.md`, `summary.json`, and per VM `<vm>/` (the same
+files) and `<vm>.console.log` (that run's pytest output).
+
+**Reading the progress.** With `-v` each phase test is named when it starts, `test_<vm>[<launcher>-<phase>]`, and
+while it runs a live line per step (`== 2 choose`) and per check (`PASS ...`, `FAIL ...`, `XFAIL ...`, `MANUAL ...`)
+follows; the VM start and the cleanup at the end have lines of their own. `--log-cli-level=DEBUG` shows every line
+the runner writes, which is also in `run.log` (`tail -f e2e/results/<vm>-*/run.log`). The matrix prints one line per
+finished run; `tail -f` a run's `<vm>.console.log` to follow it.
+
+Put pytest's path before `--api-check` or `--reboot-check` without a value, or give the value (`--api-check=smoke`):
+the bare flag takes the next word as its value.
 
 ## Launcher author: your own TV
 
@@ -20,8 +69,9 @@ control app. The second tests your launcher ipk, whose appinfo must declare both
 `appCategory:["home"]` and
 `requiredPermissions:["org.webosbrew.homechooser.applications"]`. Pass `--hc-ipk
 path/to/homechooser.ipk` if Home Chooser is not installed yet. The kit selects the launcher on
-the verified Home Chooser screen with ares keys, checks the v1 methods before and after
-selection, then restores LG Home and removes what it installed. It refuses to replace an
+the verified Home Chooser screen with ares keys, calls the API before and after selection as the
+launcher would (`getInfo`, `listApps`, and `closeApp` once it is Home; `--api-check=full` calls every
+v1 method and error case), then restores LG Home and removes what it installed. It refuses to replace an
 already installed launcher or change an existing nonstock Home choice. It uses no Beanjar,
 QMP, screenshots, or reboot. On webOS 6–9 the boot-time re-apply of the live key filter still needs a separate `--reboot-check` test.
 The output is `e2e/results/<device>-<timestamp>/results.json` and `run.log`.
@@ -40,7 +90,7 @@ host and VM setup in addition to ares:
   forward (`ares-novacom -f`) as the developer-mode user, the way the old plain device did; shell commands,
   luna calls, logs, mounts and key/screenshot fallbacks (`ares-shell -r`, `ares-do`) with `--root`. A VM on
   another machine is `HOST/NAME` (the `--host` name), which Beanjar reaches with a port forward per call.
-  All of it is built in one place, the `Device` class of `homechooser_e2e.py`.
+  All of it is built in one place, the `Device` class (`hc_e2e/device.py`).
 * Root shell commands share one `beanjar ares-shell --root -d [HOST/]NAME -r sh` per VM, fed on its stdin
   (each command `sh -c CMD </dev/null 2>&1`, then a marker line with its status). Each `beanjar ares-TOOL`
   call to a remote VM first asks its machine for the VM and opens an ssh forward, about 2 s from this PC to
@@ -69,19 +119,22 @@ python3 -I e2e/homechooser_e2e.py --vm w22h-ombre            # or --vm 9.x
 Options: `--launcher fixture:<native|qml|web>.<normal|overlay>|fixture:web.demo|<app id>` (default `fixture:web.normal`;
 `fixture:web.demo` is `examples/web-launcher` and adds step 3d, OK on the demo opens its focused app, the runner's own
 `org.webosbrew.hcfixture.first`, installed with it; see
-`fixtures/README.md`; an app id, for a real launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (the scenario once per launcher on the same VM, in
-sequence, the previous launcher and Home Chooser removed and the restore waited for in between; the log steps and the
-screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
+`fixtures/README.md`; an app id, for a real launcher, needs `--launcher-ipk <path>`), `--launchers all-fixtures|<comma list>` (all of
+them on one boot: the first runs the whole scenario, each later one is installed and chosen in Home Chooser's list over
+the one before and runs only its scopes, see "Scopes"; `all-fixtures` is web, native, qml, each normal then overlay;
+the log steps and the screenshots carry the launcher's name), `--update-check` and `--update-from <git ref>` (see "The update step"); `--build`
 (`npm run package` first; otherwise the newest `build/ipk/*.ipk` is used); `--hc-ipk <path>` (test this
 Home Chooser ipk instead); `--old-ipk <path>` (`--update-check` with an older build already made);
 `--host <name>`, `--hosts-file`, `--host-mode local|remote` and `--host-device` (see "Several machines");
 `--launcher-update-check` (install version 1.0.1 of a selected web fixture, or pass
 `--launcher-update-ipk <path>` for another launcher id); `--outdir <dir>` (instead of `e2e/results/<vm>-<timestamp>/`; must not exist);
 `--elevation luna|root-shell`; `--input-mode click|keys` (default: `click`); `--input beanjar|qmp|ares` (key backend, default: `beanjar`); `--until N` (stop after step N, no cleanup, for debugging);
-`--reboot-check` (reboot the VM after step 3 and check the preload policy at boot); `--removal-race` (after step 3, step 3r, below, then the cleanup); `--reboot-via later|alert`
+`--reboot-check[=auto|all]` (reboot the VM with a launcher chosen and check what is re-applied at boot; `auto`, the
+bare flag: once with the full-screen launcher, plus once with the overlay launcher on 10+; `all`: once per window type
+of the run; see "Scopes"); `--removal-race` (after step 3, step 3r, below, then the cleanup); `--reboot-via later|alert`
 (accepted for compatibility but not used: no release asks for a restart any more, `expects_reboot_dialog()` is always false, so
 `reboot_after_choice()` is never reached; see "webOS 6-9: nothing restarts");
-`--api-check` (the launcher-API contract, see "The launcher API check"); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
+`--api-check[=smoke|full]` (the launcher API, see "The launcher API check"; the bare flag is `smoke`); `--no-stop`; `--wait-popup N` (wait up to N s for a system popup holding key focus to be dismissed by hand). Artefacts go to `e2e/results/<vm>-<timestamp>/` (git-ignored): `run.log`,
 `results.json`, numbered screenshots (`beanjar screenshot`, the TV picture). A check is `PASS`, `FAIL`, `XFAIL`
 (below) or `MANUAL`: a check the runner leaves to a person because it would mean pressing a key at a system popup.
 
@@ -246,28 +299,165 @@ result.
 
 ## Which runs a change needs
 
-A full matrix run with `--reboot-check` takes about 10 to 14 minutes per VM, so a change gets the
-runs its reach calls for, not the whole matrix every time:
+A change gets the runs its reach calls for, not the whole matrix every time (the tiers are below):
 
 | Change | Runs |
 | --- | --- |
 | Any change | The offline suites: `service/scripts/tests/test-*.sh`, `cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host`, `cd app && npm run lint && CI=true npm test` |
 | Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
 | Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (Home key hook), 11.x (root-shell elevation, profile path) |
-| Only the runner or the docs | One VM |
-| A release or a tag | The whole matrix with `--reboot-check` |
+| Only the runner or the docs | `--tier smoke` |
+| A release or a tag | `--tier release` |
+| A new launcher runtime, a fixture change, an API method or errorCode on the device | `--tier full` |
 
 `--reboot-check` is used where boot behaviour is involved (the watcher, the preload policy, the
-live key filter re-applied at boot). There is no shortened mode; settle and sampling times stay as they are.
+live key filter re-applied at boot). Settles are polled within their old bounds (see "Waits"); sampling windows,
+which are the verdict, stay as they are.
+
+## Tiers
+
+`run_matrix.py --tier` (and pytest's `--tier` for one VM) sets the defaults of a pass, from `TIERS` in
+`hc_e2e/tiers.py`; an option given on the command line wins (`--vms`, `--launchers`,
+`--api-check=full`, `--reboot-check=all`, `--update-on`, `--uninstall-via`). Without `--tier` the options mean what
+they always did.
+
+| Tier | VMs | Launchers (one boot per VM) | Checks | Expected wall time |
+| --- | --- | --- | --- | --- |
+| `smoke` | `default_slot` of `hosts.toml` (9.x) | `fixture:web.normal` | `--api-check` (smoke); no reboot, no update | about 6 min on the Pi, 10 min on a board |
+| `release` | every slot | `fixture:web.normal`, `fixture:web.overlay` | `--api-check` (smoke), `--reboot-check`, `--uninstall-via alert`; `--update-check` on one slot, `w24g-ombre` | about 1 h with the three machines |
+| `full` | every slot | `all-fixtures`: the six, web first | `--api-check=full`, `--reboot-check`, `--uninstall-via alert`, `--update-check` and `--launcher-update-check` everywhere | about 1.5 h with the three machines |
+
+```
+python3 -I e2e/run_matrix.py --dry-run --tier release      # the runs, their flags and each run's plan
+python3 -I e2e/run_matrix.py --build --tier smoke
+python3 -I e2e/run_matrix.py --build --tier release
+python3 -I e2e/run_matrix.py --build --tier full
+python3 -I e2e/run_matrix.py --build --tier release --update-on all   # a tier with one default changed
+```
+
+The release tier's update check runs on one slot: the 9.x Home key family carries most of the update assertions (the
+live key filter, the flag and the baked id survive the update), and that slot is on the fastest machine. The 10+
+override and the 11+ re-elevation after an update are in the full tier. The times are estimates from the per-step
+times of earlier single-launcher runs, less the waits that are now polled.
+
+## The pytest device tests
+
+`e2e/device/` runs one VM run as one pytest session (`device/plugin.py`, loaded by `e2e/conftest.py`; the logic is
+in `hc_e2e/phase_tests.py`, standard library). It needs `e2e/requirements.txt` (pytest and pytest-html, pinned).
+
+* **Options.** `--vm`, `--host`, `--tier smoke|release|full`, `--launchers`, `--hc-ipk`, `--api-check[=smoke|full]`,
+  `--reboot-check[=auto|all]`, `--uninstall-via`, `--update-check`, `--outdir` mean what they mean to
+  `homechooser_e2e.py`; any other runner option goes through as `--hc-arg=<word>`, once per word
+  (`--hc-arg=--input-mode --hc-arg=keys`, `--hc-arg=--build`). `--tier` fills what is not given from `TIERS`, as
+  `run_matrix.py` does for one slot (the release tier's update check only on its slot); `--tier smoke` without `--vm`
+  takes the default slot, and the release and full tiers over every slot are `run_matrix.py --pytest`. The options
+  become a `homechooser_e2e.py` command line, which the runner's own parser checks before anything starts; the header
+  of the run prints it with the planned phases.
+* **One test per planned phase.** The tests come from `run_plan()` for the slot's release, one per `(launcher,
+  phase)`, named `test_<vm>[<launcher>-<phase>]`: `test_w22o_ponytail_us[web.overlay-reboot]`; the launcher is the
+  fixture's name or an author launcher's id. `-k` matches those words: `-k reboot`, `-k api` (`api-selected`; the API checks before the choice run in `choose`), `-k "web.overlay and home"` (its `home-proof` and `window-home`), `-k "not cleanup"`. Without `--vm`
+  or `--tier` no device test exists, so `pytest e2e` runs the unit tests only. The run re-plans from the release it
+  finds on the device; a test whose phase is not in that plan is skipped with the plan it found.
+* **Order and dependencies.** The tests run in plan order on one boot, through `PlanRun` (`hc_e2e/plan.py`), the
+  loop `homechooser_e2e.py` itself runs, with its rules: crash windows per group of phases, a later launcher's
+  exception recorded and only that launcher stopped. A selected phase first runs every earlier phase of the plan that
+  has not run, since each one leaves the device in the state the next expects; they are named in the test's
+  `setup` property, in its failure message and in the HTML. Their FAIL checks fail the test that pulled them in.
+* **Verdicts.** Every `r.check` is recorded as before (`run.log`, `results.json`). A phase test fails when a check
+  recorded during it is `FAIL`, with each failing check, its step and evidence in the message; it is `xfail` when it
+  recorded an `XFAIL` and no `PASS` (the qml gate); `MANUAL` never fails it. The counts per status, the phase, the setup phases
+  and the screenshots taken are the test's JUnit properties. When a phase of the first launcher raises, the run ends
+  as on the command line: that test fails with the traceback and every later phase but the cleanup is skipped with the reason; when a
+  later launcher's phase raises, only that launcher's remaining phases are skipped.
+* **Cleanup.** The session fixture starts the VM before the first test (`VmSession.bring_up`, as the command line
+  does) and, after the last one, whatever failed, runs the cleanup (step 6) unless a selected `-cleanup` test made
+  it, then stops VNC and the VM (`VmSession.tear_down`) and writes `results.json`. A FAIL of a cleanup made there is an
+  error at teardown. If the VM does not come up, every test fails with the reason, and the stop still runs.
+* **Reports.** `junit.xml` (xunit1, for the properties) and `report.html` go into the run's directory unless
+  `--junitxml` or `--html` say otherwise.
+* **`--dry`.** The same plan, PlanRun, fixture and reports against a fake device that records its calls
+  (`hc_e2e/dry.py`, `dry-calls.json`); `--dry-fail`, `--dry-manual` and `--dry-raise` (comma lists of phases;
+  `vm-start` for the VM start; `interrupt:<phase>` for a Ctrl-C in it) inject a FAIL, a MANUAL or an exception. A Ctrl-C in a phase fails that test (pytest exit status 2, `INTERRUPTED` in the summary), runs no later phase and still runs the cleanup. `e2e/test_phase_tests.py` runs it.
+
+**The matrix with pytest.** `run_matrix.py --pytest` keeps its scheduler and runs each slot as
+`python -m pytest e2e/device --vm <vm> --host <host> --outdir <matrix>/<vm> --hc-arg=...`, with the same flags the
+plain run would get; run it with the venv's python. pytest-xdist with `--dist loadgroup` was not used: it fixes each
+test's worker when the tests are collected, so it cannot express a slot that may run on any of several machines, the
+wait for a machine with no VM running (ours or another session's), a refused run, or Ctrl-C stopping each running VM;
+`run_matrix.py` already guarantees one VM per machine at a time, with one worker thread per machine claiming slots
+under a lock. Each pytest session is one VM, so its fixture's teardown stops exactly that VM.
+
+## Scopes
+
+A check depends on the release, on the window type, or on the launcher itself, and one VM run makes it once at that
+scope. `PHASES` in `hc_e2e/plan.py` is the one table of it; every result in `results.json` carries its phase's
+`scope`, and the run log starts with the run's plan (`run_plan`).
+
+* **per-release**, independent of the launcher: made once, with the first launcher of the run.
+* **per-window-type**, normal or overlay: made with the first launcher of each window type.
+* **per-runtime**, "SAM launches this app as Home and the Home key reaches it": made by every launcher. Each fixture's
+  window is its own code path (SDL, `WebOSWindow`, a web page), so the key is the launcher, not the runtime alone.
+
+All launchers of a run share one boot. The first runs the whole scenario; each later one is installed, chosen in Home
+Chooser's list over the current one (a live switch, as a user makes it), checked at its scopes, and left installed.
+Step 5 then removes Home Chooser with the last one chosen, and step 6 removes every launcher.
+
+| Phase | Scope | What it checks | Who runs it |
+| --- | --- | --- | --- |
+| 0 baseline, 1 install | per-release | release, nothing installed, Homebrew Channel; install, elevation | first launcher |
+| 2 choose | per-release | the Home Chooser UI: first open, stale marker, dialog, Done toast, 11+ page stays, choice/record/watcher/init.d, key filter and flag (6-9), override (10+), device texts, reopen and tick | first launcher |
+| 2a, 3a API | per-release | `--api-check`, smoke or full; the request dialog and toast | first launcher |
+| 2s switch | per-runtime | install, choose in the list over the current launcher; Done toast, choice/record/watcher, key filter (6-9), override (10+) | each later launcher |
+| window after the choice | per-window-type | the preload policy and the home gate (6-9), idleApp (10+) | first launcher of each window type |
+| 3 Home | per-runtime | Home from an ordinary app opens the launcher, sam's launch proof | every launcher |
+| qml gate | per-runtime | qml on a release where `fixtures/qml/support.json` says false: `XFAIL` | each qml launcher |
+| window after Home | per-window-type | 10+: the watcher closes LG Home once the launcher is in front | first launcher of each window type |
+| 3d demo | per-runtime | OK on the demo opens its focused app | `fixture:web.demo` |
+| 3r reboot | per-window-type | the boot checks; the API after a boot (first launcher) | see below |
+| boot cache | per-release | 6-9 after the first boot: no boot cache, no configd override, Home opens the launcher | first launcher |
+| 3u, 3v, 3f | per-release | the Home Chooser update, the launcher update, the restore repair | first launcher |
+| 4 removal | per-release | stock restore on removal, the alert, reinstall | first launcher |
+| 5 uninstall, 6 cleanup | per-release | residue, the toast, Home opens stock; test apps removed, the final screen | the run |
+
+Reboots, at most one per window type and run: `--reboot-check` (`auto`) boots once with the full-screen launcher, plus
+once with the overlay launcher on 10+, where the boot behaviour differs (the last input launch, the overlay's
+`idleApp`). On 5 to 9 that is one boot; on 10 and later two. `--reboot-check=all` also boots with the overlay launcher on
+5 to 9 (the 6-9 gate puts the last input app in front). A later launcher's boot comes in its own turn. On 10+, when the
+first overlay launcher comes after a full-screen one on the same boot, LG Home no longer runs; the runner starts it
+before that launcher's Home press, so the close rule is checked from the state a fresh boot leaves.
 On webOS 6–9 it also runs `homechooser-homekey prepare` once on the TV (the native generator must accept this
 firmware's `systemUi.js`; `cache_prepare_measure`), and after the boot asserts the keyFilters selection is active again
 and that there is no boot cache and no configd factory-db override (`step_cache`). LG firmware files are never edited.
+
+## Waits
+
+Fixed waits were replaced by polls of what they waited for, with the same upper bound and the same verdict:
+
+* 6-9, the preload checks after a choice or a boot: a fixed 60 s (30 s after a boot) and then 60 s of samples came
+  before the home gate check, and the samples decided nothing; now the runner polls for the gate mounted and stock
+  Home not running, within the same 120 s (90 s), and then makes the gate check as before.
+* 10+, after a boot with a full-screen launcher: the 30 s settle ends early when the watcher logs its close of LG
+  Home; the 60 s sample after it stays, since it is the verdict ("not running over 60 s").
+* The Home press: the 6 s after the key and the 3 s after closing the app to be launched are polls (26 s for the
+  result, 3 s for the close); the same for closing Home Chooser before it is opened again.
+* Opening Home Chooser for a later launcher's switch and for the post-update check (`3u-app`), right after a Home
+  press: the runner first polls up to 20 s for SAM to name a foreground app, then launches Home Chooser and polls
+  up to 30 s for its page to be listed by the inspector and to stay listed for 4 s; on a miss it closes it and
+  launches it once more. Home Chooser is an overlay, and surface-manager closes an overlay (`windowPolicy`) when a
+  card maps beneath it: on the slower pi VMs the launcher's card from the Home press mapped about 8 s after the
+  press, after Home Chooser had opened. Each `ares-launch` rc and the verdict are logged. The foreground alone
+  is not the test: on 9.x SAM names the card beneath our overlay while the list is on screen.
+
+Kept, because nothing observable ends them: the 45 s after the update install (the check is that no restore happens
+within the watcher's confirmation window), the short settles before a negative check (no toast, the app still
+installed, the choice unchanged), 0.8 s between keys, the 3 s after an app comes to the front before Home is pressed,
+the demo's 8 s to render, and the waits for our own alert and toast to be shown on screen.
 
 ## Beanjar host abstraction
 
 Everything on the Beanjar machine (`beanjar list/info/settings/start/stop`, the QMP `sendkey`
 through Python 3, the TV screenshot through `beanjar screenshot`) goes through the
-`BeanjarHost` class. The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
+`BeanjarHost` class (`hc_e2e/beanjar.py`). The mode comes from the machine's entry in `e2e/hosts.toml`: remote over
 `ssh <alias>` (the Pi: `ssh raspberrypi`), or local (`local = true`, beanjar on the PC running the
 runner). It is no longer guessed from `beanjar` being on PATH: this PC has Beanjar's own multi-host CLI
 on PATH, but the QMP sockets and the VM files are on the machine the VM runs on.
@@ -341,7 +531,7 @@ ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<
 "<alias>"` to `e2e/hosts.local.toml` (or `hosts.toml` when it is shared) under the same name. The VMs
 run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
 
-`MATRIX` in `homechooser_e2e.py` contains release slots. The VM field accepts a name or an ordered
+`MATRIX` in `hc_e2e/matrix.py` contains release slots. The VM field accepts a name or an ordered
  tuple of alternatives, for example `('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna',
  'verified', '...')`. Each row runs exactly once, using a candidate reported by host discovery.
  The three 9.x rows remain separate slots; `--vms 9.x` selects the first, as before. A single-run
@@ -367,14 +557,16 @@ The committed hosts are `pi` (`raspberrypi`), `rockpi4a-1` and `rockpi4a-2`
 
 ```
 python3 -I e2e/run_matrix.py --dry-run                            # the plan for the whole matrix
-python3 -I e2e/run_matrix.py --build --reboot-check               # the whole matrix
+python3 -I e2e/run_matrix.py --build --tier release               # the whole matrix, see "Tiers"
+python3 -I e2e/run_matrix.py --build --reboot-check               # the whole matrix, one launcher
 python3 -I e2e/run_matrix.py --vms 5.x,9.x,11.x --launchers all-fixtures
 ```
 
 * `--hosts pi,rockpi4a-1` limits discovery and execution to those configured hosts.
 * `--vms` takes explicit VM names (restricting a slot to that candidate) or releases (retaining its
-  alternatives); default is all matrix slots. Options it does not know (`--reboot-check`,
-  `--wait-popup N`, `--elevation`, ...) go to every run; `--no-stop`, `--vm`, `--host` and `--outdir` are
+  alternatives); default is all matrix slots, or the tier's. `--api-check`, `--reboot-check`, `--uninstall-via` and
+  `--launcher-update-check` go to every run; `--update-check` to the slots of `--update-on` (default all). Options it
+  does not know (`--wait-popup N`, `--elevation`, ...) go to every run as given; `--no-stop`, `--vm`, `--host` and `--outdir` are
   refused, since the scheduler sets them or a VM left running would hold its machine.
 * It builds once before the fan-out: Home Chooser (`--build`, else the newest `build/ipk/*.ipk`), the old
   build for `--update-check`, and any missing fixture ipk. The Home Chooser ipks are copied into the
@@ -580,13 +772,32 @@ be that installed app, with its own client permissions. The launcher must declar
 `requiredPermissions: ["org.webosbrew.homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
 web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh
 e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
-declare it and are refused. The run also installs a disposable non-home app,
+declare it and are refused as the first launcher of a run; later in a `--launchers` list they are the plain builds and
+make no API calls. The run also installs a disposable non-home app,
 `org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
 `--launcher fixture:web.demo` (the example launcher, which always declares the permission) is accepted too.
+
+Two modes. The host contract test (`service/test`, `test-launcher-contract`: the real handlers over every case of
+`launcher-contract-cases.json`) owns the methods and their error codes, so on a device the API is a smoke check:
+
+* `--api-check` (`smoke`): reachability, as a launcher calls it. 2a: the appinfo opt-in, `getInfo` (`root`,
+  `permitted`, `isSelectedHome:false`) and `listApps` (names the launcher), then the `request` dialog. 3a: `getInfo`
+  (`isSelectedHome:true`) and one Home-only method, `closeApp` of the running disposable app; with `--uninstall-via
+  alert` also the `uninstallApp` confirmation on LG's alert (cancel, then confirm), then the "already your Home" toast.
+  After a boot, after the update and after the uninstall as below.
+* `--api-check=full`: everything below, every method and error case, as the full tier runs it.
+
+`luna-send -a <id>` makes the hub take the call as that app's id, but it does not carry the app's ACG: a web app's
+calls go through WAM with the groups of its `requiredPermissions`, a root `luna-send` does not. A pass here therefore
+does not prove that a launcher page can make the call. The proof from a real page is step 3d of `fixture:web.demo`:
+the demo's grid comes from its own `listApps` call, so OK opening the runner's app, first in that grid, shows the page
+reached the API.
 
 Every reply that comes from Home Chooser (one with `apiVersion`) is also validated against its method's result schema
 in `api/launcher-v1.openrpc.json`, with the spec lint's own checker (`api/tools/launcher_schema.py`), and recorded as a
 check of its own; a reply of the luna bus itself (no `apiVersion`) is noted as outside the schemas.
+
+The full sweep:
 
 * 2a, Home Chooser open and elevated, the launcher not chosen yet: the launcher's appinfo declares the
   permission and the category; `homechooser-access status` is noted; `getInfo`, `listApps`, `listRunning`,
@@ -675,7 +886,8 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
   The formats are firmware-derived and verified on Beanjar VMs for supported fixtures: see
   `e2e/fixtures/README.md` "What the runner proves". A missing proof is a `FAIL` for every type; on a release where
   `fixtures/qml/support.json` says `false` (12.x: no qml-runner or Qt in the firmware) the qml fixture is skipped with an `XFAIL`.
-* With `--launchers all-fixtures` a failure in one launcher is recorded and the next one runs.
+* With `--launchers all-fixtures` a failure in a later launcher is recorded and the next one runs on the same boot; a
+  failure of the first launcher ends the run (the later ones need its setup), and the cleanup still runs.
 
 ## The update step (`--update-check`)
 
@@ -709,6 +921,35 @@ Asserted after a 45 s settle:
 
 Then steps 4 and 5 run on the updated install.
 
+## Code layout
+
+`homechooser_e2e.py` is the command line only (`hc_e2e.cli.main`); `run_matrix.py` the scheduler. The `hc_e2e`
+package is standard library only:
+
+| Module | What it holds |
+| --- | --- |
+| `cli.py` | the options (`build_parser`), `VmSession` (the VM bring-up and teardown around a run), `main()` |
+| `scenario.py` | `Scenario`: one VM run, its launchers on one boot, composed of the step mixins below; `begin_run`, `end_run`, `run` |
+| `plan.py` | `PHASES` (the scope table), `run_plan()`, `plan_groups()`, `PlanRun` (the plan phase by phase) |
+| `tiers.py` | `TIERS` and what a tier sets, for `run_matrix.py` and pytest |
+| `phase_tests.py`, `dry.py` | the pytest device tests without pytest: options, test ids, `PhaseTests`; the fake device |
+| `recorder.py` | `Recorder` (checks, `run.log`, `results.json`), `SCREENSHOTS` |
+| `timing.py` | `SLOWDOWN`, `seconds()`, `sleep()`, `run()`: always used as `timing.X`, so one assignment or patch reaches every wait |
+| `beanjar.py` | `BeanjarHost`: the VM's machine, locally or over ssh; keys, clicks, screenshots |
+| `device.py` | `Device` (every `ares-*` command line), `RootSession`, the luna-send pty rule, the elevation strategies |
+| `inspector.py` | the web inspector and the page probes |
+| `preflight.py` | the VM settings, waiting for root SSH, removing foreign launchers |
+| `matrix.py` | `MATRIX`, `entry()`, the hosts file |
+| `launchers.py` | `Launcher`, the fixtures and their builds, the demo, the Home Chooser builds for the update |
+| `constants.py`, `releases.py` | ids, paths and product texts; what each release is expected to do |
+| `evidence.py`, `alerts.py`, `checks.py`, `api_spec.py` | log reading and crash classification; our alerts on screen; shared verdicts; the API replies and their schema |
+| `device_api.py` | the author-TV API contract (`--device`) |
+| `steps/` | the Scenario's steps, one mixin per family: `screen`, `state`, `popups`, `preload`, `home_press` (shared by the phases); `baseline`, `choose`, `panel`, `home_proof`, `demo`, `reboot`, `api`, `update`, `removal`, `screensaver` |
+
+`e2e/device/` is the pytest plugin and test module; `e2e/test_*.py` are the offline unit tests (unittest, also
+collected by pytest). The tests patch a name in the module that looks it up (`hc_e2e.steps.api.Inspector`,
+`hc_e2e.cli.Scenario`), and the timing names in `hc_e2e.timing`.
+
 ## System popups and screenshots
 
 * On `w24g-ombre` (9.2.4), `legacy-broadcast-dvb` has intermittently crashed at
@@ -726,6 +967,11 @@ Then steps 4 and 5 run on the updated install.
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
 * `audiooutputd` crash dialog (beanjar#183, closed as stock LG behaviour; Beanjar `docs/research/w22o-audiooutputd-gain-race.md`): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse threads race, and on about 7-9% of boots audiooutputd crashes about 50-56 s after boot; LG shows "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." with YES and NO, and it takes key focus. When the probe key does not move the list, the runner reads the screen (`beanjar elements`); only if the dialog text contains both "[crash] Fault Occured" and "audiooutputd" (the text decides, not the VM name or release) does it dismiss it with NO (a click on the "NO" button, or in keys mode a focus move to NO verified on screen before OK; YES is never pressed), screenshots before and after (`audiooutputd-crash-dialog-before/after`), re-reads the screen to confirm the dialog is gone, records `RECOVERED` with the OCR text and the reference, and retries the key probe once. Any other dialog (`[general]` included) or a crash fault naming another process still stops the run as before. The "no LG [crash] fault dialog or crash fault this boot" check notes an audiooutputd crash as an expected environment fault instead of failing, and an audiooutputd fault entry or crashd line no longer counts as a foreign popup; any other crashing process still fails.
 * Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then a logged capture-unavailable result if both fail. Each fallback is logged with the word FALLBACK.
+  Pictures are taken only at key steps, the `SCREENSHOTS` list in `hc_e2e/recorder.py`: after each Home press verdict
+  (`<label>-verdict`, and `-first-press` when a press did nothing), once per step that has a `FAIL` (`fail-<step>`), after
+  a reboot's checks (`3r-after-reboot`), the final screen (`final`), and every popup or fault as before (foreign popups,
+  `keys-blocked`, the audiooutputd dialog, our alerts and toast, the keys-mode alert proof). Any other label is logged as
+  skipped.
 * On 5.x Home starts `com.webos.app.fullhome` as an overlay over the app in front (foreground stays the app), so step 3/4/5's "Home opens stock" looks for it running.
 * Readiness: before step 1 (and after every reboot) the runner waits up to 5 minutes until root SSH (`beanjar ares-shell --root`, Homebrew Channel's Dropbear on guest port 22) answers and `ares-install -l` lists `org.webosbrew.hbchannel`; each change of state is logged (`ready`, `no-root-ssh`, `no-hbchannel`, `down`). `no-root-ssh` (developer mode answers, root SSH never does) is Homebrew Channel's failsafe mode: its `startup.sh` sets `/var/luna/preferences/webosbrew_failsafe` at the start of a boot and clears it about 12 s after its boot work, so a boot stopped within seconds of starting leaves the flag, and the next boot runs only telnetd (no Dropbear) and clears the flag after 15 s. Seen 2026-10-24 on `w20l-jhericurl`, `w22p-mullet` and `w22o-number1` after a 9 s boot each (saved logs `20261024T0031..0038Z-stop`: `boot-done` false, dmesg ends at 8.7-9.7 s; the next boot's `ps.txt` has telnetd and no `bin/dropbear -R`); `w24g-ombre`'s short boot ran 22 s and it was unaffected. On `no-root-ssh` at setup the runner restarts the VM once and waits again.
 * Home Chooser is an overlay window (appinfo `defaultWindowType`), and surface-manager closes an overlay after a stretch without key input: measured on 6.5.2 (2026-10-24), about 90 s after the launch with no key and about 120 s after the last key; a close and relaunch alone does not reset it; sam logs `getAppLifeStatus ... "reason":"userTimeout"` and WAM `killApp reason : userTimeout`. On 9.2.1 the same close was seen about 90 s after the last key. The runner presses a key only while it can read our page; before the list keys of step 2 it opens Home Chooser again (and notes the close and its reason) if the page is gone, and anywhere else it stops rather than press a key at whatever is beneath.
