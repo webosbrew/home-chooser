@@ -1,2 +1,3 @@
 results/
 hosts.local.toml
+.pytest_cache/

@@ -7,6 +7,8 @@
 # VM name exists on more than one machine.
 
 default = "pi"
+# The VM of `run_matrix.py --tier smoke`: a VM name or a release (its matrix slot).
+default_slot = "9.x"
 
 [hosts.pi]
 ssh = "raspberrypi"            # an ssh config alias (BatchMode); `local = true` when beanjar runs on this PC

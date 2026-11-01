@@ -5,12 +5,14 @@ a machine are serialised (at most one VM running on it) and machines run in para
 subprocess of homechooser_e2e.py.  See e2e/README.md "Several machines".
 
     python3 -I e2e/run_matrix.py --dry-run                 # the plan for the whole matrix
+    python3 -I e2e/run_matrix.py --build --tier release    # a release pass (e2e/README.md "Tiers")
     python3 -I e2e/run_matrix.py --build --vms 5.x,9.x,11.x --reboot-check
 
---vms (names or releases) defaults to the runner's MATRIX.  Options the scheduler does not know are
-passed to every run.
+--vms (names or releases) defaults to the runner's MATRIX.  --tier sets defaults only: an explicit option
+wins.  Options the scheduler does not know are passed to every run.
 """
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -22,11 +24,17 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import homechooser_e2e as e2e  # noqa: E402
+import hc_e2e.beanjar  # noqa: E402
+import hc_e2e.launchers  # noqa: E402
+import hc_e2e.matrix  # noqa: E402
+import hc_e2e.plan  # noqa: E402
+import hc_e2e.recorder  # noqa: E402
+from hc_e2e.tiers import TIERS, apply_tier, launcher_specs, run_plan_for, updates  # noqa: E402
 
 RUNNER = [sys.executable, '-I', os.path.join(HERE, 'homechooser_e2e.py')]
+# --pytest: each run is one pytest session of the device tests (e2e/device), the runner's flags passed through
+PYTEST = [sys.executable, '-I', '-m', 'pytest', os.path.join(HERE, 'device'), '-v', '-p', 'no:cacheprovider']
 REFUSED_FLAGS = ('--vm', '--host', '--host-mode', '--host-device', '--outdir', '--no-stop', '--list')
-
 
 # ---------------------------------------------------------------------------------------------
 # Planning
@@ -34,13 +42,13 @@ REFUSED_FLAGS = ('--vm', '--host', '--host-mode', '--host-device', '--outdir', '
 def wanted_vms(names):
     """Release selects its first slot; an explicit VM restricts the slot to that VM."""
     if not names:
-        return [(m[0], m[1]) for m in e2e.MATRIX]
+        return [(m[0], m[1]) for m in hc_e2e.matrix.MATRIX]
     out, seen = [], set()
     for name in names:
-        row = next((m for m in e2e.MATRIX if name == m[0] or name in e2e.candidates(m[1])), None)
+        row = next((m for m in hc_e2e.matrix.MATRIX if name == m[0] or name in hc_e2e.matrix.candidates(m[1])), None)
         if row is None:
-            e2e.entry(name)
-        key = e2e.candidates(row[1])
+            hc_e2e.matrix.entry(name)
+        key = hc_e2e.matrix.candidates(row[1])
         if key not in seen:
             seen.add(key)
             out.append((row[0], row[1] if name == row[0] else name))
@@ -71,7 +79,7 @@ class WorkPool(dict):
             others = set(slot['choices']) - {host}
             return exclusive.get(host, 0) - min(exclusive.get(h, 0) for h in others) if others else 0
         i, slot = min(available, key=lambda pair: (
-            all(v in e2e.KEEP_LAUNCHER_VMS for v in pair[1]['choices'][host]),
+            all(v in hc_e2e.matrix.KEEP_LAUNCHER_VMS for v in pair[1]['choices'][host]),
             opportunity(pair[1]), -len(pair[1]['choices']), pair[0]))
         pending.pop(i)
         return {'host': host, 'release': slot['release'], 'vm': slot['choices'][host][0]}
@@ -99,7 +107,7 @@ def plan(wanted, cfg, found, errors=None):
             pinned[vm] = host
     for release, alternatives in wanted:
         choices = {}
-        for vm in e2e.candidates(alternatives):
+        for vm in hc_e2e.matrix.candidates(alternatives):
             where = [h for h in cfg['hosts'] if vm in found.get(h, ())]
             if vm in pinned:
                 where = [pinned[vm]]
@@ -111,8 +119,8 @@ def plan(wanted, cfg, found, errors=None):
                 choices.setdefault(where[0], []).append(vm)
         if choices:
             slots.append({'release': release, 'choices': choices})
-        elif not any('is on several machines' in p and any(v in p for v in e2e.candidates(alternatives)) for p in problems):
-            problems.append('%s is on no machine%s' % (' | '.join(e2e.candidates(alternatives)),
+        elif not any('is on several machines' in p and any(v in p for v in hc_e2e.matrix.candidates(alternatives)) for p in problems):
+            problems.append('%s is on no machine%s' % (' | '.join(hc_e2e.matrix.candidates(alternatives)),
                 ' that answered (no answer: %s)' % ', '.join(sorted(errors)) if errors else ''))
     pool = WorkPool(slots)
     pending, clocks = list(slots), {h: 0 for h in cfg['hosts']}
@@ -296,35 +304,35 @@ def write_summary(outroot, queues, problems, info):
 
 # ---------------------------------------------------------------------------------------------
 def host_lister(cfg):
-    return lambda name: [r['name'] for r in e2e.BeanjarHost.from_config(cfg, name).list_vms()]
+    return lambda name: [r['name'] for r in hc_e2e.beanjar.BeanjarHost.from_config(cfg, name).list_vms()]
 
 
 def host_busy(cfg):
-    return lambda name: e2e.BeanjarHost.from_config(cfg, name).running_vms()
+    return lambda name: hc_e2e.beanjar.BeanjarHost.from_config(cfg, name).running_vms()
 
 
 def build_once(args, outroot, cfg):
     """Everything a run would otherwise build or pick for itself, done once before the fan-out; the
     ipks are copied into the matrix directory, so a rebuild in the tree during the runs changes nothing."""
     os.makedirs(os.path.join(outroot, 'ipk'))
-    rec = e2e.Recorder(os.path.join(outroot, 'ipk'))
+    rec = hc_e2e.recorder.Recorder(os.path.join(outroot, 'ipk'))
     try:
-        hc = args.hc_ipk or e2e.current_home_chooser_ipk(rec, args.build)
+        hc = args.hc_ipk or hc_e2e.launchers.current_home_chooser_ipk(rec, args.build)
         args.hc_ipk = shutil.copy(hc, os.path.join(outroot, 'ipk'))
         rec.say('Home Chooser ipk: %s (from %s)' % (args.hc_ipk, hc))
-        if args.update_check and not args.old_ipk:
-            args.update_from = args.update_from or e2e.default_update_ref()
-            old, tmp = e2e.build_old_home_chooser(args.update_from, rec)
+        if args.update_check and not args.old_ipk:  # a tier's update_on: only some runs use it
+            args.update_from = args.update_from or hc_e2e.launchers.default_update_ref()
+            old, tmp = hc_e2e.launchers.build_old_home_chooser(args.update_from, rec)
             os.makedirs(os.path.join(outroot, 'ipk', 'old'))
             args.old_ipk = shutil.copy(old, os.path.join(outroot, 'ipk', 'old'))
             shutil.rmtree(tmp, ignore_errors=True)
             rec.say('old Home Chooser ipk (%s): %s' % (args.update_from, args.old_ipk))
-        specs = (e2e.fixture_specs() if args.launchers == 'all-fixtures' else args.launchers.split(',')) \
-            if args.launchers else [args.launcher or 'fixture:web.normal']
-        for sp in [s for s in specs if s]:  # builds missing fixture ipks now, not in N runs at once
-            e2e.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say, api=args.api_check)
+        specs = launcher_specs(args)
+        for i, sp in enumerate(specs):  # builds missing fixture ipks now, not in N runs at once
+            hc_e2e.launchers.make_launcher(sp, args.launcher_ipk if len(specs) == 1 else None, rec.say,
+                              api=hc_e2e.launchers.api_build(sp, i, args.api_check))
         if args.api_check:  # the permission-built web fixtures and the disposable app
-            e2e.api_fixture_ipks(rec.say)
+            hc_e2e.launchers.api_fixture_ipks(rec.say)
     finally:
         counts = rec.finish()
     if counts.get('FAIL'):
@@ -332,16 +340,38 @@ def build_once(args, outroot, cfg):
 
 
 def runner_command(args, rest):
+    """command(run) -> the argv of one run: homechooser_e2e.py, or with --pytest the device tests, which get
+    the same runner flags (--hc-arg) and write junit.xml and report.html into the run's directory."""
     def command(run):
-        argv = RUNNER + ['--vm', run['vm'], '--host', run['host'], '--outdir', run['outdir']]
+        argv = runner_flags(run)
+        if getattr(args, 'pytest', False):
+            return PYTEST + argv[:6] + ['--hc-arg=' + x for x in argv[6:]]
+        return RUNNER + argv
+
+    def runner_flags(run):
+        argv = ['--vm', run['vm'], '--host', run['host'], '--outdir', run['outdir']]
         for flag, value in (('--hosts-file', args.hosts_file), ('--hc-ipk', args.hc_ipk),
                             ('--launcher', args.launcher), ('--launchers', args.launchers),
                             ('--launcher-ipk', args.launcher_ipk), ('--update-from', args.update_from),
                             ('--old-ipk', args.old_ipk)):
             if value:
                 argv += [flag, value]
-        return argv + (['--update-check'] if args.update_check else []) + (['--api-check'] if args.api_check else []) + rest
+        if updates(run, args.update_on):
+            argv.append('--update-check')
+        if args.api_check:
+            argv.append('--api-check' if args.api_check in (True, 'smoke') else '--api-check=' + args.api_check)
+        if args.reboot_check:
+            argv.append('--reboot-check' if args.reboot_check == 'auto' else '--reboot-check=' + args.reboot_check)
+        if args.uninstall_via:
+            argv += ['--uninstall-via', args.uninstall_via]
+        if args.launcher_update_check:
+            argv.append('--launcher-update-check')
+        return argv + rest
     return command
+
+
+def command_prefix(args):
+    return PYTEST if getattr(args, 'pytest', False) else RUNNER
 
 
 def interrupted(*_):
@@ -351,9 +381,16 @@ def interrupted(*_):
 def main(argv=None, lister=None, busy=None):
     ap = argparse.ArgumentParser(description='Home Chooser E2E on several VMs, one at a time per Beanjar machine',
                                  epilog='Other options go to every run of homechooser_e2e.py.', allow_abbrev=False)
-    ap.add_argument('--vms', default='', help="comma list of VM names or releases (default: the runner's matrix)")
+    ap.add_argument('--tier', choices=sorted(TIERS), default=None,
+                    help='smoke (one VM, web.normal, no reboot), release (every slot, web normal+overlay on one boot, '
+                         'reboot, one update check) or full (every slot, all six fixtures, full API): the defaults of '
+                         'the options below; an option given here wins (e2e/README.md "Tiers")')
+    ap.add_argument('--vms', default=None, help="comma list of VM names or releases (default: the runner's matrix)")
     ap.add_argument('--hosts', default='', help='comma list of host names (default: all configured hosts)')
     ap.add_argument('--dry-run', action='store_true', help='print the plan and the commands, run nothing')
+    ap.add_argument('--pytest', action='store_true',
+                    help='run each VM as a pytest session of e2e/device (one test per phase, junit.xml and report.html '
+                         'in its directory); needs pytest: run this with the venv of e2e/requirements.txt')
     ap.add_argument('--hosts-file', default=None, help='a hosts file instead of e2e/hosts.toml + e2e/hosts.local.toml')
     ap.add_argument('--wait-idle', type=int, default=180,
                     help='seconds to wait for a machine to have no VM running before a run is refused (default 180)')
@@ -366,15 +403,28 @@ def main(argv=None, lister=None, busy=None):
     ap.add_argument('--update-check', action='store_true')
     ap.add_argument('--update-from', default=None)
     ap.add_argument('--old-ipk', default=None)
-    ap.add_argument('--api-check', action='store_true', help='passed to every run; its fixtures are built once first')
+    ap.add_argument('--update-on', default=None,
+                    help="with --update-check: the slots that run it, VM names or releases, 'all' (the default "
+                         "without --tier) or 'none'")
+    ap.add_argument('--api-check', nargs='?', const='smoke', choices=['smoke', 'full'], default=None,
+                    help='passed to every run; its fixtures are built once first')
+    ap.add_argument('--reboot-check', nargs='?', const='auto', choices=['auto', 'all'], default=None,
+                    help='passed to every run')
+    ap.add_argument('--uninstall-via', choices=['later', 'alert'], default=None, help='passed to every run')
+    ap.add_argument('--launcher-update-check', action='store_true', help='passed to every run')
     args, rest = ap.parse_known_args(argv)
+    if args.pytest and not args.dry_run and not importlib.util.find_spec('pytest'):
+        ap.error('--pytest needs pytest: python3 -m venv .venv && .venv/bin/pip install -r e2e/requirements.txt, '
+                 'then .venv/bin/python e2e/run_matrix.py ...')
     bad = [a for a in rest if a.split('=')[0] in REFUSED_FLAGS]
     if bad:
         ap.error('the scheduler sets these per run or cannot allow them (a VM left running holds its machine): %s'
                  % ' '.join(bad))
-    cfg = select_hosts(e2e.load_hosts(args.hosts_file), args.hosts)
+    loaded = hc_e2e.matrix.load_hosts(args.hosts_file)
+    apply_tier(args, loaded)
+    cfg = select_hosts(loaded, args.hosts)
     found, errors = discover(cfg, lister or host_lister(cfg))
-    queues, problems = plan(wanted_vms([v for v in args.vms.split(',') if v]), cfg, found, errors)
+    queues, problems = plan(wanted_vms([v for v in (args.vms or '').split(',') if v]), cfg, found, errors)
     for h, e in sorted(errors.items()):
         print('warning: host %s did not answer: %s' % (h, e))
     for p in problems:
@@ -384,12 +434,18 @@ def main(argv=None, lister=None, busy=None):
     command = runner_command(args, rest)
     if args.dry_run:
         print('plan estimate (actual workers claim slots as they finish; one VM at a time per machine; machines in parallel); results would go to %s' % outroot)
+        if args.tier:
+            print('tier %s' % args.tier)
+        if args.pytest:
+            print('each run: %s <the flags below>' % ' '.join(PYTEST))
         for host, q in queues.items():
             h = cfg['hosts'][host]
             print('%s (%s): %d run(s)' % (host, 'local' if h.get('local') else 'ssh ' + h['ssh'], len(q)))
             for i, run in enumerate(q, 1):
                 run['outdir'] = os.path.join(outroot, run['vm'])
-                print('  %d. %-5s %-18s %s' % (i, run['release'], run['vm'], ' '.join(command(run)[len(RUNNER):])))
+                print('  %d. %-5s %-18s %s' % (i, run['release'], run['vm'], ' '.join(command(run)[len(command_prefix(args)):])))
+                for line in hc_e2e.plan.describe_plan(run_plan_for(run, args), launcher_specs(args)):
+                    print('       ' + line)
         return 0
     if not queues:
         print('nothing to run')
@@ -416,8 +472,8 @@ def main(argv=None, lister=None, busy=None):
                 '%s/%s' % (r['host'], r['vm']) for q in m.results().values() for r in q if r['vm'] in left))
     queues = m.results()
     write_summary(outroot, queues, problems, {
-        'hc_ipk': args.hc_ipk, 'old_ipk': args.old_ipk, 'runner flags': ' '.join(command({'vm': '<vm>', 'host': '<host>',
-                                                                                    'outdir': '<dir>'})[len(RUNNER):])})
+        'tier': args.tier or '-', 'update on': args.update_on or '-', 'hc_ipk': args.hc_ipk, 'old_ipk': args.old_ipk, 'runner flags': ' '.join(command({'vm': '<vm>', 'release': '<release>', 'host': '<host>',
+                                                                                    'outdir': '<dir>'})[len(command_prefix(args)):])})
     print('summary: %s' % os.path.join(outroot, 'summary.md'))
     runs = [r for q in queues.values() for r in q]
     if m.stopping.is_set():
