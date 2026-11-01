@@ -86,13 +86,13 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
 
 * `setSystemSettings` replaces the whole `defaultApps` object, so the other entries (11.2.0 ships
   `kidsApp` in it) are read first and written back. `setDefaultApp` changes only `home`
-  ([Settings app](research/home-key-and-home-app.md#settings-app)).
+  ([Writing the choice](research/home-key-and-home-app.md#writing-the-choice)).
 * The profile override is `/var/webos-profile/override/org.webosbrew.homechooser.json`, holding the
   current `defaultApps` profile with `categories.home` set to the chosen id, the other keys and
   categories kept and the `_`-prefixed keys dropped. 10.3.1 replaces the second-level object
   wholesale, so the full `categories` has to be there. The compositor's home id is the profile's,
   not the record's, which is why the override is needed for the Home key to behave on these
-  releases ([10.3.1 and 11.2.0](research/home-key-and-home-app.md#1031-and-1120-1)). After the
+  releases ([10.3.1 and 11.2.0](research/home-key-and-home-app.md#1031-and-1120)). After the
   rescan the app reads `getProfiles` again and reports an error if `categories.home` is not the
   chosen id.
 * The previous home is the record's `home`, else the profile's, else `com.webos.app.home`. If it
@@ -101,8 +101,9 @@ The release comes from `/etc/os-release`, read through the service (`VERSION_ID`
   `seniorhome`, and the other stock ids), on any release. On 11.x and 12.x the watcher can close
   `com.webos.app.home` later, after the chosen launcher is in front; see
   [The stock home is not preloaded](#the-stock-home-is-not-preloaded).
-* On 6.x–9.x, the filter launches an explicit chosen app ID. This avoids the old first-write
-  `defaultApps` subscription issue in SAM, so no SAM restart is needed. Enabling validates the
+* On 6.x–9.x, the filter launches an explicit chosen app ID. This avoids SAM's first-write
+  `defaultApps` subscription issue on webOS 6
+  ([study](research/home-key-and-home-app.md#writing-the-choice)), so no SAM restart is needed. Enabling validates the
   stock source, writes the flag and boot entry, then applies the filter live; restoring LG Home
   restores the exact stock list before removing generated files.
 
@@ -112,15 +113,14 @@ are in place, closes a previous custom Home if necessary, and refreshes the live
 ### Live changes on webOS 6–9
 
 The first apply and later changes take effect immediately. Hook status always returns `reboot=no`.
-The retained service `rebootPrompt` compatibility endpoint refuses with `notPending`; the app does
-not call it. [The native implementation and recovery policy](home-key-hook.md) replace the earlier
-QML mounts, generated boot cache, compositor restart and restart prompt.
+The service's `rebootPrompt` compatibility endpoint refuses with `notPending`; the app does
+not call it. See [the native implementation and recovery policy](home-key-hook.md).
 
 ## Persistence
 
-On 11.2.0 the record's `home` can be lost at any boot: `accountmanager` calls `setDefaultApp` for
-another category 12 to 17 s into every boot and, racing `sam`, the write can drop the other entries
-([study](research/home-key-and-home-app.md#results-2026-10-19)). A write made once is not enough, so
+On 9.x and later the record's `home` can be lost at any boot: `accountmanager` calls `setDefaultApp`
+for another category early in every boot and, racing `sam`, the write can drop the other entries
+([study](research/home-key-and-home-app.md#the-records-home-can-be-lost-at-boot-921-and-later)). A write made once is not enough, so
 Home Chooser keeps its own copy of the choice and enforces it.
 
 * **The stored choice** is `/var/lib/webosbrew/homechooser/home`, a plain text file holding the app
@@ -175,7 +175,7 @@ Home Chooser keeps its own copy of the choice and enforces it.
   replace until the settings service restarts; `deleteSystemSettings` and `resetSystemSettings`
   are no-ops), but a stored `null` reads as unset and `launchDefaultApp {"category":"home"}`
   launches the profile's stock home, live and after a restart
-  ([study](research/home-key-and-home-app.md)). Everywhere the record's `home` is read, `null`,
+  ([study](research/home-key-and-home-app.md#sub-keys-of-the-settings-record)). Everywhere the record's `home` is read, `null`,
   `""` and a missing key mean "not set": with a stored choice that is a mismatch the watcher
   repairs, without one there is nothing to do.
 * **The screen** shows none of this; the init.d link, the watcher and its log are for SSH users
@@ -184,7 +184,6 @@ Home Chooser keeps its own copy of the choice and enforces it.
 Tests: `make -C service test-watcher` runs the C policy and child-transport/runtime tests under
 qemu-arm with firmware libraries and a fake transport. It covers record merging, backoff,
 per-version restore, package removal, notifications, preload retry/settle and foreground safety.
-The [port inventory](research/native-watcher-port.md) maps the removed shell checks to these tests.
 `service/scripts/tests/test-homechooser.sh` verifies boot enqueue, legacy staging and cached fallback.
 
 ## When apps are removed
@@ -222,7 +221,7 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
 | 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
-| 6.x to 9.x | Set a stock launcher in the record, keeping other entries, then `homechooser-homekey refresh stock` restores the exact stock keyFilters array with `volatile:true` | LG Home opens immediately; verified readback precedes deletion of unused generated JS |
+| 6.x to 9.x | Set a stock launcher in the record, keeping other entries, then `homechooser-homekey refresh stock` restores the exact stock keyFilters array with `volatile:true` and the home gate is unmounted | LG Home opens immediately; verified readback precedes deletion of unused generated JS |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
@@ -246,9 +245,7 @@ stopped before anything is missing), when the choice is changed to another app, 
 starts and finds the app already missing (a boot is not a new removal). The call uses root `luna-send -a com.webos.applicationManager`, under a 5 s timeout; its reply is logged (`notification createAlert: ...`) and
 nothing waits on it. A reply that says `returnValue:false` (a refusal) is logged
 (`the alert was refused`) and the same message is shown as a toast; no reply is logged and not
-retried. `HOMECHOOSER_NOTIFY=0` turns it off. What the notification service really does with the
-call is not tested here; it was read from the firmware (5.6.1 to 11.2.0) and has not been run on a
-device.
+retried. The notification can be turned off at build time (`notify` in `hc_watch_config()`).
 
 On 10.x and later clearing `home` is the `"home": null` write of `removeHomeFromRecord()` (see
 [Persistence](#persistence)); the watcher reads the record back and logs when `home` is still set.
@@ -264,14 +261,15 @@ and its native Home-key code restores configd without spawning a removed binary.
 gone it does, in order:
 
 1. Removes launcher access and reverts the platform record/profile as above.
-2. On 6–9, restores the exact stock filter array volatile and verifies its readback. Failure keeps
-   the source files and state available for retry.
+2. On 6–9, restores the exact stock filter array volatile and verifies its readback, then
+   unmounts the [home gate](home-gate.md#mount-lifecycle-daemon). Failure keeps the source files
+   and state available for retry (exit 1, unit restart).
 3. Removes the choice, flag, unused generated versions, saved stock list and init.d link. Legacy
    watcher restore copies and old cache markers are cleaned up too.
 4. Shows “Home Chooser was removed. The Home button opens LG Home again.” through a best-effort
    toast using the fixed privileged Luna identity, then exits successfully.
 
-No GUI restart or unmount is required. Runtime copies on all releases provide crash/restart recovery.
+No GUI restart is required. Runtime copies on all releases provide crash/restart recovery.
 
 Every step tests before it writes, so a second run (a unit restart half way, or both apps gone)
 changes nothing: with the record's `home` already the stock id (5.x to 9.x) or unset (10.x and later: null, empty or missing), no write
@@ -284,8 +282,7 @@ Both removed, in either order and at any spacing while the watcher runs, ends at
 state (no choice file, flag or `init.d` link, the record `home` unset, the override gone, the
 unit stopped, the stock home's preload policy enabled): the watcher looks at Home Chooser first in
 every check and again after the chosen app's confirmation wait, so a Home Chooser removed during that
-wait is found whether or not its own `listApps` message arrives (before this was added, a lost
-message left the choice file, the flag and the link until the 5 min check). It takes about 15 s per
+wait is found whether or not its own `listApps` message arrives. It takes about 15 s per
 removal it has to confirm, one after the other, so up to about 30 s after the second removal; a
 watcher stopped before that (a TV or VM powered off right after the second removal) leaves the
 state described below. Home Chooser first (or both at once, which is checked in that order) is the full
@@ -318,7 +315,7 @@ opened after a reinstall, through `homechooser watch`):
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. Before 10.x the override file is not
   read. `null`, `""` and a missing key are no id.
 * An id counts as not installed only if `getAppInfo` answers `returnValue:false` twice,
-  `HOMECHOOSER_CONFIRM_DELAY` (15 s) apart, and its `appinfo.json` is in none of the install
+  15 s apart (`confirm_ms`), and its `appinfo.json` is in none of the install
   directories above. `com.webos.app.home` and `com.webos.app.fullhome` are never acted on, and an
   id `getAppInfo` does not answer for is left as it is (logged `getAppInfo did not answer`).
 * An id that is installed is left alone even though no choice is stored: someone may have chosen it
@@ -341,13 +338,6 @@ On 6–9 the native boot role can perform this check even without a choice. Lega
 boot entries start it when a choice exists; explicit `watch` and cached uninstall recovery start
 it regardless of a stored choice.
 
-What only a live test settles: that
-`getAppInfo` of an uninstalled id answers `returnValue:false` on every release, and that `sam`
-answers it at boot when the init.d entry runs; how `listApps` change messages arrive (only their
-arrival is used) and that `timeout` accepts `timeout 10 <command>` in the images' busybox;
-and the real uninstall path through Homebrew Channel and `ares-install --remove`, including that
-an update of Home Chooser does not look like an uninstall for 15 s.
-
 ## The stock home is not preloaded
 
 LG's stock home, `com.webos.app.home`, is kept resident by the preload manager (and on 5.x to 9.x
@@ -359,11 +349,19 @@ home is chosen the watcher (webOS 6 and later) runs, as root:
 luna-send -n 1 luna://com.webos.service.preloadmanager/setPreloadPolicy '{"application":{"id":"com.webos.app.home","isEnabled":false}}'
 ```
 
-The watcher closes the stock home separately on 11.x and 12.x, after a safe launcher foreground
-event and a successful preload-policy call. It sets the policy back to `"isEnabled":true` when it
-stops applying. Never `"permanent"`: the preload manager keeps the policy in memory, nothing is
-written, and after a reboot the stock policy is back until the watcher re-applies it. The memory
-manager is not touched.
+It sets the policy back to `"isEnabled":true` when it stops applying. Never `"permanent"`: the
+preload manager keeps the policy in memory, nothing is written, and after a reboot the stock policy
+is back until the watcher re-applies it. The memory manager is not touched. This is the one runtime
+policy call Home Chooser makes on another service; it persists nothing.
+
+What happens to a stock home that is already running depends on the release:
+
+| Release | Stock home while a launcher is chosen |
+| --- | --- |
+| 5.x | Left alone: no preload call, no close |
+| 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted |
+| 10.x | Preload off, never closed: it stays resident until the next reboot |
+| 11.x, 12.x | Preload off, closed once after the chosen launcher is safely in front |
 
 * **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
   (so once per boot, and once more after a restart of the unit), when the choice changes between a
@@ -374,72 +372,41 @@ manager is not touched.
   before the choice file is removed), and the Home Chooser uninstall path, which runs from the
   `/tmp` copy. A restart after a failure (exit 1) leaves the policy as it is; the new instance
   applies it again.
-* **At boot.** The preload manager may not answer when the init.d entry starts. The policy call runs
-  in the background, retried every `HOMECHOOSER_PRELOAD_RETRY` seconds (10) up to
-  `HOMECHOOSER_PRELOAD_TRIES` times (12) until it answers `returnValue:true`. The existing
-  `HOMECHOOSER_PRELOAD_SETTLE` delay (45 seconds) then passes before a close is eligible. No
-  stock-home close is tied to that timer. On 6.x to 10.x there is no close at boot or later.
+* **At boot.** The preload manager may not answer when the boot entry starts. The policy call is
+  retried every 10 s (`preload_retry_ms`), up to 12 times (`preload_tries`), until it answers
+  `returnValue:true`. A 45 s settle delay (`preload_settle_ms`) then passes before an 11+ close is
+  eligible.
+* **Best effort.** Each call has a 5 s bound and its reply goes to `/tmp/homechooser-home.log`. A
+  refusal (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied
+  call) or a hang changes nothing else: the home switch, the restore and the uninstall cleanup go
+  on. The defaults are in `hc_watch_config()` ([watcher/core.c](../service/src/watcher/core.c)).
+* **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
+  `com.webos.app.home` is not the visible home; the preload lists of 5.6.1 name both homes, and the
+  5.x restore path hands the Home key either of them, so a policy change would have risk and no
+  gain.
+* **Why a plain close does not work on 6.x to 10.x.** `sam` relaunches the stock home as the
+  idle/last-input app whenever the foreground empties: `closeByAppId` is followed by `APP_CLOSED`,
+  `LAUNCH_LASTAPP {"status":"run_to_launch_last_app"} on_foreground_null` and
+  `NL_APP_LAUNCH_BEGIN {"app_id":"com.webos.app.home","caller_app_id":"last_input_handler","mode":"last_input"}`
+  within about 2 s, with `getPreloadPolicy` still reading `isEnabled:false`, so it is not the preload
+  manager. A close frees nothing and only makes it restart. On 6–9 the home gate answers that
+  relaunch instead of the stock binary. On 10.x Home is a Flutter app folder with no binary to
+  replace, so the watcher never closes it and logs `webOS 10: stock home left running until the next
+  reboot (sam relaunches it as the last-input app)`. After a reboot it can be gone, because its
+  preload is off from boot. The app never closes any stock home during selection on any release.
 * **11.x and 12.x: close after the launcher is in front.** The watcher subscribes to SAM's
   `getForegroundAppInfo` and `getAppLifeEvents`. A normal launcher qualifies when SAM reports it
   as foreground. An overlay qualifies only on its own launch event and only if SAM reports a
   nonstock full-screen card beneath it. With LG Home or a blank foreground beneath an overlay,
   the close is skipped. The watcher makes at most one close attempt per boot or choice change.
-  If SAM relaunches LG Home, it logs that event and does not close it again in that boot. The
-  selected launcher's page and completion toast can therefore remain visible during selection.
-* **Best effort.** Each call runs under `timeout 5` when the image has it (as the app checks do),
-  its reply goes to `/tmp/homechooser-home.log`, and only the boot call is retried: a refusal
-  (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied call) or a
-  hang costs at most 5 s per call and changes nothing else: the home switch, the restore and the
-  uninstall cleanup go on. `HOMECHOOSER_PRELOAD=0` turns the feature off.
-* **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
-  `com.webos.app.home` is not running, so there is nothing to free; the preload lists of 5.6.1 name
-  both homes, and the 5.x restore path hands the Home key hook either of them, so a policy change would
-  have risk and no gain. The watcher makes no preload call on 5.x.
-* **6.x to 10.x: the stock home is not closed, for any launcher.** On these releases `sam` relaunches
-  the stock home immediately as the "last input" app (`NL_APP_LAUNCH_BEGIN`, `caller_app_id:
-  last_input_handler`, mode `last_input`, right after `LAUNCH_LASTAPP run_to_launch_last_app`
-  on_foreground_null) whenever it is closed. Measured on 9.2.1 and 8.3.0 (about 89 MB) and on 10.3.1
-  (about 75 MB; the stock home was back 1.5 s after the close and stayed for 60 s) with an overlay
-  launcher (Dock), and again on 10.3.1 and 9.2.1 with a normal launcher: it was back within about 2 s.
-  On 10.3.1 the log shows `closeByAppId` from `com.webos.lunasend`, `APP_CLOSED` for the stock home,
-  `LAUNCH_LASTAPP {"status":"run_to_launch_last_app"} on_foreground_null`, then
-  `NL_APP_LAUNCH_BEGIN {"app_id":"com.webos.app.home","caller_app_id":"last_input_handler","mode":"last_input"}`;
-  the preload manager's only launch in that window was `com.webos.app.livetv`, and `getPreloadPolicy`
-  still read `isEnabled:false` for the stock home, so it is not the preload manager. The close frees
-  nothing and only makes it restart, so on 6.x to 10.x the watcher never closes the stock home, at boot
-  or on a change; it still sets the preload policy and logs `webOS <major>: stock home left running until
-  the next reboot (sam relaunches it as the last-input app)`. The app never closes any stock home
-  during selection on any release.
+  If SAM relaunches LG Home, it logs that event and does not close it again in that boot.
 
-  So on 6.x to 10.x **the stock home can stay resident after a launcher is chosen, until the next
-  reboot**. On 6–9 the [home gate](home-gate.md) now replaces the binary SAM relaunches, and the
-  daemon closes stock Home once after mounting it; the rest of this paragraph describes 10.x and
-  6–9 without the gate. It is not a defect of the choice: the system puts it back at once whatever is done to it.
-  After a reboot it can be gone, because the watcher turns the stock home's preload off at every boot
-  (in memory only, never `permanent`) and nothing closes and reopens it any more. The 6–9 live
-  filter needs no reboot; stock Home residency is independent of activation. On 5.x nothing is done (below). On 11.x and 12.x the close does stick (11.2.0 and 12.0.0, with
-  Dock too), so it is kept there.
-* **Measured (2026-10-23, Beanjar VMs).** Root `luna-send` may call `getPreloadPolicy` and
-  `setPreloadPolicy`; `getPreloadPolicy` answers `{"applications":[{"id":"com.webos.app.home",
-  "isEnabled":...,...},...]}` (an empty list right after boot). On 9.2.1 with the policy disabled, a
-  force-closed stock home (Homebrew Channel in front) stayed closed for 120 s and about 80 MB was
-  freed; re-enabled, the preload manager launched it again about 8 s later; after a reboot the
-  policy was back to enabled. End-to-end with `--reboot-check`: 11.2.0 (103 MB freed) and 12.0.0
-  (71 MB) kept the stock home closed in those earlier runs; 7.x, 8.3.0, 9.2.1 and 10.3.1 pass
-  with the stock home left running (for every launcher since 2026-10-24, as above); 5.6.1 makes no preload call.
-
-  The 2026-10-26 11.2.0 probe showed why the close must wait: with a normal fixture in the
-  foreground, LG Home closed and stayed down. Closing the fixture then produced SAM
-  `LAUNCH_LASTAPP ... on_foreground_null` and an `NL_APP_LAUNCH_BEGIN` for LG Home from
-  `last_input_handler` about one second later. With the web overlay over LG Home, closing LG Home
-  closed the overlay and caused the same fallback. With Homebrew Channel beneath that overlay,
-  the stock close stuck. On 12.0.0 SAM likewise recorded `on_foreground_null` and a
-  `last_input_handler` Home launch after the normal launcher closed; the old Home PID was gone
-  from `/proc` although SAM briefly kept it in `running`. Closing LG Home beneath the overlay
-  again produced the idle fallback and left an empty full-screen foreground. These observations
-  are why a running overlay alone is insufficient evidence for a close. In the 12.0.0 full fixture
-  matrix, the web overlay over Homebrew Channel stayed visible after the watcher closed LG Home;
-  no live stock-home process remained.
+  The close has to wait because of the same idle fallback. Closing LG Home while nothing else is
+  full-screen makes SAM relaunch it from `last_input_handler` about a second later
+  (`LAUNCH_LASTAPP ... on_foreground_null`), and closing it beneath an overlay also closes the
+  overlay. Closing it during selection would let the compositor close Home Chooser's own panel
+  before its completion toast. With a nonstock full-screen app in front, or beneath the overlay,
+  the close sticks.
 
 ## Restoring the stock home
 
@@ -470,57 +437,7 @@ with the reply or the error. The screen does not show them; the app writes each 
 service's own text. An absent record (`There is no matched result from DB`) is treated as "not
 set", not as a failure.
 
+
 ## Build and test
 
-```
-cd app
-npm install
-npm test                # Enact's jest
-npm run pack-p          # production build into app/dist
-npm run package         # ares-package into build/ipk (git-ignored)
-```
-
-The paths of the build machine are variables. Their defaults are one developer's layout; set them on
-the `make` command line (`make -C service SDK=/opt/sdk`) or in the environment, which `npm run
-package` passes through to `make -C service`:
-
-| Variable | Default | Used by |
-| --- | --- | --- |
-| `SDK` | `/opt/arm-webos-linux-gnueabi_sdk-buildroot` | `service/Makefile`: the webOS buildroot SDK |
-| `SYSROOT` | `$(SDK)/arm-webos-linux-gnueabi/sysroot` | `service/Makefile` |
-| `CROSS` | `$(SDK)/bin/arm-webos-linux-gnueabi-` | `service/Makefile` (gcc, strip) and `service/test/check-abi.sh` (readelf, nm; `READELF` and `NM` override one tool) |
-| `FIRMWARES` | `$OPENHOUSE_FIRMWARES`, else `~/Projects/webos-firmwares` | `service/Makefile`: where `ROOTFS` is |
-| `ROOTFS` | `$(FIRMWARES)/04.63.25.01-HE_DTV_W20L_AFAAJAAA/rootfs` (5.6.1) | `make -C service check-abi` |
-| `OUT` | `../build/service` | `service/Makefile`: where both binaries go |
-| `OPENHOUSE_FIRMWARES`, `OPENHOUSE_HYPERVISOR` | `~/Projects/webos-firmwares`, `~/Projects/webos-hypervisor` | `service/scripts/tests/test-real-roundtrip.sh` and `service/scripts/tests/test-minimal-hook.sh`: the firmware roots they try (a root that is missing is skipped) |
-| `OPENHOUSE_S23Z_ROOTFS` | under `OPENHOUSE_HYPERVISOR` | the same two scripts: the unpacked S23Z image |
-
-`make -C service test` and the Jest specs need none of them.
-
-The version has one source, `"version"` in `app/package.json`. `app/appinfo.json` (what
-`ares-package` and the TV read) must carry the same: `npm run check-version`
-(`app/scripts/check-version.js`) fails on a mismatch, `npm run package` runs it first, a Jest spec
-checks it with the other tests, and `npm version <x.y.z>` rewrites `appinfo.json` through the
-`version` script. Both native binaries get it from `service/Makefile` (`VERSION`, read from
-`package.json`, compiled in as `HC_VERSION`; `service/src/version.h` requires it and an empty
-version fails the build), and reports it as `version` in `status` and `getInfo`. `services.json` has no
-version. The ipk's control file is written by `ares-package`, which fills in
-`Maintainer: N/A <nobody@example.com>` itself; that placeholder is left as it is.
-
-Enact copies all of iLib's locale data (83 MB, a 15 MB package) and its CLI has no switch to
-limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the build and
-`ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
-directories, drops the other locale directories and the character maps, and rewrites iLib's
-manifest to the remaining files. The UI strings are English and come from the source and from
-Moonstone's own resources, which are left alone (Moonstone's fonts, 1.3 MB, are kept). `scripts/stage-service.js` copies the five runtime scripts from `service/scripts/` into
-the service package beside the native binaries, at mode 755. The app bundle carries no scripts;
-reviewed release manifests and diffs stay in the offline tests.
-
-The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
-`app/package.json`. `service/scripts/tests/test-*.sh` hold the shell tests (see [Persistence](#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
-6.6.0, 8.3.0, 9.2.1, 10.3.1 and 11.2.0 and assert the payloads.
-
-The webOS 6–9 hook has a two-file core (Settings.qml and StarfishKeyFilter.qml). The systemUi refresh and
-four supporting files are best effort; status lists skipped files. If systemUi cannot be rewritten,
-Home over the chosen launcher relaunches it instead of handing it the key, and LG Home in front
-can keep the key through the stock comparison. See [the minimal hook](home-key-hook.md).
+The app build, the build variables and the version source are in [build.md](build.md).

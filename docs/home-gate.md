@@ -3,9 +3,14 @@
 While a third-party launcher is chosen, stock LG Home (about 70–90 MB) should not run. On 6–9
 SAM relaunches it whenever the foreground becomes empty (the idle relaunch through
 `last_input_handler`), so closing it frees nothing for long
-([settings-app.md](settings-app.md), "stock home left running"). The home gate takes the binary SAM
+([The stock home is not preloaded](settings-app.md#the-stock-home-is-not-preloaded)). The home gate takes the binary SAM
 starts instead: every launch SAM makes of `com.webos.app.home` runs `homechooser-home-gate`, and the
-gate decides what to open.
+gate decides what to open. The [architecture page](architecture.md#the-home-gate-decision) has the
+decision as a diagram.
+
+The rule behind the table: a full-screen launcher is the root of navigation, so an empty foreground
+goes back to it; an overlay launcher draws over something, so an empty foreground goes to the last
+input (Live TV or an HDMI source), as the overlay homes of earlier webOS releases did.
 
 Scope: webOS 6.x to 9.x only, where stock Home is native at `file:///usr/bin/com.webos.app.home`.
 On 5.x the visible home is `com.webos.app.fullhome` (`com.webos.app.home` never shows), and on
@@ -40,15 +45,20 @@ full-screen; the watcher's 11+ close logic uses the same classification).
 - A failed or timed-out launch also falls back to real stock Home.
 - An envelope carrying `preload` (a background preload, e.g. `"preload":"full"`) opens nothing and
   exits 0. Launching would bring something to the front. The watcher turns the stock Home preload
-  off anyway. This row is not in the decision table above; it is a design choice.
+  off anyway.
+
+The table keys on the foreground and the launcher type, not on the trigger, because SAM's idle
+relaunch and an explicit launch of `com.webos.app.home` carry the same argv (`reason:"undefined"`)
+and both find the foreground empty. Only the HOME key differs (`reason:"hotKey"`,
+`parameters.launchType:"homeKey"`).
 
 ### Real stock Home: the gate removes itself
 
 Stock Home cannot run from any other path. ls-hubd gives a process its LS2 role by
 `/proc/<pid>/exe`, and Home's role files (`/usr/share/ls2/roles/{pub,prv}/com.webos.app.home.json`)
-name `exeName` exactly `/usr/bin/com.webos.app.home`. Exec'd from a private bind it got
-`LSHUB_NO_ROLE_FILE`, "Invalid permissions for com.webos.app.home" and a black screen, on 7.6.0
-and 9.2.1. So the fallback is:
+name `exeName` exactly `/usr/bin/com.webos.app.home`. Exec'd from a private bind it gets
+`LSHUB_NO_ROLE_FILE`, "Invalid permissions for com.webos.app.home" and a black screen (seen on
+7.6.0 and 9.2.1). So the fallback is:
 
 1. write the release marker `/tmp/homechooser-runtime/home-gate/released` with the stored choice;
 2. `umount2("/usr/bin/com.webos.app.home", MNT_DETACH)`, lazy because the gate runs from that file;
@@ -74,11 +84,9 @@ launch of a normal decision still waits (up to 3 s) for its reply.
 
 The gate calls PmLog (`HOME_GATE`) and writes its own line to `/tmp/homechooser-home.log`, opened
 `O_APPEND` by the gate process itself, the same file the watcher appends to. That file is the
-record to read. On a 7.6.0 and a 6.5.2 device the `HOME_GATE` lines never reached `/var/log/messages` although
-the daemon's `START` line and a root-shell `PmLogCtl logkv` to the same context (`HomeChooser`) did. The cause
-is not established; one hypothesis is that SAM runs the gate through the jailer and the process cannot reach the PmLog
-socket from there. PmLog is therefore not reliable from the gate. The file write is not affected:
-it is a plain `open` of `/tmp`, and its lines are present. Behaviour is unchanged, only the documented place to look.
+record to read: the gate's `HOME_GATE` PmLog lines do not reach `/var/log/messages` (seen on 7.6.0
+and 6.5.2), although the daemon's PmLog lines in the same context do. The file write is a plain
+`open` of `/tmp` and is not affected.
 
 ## Mount lifecycle (daemon)
 
@@ -108,9 +116,10 @@ instance the preload manager started before the mount: it keeps running from the
 closed.
 
 - After a close that confirmed by `closeByAppId` (Home really was running), the watcher waits
-  `gate_settle_ms` (20 s) and asks `getForegroundAppInfo` once. On 6.5.2 at boot SAM logged
-  `LAUNCH_LASTAPP on_foreground_null triggered` about 10 s after the close and launched nothing, leaving a black
-  screen until HOME; 7.6.0 relaunched through the gate. If the foreground is still empty, the watcher launches
+  `gate_settle_ms` (20 s) and asks `getForegroundAppInfo` once. SAM does not always relaunch after
+  that close: on 6.5.2 at boot it logged `LAUNCH_LASTAPP on_foreground_null triggered` about 10 s
+  after the close and launched nothing, leaving a black screen until HOME, while 7.6.0 relaunched
+  through the gate. If the foreground is still empty, the watcher launches
   `com.webos.app.home` as `com.webos.applicationManager`, so the gate runs and applies its table (overlay: last
   input, full-screen: the launcher). It happens at most once per close, never when something is in front, when
   the foreground did not answer, or once the gate is unmounted or released (those and a clean end cancel the
@@ -118,8 +127,8 @@ closed.
   It is also skipped when the gate has already run since the close. Every gate run that opens or releases something (not a preload) rewrites `/tmp/homechooser-runtime/home-gate/decided`; if its mtime is not
   before the close, the watcher logs `home gate: the gate already ran since the stock Home close; nothing launched`
   and skips, without asking the foreground. `getForegroundAppInfo` can answer empty for 10+ s after a web launcher
-  opened (7.6.0, and 8.x boots), so SAM's idle relaunch through the gate used to be followed by a second,
-  redundant launch about 8 s later. The foreground check stays as the second condition.
+  opened (7.6.0, 8.x), so the foreground alone would add a second, redundant launch after SAM's idle
+  relaunch through the gate. The foreground check stays as the second condition.
 - The attempt is made when the gate is first seen mounted (new mount, or already mounted at watcher
   start), again on `preload_retry_ms` (10 s) up to `preload_tries` (12) times, and at every later gate
   sync, until it is confirmed: `running` replied without Home, or `closeByAppId` returned
@@ -191,29 +200,21 @@ SAM would not see. So the bind stays shared and cleanup is explicit.
 Nothing here restarts SAM or the compositor, and nothing writes configd or settings. The runtime dir
 is on `/tmp`, which every 6–9 rootfs mounts as tmpfs (`etc/fstab`: `tmpfs /tmp tmpfs rw`, no
 `noexec`; checked on W21P 6.x, W22P/W22L 7.6.0 and W22H 9.x), so a reboot clears the mount, the
-copy and the marker, and the firmware's stock Home is back. `/run` is tmpfs too; `/tmp` was chosen
-because the daemon already stages its runtime copy in `/tmp/homechooser-runtime` and the bind probes
-ran from `/tmp`.
+copy and the marker, and the firmware's stock Home is back. `/run` is tmpfs too; `/tmp` is used
+because the daemon already stages its runtime copy in `/tmp/homechooser-runtime`.
 
-## Evidence
+## Firmware behaviour the gate relies on
 
-Local, untracked probe notes (`scratch/stock-home-kill/`, 2026-10-31):
-
-- `bind/notes.md`: on 7.6.0, `mount --bind` of a stub over `/usr/bin/com.webos.app.home` took effect
-  with no SAM restart (SAM executed the stub as Home, uid 0, `argv[1]` the envelope). A stub that
-  exits 0 stopped SAM's retry and the Live TV fallback; a stub that launches a fixture as
-  `com.webos.app.home` was accepted (`caller_id com.webos.app.home`). `umount` restored stock Home.
-- `fallback/notes.md`: stock Home exec'd from a private bind has no LS2 role
-  (`LSHUB_NO_ROLE_FILE`, black screen) on 7.6.0 and 9.2.1; after unmounting, a launch runs the real
-  `/usr/bin` binary. On 9.2.1 the binds propagated into the devmode SSH jail copies; an unmount loop
-  removed them. A preloaded Home started before the mount kept running until closed.
-- `notes.md`: SAM's idle relaunch comes from `profile.idleApp` via `last_input_handler`; closing Home
-  leads to `LAUNCH_LASTAPP … on_foreground_null` and a relaunch about 1 s later.
-- `nav/notes.md`, `lsmon/notes.md`: what the stub and stock Home receive on 5.6.1, 7.6.0 and 9.x.
-  Only the HOME key differs (`reason:"hotKey"`, `parameters.launchType:"homeKey"`). The idle
-  relaunch and explicit launches have identical argv (`reason:"undefined"`), and the foreground is
-  empty at stub time in both, which is why the table keys on the foreground and the launcher type
-  rather than on the trigger.
+- A `mount --bind` over `/usr/bin/com.webos.app.home` takes effect with no SAM restart: SAM execs
+  the bound file as Home, as uid 0, with the launch envelope as `argv[1]`. `umount` restores stock
+  Home.
+- A Home process that exits 0 stops SAM's retry and its Live TV fallback.
+- A launch made with the identity `com.webos.app.home` is accepted (`caller_id com.webos.app.home`).
+- SAM's idle relaunch comes from the profile's `idleApp` through `last_input_handler`: closing Home
+  with nothing in front leads to `LAUNCH_LASTAPP … on_foreground_null` and a relaunch about 1 s
+  later.
+- A Home instance started before the mount, including a preloaded one, keeps running from the old
+  inode until it is closed.
 
 ## Tests
 
@@ -222,19 +223,3 @@ make -C service test-gate        # decision table and self-release through real 
 make -C service test-gate-mount  # mount/unmount, idempotence, rollback, foreign/stacked mounts, jail copies, release marker
 make -C service test-watcher     # G11-G19: when the watcher mounts and unmounts; the stock Home close and its retries
 ```
-
-## Open device validation
-
-- The self-release: while the gate process (SAM's `com.webos.app.home` instance) is still alive,
-  SAM handles `launch com.webos.app.home` by starting the real binary, not by sending a relaunch
-  event to the gate's pid.
-- The bind made by the daemon's transient systemd unit (and by `--homekey` from the service) is
-  visible to SAM, i.e. all share one mount namespace.
-- The gate's `launch` as `com.webos.app.home` and `getLastInput` as `com.webos.applicationManager`
-  are accepted on 6.x, 8.x and 9.x (7.6.0 accepted a launch as `com.webos.app.home` in the probe).
-- `closeByAppId` with `forceMode` after mounting, and the following idle relaunch through the gate,
-  show no fault dialog; memory is actually freed.
-- The jail-copy cleanup leaves mountinfo with no gate entries on 9.x; whether 6.x to 8.x propagate
-  the same way.
-- Preload (CRIU on 7.x, `preloadMode criu` for Home) cannot restore a stock Home image past the gate.
-- An overlay launcher with an empty foreground gets the last input under it as intended.
