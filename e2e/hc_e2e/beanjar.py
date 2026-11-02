@@ -127,6 +127,12 @@ class BeanjarHost:
         rc, _ = timing.run(['scp', '-q', '-o', 'BatchMode=yes', '%s:%s' % (self.device, remote_path), local_path])
         return rc == 0
 
+    def ref(self, vm):
+        """A VM name as the beanjar that `sh` runs must take it.  That beanjar may have other hosts
+        configured and then refuses a bare name that exists on more than one, so a VM of the machine
+        `sh` runs on is always `local/NAME`, in local and remote mode alike."""
+        return 'local/' + vm
+
     def beanjar(self, *args, timeout=300):
         return self.sh('beanjar ' + self._q(*args), timeout)
 
@@ -156,7 +162,7 @@ class BeanjarHost:
         return self._dirs[vm]
 
     def info(self, vm):
-        rc, out = self.beanjar('info', vm)
+        rc, out = self.beanjar('info', self.ref(vm))
         d = {}
         for line in out.splitlines():
             if ': ' in line:
@@ -165,11 +171,11 @@ class BeanjarHost:
         return d
 
     def settings(self, vm):
-        rc, out = self.beanjar('settings', vm, 'show')
+        rc, out = self.beanjar('settings', self.ref(vm), 'show')
         return dict(l.split(': ', 1) for l in out.splitlines() if ': ' in l)
 
     def set_settings(self, vm, **kv):
-        return self.beanjar('settings', vm, 'set', *['%s=%s' % i for i in kv.items()])
+        return self.beanjar('settings', self.ref(vm), 'set', *['%s=%s' % i for i in kv.items()])
 
     def start(self, vm):
         # Check the host immediately before every boot, including scenario reboots.
@@ -177,7 +183,7 @@ class BeanjarHost:
         if running:
             raise RuntimeError('refusing boot while VMs are running: %s' % running)
         close_sessions()  # a root shell of the previous boot is gone
-        result = self.beanjar('start', vm, timeout=600)
+        result = self.beanjar('start', self.ref(vm), timeout=600)
         if result[0] == 0:
             self.vnc_start(vm)
         return result
@@ -185,11 +191,11 @@ class BeanjarHost:
     def stop(self, vm):
         self.vnc_stop(vm)
         close_sessions()  # before the VM goes, not a read that waits for a dead forward
-        return self.beanjar('stop', vm, timeout=300)
+        return self.beanjar('stop', self.ref(vm), timeout=300)
 
     def remote_target(self, vm):
-        """The local multi-host CLI owns routing for display input."""
-        return vm if self.mode == 'local' else self.name + '/' + vm
+        """The local multi-host CLI owns routing for display input: HOST/NAME, `local/NAME` for this PC."""
+        return self.ref(vm) if self.mode == 'local' else self.name + '/' + vm
 
     def display_beanjar(self, *args, timeout=60):
         try:
@@ -272,16 +278,16 @@ class BeanjarHost:
         return self.sh(self._q('python3', '-c', QMP_SENDKEY, sock, key), 30)
 
     def viewer_open(self, vm):
-        return self.beanjar('viewer', 'open', vm, timeout=60)
+        return self.beanjar('viewer', 'open', self.ref(vm), timeout=60)
 
     def viewer_close(self, vm):
-        return self.beanjar('viewer', 'close', vm, timeout=60)
+        return self.beanjar('viewer', 'close', self.ref(vm), timeout=60)
 
     def tv_screenshot(self, vm, local_path):
         """`beanjar screenshot` (0.3.1+): the TV picture of the running VM, headless or through a viewer.
         Returns (ok, detail); detail is the command's output (--json: path, taken_by)."""
         tmp = '/tmp/e2e-tv-%s-%d.png' % (vm, os.getpid())
-        rc, out = self.beanjar('screenshot', vm, tmp, '--json', timeout=60)
+        rc, out = self.beanjar('screenshot', self.ref(vm), tmp, '--json', timeout=60)
         ok = rc == 0 and self.fetch(tmp, local_path)
         self.sh('rm -f ' + shlex.quote(tmp))
         return ok, out.strip()
