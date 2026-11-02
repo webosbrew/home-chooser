@@ -44,6 +44,16 @@ Home Chooser reads `defaultWindowType` from the installed appinfo to decide what
 shows on webOS 6 and later. On webOS 5 the screen goes back to Live TV in both cases. A
 full-screen launcher is the root of navigation, so it must not close itself on Back.
 
+**Only one overlay.** On webOS 11 and later only one overlay stays on screen. While your overlay
+window is mapped, an app that is launched as an overlay is closed by the system within about 2
+seconds, and that includes Home Chooser when it is opened over your launcher. A native overlay
+launcher therefore hides its window (unmaps it) or exits when it launches an app; if it keeps its
+window up, the system closes the app it just launched. With two web overlays the older one is closed
+instead. On webOS 10 this close was not seen, but a launcher that gets out of the way
+when it launches something works on every release. For a native launcher also set
+`"noSplashOnLaunch": true` in `appinfo.json`: without it, on webOS 11 and later SAM's splash screen
+stays under an overlay window.
+
 ## What Home Chooser does for a launcher
 
 * **It makes your app the Home app on webOS 5 to 12.** The owner picks your app in Home Chooser;
