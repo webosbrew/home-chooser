@@ -64,7 +64,10 @@ are covered. Stock access restrictions, disableHome/first-use gates, branch deci
 timers, subscriptions and all other key handling remain intact. An unknown function or constant
 shape is refused. Boot retains/restores stock and posts a best-effort notice; interactive preparation
 fails before the hook is enabled. A missing or invalid choice, or an app SAM cannot confirm installed,
-selects stock behavior.
+selects stock behavior. With the filter stock for any such reason (`active=no`) the home gate is not
+mounted either, so Home opens LG Home; the redirect, filter and gate, returns on the next refresh or boot
+once the shape is known again. On webOS 10 and later the guard removes the generated `systemUi-*.js` and
+`keyfilters-stock.json` that an update from 6-9 left in the state directory.
 
 Each changed version receives a fresh `systemUi-XXXXXX.js` filename under
 `/var/lib/webosbrew/homechooser/`. The service reads it back and compares SHA256 before selection.

@@ -108,7 +108,7 @@ add_test(NAME test-homekey COMMAND ${qemu} "${arm}/test-homekey" "${work}/keyfil
 # Firmware update simulations: real systemUi.js pairs from the corpus (skipped when absent) and synthetic ones.
 add_test(NAME test-fwupdate COMMAND "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/fwupdate-guard.py" "${arm}/test-fwupdate"
 	"${work}/fwupdate-test" "${system_ui}" ${qemu})
-add_test(NAME test-watcher COMMAND ${qemu} "${arm}/test-watcher" "${work}/watcher-test")
+add_test(NAME test-watcher COMMAND ${qemu} "${arm}/test-watcher" "${work}/watcher-test" "${system_ui}")
 add_test(NAME test-watcher-luna COMMAND ${qemu} "${work}/watcher-test/runtime-image" "${work}/watcher-test" "${system_ui}" "${fake_luna_send}")
 add_test(NAME test-gate COMMAND ${qemu} "${arm}/test-gate" "${work}/gate-test" "${fake_luna_send}")
 add_test(NAME test-gate-mount COMMAND ${qemu} "${arm}/test-gate-mount" "${work}/gate-mount-test")

@@ -20,13 +20,13 @@ static char *homekey_call(const char *uri, const char *payload, int timeout, voi
 }
 
 /* The 6-9 home gate follows a live filter change at once; a watcher may not see a disable. */
-static void gate_follow(const char *action, gboolean stock, int rc)
+static void gate_follow(const char *action, gboolean stock, int rc, gboolean active)
 {
     gboolean redirect = !strcmp(action, "apply") || !strcmp(action, "refresh");
     if (!redirect && strcmp(action, "stop") && strcmp(action, "clear")) return;
     int major = hc_gate_major(HC_OSRELEASE);
     if (major < 6 || major > 9) return;
-    char *choice = redirect && !stock && rc == 0 ? hc_gate_wanted(HC_STATE_DIR, homekey_call, NULL) : NULL;
+    char *choice = redirect && !stock && rc == 0 && active ? hc_gate_wanted(HC_STATE_DIR, homekey_call, NULL) : NULL;
     HCGateOps ops = hc_gate_ops(homekey_call, NULL);
     /* A change of Home made in Home Chooser (the app wrote the previous-launcher file first): the panel may
      * be on screen, so the watcher closes stock Home later (watcher/previous.c), never this run. */
@@ -53,8 +53,10 @@ int hc_homekey_main(int argc, char **argv)
     GString *out = g_string_new(NULL);
     gboolean stock = argc > 3 && !strcmp(argv[3], "stock");
     int rc = hc_key_run(&ops, action, stock, out);
+    /* An unknown stock shape returns 0 with active=no: no filter, so no gate either. */
+    gboolean active = strstr(out->str, "active=yes") != NULL;
     fputs(out->str, stdout); fflush(stdout); LOGI("HOMEKEY", "%s: %s", action, out->str);
     g_string_free(out, TRUE);
-    gate_follow(action, stock, rc);
+    gate_follow(action, stock, rc, active);
     return rc;
 }
