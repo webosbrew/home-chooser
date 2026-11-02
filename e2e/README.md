@@ -891,8 +891,9 @@ an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser
 
 ## The update step (`--update-check`)
 
-The old build comes from `--update-from <git ref>` (default: the last commit before HEAD that changed `app/`,
-`service/`, or HEAD itself if those have uncommitted changes), built by `git archive` into a `/tmp`
+The old build comes from `--update-from <git ref>` (default: the last published build, `origin/main`, when HEAD's
+`app/` or `service/` differ from it; otherwise the last commit before HEAD that changed `app/`, `service/`, or HEAD
+itself if those have uncommitted changes), built by `git archive` into a `/tmp`
 directory (the working tree and `.git` are not touched; `node_modules` is linked from the main tree) and removed at the
 end. Both builds are `0.1.0` today, so the version does not tell them apart: the runner compares the md5 of the native
 `homechooser-daemon` executable (`usr/palm/services/<service id>/homechooser-daemon`) in the two ipks, in the service directory

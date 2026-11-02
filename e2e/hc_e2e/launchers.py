@@ -208,11 +208,19 @@ def api_build(spec, index, api):
 
 
 def default_update_ref():
-    """The previous commit that changed app/ or service/: the last one before HEAD, unless
-    those paths have uncommitted changes (then HEAD is the build the working tree departs from)."""
+    """The build a user updates from: the last published one (origin/main) when HEAD's app/ or
+    service/ differ from it, so an unpublished intermediate commit (which may carry a bug fixed
+    since) is never the old build.  Otherwise the previous commit that changed app/ or service/:
+    the last one before HEAD, unless those paths have uncommitted changes (then HEAD is the build
+    the working tree departs from)."""
     rc, dirty = timing.run(['git', '-C', REPO, 'status', '--porcelain', '--', 'app', 'service'], 30)
     if dirty.strip():
         return 'HEAD'
+    rc, published = timing.run(['git', '-C', REPO, 'rev-parse', '--verify', '--quiet', 'origin/main'], 30)
+    if rc == 0 and published.strip():
+        rc, _ = timing.run(['git', '-C', REPO, 'diff', '--quiet', published.strip(), 'HEAD', '--', 'app', 'service'], 30)
+        if rc == 1:
+            return published.strip()
     rc, out = timing.run(['git', '-C', REPO, 'log', '-1', '--format=%H', 'HEAD~1', '--', 'app', 'service'], 30)
     ref = out.strip()
     if rc != 0 or not ref:
