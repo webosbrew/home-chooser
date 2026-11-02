@@ -83,3 +83,5 @@ TEXT_SOURCES = [
     (BOOT_INPUT_LAUNCHED, 'service/src/watcher/input.c'),
     (BOOT_INPUT_FAILED, 'service/src/watcher/input.c'),
 ]
+
+SCREENSAVER_ID = 'com.webos.app.screensaver'

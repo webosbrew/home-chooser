@@ -157,7 +157,8 @@ def audiooutputd_dialog(frame):
     joined = ' '.join(texts)
     if '[crash] Fault Occured' not in joined or 'audiooutputd' not in joined:
         return None, joined
-    msgs = [t for t in texts if '[crash] Fault Occured' in t and 'audiooutputd' in t]
+    # OCR returns one element per line: the title line is the message, audiooutputd is on the Reason line.
+    msgs = [t for t in texts if '[crash] Fault Occured' in t]
     return (msgs[0] if len(msgs) == 1 else None), joined
 
 

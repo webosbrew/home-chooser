@@ -5,7 +5,7 @@ import time
 
 from .. import timing
 from ..checks import open_in_front, panel_front_verdict
-from ..constants import APP_ID, CHOICE, FOREGROUND_SETTLE, PANEL_FRONT_WAIT, PANEL_HOLD
+from ..constants import APP_ID, CHOICE, SCREENSAVER_ID, FOREGROUND_SETTLE, PANEL_FRONT_WAIT, PANEL_HOLD
 from ..evidence import messages_command
 from ..inspector import Inspector, PAGE_JS
 from ..launchers import qml_support
@@ -20,11 +20,25 @@ class PanelSteps:
         foreground app (at most `timeout` s).  An overlay opened before that card has mapped is closed by
         surface-manager (windowPolicy) when the card maps: on the pi VMs the launcher's card mapped about
         8 s after the Home press, while getForegroundAppInfo answered appId "".  The foreground is logged."""
+        self.wake_screensaver(label)
         t0 = time.time()
         fg = self.wait(lambda: self.dev.foreground()[0], timeout, 1)
         self.rec.say('%s: foreground before opening Home Chooser: %r after %.0f s%s' % (
             label, fg, time.time() - t0, '' if fg else ' (none named; opening anyway)'))
         return fg
+
+    def wake_screensaver(self, label):
+        """The 180 s idle timer starts the webOS screensaver, which swallows the first keys.  When it is
+        running, send BACK (harmless) and wait until it is gone.  True when it was running."""
+        if SCREENSAVER_ID not in self.running_ids():
+            return False
+        self.rec.say('%s: %s is running; waking it with BACK' % (label, SCREENSAVER_ID))
+        for _ in range(3):
+            self.press('BACK')
+            if self.wait(lambda: SCREENSAVER_ID not in self.running_ids(), 5, 1):
+                return True
+        self.rec.say('%s: %s still running after three BACK presses' % (label, SCREENSAVER_ID))
+        return True
 
     def open_panel(self, label, front_wait=PANEL_FRONT_WAIT, hold=PANEL_HOLD):
         """Launch Home Chooser and poll until it is in front and stays there for `hold` s
