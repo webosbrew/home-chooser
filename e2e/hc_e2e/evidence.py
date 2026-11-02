@@ -200,3 +200,23 @@ def previous_closes(lines, ident):
 def previous_dropped(lines, ident):
     """The watcher's lines saying the previous launcher `ident` closed by itself (nothing left to close)."""
     return [l for l in lines if 'previous launcher: %s closed by itself' % ident in l]
+
+
+OVERLAY_RULE = ('on webOS 11 and later only one overlay stays on screen: a native overlay launcher hides its '
+                'window or exits when it launches an app (docs/launcher-api.md, "Only one overlay")')
+
+
+def native_overlay_must_hide(prev, major):
+    """True when the previous launcher `prev` is a native overlay fixture on a release (11+) where the system
+    closes an app launched under a mapped overlay window; its own hiding is then stood in for by the harness."""
+    return bool(prev) and '.native.overlay' in prev and major >= 11
+
+
+def previous_close_verdict(closes, dropped, harness_closed):
+    """(ok, text) for the previous launcher after a switch.  By the watcher: exactly one close or one 'closed
+    by itself' line.  When the harness closed it before opening Home Chooser (the launcher's own hiding, per
+    OVERLAY_RULE) there is nothing for the watcher to close: it may log 'closed by itself' but never a close."""
+    if harness_closed:
+        return len(closes) == 0 and len(dropped) <= 1, 'closed by the harness beforehand; watcher lines: ' + (
+            '\n'.join(closes + dropped) or 'none')
+    return len(closes) + len(dropped) == 1 and len(closes) <= 1, '\n'.join(closes + dropped) or 'no previous-launcher line'

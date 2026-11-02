@@ -73,7 +73,8 @@ build_variant() { # <normal|overlay>
   "main": "hcfixture",
   "icon": "icon.png",
   "appCategory": ["home"],
-  "visible": true$extra
+  "visible": true,
+  "noSplashOnLaunch": true$extra
 }
 JSON
 	ares-package --outdir "$OUT" "$stage" >/dev/null

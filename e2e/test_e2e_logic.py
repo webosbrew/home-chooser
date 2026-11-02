@@ -3431,6 +3431,63 @@ class MatrixFixes2(unittest.TestCase):
         self.assertEqual(len(closes), 2)  # the stale panel before open_panel, and the finally
         s.check_previous_closed.assert_not_called()
 
+    def switch_over(self, major, prev):
+        from unittest.mock import MagicMock
+        s = scenario(major)
+        s.rec, s.dev = MagicMock(), MagicMock()
+        s.dev.install.return_value = (0, 'Installed package')
+        s.dev.sh.return_value = (0, prev)
+        s.L = MagicMock(is_demo=False, appinfo={}, overlay=False)
+        s.launcher = 'l'
+        order = []
+        for name in ('popup_mark_now', 'qml_note', 'mark_log', 'residency', 'close_insp', 'messages_mark',
+                     'check_previous_closed'):
+            setattr(s, name, MagicMock())
+        s.dev.close.side_effect = lambda a: order.append(('close', a))
+        s.open_panel = lambda label: order.append(('open_panel', label)) or True
+        s.wait_closed = lambda a, t: order.append(('gone', a)) or True
+        s.running_ids = lambda: []
+        s.wait = lambda *a, **k: {'rows': ['l']}
+        s.choose_in_ui = MagicMock()
+        with __import__("unittest.mock").mock.patch("hc_e2e.steps.choose.Inspector"):
+            s.step_switch()
+        return s, order
+
+    def test_native_overlay_is_closed_before_the_panel_from_11(self):
+        prev = 'org.webosbrew.hcfixture.native.overlay'
+        for major in (11, 12):
+            s, order = self.switch_over(major, prev)
+            self.assertEqual(order[:3], [('close', prev), ('gone', prev), ('open_panel', '2s open')])
+            s.check_previous_closed.assert_called_once_with(prev, True)
+            self.assertFalse(s.overlay_takes_pointer)
+
+    def test_native_overlay_stays_on_10_and_below_and_other_launchers_stay(self):
+        for major, prev in ((10, 'org.webosbrew.hcfixture.native.overlay'), (6, 'org.webosbrew.hcfixture.native.overlay'),
+                            (12, 'org.webosbrew.hcfixture.web.overlay'), (12, 'org.webosbrew.hcfixture.native.normal')):
+            s, order = self.switch_over(major, prev)
+            self.assertEqual(order[0], ('open_panel', '2s open'))
+            self.assertNotIn(('close', prev), order)
+            s.check_previous_closed.assert_called_once_with(prev, False)
+
+    def test_previous_close_verdict(self):
+        v = hc_e2e.evidence.previous_close_verdict
+        close, drop = ['previous launcher: closeByAppId x '], ['previous launcher: x closed by itself']
+        self.assertTrue(v(close, [], False)[0])
+        self.assertTrue(v([], drop, False)[0])
+        self.assertFalse(v([], [], False)[0])
+        self.assertFalse(v(close, drop, False)[0])
+        # closed by the harness: no watcher line is needed, a watcher close would be wrong
+        self.assertTrue(v([], [], True)[0])
+        self.assertTrue(v([], drop, True)[0])
+        self.assertFalse(v(close, [], True)[0])
+
+    def test_native_overlay_must_hide(self):
+        f = hc_e2e.evidence.native_overlay_must_hide
+        self.assertTrue(f('a.native.overlay', 11))
+        self.assertFalse(f('a.native.overlay', 10))
+        self.assertFalse(f('a.web.overlay', 12))
+        self.assertFalse(f('', 12))
+
 
 if __name__ == '__main__':
     unittest.main()
