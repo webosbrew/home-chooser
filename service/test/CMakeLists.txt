@@ -3,6 +3,7 @@
 #   cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host
 #   test-policy        the pure policy, built natively with the address and undefined sanitizers
 #   test-homekey       native live-filter transactions with fake Luna             } ARM programs from
+#   test-fwupdate      the Home key guard across simulated firmware updates (fwupdate-guard.py drives it)
 #   test-watcher       native watcher policy                                       } ../CMakeLists.txt,
 #   test-watcher-luna  watcher child transport/runtime, through fake-luna-send.py  } cross built into
 #   test-gate          the home gate's decision table and self-release             } build/service-host/arm
@@ -77,7 +78,7 @@ endif()
 # The ARM programs: ../CMakeLists.txt configured with the webOS toolchain in a build directory of its own.
 include(ExternalProject)
 set(arm "${CMAKE_CURRENT_BINARY_DIR}/arm")
-set(programs test-homekey test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract
+set(programs test-homekey test-fwupdate test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract
 	test-launcher-subscribe)
 set(cache_args -DSDK:PATH=${SDK} -DSYSROOT:PATH=${SYSROOT} -DCROSS:STRING=${CROSS})
 foreach(name VERSION EXTRA_CFLAGS)
@@ -104,6 +105,9 @@ add_test(NAME watcher-runtime-image COMMAND "${CMAKE_COMMAND}" -E copy "${arm}/t
 set_tests_properties(watcher-runtime-image PROPERTIES FIXTURES_SETUP runtime-image FIXTURES_REQUIRED scratch)
 
 add_test(NAME test-homekey COMMAND ${qemu} "${arm}/test-homekey" "${work}/keyfilter-test" "${system_ui}")
+# Firmware update simulations: real systemUi.js pairs from the corpus (skipped when absent) and synthetic ones.
+add_test(NAME test-fwupdate COMMAND "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/fwupdate-guard.py" "${arm}/test-fwupdate"
+	"${work}/fwupdate-test" "${system_ui}" ${qemu})
 add_test(NAME test-watcher COMMAND ${qemu} "${arm}/test-watcher" "${work}/watcher-test")
 add_test(NAME test-watcher-luna COMMAND ${qemu} "${work}/watcher-test/runtime-image" "${work}/watcher-test" "${system_ui}" "${fake_luna_send}")
 add_test(NAME test-gate COMMAND ${qemu} "${arm}/test-gate" "${work}/gate-test" "${fake_luna_send}")
@@ -113,7 +117,7 @@ add_test(NAME test-gate-mount COMMAND ${qemu} "${arm}/test-gate-mount" "${work}/
 add_test(NAME test-launcher-contract COMMAND ${launcher_spec} contract "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
 	"${arm}/test-launcher-contract" "${work}/launcher-contract-test" ${qemu})
 add_test(NAME test-launcher-subscribe COMMAND ${qemu} "${arm}/test-launcher-subscribe" "${work}/launcher-subscribe-test" "${fake_luna_send}")
-set_tests_properties(test-homekey test-watcher test-gate test-gate-mount test-launcher-contract test-launcher-subscribe PROPERTIES FIXTURES_REQUIRED scratch)
+set_tests_properties(test-homekey test-fwupdate test-watcher test-gate test-gate-mount test-launcher-contract test-launcher-subscribe PROPERTIES FIXTURES_REQUIRED scratch)
 set_tests_properties(test-watcher-luna PROPERTIES FIXTURES_REQUIRED "scratch;runtime-image")
 # The two watcher programs share watcher-test; never run them at once.
 set_tests_properties(test-watcher test-watcher-luna watcher-runtime-image PROPERTIES RESOURCE_LOCK watcher-test)

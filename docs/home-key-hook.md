@@ -114,6 +114,14 @@ python3 -m unittest discover -s e2e -p test_e2e_logic.py
 
 The generator checks exact-byte edits, syntax, executed launch branches/gates and unknown-shape
 refusal against `service/scripts/tests/corpus.tsv`. Missing firmware paths are explicitly reported.
+`test-fwupdate` ([fwupdate-guard.py](../service/test/fwupdate-guard.py), [test-fwupdate.c](../service/test/test-fwupdate.c))
+simulates a firmware update: two or more boots on one persistent state directory, with the stock
+`systemUi.js` and os-release swapped and configd back at the firmware's own list in between. It uses real
+adjacent releases from the corpus (6.3.1 to 9.2.4, plus files of other majors that must fall back to stock)
+and synthetic updates (unknown shape, file removed, version string only, live swap). The guard keeps no
+version, hash or mtime of the stock file: every run re-reads it, so the check is the shape fingerprint alone.
+Missing corpus sources skip their pairs.
+
 The native ARM transaction test runs under qemu with real firmware libraries and fake Luna:
 readiness, failed toast, list metadata/order, live changes, missing apps, failed writes/readbacks,
 verified restoration, retained files on recovery failure and empty-list refusal.
