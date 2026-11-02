@@ -217,6 +217,9 @@ def previous_close_verdict(closes, dropped, harness_closed):
     by itself' line.  When the harness closed it before opening Home Chooser (the launcher's own hiding, per
     OVERLAY_RULE) there is nothing for the watcher to close: it may log 'closed by itself' but never a close."""
     if harness_closed:
-        return len(closes) == 0 and len(dropped) <= 1, 'closed by the harness beforehand; watcher lines: ' + (
+        # The watcher still holds the switch's close; finding the launcher gone, its one attempt is refused
+        # ("native app is not running") and changes nothing.  Any close that took effect fails the check.
+        took = [c for c in closes if not ('"returnValue":false' in c and 'not running' in c)]
+        return (not took and len(closes) <= 1 and len(dropped) <= 1), 'closed by the harness beforehand; watcher lines: ' + (
             '\n'.join(closes + dropped) or 'none')
     return len(closes) + len(dropped) == 1 and len(closes) <= 1, '\n'.join(closes + dropped) or 'no previous-launcher line'

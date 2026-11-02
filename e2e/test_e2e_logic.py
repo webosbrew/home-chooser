@@ -3506,6 +3506,11 @@ class MatrixFixes2(unittest.TestCase):
         self.assertTrue(v([], [], True)[0])
         self.assertTrue(v([], drop, True)[0])
         self.assertFalse(v(close, [], True)[0])
+        # its one attempt on the gone launcher is refused and changes nothing (11.x run 2026-11-02)
+        refused = ['previous launcher: closeByAppId x with y in front: {"errorCode":1,"returnValue":false,'
+                   '"errorText":"native app is not running"}']
+        self.assertTrue(v(refused, [], True)[0])
+        self.assertFalse(v(refused * 2, [], True)[0])
 
     def test_native_overlay_must_hide(self):
         f = hc_e2e.evidence.native_overlay_must_hide
