@@ -7,7 +7,8 @@ from .. import timing
 from ..alerts import RebootAlertMonitor
 from ..constants import (APPDIR, APP_ID, BOOT_DIR, BOOT_SCRIPT, CHOICE, DONE_TEXT, OLD_RESTART_TEXTS, OVERRIDE,
     REBOOT_ASKED_TEXT, REBOOT_PROMPT, REMOVAL_ALERT, RESTART_NOTE, RESTART_NOW, SCRIPTS_DIR, STOCK, SVC_ID, UNINSTALL_TOAST)
-from ..evidence import PREVIOUS_ARMED, closes_under_panel, previous_closes, previous_dropped
+from ..evidence import (OVERLAY_RULE, PREVIOUS_ARMED, closes_under_panel, native_overlay_must_hide,
+    previous_close_verdict, previous_closes, previous_dropped)
 from ..inspector import Inspector, MARKER_JS, PLANT_JS, TICK_JS
 from ..launchers import DEMO_TARGET_ID, DEMO_TARGET_TITLE
 from ..releases import device_text_forms, expects_reboot_dialog
@@ -17,6 +18,7 @@ class ChooseSteps:
     """Phases choose (step 2), switch (2s) and window-chosen; the device texts."""
 
     overlay_takes_pointer = False
+    prev_hidden = False
 
     def step2(self):
         r, d = self.rec, self.dev
@@ -232,17 +234,25 @@ class ChooseSteps:
             r.say('2s: closing a stale Home Chooser before opening it')
             d.close(APP_ID)
             self.wait_closed(APP_ID, 10)
+        prev = d.sh('cat %s 2>&1' % CHOICE)[1].strip()
+        self.prev_hidden = native_overlay_must_hide(prev, self.major)
+        if self.prev_hidden:
+            r.note('the previous launcher %s is a native overlay on %d.x; %s. The harness closes it first, in '
+                   'place of the launcher hiding itself, and waits until it is gone' % (prev, self.major, OVERLAY_RULE))
+            d.close(prev)
+            gone = self.wait_closed(prev, 15)
+            r.check('the previous native overlay launcher %s is gone before Home Chooser opens' % prev, gone,
+                    'running: %s' % self.running_ids())
         front = self.open_panel('2s open')
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
         r.check('the list shows the launcher row (data-app-id)', bool(ui),
                 'DOM: %s; Home Chooser in front: %s' % (json.dumps(ui), front))
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
-        prev = d.sh('cat %s 2>&1' % CHOICE)[1].strip()
         # A native overlay launcher is a transparent full-screen window (Dock's pattern) that stays above
         # Home Chooser's panel: a click lands on it, and it takes the key focus too (the list then ignores
         # the keys).  The pointer is not used over it; a user reaches the panel with the remote's keys.
-        self.overlay_takes_pointer = '.native.overlay' in prev
+        self.overlay_takes_pointer = '.native.overlay' in prev and not self.prev_hidden
         if self.overlay_takes_pointer:
             r.note('the previous launcher %s is a native overlay window: choosing with the remote keys, '
                    'no click (it takes the pointer and the key focus)' % prev)
@@ -253,9 +263,9 @@ class ChooseSteps:
             d.close(APP_ID)
             self.wait_closed(APP_ID, 10)
             self.close_insp()
-        self.check_previous_closed(prev)
+        self.check_previous_closed(prev, self.prev_hidden)
 
-    def check_previous_closed(self, prev):
+    def check_previous_closed(self, prev, harness_closed=False):
         """After a switch: nothing closed while the panel was up (checked in choose_in_ui); once Home or a
         full-screen app is next in front, exactly one close of the previous launcher, or it closed by itself;
         never a close of the new launcher."""
@@ -266,8 +276,9 @@ class ChooseSteps:
         self.wait(lambda: previous_closes(self.log_since_mark(), prev) or previous_dropped(self.log_since_mark(), prev), 60, 3)
         since = self.log_since_mark()
         closes, dropped = previous_closes(since, prev), previous_dropped(since, prev)
-        r.check('the previous launcher %s was closed once after the panel, or closed by itself' % prev,
-                len(closes) + len(dropped) == 1 and len(closes) <= 1, '\n'.join(closes + dropped) or 'no previous-launcher line')
+        ok, text = previous_close_verdict(closes, dropped, harness_closed)
+        r.check('the previous launcher %s was %s' % (prev, 'closed by the harness before the panel, and the watcher closed nothing'
+                if harness_closed else 'closed once after the panel, or closed by itself'), ok, text)
         r.check('the new launcher %s was never closed by the watcher' % self.launcher,
                 not previous_closes(since, self.launcher), '\n'.join(previous_closes(since, self.launcher)) or 'none')
 
