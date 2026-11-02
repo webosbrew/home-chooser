@@ -156,7 +156,8 @@ The watcher's volatile preload-off for Home stays as it was. SAM's idle handling
 gate.
 
 The watcher mounts only for a valid, installed, non-stock choice whose live Home key filter was
-applied, with the `homekey` flag present. It unmounts:
+applied (`active=yes`: a stock `systemUi.js` of an unknown shape, or an unreadable one, leaves the filter stock and so
+the gate unmounted), with the `homekey` flag present. It unmounts:
 
 - when LG Home is chosen again, the launcher is missing, or the filter is not baked for the choice;
 - on disable and on `--homekey stop|clear` or `refresh stock` (the app's disable runs these; the

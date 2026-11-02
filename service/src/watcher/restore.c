@@ -29,6 +29,9 @@ int key_refresh(HCWatch *w, gboolean stock)
     GString *out = g_string_new(NULL);
     int rc = hc_key_run(&ops, "refresh", stock, out);
     watch_log(w, "Home key refresh%s: %s", stock ? " stock" : "", out->str);
+    /* Baked means the filter really redirects: rc 0 with active=no (unknown stock shape, unreadable
+     * stock file) is the stock list, so nothing is baked and the home gate stays unmounted. */
+    if (!rc && !stock && !strstr(out->str, "active=yes")) { rc = 1; g_clear_pointer(&w->baked, g_free); }
     g_string_free(out, TRUE); return rc;
 }
 void sync_baked(HCWatch *w, const char *id)

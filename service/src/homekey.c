@@ -146,6 +146,16 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         char *v = g_match_info_fetch(match, 1); major = atoi(v); g_free(v);
     }
     g_match_info_free(match); g_regex_unref(release); g_free(os);
+    if (major >= 10 && !status && !prepare) {
+        /* An update from 6-9 leaves the generated filters and the snapshot behind; 10+ has no use for them. */
+        GDir *d = g_dir_open(o->state_dir, 0, NULL); const char *name;
+        while (d && (name = g_dir_read_name(d))) {
+            if (!strcmp(name, "keyfilters-stock.json") || (g_str_has_prefix(name, "systemUi-") && g_str_has_suffix(name, ".js"))) {
+                char *p = path(o, name); unlink(p); g_free(p);
+            }
+        }
+        if (d) g_dir_close(d);
+    }
     if (major < 6 || major > 9) { g_string_append(out, "active=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
     if (boot && !ready(o)) { reason = g_strdup("boot readiness timed out; stock Home retained"); goto done; }
     source = readfile(o->stock_js);

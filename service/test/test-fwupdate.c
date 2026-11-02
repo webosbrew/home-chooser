@@ -69,14 +69,15 @@ static void invariants(const char *state, const char *label, int orphans_ok) {
         }
         g_free(f);
     }
-    /* N: an update that leaves 6-9 stops the guard before it looks at the state directory, so the old
-     * generated file stays behind (an orphan, never referenced). Reported, not failed: see the report. */
+    /* N below 10 (5, or an unparsable release): the guard does nothing and leftovers stay, reported only.
+     * From 10 on the leftovers of a 6-9 install (generated filters, snapshot) are removed. */
     if (generated_files(state) > ours && orphans_ok) { printf("NOTE %s: %d orphan generated file(s) in the state dir\n", label, generated_files(state) - ours); return; }
     if (generated_files(state) > ours) { printf("FAIL %s: %d generated file(s) left, list names %d\n", label, generated_files(state), ours); exit(1); }
     if (persisted) { printf("FAIL %s: %d non-volatile configd write(s)\n", label, persisted); exit(1); }
 }
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL %s: ", label); printf(__VA_ARGS__); printf("\n"); exit(1); } } while (0)
 static char *slurp(const char *p) { char *s = NULL; g_file_get_contents(p, &s, NULL, NULL); return s; }
+static int major_of(const char *v) { return atoi(v); }
 static void copy_to(const char *from, const char *to) {
     if (!strcmp(from, "-")) { unlink(to); return; }
     char *b = slurp(from); assert(b); assert(g_file_set_contents(to, b, -1, NULL)); g_free(b);
@@ -140,16 +141,23 @@ int main(int argc, char **argv) {
             CHECK(jvalue_equal(current, firmware), "list is not exactly the firmware's own");
             CHECK(generated_files(state) == 0, "generated file left behind");
             CHECK(starts == 0, "announced a redirect that does not happen");
+            /* The gate (watcher baked / hc_gate_wanted caller) needs rc 0 and active=yes: neither holds. */
+            CHECK(!strstr(out->str, "active=yes"), "an unknown shape reports an active filter");
             if (!live) CHECK(sets == before, "boot wrote configd %d time(s) for stock", sets - before);
         } else if (expect[0] == 'N') {
             CHECK(rc == 0 && strstr(out->str, "patch=not-needed"), "not a no-op: %s", out->str);
             CHECK(sets == before && jvalue_equal(current, firmware), "touched the list");
+            if (major_of(version) >= 10) {
+                CHECK(generated_files(state) == 0, "%d generated file(s) left from the 6-9 install", generated_files(state));
+                CHECK(!g_file_test(snap, G_FILE_TEST_EXISTS), "stock snapshot left from the 6-9 install");
+                CHECK(g_file_test(flag, G_FILE_TEST_EXISTS) && g_file_test(home, G_FILE_TEST_EXISTS), "removed more than the generated files");
+            }
         } else if (expect[0] == 'K') {
             CHECK(live && rc == 1, "rc %d", rc);
             CHECK(strstr(out->str, "reason="), "no reason");
             CHECK(generated_files(state) == 1, "generated filter not retained");
         } else CHECK(0, "unknown expectation %s", expect);
-        last_n = expect[0] == 'N';
+        last_n = expect[0] == 'N' && major_of(version) < 10;
         invariants(state, label, last_n);
         g_free(source); g_free(expected); g_free(why); g_string_free(out, TRUE); g_free(spec);
     }

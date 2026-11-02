@@ -33,6 +33,7 @@ typedef struct {
     gboolean live, string_record, absent_record, ignore_write;
     gint64 clock;
     GArray *write_times, *waits;
+    jvalue_ref keylist; /* the fake configd's keyFilters list (real key path only) */
 } Fixture;
 static const char *base;
 static unsigned serial;
@@ -78,6 +79,14 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
             }
         }
         g_free(id);
+    } else if (eq(method, "getCurrentState")) r = parse_object("{\"returnValue\":true,\"currentState\":\"launcher\"}");
+    else if (eq(method, "getConfigs") || eq(method, "setConfigs")) {
+        const char *key = "com.webos.surfacemanager.keyFilters";
+        if (eq(method, "setConfigs")) { if (f->keylist) j_release(&f->keylist); f->keylist = jvalue_duplicate(member(member(p, "configs"), key)); }
+        r = response(TRUE);
+        if (eq(method, "getConfigs")) {
+            jvalue_ref configs = jobject_create(); jobject_set(configs, key_buf(key), jvalue_duplicate(f->keylist)); jobject_set(r, key_buf("configs"), configs);
+        }
     } else if (eq(method, "getSystemSettings")) {
         r = response(!f->absent_record);
         if (f->absent_record) put_str(r, "errorText", "There is no matched result from DB");
@@ -217,7 +226,7 @@ static Fixture *setup(int major, const char *id) {
 static void teardown(Fixture *f) {
     hc_watch_free(f->w); watch_remove_tree(g_ptr_array_index(f->paths, 0));
     g_ptr_array_free(f->paths, TRUE); g_ptr_array_free(f->calls, TRUE); g_hash_table_destroy(f->apps);
-    j_release(&f->record); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE);
+    j_release(&f->record); if (f->keylist) j_release(&f->keylist); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE);
     g_string_free(f->launched, TRUE); g_string_free(f->closed, TRUE); g_hash_table_destroy(f->windows); g_free(f);
 }
 static void pump(void) {
@@ -409,6 +418,34 @@ static void test_baked(void) {
     installed(f, "gone.app", -1); choice(f, "gone.app"); settings(f, "{}"); CHECK("W12 absent not baked", !eq(f->w->baked, "gone.app")); teardown(f);
     f = setup(8, "my.home"); start(f); installed(f, "my.home", -1); event(f, 'A', "{}"); choice(f, "other.home"); settings(f, "{}");
     CHECK("W12 changed missing choice", !f->w->missing && home_is(f, "other.home")); teardown(f);
+}
+/* G21: with the real key path, a stock systemUi.js whose launchHomeApp is unknown leaves the filter stock,
+ * so nothing is baked and the 6-9 home gate stays unmounted (and is unmounted if it was mounted). */
+static const char *known_stock;
+static void real_key(Fixture *f, const char *stock_js) {
+    f->c.stock_js = stock_js; f->keylist = jdom_create(key_buf("[{\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"handleKeyEvent\"}]"), jschema_all(), NULL);
+    hc_watch_free(f->w);
+    HCWatchOps ops = {.call = fake_call, .access = fake_access, .gate = fake_gate, .now = now, .wait = wait_ms, .context = f};
+    f->w = hc_watch_new(&f->c, &ops);
+}
+static void test_unknown_shape(void) {
+    if (!known_stock) { fprintf(stderr, "SKIP G21: no known stock systemUi.js given\n"); return; }
+    for (int major = 6; major <= 9; major++) {
+        Fixture *f = setup(major, "my.home"); char *stock = path(f, f->c.state_dir, "stock.js");
+        file(stock, "function other() {}\n"); unlink(path(f, f->c.state_dir, "keyfilters-stock.json"));
+        real_key(f, stock); start(f);
+        CHECK("G21 unknown shape: nothing baked", !f->w->baked);
+        CHECK("G21 unknown shape: gate not mounted", f->gate_on == 0 && f->gate_last <= 0);
+        event(f, 'A', "{}"); CHECK("G21 unknown shape stays unmounted", f->gate_on == 0 && !f->w->baked);
+        char *known = NULL; g_file_get_contents(known_stock, &known, NULL, NULL); file(stock, known); g_free(known);
+        event(f, 'A', "{}");
+        CHECK("G21 known again: baked", eq(f->w->baked, "my.home"));
+        CHECK("G21 known again: gate mounted", f->gate_last == 1 && f->gate_on >= 1);
+        file(stock, "function other() {}\n"); settings(f, "{\"home\":\"my.home\"}"); choice(f, "other.home"); settings(f, "{\"home\":\"my.home\"}");
+        CHECK("G21 stock turned unknown: baked dropped", !f->w->baked);
+        CHECK("G21 stock turned unknown: gate unmounted", f->gate_last == 0);
+        teardown(f);
+    }
 }
 static void test_uninstall(void) {
     for (int major = 5; major <= 12; major++) for (int mode = 0; mode < 4; mode++) {
@@ -932,8 +969,8 @@ static void test_end_log(void) {
     char *log=watch_read(f->c.log); CHECK("W20 last 200 lines",strstr(log,"old line 399") && !strstr(log,"old line 0 ")); g_free(log); teardown(f);
 }
 int main(int argc,char **argv) {
-    if(argc!=2)return 2;
-    base=argv[1]; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_end_log();
+    if(argc!=2 && argc!=3)return 2;
+    base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }
