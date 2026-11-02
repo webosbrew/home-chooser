@@ -577,6 +577,9 @@ static void test_preload_close(void) {
     f=setup(11,"my.home"); f->w->c.preload=FALSE; start(f); CHECK("W14 toggle",!f->preload_off && !f->closes); teardown(f);
     f=setup(11,STOCK); start(f); CHECK("W14 stock on",f->preload_on==1 && !f->preload_off); choice(f,"my.home"); event(f,'A',"{}");
     CHECK("W14 change off immediate ready",f->preload_off==1 && f->w->preload_ready); teardown(f);
+    /* A non-boot move to a launcher whose first setPreloadPolicy fails retries and then closes LG Home. */
+    f=setup(11,STOCK); start(f); f->preload_fail=1; f->foreground="my.home"; choice(f,"my.home"); event(f,'A',"{}");
+    CHECK("W15 non-boot retry sets ready and closes",f->preload_off==2 && f->w->preload_ready && f->closes==1); teardown(f);
     /* I08: webOS 10 closes once per boot and once per choice change, never in a loop. */
     f=setup(10,"my.home"); f->foreground="my.home"; start(f); CHECK("I08 10 closes after the launcher is in front",f->closes==1);
     for(int i=0;i<3;i++) { event(f,'L',"{\"event\":\"launch\",\"appId\":\"com.webos.app.home\"}"); event(f,'F',"{\"appId\":\"my.home\"}"); event(f,'T',NULL); }
