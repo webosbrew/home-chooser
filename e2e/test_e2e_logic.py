@@ -78,9 +78,35 @@ class ClickInput(unittest.TestCase):
             hc_e2e.alerts.match_element(f, 'Use as Home')
         self.assertEqual(hc_e2e.alerts.match_element(f, 'Use as Home', ('text', 'button'))['kind'], 'button')
 
+    def test_every_vm_argument_is_host_qualified(self):
+        """A name that exists on several beanjar hosts must never reach beanjar bare."""
+        from unittest.mock import Mock, patch
+        for mode in ('local', 'remote'):
+            h = hc_e2e.beanjar.BeanjarHost(mode=mode, name='pi')
+            h.sh = Mock(return_value=(0, 'dir: /d\n'))
+            h.running_vms = Mock(return_value=[])
+            h.fetch = Mock(return_value=True)
+            h.display_beanjar = Mock(return_value=(0, 'ok'))
+            with patch.object(hc_e2e.beanjar, 'close_sessions'):
+                h.info('w22o-queue-us')
+                h.settings('w22o-queue-us')
+                h.set_settings('w22o-queue-us', link='lan')
+                h.start('w22o-queue-us')
+                h.stop('w22o-queue-us')
+                h.viewer_open('w22o-queue-us')
+                h.viewer_close('w22o-queue-us')
+                h.tv_screenshot('w22o-queue-us', '/tmp/x.png')
+            cmds = [c.args[0] for c in h.sh.call_args_list if c.args[0].startswith('beanjar ')]
+            self.assertEqual(len(cmds), 8, cmds)
+            for cmd in cmds:
+                self.assertIn('local/w22o-queue-us', cmd.split(), cmd)
+                self.assertNotIn('w22o-queue-us', [w for w in cmd.split()], cmd)
+            self.assertIn('beanjar start local/w22o-queue-us', cmds)
+            self.assertIn('beanjar stop local/w22o-queue-us', cmds)
+
     def test_click_command_local_and_host(self):
         from unittest.mock import Mock
-        for mode, target in [('local', 'vm'), ('remote', 'pi/vm')]:
+        for mode, target in [('local', 'local/vm'), ('remote', 'pi/vm')]:
             h = hc_e2e.beanjar.BeanjarHost(mode=mode, name='pi')
             h.display_beanjar = Mock(return_value=(0, 'ok'))
             h.remote_click('vm', [60, 40], self.frame())
@@ -2414,7 +2440,7 @@ class BeanjarScreensaverHelper(unittest.TestCase):
         return host
 
     def test_help_is_probed_once_and_uses_local_multi_host_cli_with_bounded_calls(self):
-        for mode, target in (('remote', 'pi/vm'), ('local', 'vm')):
+        for mode, target in (('remote', 'pi/vm'), ('local', 'local/vm')):
             with self.subTest(mode=mode):
                 host = self.host(mode)
                 self.assertEqual(host.screensaver('stop', 'vm'), (0, 'help'))
@@ -2607,7 +2633,7 @@ class HostInput(unittest.TestCase):
                          ['ENTER', 'ENTER', 'BACK', 'HOME', 'UP', 'DOWN', 'LEFT', 'RIGHT', *'0123456789'])
         self.assertTrue(all(c[-2:] == ('--hold', '150') for c in calls[1:]))
         host.mode = 'local'
-        self.assertEqual(host.remote_target('vm'), 'vm')
+        self.assertEqual(host.remote_target('vm'), 'local/vm')
 
     def test_beanjar_missing_and_dimmed_keys_fail_before_press(self):
         from types import SimpleNamespace
@@ -2652,8 +2678,8 @@ class HostInput(unittest.TestCase):
         host.start('vm')
         host.vnc_stop('vm')  # final cleanup, including when the VM is left running
         self.assertEqual([e[:2] for e in events], [
-            ('start', 'vm'), ('vnc', 'start'), ('vnc', 'stop'), ('stop', 'vm'),
-            ('start', 'vm'), ('vnc', 'start'), ('vnc', 'stop')])
+            ('start', 'local/vm'), ('vnc', 'start'), ('vnc', 'stop'), ('stop', 'local/vm'),
+            ('start', 'local/vm'), ('vnc', 'start'), ('vnc', 'stop')])
         host.display_beanjar.side_effect = None
         host.display_beanjar.return_value = (1, 'beanjar-vnc is already serving vm (pid 123)')
         host.vnc_start('vm')
@@ -2662,7 +2688,7 @@ class HostInput(unittest.TestCase):
         with self.assertRaisesRegex(hc_e2e.beanjar.KeySendError, 'cannot bind'):
             host.vnc_start('vm')
         host.stop('vm')  # even failed VNC cleanup must still stop the VM
-        self.assertEqual(events[-1], ('stop', 'vm'))
+        self.assertEqual(events[-1], ('stop', 'local/vm'))
 
     def test_await_boot_restarts_vnc_before_returning_to_keys(self):
         from unittest.mock import Mock, patch
@@ -2710,9 +2736,9 @@ class HostInput(unittest.TestCase):
                             hc_e2e.cli.main()
                     else:
                         hc_e2e.cli.main()
-                self.assertEqual([e[:2] for e in events], [('start', 'w24g-ombre'),
+                self.assertEqual([e[:2] for e in events], [('start', 'local/w24g-ombre'),
                                  ('vnc', 'start'), ('vnc', 'stop')] +
-                                 ([] if no_stop else [('stop', 'w24g-ombre')]))
+                                 ([] if no_stop else [('stop', 'local/w24g-ombre')]))
 
     def test_qmp_protocol_and_errors(self):
         import socket
@@ -2815,7 +2841,7 @@ class DeviceAccess(unittest.TestCase):
     def test_vm_target_follows_the_host(self):
         local = hc_e2e.beanjar.BeanjarHost('local', 'localhost', 'here')
         remote = hc_e2e.beanjar.BeanjarHost('remote', 'mariotaku@rockpi4a-1.lan', 'rockpi4a-1')
-        self.assertEqual(hc_e2e.device.Device.for_vm(local, 'vm').target, 'vm')
+        self.assertEqual(hc_e2e.device.Device.for_vm(local, 'vm').target, 'local/vm')
         self.assertEqual(hc_e2e.device.Device.for_vm(remote, 'vm').target, 'rockpi4a-1/vm')
         self.assertEqual(hc_e2e.device.Device.for_vm(remote, 'vm').vm, 'rockpi4a-1/vm')
 
