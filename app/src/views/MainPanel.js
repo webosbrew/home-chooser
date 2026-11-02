@@ -11,17 +11,14 @@ import {ConfirmDialog, HomeItem, Toast} from './parts';
 import css from './Home.module.less';
 
 const FATAL_TEXT = {
-	unreachable: ['Homebrew Channel is needed', 'Home Chooser needs Homebrew Channel on a rooted TV. Install it, make sure it is running, then open Home Chooser again.'],
-	denied: ["Homebrew Channel can't set up root access yet", "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser needs it."],
-	notRoot: ['Home Chooser has no root access', "Home Chooser's service did not start as root. Root the TV and make sure Homebrew Channel has root access, then open Home Chooser again."],
-	failed: ["Home Chooser can't reach the TV's services", "Something went wrong while setting up Home Chooser's service. Make sure Homebrew Channel is installed and running, then open Home Chooser again."]
+	unreachable: "Homebrew Channel isn't installed or isn't running.",
+	denied: "Homebrew Channel doesn't give Home Chooser root access on this TV.",
+	notRoot: "Home Chooser's service isn't running as root.",
+	failed: "Home Chooser couldn't set up its service."
 };
 
 // Why the list is disabled; one plain line at the top of the list area.
-export const rootReason = (kind) => {
-	const [title, body] = FATAL_TEXT[kind] || FATAL_TEXT.failed;
-	return title + '. ' + body;
-};
+export const rootReason = (kind) => FATAL_TEXT[kind] || FATAL_TEXT.failed;
 
 // A line at the bottom only when the Home button is not working or cannot be set up; nothing when
 // all is fine. `patch` is null outside webOS 6 to 9, where the stock Home button follows the choice

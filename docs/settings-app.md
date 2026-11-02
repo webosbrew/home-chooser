@@ -37,9 +37,10 @@ Home Chooser is in English only.
   is only read/cleared for compatibility. See [Live Home key filter](home-key-hook.md).
 
 * **Footer.** On webOS 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
-* **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later:
-  "Your Homebrew Channel doesn't let apps elevate Home Chooser's service yet. Update Homebrew Channel; Home Chooser
-  needs it."), or the service not coming up as root ("Home Chooser's service did not start as root"): the panel keeps its layout. A plain one-line reason is at the
+* **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later),
+  or the service not coming up as root. One line per case: "Homebrew Channel isn't installed or isn't running.",
+  "Homebrew Channel doesn't give Home Chooser root access on this TV.", "Home Chooser's service isn't running as root.",
+  "Home Chooser couldn't set up its service." (anything else). Each states the case and suggests no fix: the panel keeps its layout. A plain one-line reason is at the
   top of the list area and the list is disabled (Moonstone `disabled`: rows are dimmed, cannot be
   focused or clicked, no confirmation opens), with nothing focused; Back still closes the panel. Without
   root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs

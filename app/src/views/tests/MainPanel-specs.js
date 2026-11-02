@@ -155,10 +155,10 @@ describe('Home Chooser screen', () => {
 	});
 
 	test.each([
-		['unreachable', /needs Homebrew Channel on a rooted TV/],
-		['denied', /doesn't let apps elevate Home Chooser's service yet\. Update Homebrew Channel; Home Chooser needs it\./],
-		['notRoot', /service did not start as root/],
-		['failed', /can't reach the TV's services/]
+		['unreachable', "Homebrew Channel isn't installed or isn't running."],
+		['denied', "Homebrew Channel doesn't give Home Chooser root access on this TV."],
+		['notRoot', "Home Chooser's service isn't running as root."],
+		['failed', "Home Chooser couldn't set up its service."]
 	])('no root (%s): the reason on top and a disabled list, same layout', async (kind, text) => {
 		const onExit = jest.fn();
 		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} onExit={onExit} />);

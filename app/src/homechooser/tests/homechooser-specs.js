@@ -789,7 +789,7 @@ describe('diagnoseExecFailure', () => {
 		expect(diagnoseExecFailure('Denied method call "exec" for category "/"')).toMatch(/webOS 26 and later/);
 	});
 	test('names a missing Homebrew Channel', () => {
-		expect(diagnoseExecFailure('Service does not exist: org.webosbrew.hbchannel.service')).toMatch(/Install and start Homebrew Channel/);
+		expect(diagnoseExecFailure('Service does not exist: org.webosbrew.hbchannel.service')).toMatch(/Homebrew Channel is not reachable/);
 	});
 });
 

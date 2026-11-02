@@ -157,7 +157,7 @@ class UpdateSteps:
         self.home_press(self.launcher, '3u-home')
         if self.strat.name == 'root-shell':
             # the update reinstalled the service: root is gone and only the luna path (the app) gets it back,
-            # which root-shell stands in for; without it the app shows "can't set up root access yet"
+            # which root-shell stands in for; without it the app shows its no-root line
             self.strat.prepare(d, r)
             self.strat.verify(d, r)
         self.open_app_check('3u-app')
