@@ -441,6 +441,11 @@ static void test_unknown_shape(void) {
         event(f, 'A', "{}");
         CHECK("G21 known again: baked", eq(f->w->baked, "my.home"));
         CHECK("G21 known again: gate mounted", f->gate_last == 1 && f->gate_on >= 1);
+        /* A refresh that finds the same filter already loaded changes nothing and is still active
+         * (6-8 release run 2026-11-02: the gate was unmounted after such a refresh). */
+        g_clear_pointer(&f->w->baked, g_free); event(f, 'A', "{}");
+        CHECK("G21 unchanged filter: still baked", eq(f->w->baked, "my.home"));
+        CHECK("G21 unchanged filter: gate stays mounted", f->gate_last == 1);
         file(stock, "function other() {}\n"); settings(f, "{\"home\":\"my.home\"}"); choice(f, "other.home"); settings(f, "{\"home\":\"my.home\"}");
         CHECK("G21 stock turned unknown: baked dropped", !f->w->baked);
         CHECK("G21 stock turned unknown: gate unmounted", f->gate_last == 0);

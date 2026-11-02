@@ -255,7 +255,7 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
             }
             g_free(file);
         }
-        if (unchanged) { unlink(version); rc = 0; goto done; }
+        if (unchanged) { unlink(version); g_string_append(out, "active=yes\nreboot=no\n"); rc = 0; goto done; }
     }
     if (!jvalue_equal(next, current) && !select_list(o, next)) {
         /* A failed/readback-ambiguous write may have applied. Restore stock through configd;
