@@ -16,6 +16,8 @@ from ..releases import device_text_forms, expects_reboot_dialog
 class ChooseSteps:
     """Phases choose (step 2), switch (2s) and window-chosen; the device texts."""
 
+    overlay_takes_pointer = False
+
     def step2(self):
         r, d = self.rec, self.dev
         r.begin('2 choose the launcher through the UI')
@@ -96,20 +98,10 @@ class ChooseSteps:
             raise RuntimeError('Home Chooser is not on screen; not pressing keys')
         self.ensure_key_focus(rows)
         ui = self.ui() or ui
-        clicking = self.use_click()
+        clicking = self.use_click() and not self.overlay_takes_pointer
         if clicking:
-            try:
-                self.click_element(self.L.title, role=('text', 'button'),
-                                   effect=lambda: bool((self.ui() or {}).get('dialog')), label='launcher row')
-            except RuntimeError as exc:
-                if full or 'click effect not observed' not in str(exc):
-                    raise
-                # A switch over a native overlay launcher (Dock's pattern: a transparent full-screen overlay
-                # window): the overlay takes the pointer even above Home Chooser's panel, while the remote's
-                # keys reach the panel.  A user reaches it with the remote, so the keys are the path.
-                r.note('the click did not reach Home Chooser (the previous launcher\'s overlay window takes the '
-                       'pointer); choosing with the remote keys instead', str(exc))
-                clicking = False
+            self.click_element(self.L.title, role=('text', 'button'), effect=lambda: bool((self.ui() or {}).get('dialog')),
+                               label='launcher row')
         if not clicking:
             # move focus to the launcher's row; a key only while our page is readable
             for _ in range(len(rows) + 2):
@@ -243,7 +235,15 @@ class ChooseSteps:
         if not ui:
             raise RuntimeError('UI never listed the launcher; cannot continue')
         prev = d.sh('cat %s 2>&1' % CHOICE)[1].strip()
+        # A native overlay launcher is a transparent full-screen window (Dock's pattern) that stays above
+        # Home Chooser's panel: a click lands on it, and it takes the key focus too (the list then ignores
+        # the keys).  The pointer is not used over it; a user reaches the panel with the remote's keys.
+        self.overlay_takes_pointer = '.native.overlay' in prev
+        if self.overlay_takes_pointer:
+            r.note('the previous launcher %s is a native overlay window: choosing with the remote keys, '
+                   'no click (it takes the pointer and the key focus)' % prev)
         self.choose_in_ui(ui, full=False)
+        self.overlay_takes_pointer = False
         d.close(APP_ID)
         self.close_insp()
         self.check_previous_closed(prev)
