@@ -8,6 +8,7 @@ import time
 from .. import timing
 from ..alerts import alert_focus, alert_style_swap, match_element
 from ..beanjar import KeySendError
+from ..constants import SCREENSAVER_ID
 from ..evidence import AUDIOOUTPUTD_REF
 from ..inspector import FOCUS_JS
 from ..recorder import screenshot_reason
@@ -70,7 +71,8 @@ class ScreenInput:
             self.host._frame_mapping_logged = True
         return frame
 
-    def click_element(self, text=None, role=None, region=None, effect=None, label='UI', frame=None, read_after=True):
+    def click_element(self, text=None, role=None, region=None, effect=None, label='UI', frame=None, read_after=True,
+                      focused_row=None):
         frame = frame if frame is not None else self.elements(label)
         row = match_element(frame, text, role, region)
         self.rec.say('input click: %s %r at %s' % (label, text or role, row['centre']))
@@ -78,7 +80,16 @@ class ScreenInput:
         if rc:
             raise KeySendError('click failed: ' + out)
         if effect is not None:
-            if not self.wait(effect, 20, 1):
+            seen = self.wait(effect, 5 if focused_row else 20, 1)
+            if not seen and focused_row:
+                # The pointer arrived and focused the row but the activation was lost (seen once on 11.x):
+                # press OK once, only when the row is focused and no dialog is up.
+                ui = self.ui() or {}
+                if ui.get('row') == focused_row and not ui.get('dialog'):
+                    self.rec.say('click fallback: %s is focused but nothing happened after 5 s; pressing OK once' % label)
+                    self.press('OK')
+                seen = self.wait(effect, 15, 1)
+            if not seen:
                 self.click_diagnostics(label)
                 raise RuntimeError('click effect not observed: ' + label)
         return self.elements(label + '-after') if read_after else None
@@ -228,6 +239,7 @@ class ScreenInput:
         screenshot) and waits up to --wait-popup seconds for someone to dismiss it by hand, then
         fails the run."""
         r = self.rec
+        self.wake_screensaver('keys')
         end = time.time() + timing.seconds(self.a.wait_popup)
         first = True
         while True:
@@ -253,16 +265,17 @@ class ScreenInput:
                 raise RuntimeError('keys still blocked after dismissing the audiooutputd crash dialog; no more keys')
             if first:
                 fg = self.dev.foreground()
+                saver = SCREENSAVER_ID in self.running_ids()
                 epl = self.dev.luna('luna://com.webos.service.oledepl/isPixelRefresherCondition')
                 self.shot('keys-blocked')
                 r.say('keys do not reach Home Chooser (focus stayed on %s); foreground %s; oledepl '
-                      'isPixelRefresherCondition %s; a system popup probably holds key focus (see the '
-                      'keys-blocked screenshot); dismiss it by hand with Cancel, waiting up to %ds'
-                      % (ui.get('row'), fg[1], epl[:160], self.a.wait_popup))
+                      'isPixelRefresherCondition %s; screensaver %s; no popup was identified (see the '
+                      'keys-blocked screenshot); waiting up to %ds for the keys to work'
+                      % (ui.get('row'), fg[1], epl[:160], 'running' if saver else 'not running', self.a.wait_popup))
                 first = False
             if time.time() >= end:
                 break
             timing.sleep(10)
         r.check('remote keys reach Home Chooser (no system popup holding key focus)', False,
                 'focus did not move after a probe key; see the keys-blocked screenshot')
-        raise RuntimeError('keys blocked: a system popup probably holds key focus; not pressing OK on it')
+        raise RuntimeError('keys blocked: a probe key did not move the focus (see the keys-blocked evidence); not pressing OK')

@@ -59,8 +59,15 @@ void preload_sync(HCWatch *w, int state, char why)
         w->preload_source = g_timeout_add(0, boot_attempt, w);
         return;
     }
-    if (preload_set(w, state == 1) && state == 2) {
-        log_stock(w); w->preload_ready = TRUE;
+    unsigned generation = w->preload_generation;
+    gboolean ok = preload_set(w, state == 1);
+    if (state != 2) return;
+    if (ok) { log_stock(w); w->preload_ready = TRUE; return; }
+    /* A slow preloadmanager: retry as the boot path does, or preload_ready would stay FALSE for good. */
+    if (generation == w->preload_generation && w->preload_state == 2 && w->status < 0) {
+        w->preload_attempts = 1;
+        if (w->preload_attempts < w->c.preload_tries)
+            w->preload_source = g_timeout_add(w->c.preload_retry_ms, boot_attempt, w);
     }
 }
 void preload_follow(HCWatch *w, const char *id, char why)

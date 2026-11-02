@@ -3355,6 +3355,82 @@ class PreviousLauncherLog(unittest.TestCase):
         self.assertEqual(hc_e2e.evidence.previous_dropped([self.ARMED, self.SELF], 'old.home'), [self.SELF])
         self.assertEqual(hc_e2e.evidence.previous_dropped([self.ARMED, self.SELF], 'old.home2'), [])
 
+class MatrixFixes2(unittest.TestCase):
+    LINES = ['[crash] Fault Occured.', 'Reason : RDXDErr3_audiooutputd__Linux Crash: audiooutputd crashes at location',
+             'If you click YES and you turn off the TV', 'YES', 'NO']
+
+    def test_audiooutputd_dialog_per_line_ocr(self):
+        frame = {'elements': [{'kind': 'text', 'text': t} for t in self.LINES]}
+        msg, text = hc_e2e.evidence.audiooutputd_dialog(frame)
+        self.assertEqual(msg, '[crash] Fault Occured.')
+        self.assertIn('audiooutputd crashes', text)
+
+    def test_audiooutputd_dialog_rejects_other_shapes(self):
+        no_name = {'elements': [{'text': t} for t in self.LINES if 'audiooutputd' not in t]}
+        self.assertEqual(hc_e2e.evidence.audiooutputd_dialog(no_name)[0], None)
+        twice = {'elements': [{'text': t} for t in self.LINES + ['[crash] Fault Occured.']]}
+        self.assertEqual(hc_e2e.evidence.audiooutputd_dialog(twice)[0], None)
+
+    def click_scenario(self, ui, effect_after_ok):
+        s = scenario(11)
+        s.a = type('A', (), {})()
+        s.pressed, s.clicked = [], []
+        s.host = type('H', (), {'remote_click': lambda self_, vm, c, f: (0, '')})()
+        s.vm = 'vm'
+        s.elements = lambda label: {'width': 100, 'height': 100, 'elements': [{'kind': 'text', 'text': 'Row', 'centre': [1, 2], 'box': [0, 0, 5, 5]}]}
+        s.ui = lambda: ui
+        s.press = lambda *k: s.pressed.extend(k)
+        s.wait = lambda cond, timeout, every=3: s.pressed and effect_after_ok
+        s.click_diagnostics = lambda label: None
+        return s
+
+    def test_click_falls_back_to_ok_when_row_focused_without_dialog(self):
+        s = self.click_scenario({'row': 'r1'}, True)
+        s.wait = lambda cond, timeout, every=3: bool(s.pressed) if timeout == 15 else False
+        s.click_element('Row', effect=lambda: False, focused_row='r1', read_after=False)
+        self.assertEqual(s.pressed, ['OK'])
+
+    def test_click_no_fallback_when_dialog_or_other_row(self):
+        for ui in ({'row': 'r1', 'dialog': 'x'}, {'row': 'other'}):
+            s = self.click_scenario(ui, False)
+            s.wait = lambda cond, timeout, every=3: False
+            with self.assertRaises(RuntimeError):
+                s.click_element('Row', effect=lambda: False, focused_row='r1', read_after=False)
+            self.assertEqual(s.pressed, [])
+
+    def test_wake_screensaver(self):
+        s = scenario(11)
+        s.pressed, state = [], ['com.webos.app.screensaver']
+        s.running_ids = lambda: list(state)
+        s.press = lambda *k: (s.pressed.extend(k), state.clear())
+        s.wait = lambda cond, timeout, every=3: cond()
+        self.assertTrue(s.wake_screensaver('t'))
+        self.assertEqual(s.pressed, ['BACK'])
+        s.pressed = []
+        self.assertFalse(s.wake_screensaver('t'))
+        self.assertEqual(s.pressed, [])
+
+    def test_step_switch_closes_home_chooser_when_the_switch_fails(self):
+        from unittest.mock import MagicMock
+        s = scenario(11)
+        s.rec, s.dev = MagicMock(), MagicMock()
+        s.dev.install.return_value = (0, 'Installed package')
+        s.dev.sh.return_value = (0, 'prev')
+        s.L = MagicMock(is_demo=False, appinfo={}, overlay=False)
+        s.launcher = 'l'
+        for name in ('popup_mark_now', 'qml_note', 'mark_log', 'residency', 'close_insp', 'messages_mark', 'open_panel',
+                     'wait_closed', 'check_previous_closed'):
+            setattr(s, name, MagicMock())
+        s.running_ids = lambda: [hc_e2e.constants.APP_ID]
+        s.wait = lambda *a, **k: {'rows': ['l']}
+        s.choose_in_ui = MagicMock(side_effect=RuntimeError('click effect not observed'))
+        with __import__("unittest.mock").mock.patch("hc_e2e.steps.choose.Inspector"):
+            with self.assertRaises(RuntimeError):
+                s.step_switch()
+        closes = [c for c in s.dev.close.call_args_list if c.args == (hc_e2e.constants.APP_ID,)]
+        self.assertEqual(len(closes), 2)  # the stale panel before open_panel, and the finally
+        s.check_previous_closed.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

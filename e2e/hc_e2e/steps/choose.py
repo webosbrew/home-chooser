@@ -101,7 +101,7 @@ class ChooseSteps:
         clicking = self.use_click() and not self.overlay_takes_pointer
         if clicking:
             self.click_element(self.L.title, role=('text', 'button'), effect=lambda: bool((self.ui() or {}).get('dialog')),
-                               label='launcher row')
+                               label='launcher row', focused_row=self.launcher)
         if not clicking:
             # move focus to the launcher's row; a key only while our page is readable
             for _ in range(len(rows) + 2):
@@ -228,6 +228,10 @@ class ChooseSteps:
         self.close_insp()
         self.insp = Inspector(self.dev)
         self.launch_mark = self.messages_mark()
+        if APP_ID in self.running_ids():  # a stale panel of an earlier failed step
+            r.say('2s: closing a stale Home Chooser before opening it')
+            d.close(APP_ID)
+            self.wait_closed(APP_ID, 10)
         front = self.open_panel('2s open')
         ui = self.wait(lambda: (lambda u: u if u and self.launcher in (u.get('rows') or []) else None)(self.ui()), 120)
         r.check('the list shows the launcher row (data-app-id)', bool(ui),
@@ -242,10 +246,13 @@ class ChooseSteps:
         if self.overlay_takes_pointer:
             r.note('the previous launcher %s is a native overlay window: choosing with the remote keys, '
                    'no click (it takes the pointer and the key focus)' % prev)
-        self.choose_in_ui(ui, full=False)
-        self.overlay_takes_pointer = False
-        d.close(APP_ID)
-        self.close_insp()
+        try:
+            self.choose_in_ui(ui, full=False)
+        finally:
+            self.overlay_takes_pointer = False
+            d.close(APP_ID)
+            self.wait_closed(APP_ID, 10)
+            self.close_insp()
         self.check_previous_closed(prev)
 
     def check_previous_closed(self, prev):
