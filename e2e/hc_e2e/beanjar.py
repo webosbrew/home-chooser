@@ -6,7 +6,7 @@ import re
 import shlex
 import shutil
 
-from . import timing
+from . import mitm, timing
 from .device import close_sessions
 
 
@@ -100,6 +100,8 @@ class BeanjarHost:
         self.input_rec = None
         self._remote_keys = {}
         self._frame_mapping_logged = False
+        self.update_offer = 'keep'  # 'off': every boot gets LG's "no new version" answer (hc_e2e/mitm.py)
+        self.say = print
 
     @classmethod
     def from_config(cls, cfg, name, mode=None, device=None):
@@ -190,6 +192,8 @@ class BeanjarHost:
         close_sessions()  # a root shell of the previous boot is gone
         result = self.beanjar('start', self.ref(vm), timeout=600)
         if result[0] == 0:
+            if self.update_offer == 'off':  # first: LG's check comes about 20 s after QEMU starts
+                mitm.turn_off_update_offer(self, vm, self.say)
             self.vnc_start(vm)
         return result
 
