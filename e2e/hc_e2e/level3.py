@@ -5,6 +5,7 @@ The device side is hc_e2e/steps/level3.py."""
 import base64
 import json
 import re
+import shlex
 
 LEVEL3_SINCE = 3
 ICON_ERRORS = ('notFound', 'noIcon', 'iconTooLarge', 'overBudget')
@@ -112,11 +113,41 @@ def icon_sample(apps, size='extraLargeIcon', limit=6):
     return named, bare
 
 
-def icons_problems(items, reply, named):
+def icon_files(apps, size):
+    """{id: device path} of the `size` icon file each listApps entry names (folderPath + name; a name that
+    is already absolute is taken as it is); entries without a folderPath have no path to look at."""
+    out = {}
+    for a in apps:
+        if not (isinstance(a, dict) and isinstance(a.get('id'), str) and a.get(size)):
+            continue
+        folder, name = a.get('folderPath'), a[size]
+        if isinstance(name, str) and name.startswith('/'):
+            out[a['id']] = name
+        elif isinstance(folder, str) and folder and isinstance(name, str):
+            out[a['id']] = folder.rstrip('/') + '/' + name
+    return out
+
+
+def icon_probe_command(paths):
+    """One shell command that prints `Y <path>` or `N <path>` for each path, by `test -r`."""
+    return 'for p in %s; do if [ -r "$p" ]; then echo "Y $p"; else echo "N $p"; fi; done' % ' '.join(
+        shlex.quote(p) for p in paths)
+
+
+def icon_probe_readable(files, output):
+    """The ids of `files` ({id: path}) whose file the probe's output says is readable.  An id the output
+    does not mention is not counted as readable."""
+    ok = {line[2:] for line in (output or '').splitlines() if line.startswith('Y ')}
+    return {i for i, path in files.items() if path in ok}
+
+
+def icons_problems(items, reply, named, present=None):
     """getIcons {items} reply against what was asked: one entry per item in order; an entry is an icon (an image
     data URL whose byteLength is the decoded length) or one of the documented errors; an item whose listApps
     entry has no icon of that size (not in `named`) is noIcon, never another size's picture.  Returns
-    (problems, number of icons read)."""
+    (problems, number of icons read).  `present` (default `named`) is the subset of `named` whose file is
+    readable on the device: only those can return data, the others are noIcon."""
+    present = named if present is None else present
     icons = (reply or {}).get('icons')
     if not isinstance(icons, list):
         return ['icons is not an array'], 0
@@ -130,8 +161,8 @@ def icons_problems(items, reply, named):
         elif 'errorCode' in entry:
             if entry['errorCode'] not in ICON_ERRORS:
                 p.append('%s: unknown errorCode %r' % (who, entry['errorCode']))
-            if who not in named and entry['errorCode'] != 'noIcon':
-                p.append('%s: has no icon of this size, expected noIcon, got %s' % (who, entry['errorCode']))
+            if who not in present and entry['errorCode'] != 'noIcon':
+                p.append('%s: has no readable icon of this size, expected noIcon, got %s' % (who, entry['errorCode']))
         else:
             url = entry.get('dataUrl')
             m = re.match(r'data:(image/[a-z0-9.+-]+);base64,(.*)$', url or '', re.S)
@@ -147,10 +178,10 @@ def icons_problems(items, reply, named):
                 p.append('%s: byteLength %r, decoded %d' % (who, entry.get('byteLength'), n))
             if entry.get('mimeType') != m.group(1):
                 p.append('%s: mimeType %r, data URL says %s' % (who, entry.get('mimeType'), m.group(1)))
-            if who not in named:
-                p.append('%s: got a picture for an app whose entry has no such icon' % who)
+            if who not in present:
+                p.append('%s: got a picture for an app whose entry has no such icon' % who if who not in named else
+                         '%s: got a picture although its icon file is not readable' % who)
             data += 1
-    if named and not data and not p:
-        # a named icon may still be missing on disk or outside the app's folder (noIcon): only all of them is odd
-        p.append('none of %d apps with an icon of this size returned data' % len(named))
+    if present and not data and not p:
+        p.append('none of %d apps with a readable icon of this size returned data' % len(present))
     return p, data

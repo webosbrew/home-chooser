@@ -43,8 +43,24 @@ class Level3Steps:
 
     def api_level3_icon_size(self, label, apps, size):
         r = self.rec
-        named, bare = level3.icon_sample(apps, size)
-        items = [{'id': i, 'size': size} for i in named + ([bare] if bare else [])]
+        named, bare = level3.icon_sample(apps, size, limit=len(apps))
+        # what the service must answer comes from the device's own files: a name in appinfo is not a file
+        files = level3.icon_files(apps, size)
+        if files:
+            rc, out = self.dev.sh(level3.icon_probe_command(list(files.values())))
+            readable = level3.icon_probe_readable(files, out)
+        else:
+            readable = set()
+        # an app named without a folderPath cannot be looked at: it is left out of the sample
+        named = [i for i in named if i in files]
+        present = [i for i in named if i in readable][:6]
+        missing = [i for i in named if i not in readable][:2]
+        census = 'named by %d, file present on %d' % (len(named), len([i for i in named if i in readable]))
+        if not present:
+            r.note('%s: getIcons size %s: %s; no app has a readable file of this size, so no data is expected'
+                   % (label, size, census), '')
+        sample = present + missing
+        items = [{'id': i, 'size': size} for i in sample + ([bare] if bare else [])]
         if not items:
             r.note('%s: getIcons %s: no app to ask about' % (label, size), '')
             return
@@ -52,10 +68,11 @@ class Level3Steps:
         if (rep or {}).get('returnValue') is not True:
             problems, data = ['getIcons refused: %s %s' % ((rep or {}).get('errorCode'), (rep or {}).get('errorText'))], 0
         else:
-            problems, data = level3.icons_problems(items, rep, set(named))
+            problems, data = level3.icons_problems(items, rep, set(sample), set(present))
         r.check('%s: getIcons size %s: data for apps that name one, noIcon for one that does not' % (label, size),
-                not problems, '; '.join(problems) or '%d of %d items returned a picture (named by listApps: %d, '
-                'without: %s); %d reply bytes' % (data, len(items), len(named), bare, len(raw.encode())))
+                not problems, '; '.join(problems) or '%d of %d items returned a picture (%s; asked about %d with a '
+                'file, %d named without a file: noIcon as expected; without a name: %s); %d reply bytes' % (
+                    data, len(items), census, len(present), len(missing), bare, len(raw.encode())))
 
     # -- the live stream: a subscription held across a launch and a close of the disposable app
     def stream_begin(self):
