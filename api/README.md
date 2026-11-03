@@ -1,17 +1,18 @@
 # Launcher API description
 
 [`launcher-v1.openrpc.json`](launcher-v1.openrpc.json) is a machine-readable description of the
-launcher API, `apiVersion` 2, in [OpenRPC](https://spec.open-rpc.org/) 1.3.2. `apiVersion` is a feature
+launcher API, `apiVersion` 3, in [OpenRPC](https://spec.open-rpc.org/) 1.3.2. `apiVersion` is a feature
 level that only grows (see [Stability](../docs/launcher-api.md#stability), tag `api-v1` for level 1), and this file
-describes every level: the eight methods of level 1 and what level 2 added, marked `x-since: 2`, their parameters and
+describes every level: the eight methods of level 1, what level 2 added, marked `x-since: 2`, and what level 3 added, marked `x-since: 3`, their parameters and
 replies as JSON Schema, every `errorCode` each method can send, and examples. [`docs/launcher-api.md`](../docs/launcher-api.md) is the prose contract and wins
 where the two differ; a change to either must keep them in step.
 
 ## What is in it
 
 * **Methods.** `getInfo`, `listApps`, `listRunning`, `getForegroundApp`, `getAppInfo`, `getAppIcon`,
-  `closeApp` and `uninstallApp`, and, added at level 2, `listLaunchPoints`, `listInputs` and
-  `getIcons`, with named parameters (`paramStructure: by-name`). Facts the guide
+  `closeApp` and `uninstallApp`, added at level 2, `listLaunchPoints`, `listInputs` and
+  `getIcons`, and added at level 3, `getAppLifeEvents` (a stream: `x-stream`, with its events in
+  `x-events`), with named parameters (`paramStructure: by-name`). Facts the guide
   states about a method are `x-` fields on it: `x-needsRoot`, `x-needsPermission`,
   `x-needsSelectedHome`, `x-subscribes`, `x-forJailedLauncher`, `x-ignoredParams`, `x-notes` and so
   on.
@@ -57,7 +58,8 @@ only). Do not edit the files by hand.
   codes. `subscribe(method, params, onReply, onError)` opens a subscription of `listApps`,
   `listLaunchPoints`, `listInputs`, `listRunning` or `getForegroundApp`: `onReply` gets every
   successful reply (the whole state, again after each change), `onError` the `HomeChooserError` that ended it, and the returned object's
-  `cancel()` ends it.
+  `cancel()` ends it. `getAppLifeEvents` (level 3) is a stream and is reached only through `subscribe`:
+  the first `onReply` is the acknowledgement, then each event is its own reply.
 * [`homechooser.d.ts`](client/homechooser.d.ts): its types.
 * [`homechooser-mock.js`](client/homechooser-mock.js): the same API on fake data, for opening a
   launcher in a desktop browser.
@@ -82,7 +84,10 @@ checks in the order of `x-replyModel`, and validates `id`, `size` and `items` as
 do. Subscriptions answer at once, again on `HomeChooser.mock.notify(method)`, and refuse the 17th
 subscriber of a method; `?hcmock-changes=<ms>` flips the last input's `connected` every `<ms>`,
 brings the next app to the foreground (and into the running list), and notifies the `listInputs`,
-`getForegroundApp` and `listRunning` subscribers. `applicationManager/launch` is logged and
+`getForegroundApp` and `listRunning` subscribers. A `getAppLifeEvents` subscription gets its
+acknowledgement and the events of `HomeChooser.mock.lifeEvents` one `HomeChooser.mock.lifeEventMs`
+apart; `HomeChooser.mock.emitLifeEvent(event)` sends one to every subscriber, and `?hcmock-changes`
+sends a `foreground` event with each change. `applicationManager/launch` is logged and
 succeeds. `?hcmock=<state>` in the page URL picks the `getInfo` state: `selected-home` (default),
 `before-elevation`, `not-permitted`, `not-home`, or `absent` (every call gets a platform error, as
 when Home Chooser is not installed). `HomeChooser.mock` can be changed in the console.
