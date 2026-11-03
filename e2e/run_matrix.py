@@ -369,6 +369,8 @@ def runner_command(args, rest):
             argv.append('--reboot-check' if args.reboot_check == 'auto' else '--reboot-check=' + args.reboot_check)
         if args.uninstall_via:
             argv += ['--uninstall-via', args.uninstall_via]
+        if getattr(args, 'update_offer', None):
+            argv += ['--update-offer', args.update_offer]
         if args.launcher_update_check:
             argv.append('--launcher-update-check')
         return argv + rest
@@ -415,6 +417,8 @@ def main(argv=None, lister=None, busy=None):
                     help='passed to every run; its fixtures are built once first')
     ap.add_argument('--reboot-check', nargs='?', const='auto', choices=['auto', 'all'], default=None,
                     help='passed to every run')
+    ap.add_argument('--update-offer', choices=['off', 'keep'], default=None,
+                    help="passed to every run (their default: off, LG's update check answered 'no new version' by the VM's mitmweb)")
     ap.add_argument('--uninstall-via', choices=['later', 'alert'], default=None, help='passed to every run')
     ap.add_argument('--launcher-update-check', action='store_true', help='passed to every run')
     args, rest = ap.parse_known_args(argv)

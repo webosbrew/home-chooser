@@ -728,6 +728,17 @@ always reports `reboot=no`. The runner follows that:
   "[crash] Fault Occured" popup that would take key focus. The runner sets it while the VM is off, before the boot
   (`preflight.prepare_vm`), logs it, and leaves it set on the VM; `--debug-mode keep` leaves the VM's own setting,
   `debug` and `event` set that one and bring the popups back.
+* LG's automatic update check is answered "no new version" (`--update-offer off`, default; `keep` leaves it).
+  The update daemon POSTs `CheckSWAutoUpdate.laf` about 20 s after QEMU starts and LG's server offers a newer
+  firmware (RESULT_CD 900), which raises "The latest version of the software is available ... update now?" and
+  takes key focus. Every test VM is `mode=mitm`, and its mitmweb is up before QEMU, so right after each `beanjar
+  start` (`BeanjarHost.start`, so reboots too) `hc_e2e/mitm.py` connects with `beanjar mitm connect HOST/NAME`,
+  sets mitmproxy's `modify_body` option over the web API (Bearer password, `_mitmproxy_xsrf` cookie plus
+  `X-XSRFToken`) and closes the connection. The rule replaces the response of `CheckSWAutoUpdate.laf` only; the
+  offered version equals the installed one (from the firmware name), which the daemon's comparator treats as
+  "Not Found Image Update". Nothing is written on the TV. The run log says `update offer: ...`, and `RACE LOST`
+  if a check had been answered before the rule was in. Which reply, and why: the daemon disassembly notes in
+  `hc_e2e/mitm.py`.
 * After a boot (`--reboot-check`, cleanup boot): the watcher is active, status is `active=yes` and `reboot=no`
   again, and the boot apply log lines and the compositor QML/crash lines of the retained messages are recorded
   (`after_boot_checks`).

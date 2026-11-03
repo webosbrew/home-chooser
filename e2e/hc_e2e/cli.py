@@ -72,6 +72,10 @@ def build_parser():
                     help="the VM's debug_mode, set while it is off before the boot (default release: a retail set, "
                          "no LG [crash] popup taking key focus); keep leaves the VM's own setting, debug or event "
                          "bring the popups back; the setting stays on the VM")
+    ap.add_argument('--update-offer', choices=['off', 'keep'], default='off',
+                    help="off (default): right after each boot the VM's mitmweb is told to answer LG's automatic "
+                         "update check (CheckSWAutoUpdate.laf) with the installed version, so no 'latest version "
+                         "available' popup takes key focus; nothing is written on the TV.  keep: the offer is left as is")
     ap.add_argument('--input-mode', choices=['click', 'keys'], default='click',
                     help='prefer screen elements and pointer clicks (default), or key navigation')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
@@ -137,10 +141,12 @@ class VmSession:
             if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
         host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
         timing.SLOWDOWN = host.slowdown
+        host.update_offer = args.update_offer
         args.new_ipk, args.old_ref = args.hc_ipk, None
         outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
         os.makedirs(outdir, exist_ok=getattr(args, 'outdir_made', False))  # made by the pytest plugin
         rec = Recorder(outdir)
+        host.say = rec.say
         host.input_rec = rec if args.input == 'beanjar' or args.input_mode == 'click' else None
         rec.say('artefacts: ' + outdir)
         rec.say('host timing slowdown: %g' % host.slowdown)
