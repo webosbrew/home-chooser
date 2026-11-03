@@ -3769,6 +3769,58 @@ class Level3Logic(unittest.TestCase):
         self.assertTrue(L3.icons_problems(items, {'returnValue': True}, set(named))[0])
         self.assertEqual(L3.icon_sample([{'id': 'a'}]), ([], 'a'))
 
+    def test_icon_files_probe_and_unreadable_named_icon(self):
+        L3 = hc_e2e.level3
+        apps = [{'id': 'a', 'folderPath': '/usr/palm/applications/a/', 'extraLargeIcon': 'x.png'},
+                {'id': 'b', 'folderPath': '/usr/palm/applications/b', 'extraLargeIcon': 'y.png'},
+                {'id': 'c', 'extraLargeIcon': 'z.png'}, {'id': 'd', 'folderPath': '/f', 'extraLargeIcon': ''}]
+        files = L3.icon_files(apps, 'extraLargeIcon')
+        self.assertEqual(files, {'a': '/usr/palm/applications/a/x.png', 'b': '/usr/palm/applications/b/y.png'})
+        self.assertIn('/usr/palm/applications/a/x.png',
+                      L3.icon_probe_command(list(files.values())))
+        out = 'Y /usr/palm/applications/a/x.png\nN /usr/palm/applications/b/y.png\n'
+        self.assertEqual(L3.icon_probe_readable(files, out), {'a'})
+        self.assertEqual(L3.icon_probe_readable(files, ''), set())
+        # b names a file that is not there: noIcon is right, a picture or another error is not
+        items = [{'id': 'a', 'size': 's'}, {'id': 'b', 'size': 's'}]
+        png = {'mimeType': 'image/png', 'dataUrl': 'data:image/png;base64,' + self.PNG, 'byteLength': 8}
+        no = {'errorCode': 'noIcon', 'errorText': 'x'}
+        self.assertEqual(L3.icons_problems(items, {'icons': [png, no]}, {'a', 'b'}, {'a'}), ([], 1))
+        self.assertTrue(L3.icons_problems(items, {'icons': [png, png]}, {'a', 'b'}, {'a'})[0])
+        self.assertTrue(L3.icons_problems(items, {'icons': [png, {'errorCode': 'notFound', 'errorText': 'x'}]},
+                                          {'a', 'b'}, {'a'})[0])
+        # the one named icon is unreadable: noIcon is the whole expectation, not "none returned data"
+        self.assertEqual(L3.icons_problems(items[1:], {'icons': [no]}, {'b'}, set()), ([], 0))
+
+    def test_icon_size_step_expects_data_only_for_readable_files(self):
+        from unittest.mock import Mock
+        s = self.scenario()
+        no = {'errorCode': 'noIcon', 'errorText': 'x'}
+        png = {'mimeType': 'image/png', 'dataUrl': 'data:image/png;base64,' + self.PNG, 'byteLength': 8}
+        apps = [{'id': 'rc', 'folderPath': '/p/rc', 'extraLargeIcon': 'iconLarge.png'}, {'id': 'bare', 'folderPath': '/p/bare'}]
+        s.dev = Mock()
+        s.dev.sh.return_value = (0, 'N /p/rc/iconLarge.png\n')
+        rep = {'returnValue': True, 'apiVersion': 3, 'icons': [no, no]}
+        s.api = Mock(return_value=(rep, json.dumps(rep)))
+        s.api_level3_icon_size('w', apps, 'extraLargeIcon')
+        self.assertTrue(s.rec.check.call_args[0][1])
+        self.assertIn('named by 1, file present on 0', s.rec.check.call_args[0][2])
+        s.rec.note.assert_called_once()
+        self.assertEqual(s.api.call_args[0][1]['items'], [{'id': 'rc', 'size': 'extraLargeIcon'}, {'id': 'bare', 'size': 'extraLargeIcon'}])
+        # the file is there: data is expected, and noIcon for it fails
+        s = self.scenario()
+        s.dev = Mock()
+        s.dev.sh.return_value = (0, 'Y /p/rc/iconLarge.png\n')
+        rep = {'returnValue': True, 'apiVersion': 3, 'icons': [png, no]}
+        s.api = Mock(return_value=(rep, json.dumps(rep)))
+        s.api_level3_icon_size('w', apps, 'extraLargeIcon')
+        self.assertTrue(s.rec.check.call_args[0][1])
+        self.assertIn('file present on 1', s.rec.check.call_args[0][2])
+        rep = {'returnValue': True, 'apiVersion': 3, 'icons': [no, no]}
+        s.api = Mock(return_value=(rep, json.dumps(rep)))
+        s.api_level3_icon_size('w', apps, 'extraLargeIcon')
+        self.assertFalse(s.rec.check.call_args[0][1])
+
     def scenario(self):
         from unittest.mock import Mock
         s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
