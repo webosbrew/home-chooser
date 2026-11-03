@@ -68,6 +68,10 @@ def build_parser():
                     help="override the matrix's elevation strategy")
     ap.add_argument('--input', choices=['beanjar', 'qmp', 'ares'], default='beanjar',
                     help='remote-key path: Beanjar IR remote (default), QEMU keyboard, or ares-do key')
+    ap.add_argument('--debug-mode', choices=['release', 'debug', 'event', 'keep'], default='release',
+                    help="the VM's debug_mode, set while it is off before the boot (default release: a retail set, "
+                         "no LG [crash] popup taking key focus); keep leaves the VM's own setting, debug or event "
+                         "bring the popups back; the setting stays on the VM")
     ap.add_argument('--input-mode', choices=['click', 'keys'], default='click',
                     help='prefer screen elements and pointer clicks (default), or key navigation')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
@@ -167,7 +171,7 @@ class VmSession:
                 args.old_ipk, self.old_tmp = build_old_home_chooser(args.old_ref, rec)
             for label, f in (('old', args.old_ipk), ('current', args.new_ipk)):
                 rec.say('%s Home Chooser ipk %s version %s' % (label, f, ipk_appinfo(f).get('version')))
-        prepare_vm(host, vm, rec)
+        prepare_vm(host, vm, rec, args.debug_mode)
         self.started = True  # before the start, so a start interrupted half-way is stopped too
         rc, out = host.start(vm)
         rec.say('beanjar start: %s' % out.strip()[-200:])

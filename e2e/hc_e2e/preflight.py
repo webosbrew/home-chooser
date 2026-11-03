@@ -128,8 +128,10 @@ def clean_launchers(dev, rec):
 # ---------------------------------------------------------------------------------------------
 # VM preparation: layers, LAN
 # ---------------------------------------------------------------------------------------------
-def prepare_vm(host, vm, rec):
-    """Refuse a busy machine, set the VM's layers and link.  The caller starts it."""
+def prepare_vm(host, vm, rec, debug_mode='release'):
+    """Refuse a busy machine, set the VM's layers, link and debug_mode.  The caller starts it.  debug_mode
+    'release' (the default of --debug-mode) makes it a retail set: faultmanager shows no [crash] popup that
+    would take key focus; 'keep' leaves the VM's own setting; 'debug' and 'event' set that."""
     try:
         running = host.running_vms()
     except RuntimeError as e:
@@ -146,10 +148,15 @@ def prepare_vm(host, vm, rec):
         want['layers'] = ','.join(layers + missing)
     if s.get('link') != 'lan':
         want['link'] = 'lan'
+    have = (s.get('debug_mode') or '(default)').strip()
+    if debug_mode != 'keep' and have != debug_mode:
+        want['debug_mode'] = debug_mode
     if want:
         rec.say('VM %s is off; settings %s' % (vm, want))
         rc, out = host.set_settings(vm, **want)
         rec.say(out.strip()[-300:])
+        if rc:
+            raise SystemExit('beanjar settings %s set failed (rc %s): %s' % (vm, rc, out.strip()[-200:]))
 
 
 # wait_for_device states

@@ -7,7 +7,7 @@ from .. import timing
 from ..alerts import alert_focus
 from ..constants import REMOVAL_ALERT, UNINSTALL_TOAST
 from ..evidence import (AUDIOOUTPUTD_CRASHD_RE, AUDIOOUTPUTD_REF, KNOWN_CRASH_DOC, POPUP_LINE_RE,
-    audiooutputd_dialog, audiooutputd_fault, classify_faults, known_fault_pids, messages_command, split_known_crashes)
+    audiooutputd_dialog, classify_faults, crash_reference, is_ours_crash, split_platform_crashes, known_fault_pids, messages_command, split_known_crashes)
 
 
 class PopupsAndNotifications:
@@ -105,6 +105,17 @@ class PopupsAndNotifications:
                               'screenshot_after': after, 'reference': AUDIOOUTPUTD_REF}))
         return True
 
+    def record_platform_crashes(self, label, entries):
+        """Platform crashes seen at a step: kept for the end-of-run reference note (end_run), failing nothing."""
+        if not hasattr(self, 'platform_crashes'):
+            self.platform_crashes = []
+        self.platform_crashes += [(label, e) for e in entries]
+
+    def report_platform_crashes(self):
+        if getattr(self, 'platform_crashes', None):
+            head, text = crash_reference(self.platform_crashes)
+            self.rec.note(head, text)
+
     def foreign_popup(self, label, dismiss=False):
         """Note (never press keys at) an LG system popup that may hold key focus.  No screen reading:
         faultmanager (9.2.1 rootfs: /usr/sbin/faultmanager) raises the "[crash] Fault Occured" popup through
@@ -125,19 +136,18 @@ class PopupsAndNotifications:
         except (ValueError, TypeError, AttributeError):
             all_faults = real
         crashes = [f for f in all_faults if f.get('faultType') == 'crash']
-        expected = [f for f in crashes if audiooutputd_fault(f)]
-        crashes = [f for f in crashes if not audiooutputd_fault(f)]
-        if expected:
-            self.rec.note('%s: audiooutputd crash is an expected environment fault (%s, W22O 33.31.61/68), not counted'
-                          % (label, AUDIOOUTPUTD_REF), ' | '.join(json.dumps(f) for f in expected))
-        self.rec.check(label + ': no LG [crash] fault dialog or crash fault this boot', not crashes,
-                       ' | '.join(json.dumps(f) for f in crashes) or 'none')
-        real = [f for f in real if not audiooutputd_fault(f)]
+        crashes, platform = split_platform_crashes(crashes)
+        self.record_platform_crashes(label, platform)
+        self.rec.check(label + ': no Home Chooser or WebAppMgr crash fault this boot (platform crashes go to the end-of-run note)',
+                       not crashes, ' | '.join(json.dumps(f) for f in crashes) or 'none')
+        real = [f for f in real if f.get('faultType') != 'crash' or is_ours_crash(f)]
         ev = ['getFaultDetectedStatus new fault: %s' % json.dumps(f) for f in real]
         rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 4") % (t_mark, POPUP_LINE_RE))
         lines = [l for l in out.splitlines() if l.strip()]
         known_lines = split_known_crashes(lines, reply)[0]
-        ev += [l for l in lines if l not in known_lines and not AUDIOOUTPUTD_CRASHD_RE.search(l)]
+        crashd = [l for l in lines if 'CRASHED' in l]
+        self.record_platform_crashes(label, split_platform_crashes(crashd)[1])
+        ev += [l for l in lines if l not in known_lines and (l not in crashd or is_ours_crash(l))]
         if noise:
             self.rec.note('%s: fault entries not counted (keyCheck2 boot noise or raised before the step, uptime at mark %s)'
                           % (label, up_mark), ' | '.join(json.dumps(f) for f in noise))

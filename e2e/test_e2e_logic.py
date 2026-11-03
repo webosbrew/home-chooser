@@ -1444,8 +1444,8 @@ class Audiooutputd183(unittest.TestCase):
             s.priv_luna = lambda uri, payload='{}', r=reply(*contents): r
             s.shot = lambda label: label
             s.foreign_popup('x')
-            self.assertEqual([c for c in s.rec.checks if 'no LG [crash]' in c[0]][0][1], ok)
-            self.assertTrue(any('beanjar#183' in n for n in s.rec.notes))
+            self.assertEqual([c for c in s.rec.checks if 'no Home Chooser or WebAppMgr crash fault' in c[0]][0][1], ok)
+            self.assertEqual([hc_e2e.evidence.crash_process(e) for _, e in s.platform_crashes], ['audiooutputd'])
 
 
 class WaitForDevice(unittest.TestCase):
@@ -2517,24 +2517,25 @@ class RestartDetection(unittest.TestCase):
         s.check_no_crash('x', snap)
         self.assertEqual([ok for _, ok in s.rec.checks], [False, False])
 
-    def test_known_dvb_crash_fails_acceptance(self):
+    def test_dvb_crash_is_a_platform_crash_for_the_reference_note(self):
         s = scenario()
         snap = s.compositor_snapshot()
         s.dev.messages = KnownDvbCrash.CRASHD + '\n'
         s.dev.fault_reply = KnownDvbCrash().reply(KnownDvbCrash.NOISE, KnownDvbCrash.FAULT)
         s.check_no_crash('x', snap)
-        self.assertEqual([ok for _, ok in s.rec.checks], [False, True])
+        self.assertEqual([ok for _, ok in s.rec.checks], [True, True])
+        self.assertEqual([hc_e2e.evidence.crash_process(e) for _, e in s.platform_crashes], ['legacy-broadcas.4892'])
 
-    def test_dvb_crash_at_another_location_or_with_wam_crash_fails(self):
-        for fault_reply, extra in (('', ''), (KnownDvbCrash().reply(
-                dict(KnownDvbCrash.FAULT, faultContent='RDXDErr3_legacy-broadcas__x (API_SI_Other+0x1)__legacy-broadcas.4892.a.gz')), ''),
-                (KnownDvbCrash().reply(KnownDvbCrash.FAULT), 'x crashd CRASHED {"process":"WebAppMgr.1"}\n')):
+    def test_a_wam_crash_next_to_a_platform_crash_still_fails(self):
+        for extra, ok in (('', True), ('x crashd CRASHED {"process":"WebAppMgr.1"}\n', False),
+                          ('x crashd CRASHED {"process":"homechooser-d.77"}\n', False)):
             s = scenario()
             snap = s.compositor_snapshot()
             s.dev.messages = KnownDvbCrash.CRASHD + '\n' + extra
-            s.dev.fault_reply = fault_reply
+            s.dev.fault_reply = ''
             s.check_no_crash('x', snap)
-            self.assertEqual([ok for _, ok in s.rec.checks], [False, True], fault_reply)
+            self.assertEqual([ok_ for _, ok_ in s.rec.checks], [ok, True], extra)
+            self.assertEqual(len(s.platform_crashes), 1)
 
     def test_only_6_to_9(self):
         for major in (5, 10, 12):
@@ -3723,3 +3724,102 @@ class Level3Logic(unittest.TestCase):
         s.stream_begin()
         self.assertIn('luna-send -a org.example.launcher -i luna://org.webosbrew.homechooser.service/getAppLifeEvents',
                       s.dev.sh.call_args[0][0].replace("'", '').replace('\\', ''))
+
+
+class PlatformCrashAccounting(unittest.TestCase):
+    """2026-11-03: platform crashes (audiooutputd, data-migrator, ...) are one reference note at the end of the
+    run; only Home Chooser's own processes, fixtures and WebAppMgr fail it."""
+    E = hc_e2e.evidence
+
+    def test_crash_process_of_lines_and_faults(self):
+        E = self.E
+        line = '2026-11-03T09:31:51Z [52.1] user.info crashd [] crashd CRASHED {"process":"data-migrator.1667"}'
+        self.assertEqual(E.crash_process(line), 'data-migrator.1667')
+        self.assertEqual(E.crash_process({'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__Linux Crash: x'}),
+                         'data-migrator')
+        self.assertEqual(E.crash_process({'faultContent': 'RDXDErr3_legacy-broadcas__x'}), 'legacy-broadcas')
+        self.assertEqual(E.crash_process('no process here'), '')
+        self.assertIn('boot+52.1s', E.crash_time(line))
+        self.assertEqual(E.crash_time({'faultTime': '55.1'}), 'boot+55.1s')
+
+    def test_ours_versus_platform(self):
+        E = self.E
+        crashd = lambda p: 'x [1.0] crashd CRASHED {"process":"%s"}' % p
+        ours = [crashd(p) for p in ('homechooser-d.9', 'homechooser-service.3', 'WebAppMgr.5823', 'org.webosbrew.hcfixture.web.normal.4',
+                                    'org.webosbrew.homechooser.12')]
+        platform = [crashd(p) for p in ('audiooutputd.1', 'data-migrator.1667', 'legacy-broadcas.4892', 'surface-manager.2')]
+        self.assertEqual(E.split_platform_crashes(ours + platform), (ours, platform))
+        self.assertTrue(E.is_ours_crash('a crash that names no process'))  # cannot be shown to be somebody else's
+        self.assertTrue(E.is_ours_crash({'faultType': 'crash', 'faultContent': 'RDXDErr3_homechooser-daemon__x'}))
+        self.assertFalse(E.is_ours_crash({'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__x'}))
+
+    def test_reference_note_lists_each_process_and_time_once(self):
+        E = self.E
+        a = {'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__x', 'faultTime': '40.0'}
+        head, text = E.crash_reference([('3-home', a), ('4-alert', a),
+                                        ('4-alert', 'x [90.5] crashd CRASHED {"process":"audiooutputd.7"}')])
+        self.assertIn('2', head)
+        self.assertIn('not a failure', head)
+        self.assertEqual(len(text.splitlines()), 2)
+        self.assertIn('data-migrator  boot+40.0s  (seen at 3-home)', text)
+        self.assertIn('audiooutputd.7', text)
+
+    def test_popup_check_ignores_platform_crashes_and_fails_ours(self):
+        def reply(*contents):
+            return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': 1, 'detectedFaults': [
+                {'faultType': 'crash', 'faultContent': c, 'faultTime': '55.1'} for c in contents]}})
+        for contents, ok in ((('RDXDErr3_data-migrator__Linux Crash: x',), True),
+                             (('RDXDErr3_data-migrator__x', 'RDXDErr3_homechooser-daemon__y'), False)):
+            s = scenario(10)
+            s.popup_mark = ('2026-10-24T01:00:00', 10.0)
+            s.priv_luna = lambda uri, payload='{}', r=reply(*contents): r
+            s.shot = lambda label: label
+            s.foreign_popup('x')
+            self.assertEqual([c for c in s.rec.checks if 'crash fault this boot' in c[0]][0][1], ok)
+            self.assertEqual([self.E.crash_process(e) for _, e in s.platform_crashes], ['data-migrator'])
+
+    def test_end_of_run_note(self):
+        s = scenario(10)
+        s.report_platform_crashes()
+        self.assertEqual(s.rec.notes, [])
+        s.record_platform_crashes('x', ['a [1.0] crashd CRASHED {"process":"audiooutputd.1"}'])
+        s.report_platform_crashes()
+        self.assertIn('platform crashes this run', s.rec.notes[0][0] if isinstance(s.rec.notes[0], tuple) else s.rec.notes[0])
+
+
+class DebugModeSetting(unittest.TestCase):
+    def prepare(self, have, mode='release'):
+        from unittest.mock import Mock
+        host = Mock()
+        host.running_vms.return_value = []
+        host.settings.return_value = {'layers': 'normal,devmode,hbchannel', 'link': 'lan', 'debug_mode': have}
+        host.set_settings.return_value = (0, 'ok')
+        rec = Mock()
+        hc_e2e.preflight.prepare_vm(host, 'vm', rec, mode)
+        return host, rec
+
+    def test_a_default_vm_is_set_to_release_and_it_is_logged(self):
+        host, rec = self.prepare('(default)')
+        host.set_settings.assert_called_once_with('vm', debug_mode='release')
+        self.assertIn("{'debug_mode': 'release'}", rec.say.call_args_list[0][0][0])
+
+    def test_release_is_left_alone_and_keep_touches_nothing(self):
+        host, _ = self.prepare('release')
+        host.set_settings.assert_not_called()
+        host, _ = self.prepare('debug', 'keep')
+        host.set_settings.assert_not_called()
+        host, _ = self.prepare('release', 'debug')
+        host.set_settings.assert_called_once_with('vm', debug_mode='debug')
+
+    def test_a_failed_set_stops_the_run(self):
+        from unittest.mock import Mock
+        host = Mock()
+        host.running_vms.return_value = []
+        host.settings.return_value = {'layers': 'devmode,hbchannel', 'link': 'lan'}
+        host.set_settings.return_value = (1, 'the VM is running')
+        with self.assertRaises(SystemExit):
+            hc_e2e.preflight.prepare_vm(host, 'vm', Mock())
+
+    def test_the_option_defaults_to_release(self):
+        src = open(os.path.join(HERE, 'hc_e2e', 'cli.py')).read()
+        self.assertIn("'--debug-mode', choices=['release', 'debug', 'event', 'keep'], default='release'", src)

@@ -91,6 +91,7 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         if getattr(self, 'ask_monitor', None):
             self.ask_monitor.close()
             self.ask_monitor = None
+        self.report_platform_crashes()
         owner = self.plan[0][0]
         if (owner, 'cleanup') in self.plan:
             self.use_launcher(owner)
