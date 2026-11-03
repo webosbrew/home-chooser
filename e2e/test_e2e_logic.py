@@ -942,6 +942,16 @@ class BootInput(unittest.TestCase):
         self.assertIn('no last input launch is wanted', v([self.LAUNCHED, self.FRONT], 'com.webos.app.livetv', self.LIVETV)[1])
         self.assertFalse(v(['x last input: other.app in front; nothing launched this boot'], 'com.webos.app.livetv', self.LIVETV)[0])
 
+    def test_bootd_launching_the_chosen_launcher_is_the_home_path(self):
+        # matrix-20261103-193122 (10.x): idleApp override, bootd's first app is the overlay launcher itself
+        ov = 'org.webosbrew.hcfixture.web.overlay'
+        bootd = ('other', ov, 'bootd launched ' + ov)
+        v = hc_e2e.releases.boot_input_verdict
+        self.assertEqual(v([self.LAUNCHED], 'com.webos.app.hdmi2', bootd, ov),
+                         (True, 'com.webos.app.hdmi2 launched once and in front'))
+        self.assertFalse(v([self.LAUNCHED], 'com.webos.app.hdmi2', bootd)[0])  # launcher not named: other app
+        self.assertFalse(v([], 'com.webos.app.hdmi2', bootd, ov)[0])
+
     def test_home_boot_keeps_one_launch_and_unknown_fails(self):
         v = hc_e2e.releases.boot_input_verdict
         self.assertFalse(v([self.FRONT], 'com.webos.app.livetv', self.HOME)[0])

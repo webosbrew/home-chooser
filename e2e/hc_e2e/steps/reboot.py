@@ -236,7 +236,7 @@ class RebootSteps:
         (service/src/watcher/input.c), so a full-screen input app is in front beneath the overlay."""
         r = self.rec
         first = self.boot_first_app()  # bootd.log: what the TV booted to decides what the watcher should do
-        verdict = lambda: boot_input_verdict(self.log_lines(), self.dev.foreground()[0], first)
+        verdict = lambda: boot_input_verdict(self.log_lines(), self.dev.foreground()[0], first, self.launcher)
         self.wait(lambda: verdict()[0], BOOT_INPUT_WAIT, 5)
         ok, why = verdict()
         lines = [l for l in self.log_lines() if 'last input:' in l]
