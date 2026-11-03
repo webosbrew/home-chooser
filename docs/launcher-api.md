@@ -815,13 +815,15 @@ means not checked on that release, not that it fails there.
 | `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `listApps {subscribe}` from a launcher page: a reply on install and on removal | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `listRunning {subscribe}`, `getForegroundApp {subscribe}` | untested | untested | untested | untested | untested | untested | untested | untested |
-| Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | untested | untested | untested | untested |
-| Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | untested | untested | untested | untested |
+| Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
+| Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 
-The level 3 additions are covered by the offline contract and subscription tests only, and by
-captures of SAM's own replies (`getAppLifeEvents` events from end-to-end test runs; `systemApp` on
-5.6.1; `mediumLargeIcon` in 5.6.1 launch points and `extraLargeIcon` in 10.3.1 and 12.0.0 ones). They
-have not been run on a device through Home Chooser's service.
+The level 3 additions are covered by the offline contract and subscription tests, and were run
+through Home Chooser's service on 9.x and 11.2.0 "as the app": `luna-send -a <launcher id>`, which
+checks the service's own permission but not the page's bus access. Every reply validated against the
+API description; `getAppLifeEvents` sent its acknowledgement, then the launch, foreground, close and
+stop events of an app opened and closed meanwhile. On 9.x, 12 of 121 apps had an `extraLargeIcon`;
+on 11.2.0, 32 of 158.
 
 On 10.3.1, 11.2.0 and 12.0.0, one `getIcons` call for 20 apps took 40 to 160 ms, where 20 single
 `getAppIcon` calls took 720 to 2890 ms.
