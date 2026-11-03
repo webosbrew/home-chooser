@@ -388,7 +388,7 @@ static void test_list_fields(void)
 {
 	/* the apiVersion 1 fields stay; appCategory is added so a launcher can find the other launchers */
 	static const char *const v1[] = {"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory",
-		"iconColor", "bgColor"};
+		"iconColor", "bgColor", /* level 3: */ "systemApp", "mediumLargeIcon", "extraLargeIcon"};
 	int n = 0;
 	while (hc_launcher_list_fields[n]) n++;
 	CHECK(n == (int)(sizeof v1 / sizeof v1[0]));
@@ -399,6 +399,20 @@ static void test_list_fields(void)
 	CHECK(list_field_index("requiredPermissions") < 0);
 	CHECK(list_field_index("main") < 0);
 	CHECK(list_field_index("trustLevel") < 0);
+	/* the launch point fields gain the two larger icons at level 3; the life event fields are a fixed set */
+	static const char *const lp[] = {"mediumLargeIcon", "extraLargeIcon"};
+	for (size_t i = 0; i < sizeof lp / sizeof lp[0]; i++) {
+		bool found = false;
+		for (int j = 0; hc_launch_point_fields[j]; j++) found |= strcmp(hc_launch_point_fields[j], lp[i]) == 0;
+		CHECK(found);
+	}
+	static const char *const life[] = {"event", "appId", "reason", "windowType", "windowGroup", "windowGroupOwner",
+		"windowGroupOwnerId", "title", "showSplash", "showSpinner", "splashBackground"};
+	int ln = 0;
+	while (hc_life_event_fields[ln]) ln++;
+	CHECK(ln == (int)(sizeof life / sizeof life[0]));
+	for (int i = 0; i < ln; i++) CHECK(strcmp(hc_life_event_fields[i], life[i]) == 0);
+	CHECK(HC_API_VERSION == 3);
 }
 
 static void test_reboot(void)

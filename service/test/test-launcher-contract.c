@@ -124,6 +124,7 @@ static const struct {
 	{"listLaunchPoints", on_launcher_list_launch_points},
 	{"listInputs", on_launcher_list_inputs},
 	{"getIcons", on_launcher_get_icons},
+	{"getAppLifeEvents", on_launcher_life_events},
 	{"closeApp", on_launcher_close_by_id},
 	{"uninstallApp", on_launcher_uninstall},
 	{NULL, NULL}

@@ -2,11 +2,11 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "Home Chooser launcher API",
-    "version": "2.0.0",
-    "description": "The launcher API of Home Chooser's root service, API level 2 (apiVersion 2; level 1 is the freeze at tag api-v1), as documented in docs/launcher-api.md. This file describes the contract; docs/launcher-api.md is the prose and wins where the two differ. Every method takes one JSON object of named parameters and gives one JSON reply, except that listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp with subscribe true keep sending the whole reply again after each change (see x-luna.subscriptionModel). Replies are luna replies, not JSON-RPC responses: success and failure are both a result object, told apart by returnValue (see x-replyModel).",
+    "version": "3.0.0",
+    "description": "The launcher API of Home Chooser's root service, API level 3 (apiVersion 3; level 1 is the freeze at tag api-v1), as documented in docs/launcher-api.md. This file describes the contract; docs/launcher-api.md is the prose and wins where the two differ. Every method takes one JSON object of named parameters and gives one JSON reply, except that listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp with subscribe true keep sending the whole reply again after each change (see x-luna.subscriptionModel). Replies are luna replies, not JSON-RPC responses: success and failure are both a result object, told apart by returnValue (see x-replyModel).",
     "license": {"name": "Apache-2.0", "url": "https://www.apache.org/licenses/LICENSE-2.0"},
-    "x-apiVersion": 2,
-    "x-stability": "apiVersion is the feature level and only grows. A higher level keeps everything earlier levels documented: no method or field is removed and no meaning changes. Launchers check apiVersion >= N for what they need, never == 1, and ignore unknown fields and error codes. If a backward-incompatible change ever becomes unavoidable, it will be handled separately and announced. Level 1 is the eight methods as frozen at tag api-v1 (getInfo, listApps, listRunning, getForegroundApp, getAppInfo, getAppIcon, closeApp, uninstallApp), the permission, the appCategory [\"home\"] and requiredPermissions appinfo declarations and the request launch parameter. Level 2 adds listLaunchPoints, listInputs, getIcons, the subscribe parameter of listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp, and the iconColor and bgColor fields of App; x-since: 2 marks them. Settings-only and confirmation methods (uninstallConfirmed, call, readFile and the rest), files, status output and log ids are internal and not part of this contract.",
+    "x-apiVersion": 3,
+    "x-stability": "apiVersion is the feature level and only grows. A higher level keeps everything earlier levels documented: no method or field is removed and no meaning changes. Launchers check apiVersion >= N for what they need, never == 1, and ignore unknown fields and error codes. If a backward-incompatible change ever becomes unavoidable, it will be handled separately and announced. Level 1 is the eight methods as frozen at tag api-v1 (getInfo, listApps, listRunning, getForegroundApp, getAppInfo, getAppIcon, closeApp, uninstallApp), the permission, the appCategory [\"home\"] and requiredPermissions appinfo declarations and the request launch parameter. Level 2 adds listLaunchPoints, listInputs, getIcons, the subscribe parameter of listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp, and the iconColor and bgColor fields of App; x-since: 2 marks them. Level 3 adds getAppLifeEvents (a stream of app life events, subscribe: true required), the systemApp field of App, and the mediumLargeIcon and extraLargeIcon fields of App and LaunchPoint with the same two names as getIcons sizes; x-since: 3 marks them. Settings-only and confirmation methods (uninstallConfirmed, call, readFile and the rest), files, status output and log ids are internal and not part of this contract.",
     "x-doc": "docs/launcher-api.md"
   },
   "servers": [
@@ -23,7 +23,7 @@
     "subscriptions": true,
     "repliesPerCall": 1,
     "subscribersMax": 16,
-    "subscriptionModel": "listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp take subscribe: true (a JSON boolean; any other value is a single reply): the methods whose platform call can be subscribed to. The first reply is a fresh read of the whole state with subscribed: true; after every change the platform reports, the subscriber gets the whole state again, the same reply with subscribed: true. Every reply is a full state, never a delta, and one may repeat the previous one. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A method takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies.",
+    "subscriptionModel": "listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp take subscribe: true (a JSON boolean; any other value is a single reply): the methods whose platform call can be subscribed to. The first reply is a fresh read of the whole state with subscribed: true; after every change the platform reports, the subscriber gets the whole state again, the same reply with subscribed: true. Every reply is a full state, never a delta, and one may repeat the previous one. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A method takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies. getAppLifeEvents (level 3) is a stream and takes subscribe: true only: its first reply is the acknowledgement {returnValue, apiVersion, subscribed: true} and every later reply is one app life event, in the order the application manager sends them. Events are never debounced, coalesced, repeated or kept: an event that happens while no subscription is open, or while the service restarts its own upstream subscription, is not delivered later.",
     "paramStructure": "by-name",
     "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
     "clientTimeoutSeconds": 70,
@@ -33,7 +33,7 @@
     "group": "org.webosbrew.homechooser.applications",
     "declaredIn": "requiredPermissions of the launcher's appinfo.json",
     "readFrom": "the appinfo the app was installed with (reinstall after a change)",
-    "grants": ["listApps", "listRunning", "getForegroundApp", "getAppInfo", "getAppIcon", "closeApp", "uninstallApp", "listLaunchPoints", "listInputs", "getIcons"],
+    "grants": ["listApps", "listRunning", "getForegroundApp", "getAppInfo", "getAppIcon", "closeApp", "uninstallApp", "listLaunchPoints", "listInputs", "getIcons", "getAppLifeEvents"],
     "notNeededFor": ["getInfo"],
     "enforcedBy": "The service: it reads requiredPermissions from the caller's installed appinfo and answers noPermission without the group. The luna bus does not enforce this group.",
     "busDelivery": {
@@ -95,7 +95,7 @@
     "noPermission": {"cause": "The installed appinfo lacks org.webosbrew.homechooser.applications.", "action": "Fix requiredPermissions, reinstall."},
     "lookupFailed": {"cause": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.", "action": "Retry later; log errorText."},
     "notHome": {"cause": "The app is not the selected Home.", "action": "Send the request launch, wait for the owner."},
-    "badRequest": {"cause": "id is missing or not an app id, getAppIcon.size is invalid, or getIcons.items is not 1 to 64 valid items.", "action": "A bug in the launcher."},
+    "badRequest": {"cause": "id is missing or not an app id, getAppIcon.size is invalid, getIcons.items is not 1 to 64 valid items, or getAppLifeEvents was called without subscribe: true.", "action": "A bug in the launcher."},
     "notFound": {"cause": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.", "action": "Refresh the list."},
     "noIcon": {"cause": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.", "action": "Show a placeholder."},
     "iconTooLarge": {"cause": "getAppIcon: the icon exceeds 262144 bytes.", "action": "Show a placeholder."},
@@ -159,7 +159,7 @@
           "name": "selected-home",
           "description": "An elevated service and a permitted launcher that is the selected Home.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}},
           "x-match": {"/version": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.+-]*)?$"},
           "x-fixture": {
             "caller": "org.example.launcher",
@@ -174,7 +174,7 @@
           "name": "before-elevation",
           "description": "The service is not root yet and the caller's appinfo could not be read: getInfo still answers, with root and permitted false.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "version": "0.1.0", "root": false, "permission": "org.webosbrew.homechooser.applications", "permitted": false, "isSelectedHome": false}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "version": "0.1.0", "root": false, "permission": "org.webosbrew.homechooser.applications", "permitted": false, "isSelectedHome": false}},
           "x-match": {"/version": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.+-]*)?$"},
           "x-fixture": {
             "caller": "org.example.launcher",
@@ -189,7 +189,7 @@
           "name": "no-application-id",
           "description": "A shell luna-send without -a has no application id.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "forbidden", "errorText": "This method is for apps; the caller has no application id"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "forbidden", "errorText": "This method is for apps; the caller has no application id"}},
           "x-fixture": {"caller": null, "senderService": "com.webos.lunasend-1234", "root": true, "selectedHome": null, "calls": []}
         }
       ]
@@ -197,7 +197,7 @@
     {
       "name": "listApps",
       "summary": "Lists the installed apps.",
-      "description": "Each app carries id, title, icon, largeIcon, folderPath, version, vendor, type, removable, visible, appCategory, iconColor and bgColor, when the platform has them; absent fields are omitted. Within an apiVersion this field list only grows. icon and largeIcon are appinfo paths, usually relative to folderPath; use getIcons or getAppIcon to read them from a jailed launcher. With subscribe true the list comes again after every change of the installed apps.",
+      "description": "Each app carries id, title, icon, largeIcon, mediumLargeIcon, extraLargeIcon, folderPath, version, vendor, type, removable, visible, appCategory, iconColor, bgColor and systemApp, when the platform has them (mediumLargeIcon, extraLargeIcon and systemApp are level 3; the platform may give the two icons as empty strings, which are passed as they are); absent fields are omitted. Within an apiVersion this field list only grows. icon and largeIcon are appinfo paths, usually relative to folderPath; use getIcons or getAppIcon to read them from a jailed launcher. With subscribe true the list comes again after every change of the installed apps.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -219,14 +219,29 @@
           "name": "two-apps",
           "description": "SAM's list is cut to the published fields.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true, "systemApp": false}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
             "selectedHome": null,
             "calls": [
               {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
-              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory", "iconColor", "bgColor"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true, "systemApp": false}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true, "requiredPermissions": ["org.webosbrew.homechooser.applications"]}]}}
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory", "iconColor", "bgColor", "systemApp", "mediumLargeIcon", "extraLargeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true, "systemApp": false}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true, "requiredPermissions": ["org.webosbrew.homechooser.applications"]}]}}
+            ]
+          }
+        },
+        {
+          "name": "system-app-and-large-icons",
+          "description": "Level 3: systemApp, mediumLargeIcon and extraLargeIcon as SAM gives them (an empty string stays an empty string in an app).",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "apps": [{"id": "com.webos.app.settings", "title": "Settings", "icon": "icon.png", "largeIcon": "largeIcon.png", "mediumLargeIcon": "mediumLargeIcon.png", "extraLargeIcon": "", "folderPath": "/usr/palm/applications/com.webos.app.settings", "removable": false, "systemApp": true}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "removable": true, "systemApp": false}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory", "iconColor", "bgColor", "systemApp", "mediumLargeIcon", "extraLargeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "com.webos.app.settings", "title": "Settings", "icon": "icon.png", "largeIcon": "largeIcon.png", "mediumLargeIcon": "mediumLargeIcon.png", "extraLargeIcon": "", "folderPath": "/usr/palm/applications/com.webos.app.settings", "removable": false, "systemApp": true, "main": "index.html"}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "removable": true, "systemApp": false}]}}
             ]
           }
         },
@@ -234,14 +249,14 @@
           "name": "subscribe",
           "description": "The first reply of a subscription: a fresh read, with subscribed true and the colours SAM has.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "apps": [{"id": "com.webos.app.hdmi1", "title": "HDMI1", "icon": "icon.png", "largeIcon": "assets/icon_HDMI_1_130.png", "folderPath": "/usr/palm/applications/com.webos.app.hdmi1", "visible": false, "iconColor": "#6d757f"}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "iconColor": "#ffffff", "bgColor": "#000000"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true, "apps": [{"id": "com.webos.app.hdmi1", "title": "HDMI1", "icon": "icon.png", "largeIcon": "assets/icon_HDMI_1_130.png", "folderPath": "/usr/palm/applications/com.webos.app.hdmi1", "visible": false, "iconColor": "#6d757f"}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "iconColor": "#ffffff", "bgColor": "#000000"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
             "selectedHome": null,
             "calls": [
               {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
-              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory", "iconColor", "bgColor"]}, "reply": {"returnValue": true, "apps": [{"id": "com.webos.app.hdmi1", "title": "HDMI1", "icon": "icon.png", "largeIcon": "assets/icon_HDMI_1_130.png", "folderPath": "/usr/palm/applications/com.webos.app.hdmi1", "visible": false, "iconColor": "#6d757f", "notSpecified": ["bgColor"]}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "iconColor": "#ffffff", "bgColor": "#000000"}]}}
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible", "appCategory", "iconColor", "bgColor", "systemApp", "mediumLargeIcon", "extraLargeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "com.webos.app.hdmi1", "title": "HDMI1", "icon": "icon.png", "largeIcon": "assets/icon_HDMI_1_130.png", "folderPath": "/usr/palm/applications/com.webos.app.hdmi1", "visible": false, "iconColor": "#6d757f", "notSpecified": ["bgColor"]}, {"id": "org.example.app", "title": "Example", "icon": "icon.png", "iconColor": "#ffffff", "bgColor": "#000000"}]}}
             ]
           }
         },
@@ -249,7 +264,7 @@
           "name": "no-permission",
           "description": "The caller's installed appinfo does not list the permission.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "noPermission", "errorText": "The app's appinfo.json must list \"org.webosbrew.homechooser.applications\" in requiredPermissions"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "noPermission", "errorText": "The app's appinfo.json must list \"org.webosbrew.homechooser.applications\" in requiredPermissions"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -286,7 +301,7 @@
           "name": "one-app",
           "description": "SAM's lowercase processid and webprocessid become numeric processId and webProcessId.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -301,7 +316,7 @@
           "name": "subscribe",
           "description": "The first reply of a subscription is a fresh read.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -342,7 +357,7 @@
         {
           "name": "an-app-in-front",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "appId": "org.example.app", "windowId": "window", "processId": 123}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "appId": "org.example.app", "windowId": "window", "processId": 123}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -356,7 +371,7 @@
         {
           "name": "nothing-in-front",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "appId": ""}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "appId": ""}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -371,7 +386,7 @@
           "name": "subscribe",
           "description": "The first reply of a subscription is a fresh read.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "appId": "org.example.app", "windowId": "window", "processId": 123}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true, "appId": "org.example.app", "windowId": "window", "processId": 123}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -402,7 +417,7 @@
         {
           "name": "an-app",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -417,7 +432,7 @@
           "name": "absent-id",
           "description": "SAM's combined missing-id/unsupported-type error, resolved against the installed app list: the id is absent.",
           "params": [{"name": "id", "value": "org.example.gone"}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "notFound", "errorText": "No such app: Invalid appId specified OR Unsupported Application Type: org.example.gone"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "notFound", "errorText": "No such app: Invalid appId specified OR Unsupported Application Type: org.example.gone"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -455,7 +470,7 @@
         {
           "name": "png-icon",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -471,7 +486,7 @@
           "name": "advertised-icon-missing",
           "description": "LG Home on 11.x: the appinfo names icon.png, the folder has no such file.",
           "params": [{"name": "id", "value": "com.webos.app.home"}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "noIcon", "errorText": "The app has no readable icon of the requested size"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "noIcon", "errorText": "The app has no readable icon of the requested size"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -489,7 +504,7 @@
       "name": "listLaunchPoints",
       "x-since": 2,
       "summary": "Lists the launch points in LG's order, bookmarks included.",
-      "description": "SAM's launch points (listLaunchPoints), in SAM's order, each cut to launchPointId, id, title, lptype, icon, largeIcon, iconColor, bgColor, bgImage, params and removable when the platform has them; absent and empty fields are omitted. A launch point launches with luna://com.webos.applicationManager/launch {id, launchPointId, params}. Read its icons with getIcons {launchPointId}. With subscribe true the list comes again after every change.",
+      "description": "SAM's launch points (listLaunchPoints), in SAM's order, each cut to launchPointId, id, title, lptype, icon, largeIcon, mediumLargeIcon, extraLargeIcon, iconColor, bgColor, bgImage, params and removable (mediumLargeIcon and extraLargeIcon are level 3) when the platform has them; absent and empty fields are omitted. A launch point launches with luna://com.webos.applicationManager/launch {id, launchPointId, params}. Read its icons with getIcons {launchPointId}. With subscribe true the list comes again after every change.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -513,7 +528,7 @@
           "name": "app-and-bookmark",
           "description": "An app's launch point and a bookmark (illustrative: the bookmark's id and icon path are not from a device). SAM's empty strings are dropped.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}, {"launchPointId": "com.webos.app.browser_bookmark1", "id": "com.webos.app.browser", "title": "Example bookmark", "lptype": "bookmark", "icon": "/mnt/lg/cache/webbrowser/bookmark.png", "iconColor": "#ffffff", "params": {"target": "https://www.example.com/"}, "removable": true}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "mediumLargeIcon": "/mnt/otncabi/usr/palm/applications/netflix/mediumLargeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}, {"launchPointId": "com.webos.app.browser_bookmark1", "id": "com.webos.app.browser", "title": "Example bookmark", "lptype": "bookmark", "icon": "/mnt/lg/cache/webbrowser/bookmark.png", "iconColor": "#ffffff", "params": {"target": "https://www.example.com/"}, "removable": true}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -528,7 +543,7 @@
           "name": "subscribe",
           "description": "The first reply of a subscription is a fresh read.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "mediumLargeIcon": "/mnt/otncabi/usr/palm/applications/netflix/mediumLargeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -566,7 +581,7 @@
           "name": "av-and-hdmi",
           "description": "The input manager's reply on webOS 5.6.1, cut to the published fields.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -581,7 +596,7 @@
           "name": "signal-and-unique-id",
           "description": "The input manager's reply on webOS 7.6.0 with a device that has a uniqueId: signal is hdmiSignalExist (webOS 7 and later only), and params is what to launch the input with.",
           "params": [],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}, {"id": "com.webos.app.hdmi2", "inputId": "HDMI_2", "label": "HDMI 2", "port": 2, "connected": false, "activate": false, "signal": false, "params": {"id": "uniqueId", "value": "3"}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_2.png"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}, {"id": "com.webos.app.hdmi2", "inputId": "HDMI_2", "label": "HDMI 2", "port": 2, "connected": false, "activate": false, "signal": false, "params": {"id": "uniqueId", "value": "3"}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_2.png"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -596,7 +611,7 @@
           "name": "subscribe",
           "description": "The first reply of a subscription is a fresh read.",
           "params": [{"name": "subscribe", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "subscribed": true, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true, "inputs": [{"id": "com.webos.app.externalinput.av1", "inputId": "AV_1", "label": "AV", "port": 1, "connected": false, "activate": false, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/av.png"}, {"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -613,14 +628,14 @@
       "name": "getIcons",
       "x-since": 2,
       "summary": "Reads several icons in one call, for a jailed launcher.",
-      "description": "items: 1 to 64 objects, each {id, size?} (an app's appinfo icon, as getAppIcon), {launchPointId, size?} (a launch point's icon) or {inputId} (an input's icon); size is icon (default) or largeIcon. The reply's icons array has one entry per item in request order: {mimeType, dataUrl, byteLength} or {errorCode, errorText} with errorCode notFound, noIcon, iconTooLarge or overBudget. Each call reads the platform's lists once and the files afresh. An app icon must lie in the app's folder; a launch point icon in its app's folder under /usr/palm/applications, /mnt/otncabi/usr/palm/applications, /media/cryptofs/apps/usr/palm/applications or /media/developer/apps/usr/palm/applications; an input icon under /usr/palm/plugins/inputapps/assets. Symlinks and .. are resolved first; anything else is noIcon. One icon is at most 262144 bytes; one reply holds at most 1048576 icon bytes, later icons that do not fit are overBudget.",
+      "description": "items: 1 to 64 objects, each {id, size?} (an app's appinfo icon, as getAppIcon), {launchPointId, size?} (a launch point's icon) or {inputId} (an input's icon); size is icon (default), largeIcon, or, at level 3, mediumLargeIcon or extraLargeIcon (not for an input); the size names the appinfo field or launch point field to read, and there is no fallback to another size: a missing or empty one is noIcon. The reply's icons array has one entry per item in request order: {mimeType, dataUrl, byteLength} or {errorCode, errorText} with errorCode notFound, noIcon, iconTooLarge or overBudget. Each call reads the platform's lists once and the files afresh. An app icon must lie in the app's folder; a launch point icon in its app's folder under /usr/palm/applications, /mnt/otncabi/usr/palm/applications, /media/cryptofs/apps/usr/palm/applications or /media/developer/apps/usr/palm/applications; an input icon under /usr/palm/plugins/inputapps/assets. Symlinks and .. are resolved first; anything else is noIcon. One icon is at most 262144 bytes; one reply holds at most 1048576 icon bytes, later icons that do not fit are overBudget.",
       "paramStructure": "by-name",
       "params": [
         {
           "name": "items",
           "required": true,
           "description": "What to read, at most 64.",
-          "schema": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"oneOf": [{"type": "object", "required": ["id"], "properties": {"id": {"$ref": "#/components/schemas/AppId"}, "size": {"type": "string", "enum": ["icon", "largeIcon"]}}, "not": {"anyOf": [{"required": ["launchPointId"]}, {"required": ["inputId"]}]}}, {"type": "object", "required": ["launchPointId"], "properties": {"launchPointId": {"type": "string", "minLength": 1, "maxLength": 256}, "size": {"type": "string", "enum": ["icon", "largeIcon"]}}, "not": {"anyOf": [{"required": ["id"]}, {"required": ["inputId"]}]}}, {"type": "object", "required": ["inputId"], "properties": {"inputId": {"type": "string", "minLength": 1, "maxLength": 256}}, "not": {"anyOf": [{"required": ["id"]}, {"required": ["launchPointId"]}, {"required": ["size"]}]}}]}}
+          "schema": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"oneOf": [{"type": "object", "required": ["id"], "properties": {"id": {"$ref": "#/components/schemas/AppId"}, "size": {"type": "string", "enum": ["icon", "largeIcon", "mediumLargeIcon", "extraLargeIcon"], "description": "mediumLargeIcon and extraLargeIcon are level 3."}}, "not": {"anyOf": [{"required": ["launchPointId"]}, {"required": ["inputId"]}]}}, {"type": "object", "required": ["launchPointId"], "properties": {"launchPointId": {"type": "string", "minLength": 1, "maxLength": 256}, "size": {"type": "string", "enum": ["icon", "largeIcon", "mediumLargeIcon", "extraLargeIcon"], "description": "mediumLargeIcon and extraLargeIcon are level 3."}}, "not": {"anyOf": [{"required": ["id"]}, {"required": ["inputId"]}]}}, {"type": "object", "required": ["inputId"], "properties": {"inputId": {"type": "string", "minLength": 1, "maxLength": 256}}, "not": {"anyOf": [{"required": ["id"]}, {"required": ["launchPointId"]}, {"required": ["size"]}]}}]}}
         }
       ],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetIconsReply"}},
@@ -643,7 +658,7 @@
               "value": [{"id": "org.example.app"}, {"id": "org.example.gone"}, {"launchPointId": "netflix_default", "size": "largeIcon"}, {"inputId": "HDMI_1"}, {"launchPointId": "com.webos.app.browser_bookmark1"}]
             }
           ],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}, {"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "noIcon", "errorText": "No readable icon of the requested size"}]}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}, {"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "noIcon", "errorText": "No readable icon of the requested size"}]}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -656,9 +671,34 @@
             },
             "calls": [
               {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
-              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "folderPath", "icon", "largeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "icon": "icon.png", "folderPath": "{root}/media/developer/apps/usr/palm/applications/org.example.app"}]}},
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "folderPath", "icon", "largeIcon", "mediumLargeIcon", "extraLargeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "icon": "icon.png", "folderPath": "{root}/media/developer/apps/usr/palm/applications/org.example.app"}]}},
               {"uri": "luna://com.webos.applicationManager/listLaunchPoints", "request": {}, "reply": {"returnValue": true, "subscribed": false, "caseDetail": {"change": []}, "launchPoints": [{"systemApp": false, "removable": true, "relaunch": false, "mediumLargeIcon": "{root}/mnt/otncabi/usr/palm/applications/netflix/mediumLargeIcon.png", "bgImages": [], "userData": "", "id": "netflix", "largeIcon": "{root}/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "bgColor": "#ffffff", "title": "Netflix", "iconColor": "#ffffff", "appDescription": "", "lptype": "default", "params": {}, "bgImage": "{root}/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "unmovable": false, "miniicon": "", "icon": "{root}/mnt/otncabi/usr/palm/applications/netflix/icon.png", "launchPointId": "netflix_default", "favicon": "", "installTime": 0, "imageForRecents": "", "tileSize": "normal"}, {"systemApp": false, "removable": true, "relaunch": false, "mediumLargeIcon": "", "bgImages": [], "userData": "", "id": "com.webos.app.browser", "largeIcon": "", "bgColor": "", "title": "Example bookmark", "iconColor": "#ffffff", "appDescription": "", "lptype": "bookmark", "params": {"target": "https://www.example.com/"}, "bgImage": "", "unmovable": false, "miniicon": "", "icon": "{root}/mnt/lg/cache/webbrowser/bookmark.png", "launchPointId": "com.webos.app.browser_bookmark1", "favicon": "", "installTime": 0, "imageForRecents": "", "tileSize": "normal"}]}},
               {"uri": "luna://com.webos.service.eim/getAllInputStatus", "request": {}, "reply": {"returnValue": true, "devices": [{"id": "AV_1", "label": "AV", "port": 1, "activate": false, "connected": false, "appId": "com.webos.app.externalinput.av1", "icon": "av.png", "iconPrefix": "{root}/usr/palm/plugins/inputapps/assets/small/", "forceIcon": false, "chosen": false, "modified": false, "subList": [], "subCount": 0}, {"id": "HDMI_1", "label": "HDMI 1", "port": 1, "activate": true, "connected": true, "appId": "com.webos.app.hdmi1", "icon": "HDMI_1.png", "iconPrefix": "{root}/usr/palm/plugins/inputapps/assets/small/", "forceIcon": false, "chosen": false, "modified": false, "lastUniqueId": -1, "hdmiPlugIn": true, "subList": [], "subCount": 0}], "atmosDevice": false, "arcDevice": false, "arcDevicePower": 0, "unknownCECPNumber": 0, "blockedAllInput": false, "totalCount": 2}}
+            ]
+          }
+        },
+        {
+          "name": "larger-sizes",
+          "description": "Level 3: an app's mediumLargeIcon, its extraLargeIcon that the platform gives as an empty string (noIcon: there is no fallback to another size), and a launch point's extraLargeIcon.",
+          "params": [
+            {
+              "name": "items",
+              "value": [{"id": "org.example.app", "size": "mediumLargeIcon"}, {"id": "org.example.app", "size": "extraLargeIcon"}, {"launchPointId": "netflix_default", "size": "extraLargeIcon"}]
+            }
+          ],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "noIcon", "errorText": "No readable icon of the requested size"}, {"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}]}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "files": {
+              "{root}/media/developer/apps/usr/palm/applications/org.example.app/assets/medium.png": {"base64": "iVBORw0KGgo="},
+              "{root}/mnt/otncabi/usr/palm/applications/netflix/extraLargeIcon.png": {"base64": "iVBORw0KGgo="}
+            },
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}},
+              {"uri": "luna://com.webos.applicationManager/listApps", "request": {"properties": ["id", "folderPath", "icon", "largeIcon", "mediumLargeIcon", "extraLargeIcon"]}, "reply": {"returnValue": true, "apps": [{"id": "org.example.app", "icon": "icon.png", "mediumLargeIcon": "assets/medium.png", "extraLargeIcon": "", "folderPath": "{root}/media/developer/apps/usr/palm/applications/org.example.app"}]}},
+              {"uri": "luna://com.webos.applicationManager/listLaunchPoints", "request": {}, "reply": {"returnValue": true, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "icon": "{root}/mnt/otncabi/usr/palm/applications/netflix/icon.png", "extraLargeIcon": "{root}/mnt/otncabi/usr/palm/applications/netflix/extraLargeIcon.png", "mediumLargeIcon": ""}]}}
             ]
           }
         },
@@ -666,7 +706,59 @@
           "name": "bad-items",
           "description": "An item names both an app and an input.",
           "params": [{"name": "items", "value": [{"id": "org.example.app", "inputId": "HDMI_1"}]}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "badRequest", "errorText": "items must be 1 to 64 objects, each with one of id, launchPointId or inputId, and size icon or largeIcon (not for an input)"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "badRequest", "errorText": "items must be 1 to 64 objects, each with one of id, launchPointId or inputId, and size icon, largeIcon, mediumLargeIcon or extraLargeIcon (not for an input)"}},
+          "x-fixture": {"caller": "org.example.launcher", "root": true, "selectedHome": null, "calls": []}
+        }
+      ]
+    },
+    {
+      "name": "getAppLifeEvents",
+      "x-since": 3,
+      "summary": "A stream of app life events: launch, foreground, splash, stop, close.",
+      "description": "A stream, not a list: call it with subscribe: true, which is required (without it the reply is badRequest). The first reply is the acknowledgement {returnValue: true, apiVersion, subscribed: true}; every later reply is one event the application manager (luna://com.webos.applicationManager/getAppLifeEvents) sends, with subscribed: true, in the order it sends them. There is no list and no state to read: do not wait for a first full reply, and do not treat a reply as the whole truth about what runs (use listRunning and getForegroundApp for that). Events are not debounced, coalesced, repeated or kept by Home Chooser: an event that happens while no subscription is open, or while Home Chooser restarts its own upstream subscription after the platform dropped it, is lost. Each event carries event (a string: seen are launch, relaunch, foreground, splash, stop and close; ignore others) and then, when the platform sends them, appId, reason (for launch, stop and close: for example hotKey, windowPolicy, userTimeout, or the string undefined), windowType (for foreground: for example _WEBOS_WINDOW_TYPE_CARD or _WEBOS_WINDOW_TYPE_OVERLAY), windowGroup, windowGroupOwner and windowGroupOwnerId (for foreground), and title, showSplash, showSpinner and splashBackground (for splash). Every other field of the platform's event is dropped. A method takes at most 16 subscribers (tooManySubscriptions). Cancel with the bus's own cancel.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "subscribe",
+          "required": true,
+          "description": "Must be true (a JSON boolean). The method has no single-reply form.",
+          "schema": {"const": true}
+        }
+      ],
+      "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetAppLifeEventsReply"}},
+      "x-needsRoot": true,
+      "x-needsPermission": true,
+      "x-needsSelectedHome": false,
+      "x-subscribes": true,
+      "x-stream": true,
+      "x-doc": "docs/launcher-api.md#getapplifeevents-subscribe",
+      "x-events": [
+        {"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "launch", "appId": "org.example.app", "reason": "hotKey"},
+        {"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "splash", "appId": "org.example.app", "title": "Example", "showSplash": true, "showSpinner": true, "splashBackground": ""},
+        {"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "foreground", "appId": "org.example.app", "windowType": "_WEBOS_WINDOW_TYPE_CARD", "windowGroup": false},
+        {"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "stop", "appId": "org.example.app", "reason": "windowPolicy"},
+        {"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "close", "appId": "org.example.app", "reason": "windowPolicy"}
+      ],
+      "examples": [
+        {
+          "name": "subscribe",
+          "description": "The first reply is the acknowledgement; the events follow as separate replies (x-events), not as part of this reply.",
+          "params": [{"name": "subscribe", "value": true}],
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "subscribed": true}},
+          "x-fixture": {
+            "caller": "org.example.launcher",
+            "root": true,
+            "selectedHome": null,
+            "calls": [
+              {"uri": "luna://com.webos.applicationManager/getAppInfo", "request": {"id": "org.example.launcher"}, "reply": {"returnValue": true, "appId": "org.example.launcher", "appInfo": {"id": "org.example.launcher", "title": "Example Launcher", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.launcher", "appCategory": ["home"], "requiredPermissions": ["org.webosbrew.homechooser.applications"]}}}
+            ]
+          }
+        },
+        {
+          "name": "without-subscribe",
+          "description": "A single-reply call is refused: the method is a stream.",
+          "params": [],
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "badRequest", "errorText": "getAppLifeEvents is a stream: call it with subscribe: true"}},
           "x-fixture": {"caller": "org.example.launcher", "root": true, "selectedHome": null, "calls": []}
         }
       ]
@@ -690,7 +782,7 @@
         {
           "name": "forced-close",
           "params": [{"name": "id", "value": "org.example.app"}, {"name": "force", "value": true}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "id": "org.example.app"}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "id": "org.example.app"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -704,7 +796,7 @@
         {
           "name": "not-the-selected-home",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}},
           "x-fixture": {"caller": "org.example.launcher", "root": true, "selectedHome": "org.example.other", "calls": []}
         }
       ]
@@ -730,7 +822,7 @@
         {
           "name": "asked-by-alert",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "pending": true, "id": "org.example.app", "confirmation": "alert"}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "pending": true, "id": "org.example.app", "confirmation": "alert"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -746,7 +838,7 @@
           "name": "asked-on-screen",
           "description": "The alert is refused, so Home Chooser opens its own confirmation screen with a one-shot token.",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 2, "pending": true, "id": "org.example.app", "confirmation": "screen"}},
+          "result": {"name": "reply", "value": {"returnValue": true, "apiVersion": 3, "pending": true, "id": "org.example.app", "confirmation": "screen"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -762,7 +854,7 @@
         {
           "name": "homebrew-channel-is-protected",
           "params": [{"name": "id", "value": "org.webosbrew.hbchannel"}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "protected", "errorText": "Homebrew Channel cannot be uninstalled through this API"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "protected", "errorText": "Homebrew Channel cannot be uninstalled through this API"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -776,7 +868,7 @@
         {
           "name": "marked-not-removable",
           "params": [{"name": "id", "value": "org.example.app"}],
-          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 2, "errorCode": "notRemovable", "errorText": "this is a system app or is not removable"}},
+          "result": {"name": "reply", "value": {"returnValue": false, "apiVersion": 3, "errorCode": "notRemovable", "errorText": "this is a system app or is not removable"}},
           "x-fixture": {
             "caller": "org.example.launcher",
             "root": true,
@@ -843,7 +935,10 @@
           "visible": {"type": "boolean"},
           "appCategory": {"type": "array", "items": {"type": "string"}, "description": "The category array as SAM reports it, for example [\"home\"]."},
           "iconColor": {"type": "string", "x-since": 2, "description": "The appinfo's icon colour as the platform gives it, for example \"#6d757f\"."},
-          "bgColor": {"type": "string", "x-since": 2, "description": "The appinfo's background colour as the platform gives it, for example \"#ffffff\"."}
+          "bgColor": {"type": "string", "x-since": 2, "description": "The appinfo's background colour as the platform gives it, for example \"#ffffff\"."},
+          "systemApp": {"type": "boolean", "x-since": 3, "description": "The platform's own flag: true for an app that is part of the firmware, false for an installed one. Passed through as the application manager reports it."},
+          "mediumLargeIcon": {"type": "string", "x-since": 3, "description": "Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size mediumLargeIcon."},
+          "extraLargeIcon": {"type": "string", "x-since": 3, "description": "Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size extraLargeIcon."}
         }
       },
       "RunningApp": {
@@ -1010,6 +1105,8 @@
           "lptype": {"type": "string", "description": "SAM's launch point type: default (an app) or bookmark (for example a browser bookmark)."},
           "icon": {"type": "string", "description": "Absolute path."},
           "largeIcon": {"type": "string", "description": "Absolute path."},
+          "mediumLargeIcon": {"type": "string", "x-since": 3, "description": "Absolute path. Present on webOS 5 and later where SAM gives a non-empty one; getIcons reads it with size mediumLargeIcon."},
+          "extraLargeIcon": {"type": "string", "x-since": 3, "description": "Absolute path. SAM has the key on webOS 10 and later only, and often leaves it empty; getIcons reads it with size extraLargeIcon."},
           "iconColor": {"type": "string"},
           "bgColor": {"type": "string"},
           "bgImage": {"type": "string", "description": "Absolute path of the background image."},
@@ -1166,6 +1263,45 @@
                   }
                 }
               }
+            ]
+          }
+        ]
+      },
+      "AppLifeEvent": {
+        "title": "AppLifeEvent",
+        "description": "One app life event as the application manager sends it, cut to the published fields (level 3). Within an apiVersion this field list only grows; ignore unknown fields.",
+        "type": "object",
+        "properties": {
+          "event": {"type": "string", "description": "Seen: launch, relaunch, foreground, splash, stop, close. Absent on the acknowledgement."},
+          "appId": {"type": "string"},
+          "reason": {"type": "string", "description": "Why: for example hotKey, windowPolicy, userTimeout, or the string undefined."},
+          "windowType": {"type": "string", "description": "foreground: for example _WEBOS_WINDOW_TYPE_CARD or _WEBOS_WINDOW_TYPE_OVERLAY."},
+          "windowGroup": {"type": "boolean"},
+          "windowGroupOwner": {"type": "boolean"},
+          "windowGroupOwnerId": {"type": "string"},
+          "title": {"type": "string", "description": "splash: the title the splash shows."},
+          "showSplash": {"type": "boolean"},
+          "showSpinner": {"type": "boolean"},
+          "splashBackground": {"type": "string"}
+        }
+      },
+      "GetAppLifeEventsReply": {
+        "title": "GetAppLifeEventsReply",
+        "oneOf": [
+          {
+            "title": "GetAppLifeEventsSuccess",
+            "description": "The acknowledgement (no event) or one event; both carry subscribed true.",
+            "allOf": [
+              {"$ref": "#/components/schemas/Success"},
+              {"$ref": "#/components/schemas/AppLifeEvent"},
+              {"required": ["subscribed"], "properties": {"subscribed": {"$ref": "#/components/schemas/Subscribed"}}}
+            ]
+          },
+          {
+            "title": "GetAppLifeEventsFailure",
+            "allOf": [
+              {"$ref": "#/components/schemas/Failure"},
+              {"properties": {"errorCode": {"enum": ["forbidden", "notRoot", "badRequest", "noPermission", "lookupFailed", "timeout", "tooManySubscriptions"]}}}
             ]
           }
         ]

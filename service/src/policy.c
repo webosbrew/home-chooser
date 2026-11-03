@@ -375,13 +375,20 @@ int hc_remove_reply_class(const char *text)
 
 const char *const hc_launcher_list_fields[] = {
 	"id", "title", "icon", "largeIcon", "folderPath", "version", "vendor", "type", "removable", "visible",
-	"appCategory", "iconColor", "bgColor", NULL
+	"appCategory", "iconColor", "bgColor", "systemApp", "mediumLargeIcon", "extraLargeIcon", NULL
+};
+
+/* The fields of one getAppLifeEvents event that are forwarded (seen in captured SAM events); "event" is
+ * the one that makes a reply an event. */
+const char *const hc_life_event_fields[] = {
+	"event", "appId", "reason", "windowType", "windowGroup", "windowGroupOwner", "windowGroupOwnerId",
+	"title", "showSplash", "showSpinner", "splashBackground", NULL
 };
 
 /* The launch point fields listLaunchPoints forwards (additive, like hc_launcher_list_fields). */
 const char *const hc_launch_point_fields[] = {
 	"launchPointId", "id", "title", "lptype", "icon", "largeIcon", "iconColor", "bgColor", "bgImage",
-	"params", "removable", NULL
+	"params", "removable", "mediumLargeIcon", "extraLargeIcon", NULL
 };
 
 /* Where an absolute launch point icon may lie: the folder of the launch point's own app under one of

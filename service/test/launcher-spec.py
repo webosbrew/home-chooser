@@ -150,7 +150,7 @@ def lint(spec_path, cases_path, meta_paths):
     sv = Validator([])
     methods, records = collect(spec, cases_doc)
     want = ['getInfo', 'listApps', 'listRunning', 'getForegroundApp', 'getAppInfo', 'getAppIcon', 'closeApp', 'uninstallApp',
-            'listLaunchPoints', 'listInputs', 'getIcons']
+            'listLaunchPoints', 'listInputs', 'getIcons', 'getAppLifeEvents']
     if sorted(methods) != sorted(want):
         problems.append('methods are %s, v1 has %s' % (sorted(methods), sorted(want)))
     # Every schema in the document, against the subset (an unsupported keyword is a problem too).
@@ -195,6 +195,13 @@ def lint(spec_path, cases_path, meta_paths):
             problems += ['%s: knownDisagreement%s' % (label, e) for e in sv.errors(r['knownDisagreement'], DISAGREEMENT, {})]
         elif r['result'].get('returnValue') is False:
             produced.setdefault(r['method'], set()).add(r['result'].get('errorCode'))
+    # The events a stream method documents (x-events) are replies too.
+    for m in spec['methods']:
+        for i, event in enumerate(m.get('x-events', [])):
+            try:
+                problems += ['%s x-events[%d]%s' % (m['name'], i, e) for e in sv.errors(event, m['result']['schema'], spec)]
+            except SchemaError as e:
+                problems.append('%s x-events[%d]: %s' % (m['name'], i, e))
     names = [(r['method'], r['name']) for r in records]
     problems += ['duplicate case %s/%s' % n for n in sorted({n for n in names if names.count(n) > 1})]
 

@@ -69,6 +69,7 @@ static LSMethod methods[] = {
 	{"getAppInfo", on_launcher_get_app_info, LUNA_METHOD_FLAGS_NONE},
 	{"getAppIcon", on_launcher_get_app_icon, LUNA_METHOD_FLAGS_NONE},
 	{"listLaunchPoints", on_launcher_list_launch_points, LUNA_METHOD_FLAGS_NONE},
+	{"getAppLifeEvents", on_launcher_life_events, LUNA_METHOD_FLAGS_NONE},
 	{"listInputs", on_launcher_list_inputs, LUNA_METHOD_FLAGS_NONE},
 	{"getIcons", on_launcher_get_icons, LUNA_METHOD_FLAGS_NONE},
 	{"uninstallConfirmed", on_uninstall_confirmed, LUNA_METHOD_FLAGS_NONE},
