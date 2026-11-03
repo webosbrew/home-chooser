@@ -235,11 +235,12 @@ class RebootSteps:
         """10+ after a boot with an overlay launcher: the watcher launched the last input once
         (service/src/watcher/input.c), so a full-screen input app is in front beneath the overlay."""
         r = self.rec
-        verdict = lambda: boot_input_verdict(self.log_lines(), self.dev.foreground()[0])
+        first = self.boot_first_app()  # bootd.log: what the TV booted to decides what the watcher should do
+        verdict = lambda: boot_input_verdict(self.log_lines(), self.dev.foreground()[0], first)
         self.wait(lambda: verdict()[0], BOOT_INPUT_WAIT, 5)
         ok, why = verdict()
         lines = [l for l in self.log_lines() if 'last input:' in l]
-        r.check(label + ': the watcher launched the last input once and the input is in front (overlay launcher; the launch closes the overlay)', ok,
+        r.check(label + ': the watcher launched the last input once and the input is in front, or left the app bootd booted in front (overlay launcher)', ok,
                 why + '\n' + '\n'.join(lines))
         r.note(label + ': the overlay launcher over the input', '%s running=%s' % (
             self.launcher, self.launcher in self.running_ids()))
