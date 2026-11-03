@@ -532,10 +532,11 @@ ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<
 run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
 
 `MATRIX` in `hc_e2e/matrix.py` contains release slots. The VM field accepts a name or an ordered
- tuple of alternatives, for example `('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna',
- 'verified', '...')`. Each row runs exactly once, using a candidate reported by host discovery.
- The three 9.x rows remain separate slots; `--vms 9.x` selects the first, as before. A single-run
- `homechooser_e2e.py --vm 6.x` retains the original Pi VM; explicit RK names work too.
+ tuple of alternatives (for slots whose VM has a different name on another machine). Each row runs
+ exactly once, using a candidate reported by host discovery. The three 9.x rows remain separate
+ slots; `--vms 9.x` selects the first, as before. The VMs of `pi` and `rockpi4a-1` have the same
+ names, so `hosts.toml` pins each matrix VM to one of them (below); a single-run
+ `homechooser_e2e.py --vm 6.x` runs on the default host (`pi`) unless `--host` says otherwise.
 
 `run_matrix.py` has one worker per eligible machine and a shared pool of slots. A free worker claims
  a compatible slot under a lock. It favours shared work on machines with less exclusive work, leaving
@@ -545,10 +546,17 @@ run with `link=lan`, so their LAN addresses are reachable from this PC wherever 
  configured slowdown; its printed plan is an estimate, not a reservation.
 
 The committed hosts are `pi` (`raspberrypi`), `rockpi4a-1` and `rockpi4a-2`
- (`mariotaku@rockpi4a-N.lan`, accepted directly by ssh and scp). Each host can set `slowdown = 1.5`;
- the default is `1.0`, values must be finite and at least `1.0`. The boards use a provisional 1.5;
- this is a guess to measure, not a measured speed ratio. Pi timing is unchanged.
- In the per-run process the factor scales Python settling sleeps and polling intervals, boot/LAN and
+ (`mariotaku@rockpi4a-N.lan`, accepted directly by ssh and scp). `rockpi4a-2` has `opt_in = true`: it
+ is the user's own machine, so a run with no `--hosts` never picks it; `--hosts rockpi4a-2` does.
+ Each host can set `slowdown = 2.0`; the default is `1.0`, values must be finite and at least `1.0`.
+ The Rock Pi boards use 2.0, the ratio measured against the Pi (a release-tier run of one VM: 10.x
+ 8m47s on `pi`, 17m56s on `rockpi4a-1`). Pi timing is unchanged.
+ `pi` and `rockpi4a-1` carry the same VM names, so `hosts.toml` pins each matrix VM to one of them
+ (`vms = [...]`) to balance the two: `rockpi4a-1` takes 5.x to 8.x, `pi` the three 9.x slots and
+ 10.x to 12.x, which finish within a few minutes of each other. `w21p-kisscurl` is never pinned or run.
+ The unit test `CommittedPlan` in `test_run_matrix.py` holds the plan, the balance and both
+ exclusions; `python3 -I e2e/run_matrix.py --tier release --dry-run` prints it.
+In the per-run process the factor scales Python settling sleeps and polling intervals, boot/LAN and
  device readiness deadlines, inspector readiness, scenario/notification/alert waits, popup/manual
  waits, reboot and sam relaunch deadlines, preload settling and observation sleeps, and command
  timeouts through `run()` (including Beanjar/ares). Embedded guest shell sleeps, socket/HTTP probe
@@ -784,8 +792,14 @@ Two modes. The host contract test (`service/test`, `test-launcher-contract`: the
   `permitted`, `isSelectedHome:false`) and `listApps` (names the launcher), then the `request` dialog. 3a: `getInfo`
   (`isSelectedHome:true`) and one Home-only method, `closeApp` of the running disposable app; with `--uninstall-via
   alert` also the `uninstallApp` confirmation on LG's alert (cancel, then confirm), then the "already your Home" toast.
-  After a boot, after the update and after the uninstall as below.
-* `--api-check=full`: everything below, every method and error case, as the full tier runs it.
+  After a boot, after the update and after the uninstall as below. Level 3 (`hc_e2e/level3.py`,
+  `hc_e2e/steps/level3.py`): in 2a `getAppLifeEvents` without `subscribe` is `badRequest` and the `systemApp`,
+  `mediumLargeIcon` and `extraLargeIcon` fields of `listApps` are well formed; in 3a a subscription held as the launcher
+  (`luna-send -a <id> -i`) across the launch and the `closeApp` of the disposable app must see the acknowledgement and
+  its launch and close or stop events, every reply valid against the spec (never the browser: it raises an LG popup).
+* `--api-check=full`: everything below, every method and error case, as the full tier runs it, and for level 3 also
+  `getIcons` with `extraLargeIcon` and `mediumLargeIcon` (data for apps whose `listApps` entry names that icon, `noIcon`
+  for one that does not, never another size's picture).
 
 `luna-send -a <id>` makes the hub take the call as that app's id, but it does not carry the app's ACG: a web app's
 calls go through WAM with the groups of its `requiredPermissions`, a root `luna-send` does not. A pass here therefore
