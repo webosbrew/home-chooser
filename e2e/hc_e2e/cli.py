@@ -6,7 +6,7 @@ import shutil
 import signal
 import time
 
-from . import timing
+from . import mitm, timing
 from .api_spec import DISPOSABLE_ID
 from .beanjar import BeanjarHost
 from .constants import HERE, REPO
@@ -76,6 +76,11 @@ def build_parser():
                     help="off (default): right after each boot the VM's mitmweb is told to answer LG's automatic "
                          "update check (CheckSWAutoUpdate.laf) with the installed version, so no 'latest version "
                          "available' popup takes key focus; nothing is written on the TV.  keep: the offer is left as is")
+    ap.add_argument('--country-reply', choices=['off', 'keep'], default='off',
+                    help="off (default): the VM's mitmweb rewrites the country of LG's initservices reply to the TV's "
+                         "own (read from its settings once per VM, kept in e2e/results/country/), so sdx raises no "
+                         "'Changing the country will cause your TV to restart' popup for the Raspberry Pi's "
+                         "geolocated country.  keep: the reply is left as LG sent it")
     ap.add_argument('--input-mode', choices=['click', 'keys'], default='click',
                     help='prefer screen elements and pointer clicks (default), or key navigation')
     ap.add_argument('--build', action='store_true', help='run npm run package first')
@@ -142,6 +147,7 @@ class VmSession:
         host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)
         timing.SLOWDOWN = host.slowdown
         host.update_offer = args.update_offer
+        host.country_reply = args.country_reply
         args.new_ipk, args.old_ref = args.hc_ipk, None
         outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' % (vm, time.strftime('%Y%m%d-%H%M%S')))
         os.makedirs(outdir, exist_ok=getattr(args, 'outdir_made', False))  # made by the pytest plugin
@@ -200,6 +206,8 @@ class VmSession:
             state = wait_for_device(dev, rec)
         if state != READY:
             raise SystemExit('the VM did not come up with Homebrew Channel: %s (%s)' % (state, WAIT_STATES[state]))
+        if args.country_reply == 'off':
+            mitm.learn_country(host, vm, dev, rec.say)
         removed_launchers = clean_launchers(dev, rec)
         # every launcher on this one boot: the first makes the whole lifecycle, the later ones switch in
         # through Home Chooser and make only their scopes (run_plan; e2e/README.md "Scopes")

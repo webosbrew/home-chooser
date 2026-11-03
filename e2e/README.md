@@ -739,6 +739,17 @@ always reports `reboot=no`. The runner follows that:
   "Not Found Image Update". Nothing is written on the TV. The run log says `update offer: ...`, and `RACE LOST`
   if a check had been answered before the rule was in. Which reply, and why: the daemon disassembly notes in
   `hc_e2e/mitm.py`.
+* LG's country answer is the TV's own (`--country-reply off`, default; `keep` leaves it). At boot LG's server
+  answers `POST /init/<ver>/initservices` with `"country":{"code":"JP","ricCode":"AIC","threecode":"JPN"}`, the
+  country of the public address of the machine the VM runs on, while the VMs are set to USA; sdx then raises
+  "Changing the country will cause your TV to restart ... Continue?", which takes key focus. The same
+  `modify_body` list gets two more rules that change `code` and `threecode` inside that reply's country object
+  to the TV's own (`ricCode`, LG's regional cluster, and every other byte stay as sent). The request carries the
+  country only in headers, which `modify_body` cannot read, so the TV's own country is read once per VM from
+  its settings (read-only `getSystemSettings`: `smartServiceCountryCode2/3`) after a boot is up and kept in
+  `e2e/results/country/HOST-VM.json`; the boots after that get the rule, and a VM never read yet gets none
+  (the log says `country reply: ... not known yet`). The log line on the rules is `mitm rules: ... modify_body
+  set; ...`. Facts: `scratch/country-popup/facts.md`.
 * After a boot (`--reboot-check`, cleanup boot): the watcher is active, status is `active=yes` and `reboot=no`
   again, and the boot apply log lines and the compositor QML/crash lines of the retained messages are recorded
   (`after_boot_checks`).

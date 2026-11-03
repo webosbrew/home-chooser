@@ -101,6 +101,7 @@ class BeanjarHost:
         self._remote_keys = {}
         self._frame_mapping_logged = False
         self.update_offer = 'keep'  # 'off': every boot gets LG's "no new version" answer (hc_e2e/mitm.py)
+        self.country_reply = 'keep'  # 'off': the initservices reply carries the TV's own country (hc_e2e/mitm.py)
         self.say = print
 
     @classmethod
@@ -192,8 +193,9 @@ class BeanjarHost:
         close_sessions()  # a root shell of the previous boot is gone
         result = self.beanjar('start', self.ref(vm), timeout=600)
         if result[0] == 0:
-            if self.update_offer == 'off':  # first: LG's check comes about 20 s after QEMU starts
-                mitm.turn_off_update_offer(self, vm, self.say)
+            if self.update_offer == 'off' or self.country_reply == 'off':  # first: LG's check comes ~20 s after QEMU starts
+                mitm.turn_off_update_offer(self, vm, self.say, update=self.update_offer == 'off',
+                                           country=self.country_reply == 'off')
             self.vnc_start(vm)
         return result
 
