@@ -41,10 +41,32 @@ def boot_input_launches(lines):
     return out
 
 
-def boot_input_verdict(lines, foreground):
-    """(ok, detail) after a boot with an overlay launcher on 10+: this boot's watcher log has exactly one
-    last-input launch, accepted, and that app is SAM's foreground (the overlay is not named there)."""
+BOOT_INPUT_IN_FRONT = re.compile(r'last input: (\S+) in front; nothing launched this boot')
+
+
+def boot_input_verdict(lines, foreground, bootd=None, launcher=''):
+    """(ok, detail) after a boot with an overlay launcher on 10+.  `bootd` is bootd_first_app() of this boot.
+    bootd launched LG Home (boot:true): this boot's watcher log has exactly one last-input launch, accepted,
+    and that app is SAM's foreground (the overlay is not named there).  bootd launched another app (Live TV
+    with lgChannelAutoLaunch on): the watcher launches nothing and logs "<app> in front; nothing launched
+    this boot" naming that app, which is in front.  On 10+ the idleApp override makes the chosen launcher
+    bootd's home first app, so bootd launching `launcher` is the LG Home path too (an overlay leaves the
+    foreground empty).  No bootd evidence is a failure, never a guess."""
     launches = boot_input_launches(lines)
+    kind, boot_app, why = bootd if bootd else ('unknown', '', 'bootd.log was not read')
+    if kind == 'unknown':
+        return False, 'what the TV booted to is unknown: ' + why
+    if kind == 'other' and launcher and boot_app == launcher:
+        kind = 'home'
+    if kind == 'other':
+        if launches:
+            return False, 'bootd booted to %s, so no last input launch is wanted; the log has %r' % (boot_app, launches)
+        named = [m.group(1) for l in lines for m in [BOOT_INPUT_IN_FRONT.search(l)] if m]
+        if boot_app not in named:
+            return False, 'no "%s in front; nothing launched this boot" line (found %r)' % (boot_app, named)
+        if foreground != boot_app:
+            return False, 'foreground %r, not the bootd app %s' % (foreground, boot_app)
+        return True, 'bootd booted to %s; the watcher left it in front, nothing launched' % boot_app
     if len(launches) != 1:
         return False, '%d last-input launches in the log, want 1: %r' % (len(launches), launches)
     app, accepted = launches[0]

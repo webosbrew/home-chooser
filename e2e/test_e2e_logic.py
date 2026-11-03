@@ -907,6 +907,7 @@ class LogMark(unittest.TestCase):
 
 class BootInput(unittest.TestCase):
     LAUNCHED = '2026-11-01 01:31:00 last input: launched com.webos.app.hdmi2 over an empty foreground: {"returnValue":true}'
+    HOME = ('home', 'com.webos.app.home', 'bootd launched com.webos.app.home with boot:true')
     FAILED = '2026-11-01 01:31:00 last input: launch of com.webos.app.livetv failed: no reply; not retried this boot'
 
     def test_launches_are_read_from_the_log(self):
@@ -917,18 +918,47 @@ class BootInput(unittest.TestCase):
         self.assertEqual(hc_e2e.releases.boot_input_launches(['x last input: netflix in front; nothing launched this boot']), [])
 
     def test_one_accepted_launch_in_front(self):
-        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], 'com.webos.app.hdmi2'),
+        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], 'com.webos.app.hdmi2', self.HOME),
                          (True, 'com.webos.app.hdmi2 launched once and in front'))
 
     def test_not_in_front_yet(self):
         for fg in ('', None, 'org.webosbrew.hcfixture.web.overlay', 'com.webos.app.livetv'):
-            self.assertFalse(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], fg)[0], fg)
+            self.assertFalse(hc_e2e.releases.boot_input_verdict([self.LAUNCHED], fg, self.HOME)[0], fg)
 
     def test_none_two_or_failed(self):
-        self.assertIn('0 last-input launches', hc_e2e.releases.boot_input_verdict([], 'com.webos.app.hdmi2')[1])
-        self.assertIn('2 last-input launches', hc_e2e.releases.boot_input_verdict([self.LAUNCHED, self.LAUNCHED], 'com.webos.app.hdmi2')[1])
-        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.FAILED], 'com.webos.app.livetv'),
+        self.assertIn('0 last-input launches', hc_e2e.releases.boot_input_verdict([], 'com.webos.app.hdmi2', self.HOME)[1])
+        self.assertIn('2 last-input launches', hc_e2e.releases.boot_input_verdict([self.LAUNCHED, self.LAUNCHED], 'com.webos.app.hdmi2', self.HOME)[1])
+        self.assertEqual(hc_e2e.releases.boot_input_verdict([self.FAILED], 'com.webos.app.livetv', self.HOME),
                          (False, 'the launch of com.webos.app.livetv failed'))
+
+    LIVETV = ('other', 'com.webos.app.livetv', 'bootd launched com.webos.app.livetv')
+    FRONT = '2026-11-03 19:00:00 last input: com.webos.app.livetv in front; nothing launched this boot'
+
+    def test_bootd_booted_another_app_nothing_launched(self):
+        v = hc_e2e.releases.boot_input_verdict
+        self.assertTrue(v([self.FRONT], 'com.webos.app.livetv', self.LIVETV)[0])
+        self.assertFalse(v([self.FRONT], 'org.x.overlay', self.LIVETV)[0])
+        self.assertIn('no "com.webos.app.livetv in front', v([], 'com.webos.app.livetv', self.LIVETV)[1])
+        self.assertIn('no last input launch is wanted', v([self.LAUNCHED, self.FRONT], 'com.webos.app.livetv', self.LIVETV)[1])
+        self.assertFalse(v(['x last input: other.app in front; nothing launched this boot'], 'com.webos.app.livetv', self.LIVETV)[0])
+
+    def test_bootd_launching_the_chosen_launcher_is_the_home_path(self):
+        # matrix-20261103-193122 (10.x): idleApp override, bootd's first app is the overlay launcher itself
+        ov = 'org.webosbrew.hcfixture.web.overlay'
+        bootd = ('other', ov, 'bootd launched ' + ov)
+        v = hc_e2e.releases.boot_input_verdict
+        self.assertEqual(v([self.LAUNCHED], 'com.webos.app.hdmi2', bootd, ov),
+                         (True, 'com.webos.app.hdmi2 launched once and in front'))
+        self.assertFalse(v([self.LAUNCHED], 'com.webos.app.hdmi2', bootd)[0])  # launcher not named: other app
+        self.assertFalse(v([], 'com.webos.app.hdmi2', bootd, ov)[0])
+
+    def test_home_boot_keeps_one_launch_and_unknown_fails(self):
+        v = hc_e2e.releases.boot_input_verdict
+        self.assertFalse(v([self.FRONT], 'com.webos.app.livetv', self.HOME)[0])
+        for bootd in (None, ('unknown', '', 'no first-app launch call')):
+            ok, why = v([self.LAUNCHED], 'com.webos.app.hdmi2', bootd)
+            self.assertFalse(ok)
+            self.assertIn('unknown', why)
 
 
 class StockRecord(unittest.TestCase):
