@@ -175,7 +175,7 @@ class VmSession:
         dev = Device.for_vm(host, vm)
         dev.say = rec.say
         end = time.time() + timing.seconds(120)
-        while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
+        while time.time() < end and (host.awaits_lan(vm)):
             timing.sleep(3)
         state = wait_for_device(dev, rec)
         if state == NO_ROOT_SSH:
@@ -185,7 +185,7 @@ class VmSession:
             rc, out = host.start(vm)
             rec.say('beanjar start: %s' % out.strip()[-200:])
             end = time.time() + timing.seconds(120)
-            while time.time() < end and (host.info(vm).get('lan_address') in (None, '', '-')):
+            while time.time() < end and (host.awaits_lan(vm)):
                 timing.sleep(3)
             state = wait_for_device(dev, rec)
         if state != READY:

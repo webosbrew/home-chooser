@@ -3520,5 +3520,13 @@ class MatrixFixes2(unittest.TestCase):
         self.assertFalse(f('', 12))
 
 
+class AwaitsLanTest(unittest.TestCase):
+    def test_nat_vm_never_waits_for_a_lan_address(self):
+        host = hc_e2e.beanjar.BeanjarHost.__new__(hc_e2e.beanjar.BeanjarHost)
+        for info, want in (({'link': 'lan', 'lan_address': '-'}, True), ({'link': 'lan', 'lan_address': '192.168.1.5'}, False),
+                           ({'link': 'nat'}, False), ({}, True)):
+            host.info = lambda vm, info=info: info
+            self.assertEqual(host.awaits_lan('x'), want, info)
+
 if __name__ == '__main__':
     unittest.main()

@@ -111,7 +111,7 @@ class DeviceState:
         """After a reboot (any route): LAN address, Homebrew Channel, a new boot id."""
         r, host = self.rec, self.host
         end = time.time() + timing.seconds(120)
-        while time.time() < end and (host.info(self.vm).get('lan_address') in (None, '', '-')):
+        while time.time() < end and (host.awaits_lan(self.vm)):
             timing.sleep(3)
         state = wait_for_device(self.dev, r)
         up = state == READY

@@ -170,6 +170,11 @@ class BeanjarHost:
                 d.setdefault(k.strip(), v.strip())
         return d
 
+    def awaits_lan(self, vm):
+        """True while a LAN-linked VM has no LAN address yet; a NAT VM never gets one, so never waits."""
+        d = self.info(vm)
+        return d.get('link', 'lan') == 'lan' and d.get('lan_address') in (None, '', '-')
+
     def settings(self, vm):
         rc, out = self.beanjar('settings', self.ref(vm), 'show')
         return dict(l.split(': ', 1) for l in out.splitlines() if ': ' in l)
