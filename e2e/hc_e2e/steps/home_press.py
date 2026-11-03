@@ -76,6 +76,7 @@ class HomePress:
     LIFE_LOG = '/tmp/hc-e2e-life.log'
     LIFE_PID = '/tmp/hc-e2e-life.pid'
     LAUNCH_OK = re.compile(r'NL_APP_LAUNCH_BEGIN|APP_LAUNCHED|RelaunchAsCommon')
+    RUNNING_WAIT = 30  # seconds (scaled) a launched app has to appear in `running`
     LAUNCH_BAD = re.compile(r'APP_LAUNCH_ERR|APP_LAUNCH_WARNING|LAUNCH_FAILED')
 
     def life_begin(self):
@@ -119,7 +120,9 @@ class HomePress:
             got.update(lines=lines, ok_lines=ok_lines, ev=ev, held=held)
             return ok_lines or [e for e in ev if e[0] in ('launch', 'relaunch', 'foreground', 'splash')]
         self.wait(check, 20, 2)
-        running = appid in self.running_ids()
+        # The first launch sign (NL_APP_LAUNCH_BEGIN) comes ~100 ms after the press; the process shows in
+        # applicationManager/running later, and on a slow board (rockpi4a, 11.x) seconds later: poll it.
+        running = bool(self.wait(lambda: appid in self.running_ids(), self.RUNNING_WAIT, 2))
         lines, ok_lines, ev, held = (got.get(k, []) for k in ('lines', 'ok_lines', 'ev', 'held'))
         self.life_end()
         proved = bool(ok_lines) or any(e[0] in ('launch', 'relaunch', 'foreground', 'splash') for e in ev)

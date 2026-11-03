@@ -5,6 +5,13 @@
 # Use the names `beanjar host list` uses on this PC, so `beanjar start <host>/<vm>` means the same machine.
 # Which VMs a machine has is asked from it (`beanjar list --local --json`); `vms` pins one only when a
 # VM name exists on more than one machine.
+#
+# `run_matrix.py` with no options spreads the matrix over `pi` and `rockpi4a-1`, which have the same VM
+# names, so the pins below say which machine runs which slot.  They balance the measured times of a
+# release-tier run (e2e/results/matrix-20261102-*/summary.md): the Pi runs a VM in about half the time
+# a Rock Pi 4A does (10.x: 8m47s on pi, 17m56s on rockpi4a-1; 12.x about 11m against 18m47s), so the Rock Pi
+# takes 5.x-8.x (about 23 Pi-minutes of work, 46 minutes there) and the Pi the three 9.x slots and 10.x-12.x
+# (about 46 minutes).  Change a pin and e2e/test_run_matrix.py (CommittedPlan) tells you what it costs.
 
 default = "pi"
 # The VM of `run_matrix.py --tier smoke`: a VM name or a release (its matrix slot).
@@ -12,12 +19,17 @@ default_slot = "9.x"
 
 [hosts.pi]
 ssh = "raspberrypi"            # an ssh config alias (BatchMode); `local = true` when beanjar runs on this PC
-# vms = ["w22o-ponytail-us"]
+# w21p-kisscurl is on this machine and belongs to another project: it is not in the matrix, never pin it.
+vms = ["w24g-ombre", "w22o-ponytail-us", "w22o-queue-us", "w24g-spacebuns"]
 
 [hosts.rockpi4a-1]
 ssh = "mariotaku@rockpi4a-1.lan"
-slowdown = 1.5 # provisional; measure on the board
+slowdown = 2.0 # measured against pi: a run takes about twice as long
+vms = ["w20l-jhericurl", "w21a-kisscurl", "w22p-mullet", "w22o-number1"]
 
 [hosts.rockpi4a-2]
 ssh = "mariotaku@rockpi4a-2.lan"
-slowdown = 1.5 # provisional; measure on the board
+slowdown = 2.0
+# Reserved for the user: no run picks this machine unless it is named, `run_matrix.py --hosts rockpi4a-2`
+# (then the VM names it shares with the others are pinned elsewhere: give `--hosts rockpi4a-2` alone).
+opt_in = true

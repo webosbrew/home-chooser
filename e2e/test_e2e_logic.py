@@ -33,6 +33,7 @@ import hc_e2e.device  # noqa: E402
 import hc_e2e.evidence  # noqa: E402
 import hc_e2e.inspector  # noqa: E402
 import hc_e2e.launchers  # noqa: E402
+import hc_e2e.level3  # noqa: E402
 import hc_e2e.plan  # noqa: E402
 import hc_e2e.preflight  # noqa: E402
 import hc_e2e.recorder  # noqa: E402
@@ -382,6 +383,7 @@ class AlertFocus(unittest.TestCase):
         from types import SimpleNamespace
         scenario = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
+        scenario.PROOF_WAIT = 0
         scenario.press = lambda *a: self.fail('unproven service must send no key')
         scenario.shot = lambda *a: self.fail('service proof must precede screen capture')
         self.assertFalse(scenario.press_alert(hc_e2e.constants.REBOOT_PROMPT['apply'], 'Reboot', 'Later',
@@ -403,6 +405,19 @@ class AlertFocus(unittest.TestCase):
         self.assertFalse(uninstall(raw.replace('org.webosbrew.hcfixture.web.normal', 'other.caller')))
         self.assertFalse(uninstall(raw.replace('alert shown', 'alert refused')))
         self.assertFalse(uninstall(raw.replace('"returnValue":true', '"returnValue":false')))
+
+    def test_service_proof_is_awaited_not_read_once(self):
+        """matrix-20261102-194054/w22o-number1: the alert was on screen, its log line was not there yet."""
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        scenario = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        scenario.rec = SimpleNamespace(say=lambda *a: None, note=lambda *a: None)
+        readings = iter([('', False), ('', False), ('UNINSTALL_ASK line', True)])
+        with patch.object(hc_e2e.timing, 'sleep') as slept:
+            self.assertEqual(scenario.await_service_proof(lambda: next(readings)), ('UNINSTALL_ASK line', True))
+        self.assertEqual(slept.call_count, 2)
+        with patch.object(hc_e2e.timing, 'SLOWDOWN', 0.0):  # never proven: the last reading, after the bound
+            self.assertEqual(scenario.await_service_proof(lambda: ('no line', False)), ('no line', False))
 
     def test_extra_alert_control_fails_closed(self):
         frame = self.frame()
@@ -1429,8 +1444,8 @@ class Audiooutputd183(unittest.TestCase):
             s.priv_luna = lambda uri, payload='{}', r=reply(*contents): r
             s.shot = lambda label: label
             s.foreign_popup('x')
-            self.assertEqual([c for c in s.rec.checks if 'no LG [crash]' in c[0]][0][1], ok)
-            self.assertTrue(any('beanjar#183' in n for n in s.rec.notes))
+            self.assertEqual([c for c in s.rec.checks if 'no Home Chooser or WebAppMgr crash fault' in c[0]][0][1], ok)
+            self.assertEqual([hc_e2e.evidence.crash_process(e) for _, e in s.platform_crashes], ['audiooutputd'])
 
 
 class WaitForDevice(unittest.TestCase):
@@ -2502,24 +2517,25 @@ class RestartDetection(unittest.TestCase):
         s.check_no_crash('x', snap)
         self.assertEqual([ok for _, ok in s.rec.checks], [False, False])
 
-    def test_known_dvb_crash_fails_acceptance(self):
+    def test_dvb_crash_is_a_platform_crash_for_the_reference_note(self):
         s = scenario()
         snap = s.compositor_snapshot()
         s.dev.messages = KnownDvbCrash.CRASHD + '\n'
         s.dev.fault_reply = KnownDvbCrash().reply(KnownDvbCrash.NOISE, KnownDvbCrash.FAULT)
         s.check_no_crash('x', snap)
-        self.assertEqual([ok for _, ok in s.rec.checks], [False, True])
+        self.assertEqual([ok for _, ok in s.rec.checks], [True, True])
+        self.assertEqual([hc_e2e.evidence.crash_process(e) for _, e in s.platform_crashes], ['legacy-broadcas.4892'])
 
-    def test_dvb_crash_at_another_location_or_with_wam_crash_fails(self):
-        for fault_reply, extra in (('', ''), (KnownDvbCrash().reply(
-                dict(KnownDvbCrash.FAULT, faultContent='RDXDErr3_legacy-broadcas__x (API_SI_Other+0x1)__legacy-broadcas.4892.a.gz')), ''),
-                (KnownDvbCrash().reply(KnownDvbCrash.FAULT), 'x crashd CRASHED {"process":"WebAppMgr.1"}\n')):
+    def test_a_wam_crash_next_to_a_platform_crash_still_fails(self):
+        for extra, ok in (('', True), ('x crashd CRASHED {"process":"WebAppMgr.1"}\n', False),
+                          ('x crashd CRASHED {"process":"homechooser-d.77"}\n', False)):
             s = scenario()
             snap = s.compositor_snapshot()
             s.dev.messages = KnownDvbCrash.CRASHD + '\n' + extra
-            s.dev.fault_reply = fault_reply
+            s.dev.fault_reply = ''
             s.check_no_crash('x', snap)
-            self.assertEqual([ok for _, ok in s.rec.checks], [False, True], fault_reply)
+            self.assertEqual([ok_ for _, ok_ in s.rec.checks], [ok, True], extra)
+            self.assertEqual(len(s.platform_crashes), 1)
 
     def test_only_6_to_9(self):
         for major in (5, 10, 12):
@@ -3530,3 +3546,280 @@ class AwaitsLanTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HarnessFixes1103(unittest.TestCase):
+    """The three one-off failures of 2026-11-02/03 (scratch/api-level3-device*.md)."""
+
+    def test_page_vanished_needs_the_inspector_to_have_lost_the_page(self):
+        steps = hc_e2e.steps.api
+        gone = ('none (DOM last_error=None; timeline: t+0.0s #1 DOM 0.4s toast=None; '
+                't+4.5s #2 DOM 0.1s err=no page for org.webosbrew.homechooser in /json (forward alive))')
+        self.assertTrue(steps.page_vanished(gone))
+        self.assertFalse(steps.page_vanished('none (DOM last_error=None; timeline: t+0.0s #1 DOM 0.4s toast=None)'))
+        self.assertFalse(steps.page_vanished('DOM'))
+        self.assertFalse(steps.page_vanished(None))
+
+    def launch_scenario(self, running, events=(('launch', '{"event":"launch"}'),)):
+        from unittest.mock import Mock
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.rec = Mock()
+        s.sam_launch_lines = Mock(return_value=['SAM APP_LAUNCHED {"app_id":"x"}'])
+        s.life_events = Mock(return_value=(list(events), True))
+        s.life_end = Mock()
+        s.running_ids = Mock(side_effect=running)
+        return s
+
+    def test_launch_proof_waits_for_the_process_to_be_listed(self):
+        """w22o-queue-us-20261103-141531: launch lines at once, `running` read once, a slow board lists it later."""
+        from unittest.mock import patch
+        s = self.launch_scenario([[], [], ['x']])
+        with patch.object(hc_e2e.timing, 'sleep'):
+            s.launch_proof('4-home', 'x', '2026-11-03T00:00:00')
+        self.assertTrue(s.rec.check.call_args[0][1])
+        self.assertIn('running: True', s.rec.check.call_args[0][2])
+
+    def test_launch_proof_fails_when_the_app_never_runs(self):
+        from unittest.mock import patch
+        s = self.launch_scenario(lambda: [])
+        s.running_ids.side_effect = None
+        s.running_ids.return_value = ['other']
+        with patch.object(hc_e2e.timing, 'sleep'), patch.object(hc_e2e.timing, 'SLOWDOWN', 0.01):
+            s.launch_proof('4-home', 'x', '2026-11-03T00:00:00')
+        self.assertFalse(s.rec.check.call_args[0][1])
+        self.assertIn('running: False', s.rec.check.call_args[0][2])
+
+
+class Level3Logic(unittest.TestCase):
+    APP = 'org.webosbrew.hcfixture.disposable'
+
+    def ev(self, kind, appid=None, **extra):
+        d = {'subscribed': True, 'returnValue': True, 'apiVersion': 3, 'event': kind}
+        if appid:
+            d['appId'] = appid
+        d.update(extra)
+        return d
+
+    ACK = {'subscribed': True, 'returnValue': True, 'apiVersion': 3}
+
+    def test_parse_stream_keeps_json_lines_only(self):
+        text = 'luna-send banner\r\n{"subscribed":true,"returnValue":true,"apiVersion":3}\r\nnoise {not json}\n[1]\n' \
+               '{"event":"launch","appId":"a"}\n'
+        got = hc_e2e.level3.parse_stream(text)
+        self.assertEqual([r.get('event') for r in got], [None, 'launch'])
+        self.assertEqual(hc_e2e.level3.parse_stream(None), [])
+
+    def test_a_good_stream(self):
+        replies = [self.ACK, self.ev('splash', self.APP), self.ev('launch', self.APP, reason='undefined'),
+                   self.ev('foreground', 'other'), self.ev('close', self.APP), self.ev('stop', self.APP)]
+        self.assertEqual(hc_e2e.level3.stream_problems(replies, self.APP), [])
+        self.assertIn('close', hc_e2e.level3.stream_summary(replies, self.APP))
+
+    def test_stream_problems(self):
+        L = hc_e2e.level3.stream_problems
+        good = [self.ACK, self.ev('launch', self.APP), self.ev('close', self.APP)]
+        self.assertTrue(any('no acknowledgement' in p for p in L([self.ev('launch', self.APP)], self.APP)))
+        self.assertTrue(any('no launch event' in p for p in L([self.ACK, self.ev('close', self.APP)], self.APP)))
+        self.assertTrue(any('no close or stop' in p for p in L([self.ACK, self.ev('launch', self.APP)], self.APP)))
+        # a close that came before the launch does not count as the close of this launch
+        self.assertTrue(any('no close or stop' in p for p in
+                            L([self.ACK, self.ev('close', self.APP), self.ev('launch', self.APP)], self.APP)))
+        self.assertTrue(any('level 3' in p for p in L([dict(self.ACK, apiVersion=2)] + good[1:], self.APP)))
+        self.assertTrue(any('not say subscribed' in p for p in L([dict(self.ACK, subscribed=False)] + good[1:], self.APP)))
+        refused = {'returnValue': False, 'apiVersion': 3, 'errorCode': 'noPermission', 'errorText': 'x'}
+        self.assertTrue(any('refusal' in p for p in L([refused], self.APP)))
+        self.assertTrue(any('not the first' in p for p in L([self.ev('launch', self.APP)] + good, self.APP)))
+        self.assertTrue(any('non-string appId' in p for p in L(good + [self.ev('stop', 5)], self.APP)))
+        self.assertEqual(L(good, self.APP, validate=lambda r: []), [])
+        self.assertTrue(any('schema says no' in p for p in L(good, self.APP, validate=lambda r: ['schema says no'])))
+
+    def test_stream_replies_validate_against_the_spec(self):
+        """The recorded stream of scratch/api-level3-device.md: ack and events pass the spec's schema."""
+        replies = [self.ACK, self.ev('splash', self.APP, splashBackground='', showSpinner=True, showSplash=True, title='T'),
+                   self.ev('launch', self.APP, reason='undefined'),
+                   self.ev('foreground', self.APP, windowType='_WEBOS_WINDOW_TYPE_CARD', windowGroup=False),
+                   self.ev('close', self.APP, reason='undefined'), self.ev('stop', self.APP, reason='undefined'),
+                   self.ev('background', self.APP)]
+        validate = lambda r: hc_e2e.api_spec.spec_reply_problems('getAppLifeEvents', r) or []
+        self.assertEqual(hc_e2e.level3.stream_problems(replies, self.APP, validate), [])
+        self.assertEqual(hc_e2e.api_spec.spec_reply_problems('getAppLifeEvents', dict(self.ACK, apiVersion='3')) != [], True)
+
+    def test_list_field_problems(self):
+        L = hc_e2e.level3.list_field_problems
+        apps = [{'id': 'a', 'systemApp': True, 'mediumLargeIcon': '', 'extraLargeIcon': 'x.png'},
+                {'id': 'l', 'systemApp': False}, {'id': 'old'}]
+        self.assertEqual(L(apps, 'l'), [])
+        self.assertTrue(L([{'id': 'a', 'systemApp': 'true'}]))
+        self.assertTrue(L([{'id': 'a', 'extraLargeIcon': None}]))
+        self.assertTrue(L([{'id': 'a', 'mediumLargeIcon': 3}]))
+        self.assertTrue(L([{'id': 'l', 'systemApp': True}], 'l'))
+        self.assertEqual(hc_e2e.level3.field_census(apps), (2, 1, 1, 0, 1))
+        # the service-level checker of listApps knows the fields too
+        reply = {'returnValue': True, 'apiVersion': 3, 'apps': [{'id': 'a', 'systemApp': 1}]}
+        self.assertTrue(hc_e2e.api_spec.api_reply_problems('listApps', reply))
+        reply['apps'][0]['systemApp'] = True
+        self.assertEqual(hc_e2e.api_spec.api_reply_problems('listApps', reply), [])
+
+    PNG = 'iVBORw0KGgo='  # 8 bytes
+
+    def test_icon_sample_and_verdict(self):
+        L3 = hc_e2e.level3
+        apps = [{'id': 'a', 'extraLargeIcon': 'x.png'}, {'id': 'b', 'extraLargeIcon': ''}, {'id': 'c'},
+                {'id': 'd', 'extraLargeIcon': 'y.png'}]
+        named, bare = L3.icon_sample(apps)
+        self.assertEqual((named, bare), (['a', 'd'], 'b'))
+        items = [{'id': i, 'size': 'extraLargeIcon'} for i in named + [bare]]
+        good = {'returnValue': True, 'apiVersion': 3, 'icons': [
+            {'mimeType': 'image/png', 'dataUrl': 'data:image/png;base64,' + self.PNG, 'byteLength': 8},
+            {'errorCode': 'noIcon', 'errorText': 'x'}, {'errorCode': 'noIcon', 'errorText': 'x'}]}
+        self.assertEqual(L3.icons_problems(items, good, set(named)), ([], 1))
+        bad = json.loads(json.dumps(good))
+        bad['icons'][0]['byteLength'] = 9
+        self.assertTrue(L3.icons_problems(items, bad, set(named))[0])
+        bad = json.loads(json.dumps(good))
+        bad['icons'][2] = {'errorCode': 'notFound', 'errorText': 'x'}  # the bare app must be noIcon
+        self.assertTrue(any('expected noIcon' in p for p in L3.icons_problems(items, bad, set(named))[0]))
+        bad = json.loads(json.dumps(good))
+        bad['icons'][2] = good['icons'][0]  # a picture for an app that has no such size: a fallback
+        self.assertTrue(any('no such icon' in p for p in L3.icons_problems(items, bad, set(named))[0]))
+        none = json.loads(json.dumps(good))
+        none['icons'][0] = {'errorCode': 'noIcon', 'errorText': 'x'}
+        self.assertTrue(any('none of 2' in p for p in L3.icons_problems(items, none, set(named))[0]))
+        self.assertTrue(L3.icons_problems(items, {'icons': good['icons'][:2]}, set(named))[0])
+        self.assertTrue(L3.icons_problems(items, {'returnValue': True}, set(named))[0])
+        self.assertEqual(L3.icon_sample([{'id': 'a'}]), ([], 'a'))
+
+    def scenario(self):
+        from unittest.mock import Mock
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.rec, s.launcher = Mock(), 'org.example.launcher'
+        return s
+
+    def test_smoke_refuses_the_plain_call_and_checks_fields(self):
+        from unittest.mock import Mock
+        s = self.scenario()
+        refusal = {'returnValue': False, 'apiVersion': 3, 'errorCode': 'badRequest', 'errorText': 'stream'}
+        s.api = Mock(return_value=(refusal, json.dumps(refusal)))
+        apps = {'apps': [{'id': 'sys', 'systemApp': True}, {'id': 'org.example.launcher', 'systemApp': False}]}
+        s.api_level3_smoke('before selection', apps)
+        self.assertEqual([c[0][1] for c in s.rec.check.call_args_list], [True, True, True])
+        s.api.assert_called_once_with('getAppLifeEvents', {})
+        s = self.scenario()
+        ok = {'returnValue': True, 'apiVersion': 3, 'subscribed': True}
+        s.api = Mock(return_value=(ok, json.dumps(ok)))  # a service that streams a plain call: not badRequest
+        s.api_level3_smoke('x', {'apps': [{'id': 'a', 'systemApp': 'yes'}]})
+        self.assertEqual([c[0][1] for c in s.rec.check.call_args_list][:2], [False, False])
+
+    def test_stream_check_reads_the_device_file(self):
+        from unittest.mock import Mock, patch
+        s = self.scenario()
+        text = '\n'.join(json.dumps(x) for x in [self.ACK, self.ev('launch', self.APP), self.ev('close', self.APP)])
+        s.dev = Mock()
+        s.dev.sh.return_value = (0, text)
+        s.wait = lambda cond, timeout, every=3: cond()
+        self.assertTrue(s.stream_check('selected'))
+        self.assertTrue(s.rec.check.call_args[0][1])
+        s.dev.sh.return_value = (0, json.dumps(self.ACK))
+        self.assertFalse(s.stream_check('selected'))
+        s.stream_begin()
+        self.assertIn('luna-send -a org.example.launcher -i luna://org.webosbrew.homechooser.service/getAppLifeEvents',
+                      s.dev.sh.call_args[0][0].replace("'", '').replace('\\', ''))
+
+
+class PlatformCrashAccounting(unittest.TestCase):
+    """2026-11-03: platform crashes (audiooutputd, data-migrator, ...) are one reference note at the end of the
+    run; only Home Chooser's own processes, fixtures and WebAppMgr fail it."""
+    E = hc_e2e.evidence
+
+    def test_crash_process_of_lines_and_faults(self):
+        E = self.E
+        line = '2026-11-03T09:31:51Z [52.1] user.info crashd [] crashd CRASHED {"process":"data-migrator.1667"}'
+        self.assertEqual(E.crash_process(line), 'data-migrator.1667')
+        self.assertEqual(E.crash_process({'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__Linux Crash: x'}),
+                         'data-migrator')
+        self.assertEqual(E.crash_process({'faultContent': 'RDXDErr3_legacy-broadcas__x'}), 'legacy-broadcas')
+        self.assertEqual(E.crash_process('no process here'), '')
+        self.assertIn('boot+52.1s', E.crash_time(line))
+        self.assertEqual(E.crash_time({'faultTime': '55.1'}), 'boot+55.1s')
+
+    def test_ours_versus_platform(self):
+        E = self.E
+        crashd = lambda p: 'x [1.0] crashd CRASHED {"process":"%s"}' % p
+        ours = [crashd(p) for p in ('homechooser-d.9', 'homechooser-service.3', 'WebAppMgr.5823', 'org.webosbrew.hcfixture.web.normal.4',
+                                    'org.webosbrew.homechooser.12')]
+        platform = [crashd(p) for p in ('audiooutputd.1', 'data-migrator.1667', 'legacy-broadcas.4892', 'surface-manager.2')]
+        self.assertEqual(E.split_platform_crashes(ours + platform), (ours, platform))
+        self.assertTrue(E.is_ours_crash('a crash that names no process'))  # cannot be shown to be somebody else's
+        self.assertTrue(E.is_ours_crash({'faultType': 'crash', 'faultContent': 'RDXDErr3_homechooser-daemon__x'}))
+        self.assertFalse(E.is_ours_crash({'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__x'}))
+
+    def test_reference_note_lists_each_process_and_time_once(self):
+        E = self.E
+        a = {'faultType': 'crash', 'faultContent': 'RDXDErr3_data-migrator__x', 'faultTime': '40.0'}
+        head, text = E.crash_reference([('3-home', a), ('4-alert', a),
+                                        ('4-alert', 'x [90.5] crashd CRASHED {"process":"audiooutputd.7"}')])
+        self.assertIn('2', head)
+        self.assertIn('not a failure', head)
+        self.assertEqual(len(text.splitlines()), 2)
+        self.assertIn('data-migrator  boot+40.0s  (seen at 3-home)', text)
+        self.assertIn('audiooutputd.7', text)
+
+    def test_popup_check_ignores_platform_crashes_and_fails_ours(self):
+        def reply(*contents):
+            return json.dumps({'returnValue': True, 'faultDetectedStatus': {'detected': 1, 'detectedFaults': [
+                {'faultType': 'crash', 'faultContent': c, 'faultTime': '55.1'} for c in contents]}})
+        for contents, ok in ((('RDXDErr3_data-migrator__Linux Crash: x',), True),
+                             (('RDXDErr3_data-migrator__x', 'RDXDErr3_homechooser-daemon__y'), False)):
+            s = scenario(10)
+            s.popup_mark = ('2026-10-24T01:00:00', 10.0)
+            s.priv_luna = lambda uri, payload='{}', r=reply(*contents): r
+            s.shot = lambda label: label
+            s.foreign_popup('x')
+            self.assertEqual([c for c in s.rec.checks if 'crash fault this boot' in c[0]][0][1], ok)
+            self.assertEqual([self.E.crash_process(e) for _, e in s.platform_crashes], ['data-migrator'])
+
+    def test_end_of_run_note(self):
+        s = scenario(10)
+        s.report_platform_crashes()
+        self.assertEqual(s.rec.notes, [])
+        s.record_platform_crashes('x', ['a [1.0] crashd CRASHED {"process":"audiooutputd.1"}'])
+        s.report_platform_crashes()
+        self.assertIn('platform crashes this run', s.rec.notes[0][0] if isinstance(s.rec.notes[0], tuple) else s.rec.notes[0])
+
+
+class DebugModeSetting(unittest.TestCase):
+    def prepare(self, have, mode='release'):
+        from unittest.mock import Mock
+        host = Mock()
+        host.running_vms.return_value = []
+        host.settings.return_value = {'layers': 'normal,devmode,hbchannel', 'link': 'lan', 'debug_mode': have}
+        host.set_settings.return_value = (0, 'ok')
+        rec = Mock()
+        hc_e2e.preflight.prepare_vm(host, 'vm', rec, mode)
+        return host, rec
+
+    def test_a_default_vm_is_set_to_release_and_it_is_logged(self):
+        host, rec = self.prepare('(default)')
+        host.set_settings.assert_called_once_with('vm', debug_mode='release')
+        self.assertIn("{'debug_mode': 'release'}", rec.say.call_args_list[0][0][0])
+
+    def test_release_is_left_alone_and_keep_touches_nothing(self):
+        host, _ = self.prepare('release')
+        host.set_settings.assert_not_called()
+        host, _ = self.prepare('debug', 'keep')
+        host.set_settings.assert_not_called()
+        host, _ = self.prepare('release', 'debug')
+        host.set_settings.assert_called_once_with('vm', debug_mode='debug')
+
+    def test_a_failed_set_stops_the_run(self):
+        from unittest.mock import Mock
+        host = Mock()
+        host.running_vms.return_value = []
+        host.settings.return_value = {'layers': 'devmode,hbchannel', 'link': 'lan'}
+        host.set_settings.return_value = (1, 'the VM is running')
+        with self.assertRaises(SystemExit):
+            hc_e2e.preflight.prepare_vm(host, 'vm', Mock())
+
+    def test_the_option_defaults_to_release(self):
+        src = open(os.path.join(HERE, 'hc_e2e', 'cli.py')).read()
+        self.assertIn("'--debug-mode', choices=['release', 'debug', 'event', 'keep'], default='release'", src)

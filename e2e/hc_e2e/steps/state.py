@@ -6,7 +6,7 @@ import time
 
 from .. import timing
 from ..constants import CHOICE, FLAG, FULLHOME, GET_PROFILES, INITD, OVERRIDE, SCRIPTS_DIR, STOCK
-from ..evidence import CRASH_RE, KNOWN_CRASH_DOC, crash_lines, messages_command, parse_status, split_known_crashes
+from ..evidence import CRASH_RE, split_platform_crashes, KNOWN_CRASH_DOC, crash_lines, messages_command, parse_status, split_known_crashes
 from ..preflight import READY, WAIT_STATES, wait_for_device
 from ..releases import idle_app_stock, idle_app_verdict, profile_idle_app, stock_record_ok, uses_home_key_hook
 
@@ -92,12 +92,14 @@ class DeviceState:
         rc, out = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -iE %s | tail -n 20")
                        % (before['mark'], shlex.quote(CRASH_RE.pattern)))
         bad = crash_lines(out)
+        bad, platform = split_platform_crashes(bad)
+        self.record_platform_crashes(label, platform)
         if bad:
             known, bad = split_known_crashes(bad, self.priv_luna('luna://com.webos.service.faultmanager/getFaultDetectedStatus'))
             if known:
                 self.rec.note('%s: known LG crash (legacy-broadcast-dvb, API_SI_GetLinkageUriInfo+0x197), accepted limitation, '
                               'not a FAIL; see %s' % (label, KNOWN_CRASH_DOC), '\n'.join(known[-3:]))
-        self.rec.check(label + ': no crashd CRASHED or WebAppMgr crash line in /var/log/messages since %s' % before['mark'],
+        self.rec.check(label + ': no Home Chooser or WebAppMgr crash line in /var/log/messages since %s (platform crashes: end-of-run note)' % before['mark'],
                        not bad, '\n'.join(bad[-6:]) or 'none')
         if d.boot_id() == before['boot']:
             wam = d.unit('webapp-mgr')

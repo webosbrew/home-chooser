@@ -109,13 +109,13 @@ class Planning(unittest.TestCase):
             asked = []
             def lister(host):
                 asked.append(host)
-                return ['w21a-kisscurl-rk1']
+                return ['w21a-kisscurl']
             with contextlib.redirect_stdout(io.StringIO()) as output:
                 rc = run_matrix.main(['--dry-run', '--hosts-file', hosts, '--hosts', 'b', '--vms', '6.x'],
                                      lister=lister)
             self.assertEqual(rc, 0)
             self.assertEqual(asked, ['b'])
-            self.assertIn('w21a-kisscurl-rk1', output.getvalue())
+            self.assertIn('w21a-kisscurl', output.getvalue())
             self.assertIn('--host b', output.getvalue())
 
     def test_host_filter_and_release_alternatives(self):
@@ -437,8 +437,8 @@ class HostsConfig(unittest.TestCase):
 # Tiers (e2e/README.md "Tiers")
 # ---------------------------------------------------------------------------------------------
 TIER_VMS = {'pi': ['w24g-ombre', 'w24p-ombre', 'w22h-ombre', 'w24g-spacebuns'],
-            'rockpi4a-1': ['w20l-jhericurl-rk1', 'w21a-kisscurl-rk1', 'w22p-mullet-rk1'],
-            'rockpi4a-2': ['w22o-number1-rk2', 'w22o-ponytail-us-rk2', 'w22o-queue-us-rk2']}
+            'rockpi4a-1': ['w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet'],
+            'rockpi4a-2': ['w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us']}
 
 
 class Tiers(unittest.TestCase):
@@ -507,7 +507,7 @@ class Tiers(unittest.TestCase):
                          ('fixture:web.overlay', 'full', 'all', False, 'later', '5.x'))
         a = self.args('--tier', 'release', '--update-on', '11.x')
         self.assertTrue(a.update_check)
-        self.assertTrue(run_matrix.updates({'vm': 'w22o-queue-us-rk2', 'release': '11.x'}, a.update_on))
+        self.assertTrue(run_matrix.updates({'vm': 'w22o-queue-us', 'release': '11.x'}, a.update_on))
         self.assertFalse(run_matrix.updates({'vm': 'w24g-ombre', 'release': '9.x'}, a.update_on))
         a = self.args('--tier', 'smoke', '--launcher', 'org.example.launcher')
         self.assertIsNone(a.launchers)
@@ -523,3 +523,94 @@ class Tiers(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# ---------------------------------------------------------------------------------------------
+# The committed hosts.toml and MATRIX: what `run_matrix.py --tier release` does with no hosts file of
+# one's own (the machines and their VMs as `beanjar list --json` showed them on 2026-11-03)
+# ---------------------------------------------------------------------------------------------
+BEANJAR_LIST = {
+    'pi': ['w15m-beehive', 'w16r-dreadlocks', 'w17h-dreadlocks2', 'w18r-goldilocks', 'w19p-goldilocks2', 'w20h-jhericurl',
+           'w20l-jhericurl', 'w21a-kisscurl', 'w21p-kisscurl', 'w21z-kisscurl', 'w22a-mullet', 'w22h-mullet', 'w22h-ombre',
+           'w22l-mullet', 'w22o-mullet', 'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-jp', 'w22o-queue-us', 'w22p-mullet',
+           'w24g-ombre', 'w24g-spacebuns', 'w24p-ombre', 'wt1h-afro'],
+    'rockpi4a-1': ['w20l-jhericurl', 'w21a-kisscurl', 'w22h-mullet', 'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us',
+                   'w22p-mullet', 'w24g-ombre', 'w24g-spacebuns', 'wt1h-afro'],
+    'rockpi4a-2': ['w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us', 'w24g-spacebuns'],
+}
+# minutes one release-tier run takes on the Pi (matrix-20261102-*/summary.md: the Rock Pi 4A takes about twice as long)
+PI_MINUTES = {'5.x': 6.0, '6.x': 6.2, '7.x': 5.8, '8.x': 5.2, '9.x': 6.4, '10.x': 8.8, '11.x': 8.9, '12.x': 9.4}
+
+
+class CommittedPlan(unittest.TestCase):
+    def plan(self, hosts=''):
+        cfg = hc_e2e.matrix.load_hosts(hc_e2e.matrix.HOSTS_FILE)
+        cfg = run_matrix.select_hosts(cfg, hosts)
+        found, errors = run_matrix.discover(cfg, lambda h: BEANJAR_LIST[h])
+        queues, problems = run_matrix.plan(run_matrix.wanted_vms([]), cfg, found, errors)
+        return cfg, queues, problems
+
+    def test_default_spreads_the_matrix_over_pi_and_rockpi4a_1(self):
+        cfg, queues, problems = self.plan()
+        self.assertEqual(problems, [])
+        self.assertEqual(sorted(queues), ['pi', 'rockpi4a-1'])
+        runs = [(h, r['release'], r['vm']) for h, q in queues.items() for r in q]
+        self.assertEqual(len(runs), len(hc_e2e.matrix.MATRIX))  # every slot exactly once
+        self.assertEqual(sorted(r[1] for r in runs), sorted(m[0] for m in hc_e2e.matrix.MATRIX))
+        self.assertEqual({r[2] for r in runs if r[0] == 'rockpi4a-1'},
+                         {'w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet', 'w22o-number1'})
+
+    def test_default_never_touches_the_reserved_machine_or_the_other_projects_vm(self):
+        cfg, queues, problems = self.plan()
+        self.assertNotIn('rockpi4a-2', cfg['hosts'])
+        self.assertTrue(cfg['hosts'] and 'rockpi4a-2' not in queues)
+        used = {r['vm'] for q in queues.values() for r in q}
+        self.assertNotIn('w21p-kisscurl', used)
+        self.assertNotIn('w21p-kisscurl', [m[1] for m in hc_e2e.matrix.MATRIX])
+        # the reserved machine is still there for a run that names it, and nothing pins its VMs elsewhere then
+        cfg, queues, problems = self.plan('rockpi4a-2')
+        self.assertEqual(sorted(queues), ['rockpi4a-2'])
+        self.assertEqual({r['vm'] for r in queues['rockpi4a-2']}, {'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us', 'w24g-spacebuns'})
+        self.assertTrue(problems)  # the slots it does not have are said to be on no machine
+
+    def test_both_machines_finish_together(self):
+        cfg, queues, problems = self.plan()
+        finish = {h: sum(PI_MINUTES[r['release']] for r in q) * cfg['hosts'][h].get('slowdown', 1.0)
+                  for h, q in queues.items()}
+        self.assertLess(max(finish.values()) / min(finish.values()), 1.15, finish)
+        self.assertEqual(cfg['hosts']['rockpi4a-1']['slowdown'], 2.0)
+
+    def test_no_vm_name_is_left_ambiguous(self):
+        cfg = hc_e2e.matrix.load_hosts(hc_e2e.matrix.HOSTS_FILE)
+        pins = [vm for h in cfg['hosts'].values() for vm in h.get('vms', [])]
+        self.assertEqual(len(pins), len(set(pins)))
+        for slot in hc_e2e.matrix.MATRIX:
+            for vm in hc_e2e.matrix.candidates(slot[1]):
+                on = [h for h in ('pi', 'rockpi4a-1') if vm in BEANJAR_LIST[h]]
+                self.assertTrue(len(on) == 1 or vm in pins, '%s is on %s and not pinned' % (vm, on))
+        for h, vm in ((h, vm) for h, v in cfg['hosts'].items() for vm in v.get('vms', [])):
+            self.assertIn(vm, BEANJAR_LIST[h], '%s is pinned to %s, which does not have it' % (vm, h))
+        self.assertNotIn('w21p-kisscurl', pins)
+
+    def test_a_pin_to_a_machine_without_the_vm_is_a_problem_not_a_run(self):
+        cfg = {'default': 'a', 'hosts': {'a': {'ssh': 'a', 'vms': ['x']}, 'b': {'ssh': 'b'}}}
+        queues, problems = run_matrix.plan([('5.x', 'x')], cfg, {'a': set(), 'b': {'x'}})
+        self.assertEqual(queues, {})
+        self.assertEqual(problems, ['x is pinned to a, which does not have it'])
+
+    def test_opt_in_hosts_need_to_be_named(self):
+        cfg = {'default': 'a', 'hosts': {'a': {'ssh': 'a'}, 'mine': {'ssh': 'm', 'opt_in': True}}}
+        self.assertEqual(list(run_matrix.select_hosts(cfg, '')['hosts']), ['a'])
+        self.assertEqual(list(run_matrix.select_hosts(cfg, 'mine')['hosts']), ['mine'])
+        self.assertEqual(list(run_matrix.select_hosts(cfg, 'a,mine')['hosts']), ['a', 'mine'])
+
+    def test_dry_run_of_the_release_tier_with_the_committed_hosts(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
+            rc = run_matrix.main(['--dry-run', '--tier', 'release', '--results', tmp], lister=lambda h: BEANJAR_LIST[h])
+        self.assertEqual(rc, 0)
+        text = out.getvalue()
+        self.assertIn('pi (ssh raspberrypi): 6 run(s)', text)
+        self.assertIn('rockpi4a-1 (ssh mariotaku@rockpi4a-1.lan): 4 run(s)', text)
+        self.assertNotIn('rockpi4a-2', text)
+        self.assertNotIn('w21p-kisscurl', text)
+        self.assertNotIn('not run:', text)

@@ -18,6 +18,12 @@ from ..inspector import Inspector
 from ..launchers import FIXTURE_DIR, FIXTURE_ID
 
 
+def page_vanished(source):
+    """see_toast gave up ('none (...; timeline ...)') and the Inspector found no page for the app in its
+    later rounds: the app's page went away, which is not the same as 'it showed nothing'."""
+    return str(source).startswith('none') and 'no page for' in str(source)
+
+
 class ApiSteps:
     """The launcher API before the choice (2a, called by choose) and api-selected (3a)."""
 
@@ -193,6 +199,7 @@ class ApiSteps:
         apps = self.api_conforms('listApps', 'before selection')
         ids = [a.get('id') for a in apps.get('apps') or [] if isinstance(a, dict)]
         r.check('listApps names the launcher', self.launcher in ids, '%d apps; launcher %s' % (len(ids), self.launcher in ids))
+        self.api_level3_smoke('before selection', apps)
         self.api_request(selected=False)
 
     def api_smoke_selected(self):
@@ -205,15 +212,20 @@ class ApiSteps:
         info = self.api_conforms('getInfo', 'selected')
         r.check('selected: getInfo says root true, permitted true, isSelectedHome true',
                 info.get('root') is True and info.get('permitted') is True and info.get('isSelectedHome') is True, json.dumps(info))
-        d.launch(DISPOSABLE_ID)
-        running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
-        r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
-        rep, raw = self.api('closeApp', {'id': DISPOSABLE_ID})
-        r.check('closeApp as the selected Home accepts the disposable app',
-                (rep or {}).get('returnValue') is True and rep.get('id') == DISPOSABLE_ID
-                and not api_reply_problems('closeApp', rep), raw[:400])
-        gone = self.wait(lambda: DISPOSABLE_ID not in self.running_ids(), 20, 2)
-        r.check('the disposable app is not running after closeApp', bool(gone), str(self.running_ids()))
+        self.stream_begin()  # level 3: getAppLifeEvents held open across the launch and the close below
+        try:
+            d.launch(DISPOSABLE_ID)
+            running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
+            r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
+            rep, raw = self.api('closeApp', {'id': DISPOSABLE_ID})
+            r.check('closeApp as the selected Home accepts the disposable app',
+                    (rep or {}).get('returnValue') is True and rep.get('id') == DISPOSABLE_ID
+                    and not api_reply_problems('closeApp', rep), raw[:400])
+            gone = self.wait(lambda: DISPOSABLE_ID not in self.running_ids(), 20, 2)
+            r.check('the disposable app is not running after closeApp', bool(gone), str(self.running_ids()))
+            self.stream_check('selected')
+        finally:
+            self.stream_end()
         if getattr(self.a, 'uninstall_via', 'later') == 'alert':
             self.api_uninstall_cancel()
             self.api_uninstall_confirm()
@@ -262,6 +274,7 @@ class ApiSteps:
                 '%d apps; launcher %s, disposable %s' % (len(ids), self.launcher in ids, DISPOSABLE_ID in ids))
         self.api_conforms('listRunning', 'before selection')
         self.api_new_methods('before selection')
+        self.api_level3_icons('before selection', self.api_level3_smoke('before selection', apps))
         rep, raw = self.api('getAppIcon', {'id': DISPOSABLE_ID, 'size': 'largeIcon'})
         r.check('getAppIcon of an app without largeIcon has no fallback',
                 api_refused(rep) and rep.get('errorCode') == 'noIcon'
@@ -375,9 +388,25 @@ class ApiSteps:
         r.check('ares-launch %s -p {"request":"%s"}' % (APP_ID, self.launcher), rc == 0, out.strip())
         if selected:
             toast, source = self.see_toast('already your Home', 30)
+            retried = ''
+            if not toast and page_vanished(source):
+                # scratch/api3-run1 (pi/w24g-ombre, 9.x): a cold-started Home Chooser page was up, then gone
+                # within 4 s, before it showed anything; nothing in the harness or in the product closes it.
+                # Look at what the platform says, launch once more, and say so in the check.
+                fg = d.foreground()
+                r.note('request while it is Home: the page went away without a toast; launching once more',
+                       'first attempt: %s; SAM foreground: %s; Home Chooser running: %s'
+                       % (source, fg[1], APP_ID in self.running_ids()))
+                d.close(APP_ID)
+                self.close_insp()
+                self.insp = Inspector(self.dev)
+                rc, out = d.launch(APP_ID, {'request': self.launcher})
+                r.check('ares-launch %s -p {"request":"%s"} (second attempt)' % (APP_ID, self.launcher), rc == 0, out.strip())
+                toast, source = self.see_toast('already your Home', 30)
+                retried = ' (second attempt: the first page went away without a toast)'
             self.shot('3a-request-selected')
             r.check('request while it is Home: the toast "<title> is already your Home."', bool(toast),
-                    'source=%s: %r' % (source, toast))
+                    'source=%s: %r%s' % (source, toast, retried))
             d.close(APP_ID)
             self.close_insp()
             return
@@ -446,10 +475,15 @@ class ApiSteps:
         self.api_conforms('listRunning', 'selected')
         self.api_new_methods('selected')
         # closeApp closes a running web app; record whether WAM retains its page or process.
-        d.launch(DISPOSABLE_ID)
-        running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
-        r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
-        self.api_close_probe(DISPOSABLE_ID, 'web disposable')
+        self.stream_begin()  # level 3: getAppLifeEvents held open across the launch and the close below
+        try:
+            d.launch(DISPOSABLE_ID)
+            running = self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
+            r.check('the disposable app is running before closeApp', bool(running), str(self.running_ids()))
+            self.api_close_probe(DISPOSABLE_ID, 'web disposable')
+            self.stream_check('selected')
+        finally:
+            self.stream_end()
         # The native fixture is optional; use it where a package was built and remove it afterward.
         native = sorted(glob.glob(os.path.join(FIXTURE_DIR, FIXTURE_ID % ('native', 'normal') + '_*.ipk')))
         if native and self.major == 9 and not getattr(self.a, 'device', None):

@@ -8,6 +8,7 @@ from .steps.choose import ChooseSteps
 from .steps.demo import DemoSteps
 from .steps.home_press import HomePress
 from .steps.home_proof import HomeProofSteps
+from .steps.level3 import Level3Steps
 from .steps.panel import PanelSteps
 from .steps.popups import PopupsAndNotifications
 from .steps.preload import PreloadPolicy
@@ -23,7 +24,7 @@ from .steps.update import UpdateSteps
 # ---------------------------------------------------------------------------------------------
 class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, HomePress, BaselineSteps,
                ScreensaverSteps, ChooseSteps, PanelSteps, RebootSteps, HomeProofSteps, DemoSteps, ApiSteps,
-               UpdateSteps, RemovalSteps):
+               Level3Steps, UpdateSteps, RemovalSteps):
     def __init__(self, args, host, rec, row, launcher, launchers=None):
         self.a, self.host, self.rec = args, host, rec
         self.L = launcher
@@ -90,6 +91,7 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         if getattr(self, 'ask_monitor', None):
             self.ask_monitor.close()
             self.ask_monitor = None
+        self.report_platform_crashes()
         owner = self.plan[0][0]
         if (owner, 'cleanup') in self.plan:
             self.use_launcher(owner)

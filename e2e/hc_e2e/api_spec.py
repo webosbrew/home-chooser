@@ -18,7 +18,7 @@ DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')
 API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory',
-                   'iconColor', 'bgColor')
+                   'iconColor', 'bgColor', 'systemApp', 'mediumLargeIcon', 'extraLargeIcon')
 API_RUNNING_FIELDS = ('id', 'instanceId', 'processId', 'webProcessId')
 _SPEC = None  # (spec, validator), loaded on first use by spec_reply_problems
 
@@ -102,11 +102,11 @@ def api_reply_problems(method, reply):
             if field not in it or field == 'id':
                 continue
             value = it[field]
-            if field in ('removable', 'visible') and not isinstance(value, bool):
+            if field in ('removable', 'visible', 'systemApp') and not isinstance(value, bool):
                 p.append('%s has nonboolean %s' % (it['id'], field))
             elif field == 'appCategory' and (not isinstance(value, list) or any(not isinstance(v, str) for v in value)):
                 p.append('%s has invalid appCategory' % it['id'])
-            elif field not in ('removable', 'visible', 'appCategory', 'processId', 'webProcessId') and not isinstance(value, str):
+            elif field not in ('removable', 'visible', 'systemApp', 'appCategory', 'processId', 'webProcessId') and not isinstance(value, str):
                 p.append('%s has nonstring %s' % (it['id'], field))
         for field in allowed:
             if field in it and field in ('processId', 'webProcessId') and (not isinstance(it[field], int) or isinstance(it[field], bool)):

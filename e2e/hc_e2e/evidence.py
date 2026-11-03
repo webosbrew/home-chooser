@@ -162,6 +162,65 @@ def audiooutputd_dialog(frame):
     return (msgs[0] if len(msgs) == 1 else None), joined
 
 
+# Whose crash it is.  A platform crash (audiooutputd, legacy-broadcast-dvb, data-migrator, ...) is an environment
+# fact: it is collected into one reference note at the end of the run and fails nothing.  A crash is ours when the
+# process is Home Chooser's (the daemon, the service, a fixture or the app's own id) or WebAppMgr, which hosts the
+# app's page and the launcher's (a WebAppMgr crash line, or webapp-mgr restarting, which check_no_crash also reads).
+OURS_PROCESS_RE = re.compile(r'homechooser|hcfixture|org\.webosbrew\.(?:homechooser|hcfixture)|WebAppMgr|webapp-mgr', re.I)
+CRASHD_PROCESS_RE = re.compile(r'"process":\s*"([^"]+)"')
+FAULT_PROCESS_RE = re.compile(r'^(?:RDXDErr\d+_)?([^_\s][^\s]*?)(?:__|$)')
+
+
+def crash_process(entry):
+    """The crashing process of a crashd log line, a getFaultDetectedStatus fault entry (dict) or its text; ''
+    when it names none.  crashd names process.<pid>; a fault's faultContent is RDXDErr3_<process>__<reason>."""
+    if isinstance(entry, dict):
+        entry = entry.get('faultContent') or ''
+        m = FAULT_PROCESS_RE.match(str(entry))
+        return m.group(1) if m else ''
+    m = CRASHD_PROCESS_RE.search(str(entry))
+    if m:
+        return m.group(1)
+    m = re.search(r'CRASHED[:\s]+(\S+)', str(entry))
+    return m.group(1) if m else ''
+
+
+def is_ours_crash(entry):
+    """True when a crash line or fault entry is Home Chooser's or WebAppMgr's (fails the run); an entry that
+    names no process is ours too (it cannot be shown to be somebody else's)."""
+    process = crash_process(entry)
+    text = json.dumps(entry) if isinstance(entry, dict) else str(entry)
+    return not process or bool(OURS_PROCESS_RE.search(process)) or bool(CRASH_RE.search(text) and 'WebAppMgr' in text)
+
+
+def crash_time(entry):
+    """The time of a crash entry: the log line's own stamp, or the fault's faultTime (seconds since boot)."""
+    if isinstance(entry, dict):
+        return 'boot+%ss' % entry.get('faultTime') if entry.get('faultTime') is not None else ''
+    m = re.match(r'\s*(\S+)\s+\[([\d.]+)\]', str(entry))
+    return '%s (boot+%ss)' % (m.group(1), m.group(2)) if m else ''
+
+
+def split_platform_crashes(entries):
+    """(ours, platform) of crash lines / fault entries."""
+    ours, platform = [], []
+    for e in entries:
+        (ours if is_ours_crash(e) else platform).append(e)
+    return ours, platform
+
+
+def crash_reference(records):
+    """The end-of-run reference note: [(label, entry)] -> (headline, text), one line per distinct process and time."""
+    seen, lines = set(), []
+    for label, e in records:
+        key = (crash_process(e), crash_time(e))
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append('%s  %s  (seen at %s)' % (key[0] or '?', key[1] or 'time unknown', label))
+    return ('platform crashes this run (reference, not a failure): %d' % len(lines)), '\n'.join(lines)
+
+
 def split_known_crashes(lines, reply):
     """All crash lines fail acceptance, including previously documented firmware crashes."""
     return [], list(lines)

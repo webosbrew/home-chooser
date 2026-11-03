@@ -56,7 +56,9 @@ def wanted_vms(names):
 
 
 def select_hosts(cfg, names):
-    selected = names.split(',') if names else list(cfg['hosts'])
+    """The hosts of a run: those named by --hosts, else every configured host except the opt-in ones
+    (`opt_in = true` in hosts.toml: a machine that is somebody's own, used only when named)."""
+    selected = names.split(',') if names else [h for h, v in cfg['hosts'].items() if not v.get('opt_in')]
     unknown = set(selected) - cfg['hosts'].keys()
     if unknown:
         raise SystemExit('unknown hosts: ' + ', '.join(sorted(unknown)))
@@ -111,6 +113,9 @@ def plan(wanted, cfg, found, errors=None):
             where = [h for h in cfg['hosts'] if vm in found.get(h, ())]
             if vm in pinned:
                 where = [pinned[vm]]
+                if pinned[vm] in found and vm not in found[pinned[vm]]:
+                    problems.append('%s is pinned to %s, which does not have it' % (vm, pinned[vm]))
+                    continue
             if len(where) > 1:
                 problems.append('%s is on several machines (%s): pin it with vms = [...] in hosts.toml'
                                 % (vm, ', '.join(where)))
@@ -119,7 +124,7 @@ def plan(wanted, cfg, found, errors=None):
                 choices.setdefault(where[0], []).append(vm)
         if choices:
             slots.append({'release': release, 'choices': choices})
-        elif not any('is on several machines' in p and any(v in p for v in hc_e2e.matrix.candidates(alternatives)) for p in problems):
+        elif not any(v in p for p in problems for v in hc_e2e.matrix.candidates(alternatives)):
             problems.append('%s is on no machine%s' % (' | '.join(hc_e2e.matrix.candidates(alternatives)),
                 ' that answered (no answer: %s)' % ', '.join(sorted(errors)) if errors else ''))
     pool = WorkPool(slots)

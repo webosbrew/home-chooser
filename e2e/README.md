@@ -532,10 +532,11 @@ ssh://<user>@<alias>` so the multi-host CLI here knows it too, and add `[hosts.<
 run with `link=lan`, so their LAN addresses are reachable from this PC wherever they run.
 
 `MATRIX` in `hc_e2e/matrix.py` contains release slots. The VM field accepts a name or an ordered
- tuple of alternatives, for example `('6.x', ('w21a-kisscurl-rk1', 'w21a-kisscurl'), 'luna',
- 'verified', '...')`. Each row runs exactly once, using a candidate reported by host discovery.
- The three 9.x rows remain separate slots; `--vms 9.x` selects the first, as before. A single-run
- `homechooser_e2e.py --vm 6.x` retains the original Pi VM; explicit RK names work too.
+ tuple of alternatives (for slots whose VM has a different name on another machine). Each row runs
+ exactly once, using a candidate reported by host discovery. The three 9.x rows remain separate
+ slots; `--vms 9.x` selects the first, as before. The VMs of `pi` and `rockpi4a-1` have the same
+ names, so `hosts.toml` pins each matrix VM to one of them (below); a single-run
+ `homechooser_e2e.py --vm 6.x` runs on the default host (`pi`) unless `--host` says otherwise.
 
 `run_matrix.py` has one worker per eligible machine and a shared pool of slots. A free worker claims
  a compatible slot under a lock. It favours shared work on machines with less exclusive work, leaving
@@ -545,10 +546,17 @@ run with `link=lan`, so their LAN addresses are reachable from this PC wherever 
  configured slowdown; its printed plan is an estimate, not a reservation.
 
 The committed hosts are `pi` (`raspberrypi`), `rockpi4a-1` and `rockpi4a-2`
- (`mariotaku@rockpi4a-N.lan`, accepted directly by ssh and scp). Each host can set `slowdown = 1.5`;
- the default is `1.0`, values must be finite and at least `1.0`. The boards use a provisional 1.5;
- this is a guess to measure, not a measured speed ratio. Pi timing is unchanged.
- In the per-run process the factor scales Python settling sleeps and polling intervals, boot/LAN and
+ (`mariotaku@rockpi4a-N.lan`, accepted directly by ssh and scp). `rockpi4a-2` has `opt_in = true`: it
+ is the user's own machine, so a run with no `--hosts` never picks it; `--hosts rockpi4a-2` does.
+ Each host can set `slowdown = 2.0`; the default is `1.0`, values must be finite and at least `1.0`.
+ The Rock Pi boards use 2.0, the ratio measured against the Pi (a release-tier run of one VM: 10.x
+ 8m47s on `pi`, 17m56s on `rockpi4a-1`). Pi timing is unchanged.
+ `pi` and `rockpi4a-1` carry the same VM names, so `hosts.toml` pins each matrix VM to one of them
+ (`vms = [...]`) to balance the two: `rockpi4a-1` takes 5.x to 8.x, `pi` the three 9.x slots and
+ 10.x to 12.x, which finish within a few minutes of each other. `w21p-kisscurl` is never pinned or run.
+ The unit test `CommittedPlan` in `test_run_matrix.py` holds the plan, the balance and both
+ exclusions; `python3 -I e2e/run_matrix.py --tier release --dry-run` prints it.
+In the per-run process the factor scales Python settling sleeps and polling intervals, boot/LAN and
  device readiness deadlines, inspector readiness, scenario/notification/alert waits, popup/manual
  waits, reboot and sam relaunch deadlines, preload settling and observation sleeps, and command
  timeouts through `run()` (including Beanjar/ares). Embedded guest shell sleeps, socket/HTTP probe
@@ -666,9 +674,8 @@ and Home key hook docs.
    before the mark are noted, never counted. It never presses keys at a popup, with one exception: the known
    9.2.4 `legacy-broadcast-dvb` crash (`API_SI_GetLinkageUriInfo+0x197`, a crashd line for `legacy-broadcas.<pid>`
    confirmed by the fault entry of the same pid; accepted limitation, see
-   [Known LG crash on 9.2.4](../docs/home-key-hook.md#known-lg-crash-on-924)). That crash is recorded as a note, not a `FAIL`, in the
-   end-of-step crash check and the popup check; any other crash, a WebAppMgr crash, or a legacy-broadcast crash at
-   another location still fails. If its popup holds key focus (before a Home proof, or when the probe key is
+   [Known LG crash on 9.2.4](../docs/home-key-hook.md#known-lg-crash-on-924)). That crash, like every other platform crash, goes to the end-of-run reference note and is no `FAIL` in the
+   end-of-step crash check and the popup check; only a crash of a Home Chooser process or of WebAppMgr fails. If its popup holds key focus (before a Home proof, or when the probe key is
    blocked) the runner sends BACK at most once per fault (pid and faultTime; YES and NO do the same there), then
    checks that key focus is back: a probe key moves the list focus when our page is open, else the foreground app
    is unchanged. (The fault status keeps every fault of the boot, so it cannot show the popup is gone.) If focus
@@ -711,8 +718,16 @@ always reports `reboot=no`. The runner follows that:
   `restarting surface-manager-daemon` line appears in `/tmp/homechooser-homekey.log`. Checked for
   the choice, the launcher removal and its return (a live switch), the Home Chooser
   uninstall and the API calls. It is skipped when a reboot came in between.
-* No crash: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
-  line and no WebAppMgr crash line, and within one boot `webapp-mgr` keeps its `MainPID` and `NRestarts`.
+* No crash of ours: after every step `/var/log/messages` since the step began must have no `crashd ... CRASHED`
+  line for a Home Chooser process (`homechooser-*`, the service, the app, an `org.webosbrew.hcfixture.*` fixture),
+  no WebAppMgr crash line, and within one boot `webapp-mgr` keeps its `MainPID` and `NRestarts`. A crash of any
+  other process (audiooutputd, legacy-broadcast-dvb, data-migrator, ...) is a platform crash: it fails nothing and
+  is collected, by process and time, into one note at the end of the run, "platform crashes this run (reference,
+  not a failure)" (`evidence.split_platform_crashes`, `crash_reference`). A crash that names no process counts as ours.
+* VMs run with `debug_mode=release` (`--debug-mode`, default `release`): a retail set, where faultmanager shows no
+  "[crash] Fault Occured" popup that would take key focus. The runner sets it while the VM is off, before the boot
+  (`preflight.prepare_vm`), logs it, and leaves it set on the VM; `--debug-mode keep` leaves the VM's own setting,
+  `debug` and `event` set that one and bring the popups back.
 * After a boot (`--reboot-check`, cleanup boot): the watcher is active, status is `active=yes` and `reboot=no`
   again, and the boot apply log lines and the compositor QML/crash lines of the retained messages are recorded
   (`after_boot_checks`).
@@ -784,8 +799,14 @@ Two modes. The host contract test (`service/test`, `test-launcher-contract`: the
   `permitted`, `isSelectedHome:false`) and `listApps` (names the launcher), then the `request` dialog. 3a: `getInfo`
   (`isSelectedHome:true`) and one Home-only method, `closeApp` of the running disposable app; with `--uninstall-via
   alert` also the `uninstallApp` confirmation on LG's alert (cancel, then confirm), then the "already your Home" toast.
-  After a boot, after the update and after the uninstall as below.
-* `--api-check=full`: everything below, every method and error case, as the full tier runs it.
+  After a boot, after the update and after the uninstall as below. Level 3 (`hc_e2e/level3.py`,
+  `hc_e2e/steps/level3.py`): in 2a `getAppLifeEvents` without `subscribe` is `badRequest` and the `systemApp`,
+  `mediumLargeIcon` and `extraLargeIcon` fields of `listApps` are well formed; in 3a a subscription held as the launcher
+  (`luna-send -a <id> -i`) across the launch and the `closeApp` of the disposable app must see the acknowledgement and
+  its launch and close or stop events, every reply valid against the spec (never the browser: it raises an LG popup).
+* `--api-check=full`: everything below, every method and error case, as the full tier runs it, and for level 3 also
+  `getIcons` with `extraLargeIcon` and `mediumLargeIcon` (data for apps whose `listApps` entry names that icon, `noIcon`
+  for one that does not, never another size's picture).
 
 `luna-send -a <id>` makes the hub take the call as that app's id, but it does not carry the app's ACG: a web app's
 calls go through WAM with the groups of its `requiredPermissions`, a root `luna-send` does not. A pass here therefore
@@ -966,7 +987,7 @@ collected by pytest). The tests patch a name in the module that looks it up (`hc
   the existing restart path triggers the LG fault. The runner keeps this as a `FAIL` and never confirms
   the LG crash popup.
 * `w22o-ponytail-us` (10.3.1) shows the OLED "screen restoration" popup (`com.webos.app.factorywin`, buttons "Start Now", focused by default, and "Cancel") after every boot. It takes key focus, so the Home Chooser list never moves; BACK does not close it, and "Start Now" restarts the TV for 5 minutes. Before driving the list the runner probes one key; if the focus does not move it records the evidence (`oledepl isPixelRefresherCondition`, a screenshot) and waits `--wait-popup` seconds for someone to press Cancel by hand, then fails. It never presses OK on a system popup.
-* `audiooutputd` crash dialog (beanjar#183, closed as stock LG behaviour; Beanjar `docs/research/w22o-audiooutputd-gain-race.md`): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse threads race, and on about 7-9% of boots audiooutputd crashes about 50-56 s after boot; LG shows "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." with YES and NO, and it takes key focus. When the probe key does not move the list, the runner reads the screen (`beanjar elements`); only if the dialog text contains both "[crash] Fault Occured" and "audiooutputd" (the text decides, not the VM name or release) does it dismiss it with NO (a click on the "NO" button, or in keys mode a focus move to NO verified on screen before OK; YES is never pressed), screenshots before and after (`audiooutputd-crash-dialog-before/after`), re-reads the screen to confirm the dialog is gone, records `RECOVERED` with the OCR text and the reference, and retries the key probe once. Any other dialog (`[general]` included) or a crash fault naming another process still stops the run as before. The "no LG [crash] fault dialog or crash fault this boot" check notes an audiooutputd crash as an expected environment fault instead of failing, and an audiooutputd fault entry or crashd line no longer counts as a foreign popup; any other crashing process still fails.
+* `audiooutputd` crash dialog (beanjar#183, closed as stock LG behaviour; Beanjar `docs/research/w22o-audiooutputd-gain-race.md`): on W22O firmware 33.31.61 and 33.31.68 (webOS 10.x) two audiooutputd gain-parse threads race, and on about 7-9% of boots audiooutputd crashes about 50-56 s after boot; LG shows "[crash] Fault Occured. Reason: RDXDErr3_audiooutputd__Linux Crash: ..." with YES and NO, and it takes key focus. When the probe key does not move the list, the runner reads the screen (`beanjar elements`); only if the dialog text contains both "[crash] Fault Occured" and "audiooutputd" (the text decides, not the VM name or release) does it dismiss it with NO (a click on the "NO" button, or in keys mode a focus move to NO verified on screen before OK; YES is never pressed), screenshots before and after (`audiooutputd-crash-dialog-before/after`), re-reads the screen to confirm the dialog is gone, records `RECOVERED` with the OCR text and the reference, and retries the key probe once. Any other dialog (`[general]` included) or a crash fault naming another process still stops the run as before. With `debug_mode=release` (the default) this popup is not shown at all, so the dismissal is needed only with `--debug-mode keep|debug|event`; it stays for that. The "no Home Chooser or WebAppMgr crash fault this boot" check does not fail on an audiooutputd crash (or any platform crash): it goes to the end-of-run reference note; a crashing Home Chooser process or WebAppMgr still fails.
 * Screenshots: `beanjar screenshot <vm> <file> --json` is the primary capture (about 2 s, headless, whatever the window position; `taken_by` is logged). No viewer is opened for it, so the runner no longer opens one. Only if it fails: the guest capture (`ares-do screenshot`; `com.webos.service.capture` does not work on 5.x (timeout) or 10.x/11.x/12.x (`ERROR_INTERNAL`), and after the first failure it is not tried again), then a logged capture-unavailable result if both fail. Each fallback is logged with the word FALLBACK.
   Pictures are taken only at key steps, the `SCREENSHOTS` list in `hc_e2e/recorder.py`: after each Home press verdict
   (`<label>-verdict`, and `-first-press` when a press did nothing), once per step that has a `FAIL` (`fail-<step>`), after
