@@ -128,10 +128,26 @@ class ScreenInput:
             request()
         return False
 
+    # The service writes its UNINSTALL_ASK / REBOOT_ASK line before it replies, but pmlogd flushes it to
+    # /var/log/messages late on a slow guest (matrix-20261102-194054/w22o-number1: the alert was on screen
+    # at the first read, the line was not there yet).  An alert that is visibly up is not a reason to
+    # give up on the proof: read it again for a while.
+    PROOF_WAIT = 20
+
+    def await_service_proof(self, service_proof, timeout=None, every=2):
+        """service_proof() -> (raw, proven), repeated until proven or `timeout` seconds (scaled) pass;
+        the last reading is returned."""
+        end = time.time() + timing.seconds(self.PROOF_WAIT if timeout is None else timeout)
+        while True:
+            raw, proven = service_proof()
+            if proven or time.time() >= end:
+                return raw, proven
+            timing.sleep(every)
+
     def press_alert(self, message, target, safe, label, service_proof):
         """Prove ownership and screen buttons; keys additionally require two focus proofs."""
         def read():
-            raw_service, proven = service_proof()
+            raw_service, proven = self.await_service_proof(service_proof)
             self.rec.say('%s service ownership proof:\n%s' % (label, raw_service))
             if not proven:
                 raise ValueError('no matching accepted service alert from this request')
