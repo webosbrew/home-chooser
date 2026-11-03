@@ -17,7 +17,7 @@ major=$(major_version)
 # x-permission.grants plus getInfo (api/launcher-v1.openrpc.json; tests/test-homechooser-access.sh
 # checks the two agree). Every grant below is built from it.
 LAUNCHER_METHODS='getInfo:query listApps:query listRunning:query getForegroundApp:query getAppInfo:query
-getAppIcon:query listLaunchPoints:query listInputs:query getIcons:query closeApp:launcher uninstallApp:launcher'
+getAppIcon:query listLaunchPoints:query listInputs:query getIcons:query getAppLifeEvents:query closeApp:launcher uninstallApp:launcher'
 SERVICE_ID=org.webosbrew.homechooser.service
 
 # The methods (of one LG group, or all) as a JSON array of "<service>/<method>".

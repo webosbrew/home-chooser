@@ -38,7 +38,7 @@
 #define HC_GATE_DIR "/tmp/homechooser-runtime/home-gate"
 
 /* The launcher-facing API (docs/launcher-api.md). */
-#define HC_API_VERSION 2
+#define HC_API_VERSION 3
 #define HC_GROUP "org.webosbrew.homechooser.applications"
 #define HC_HBC_APP_ID "org.webosbrew.hbchannel"
 #define HC_STOCK_HOME_ID "com.webos.app.home"
@@ -120,6 +120,8 @@ bool hc_is_selected_home(const char *caller, const char *choice_text);
 extern const char *const hc_launcher_list_fields[];
 /* The launch point fields listLaunchPoints forwards, NULL-terminated; additive in the same way. */
 extern const char *const hc_launch_point_fields[];
+/* The getAppLifeEvents fields forwarded (level 3). */
+extern const char *const hc_life_event_fields[];
 /* The directory eim's input icons (iconPrefix + icon) are read from. */
 #define HC_INPUT_ICON_DIR "/usr/palm/plugins/inputapps/assets"
 /* A launch point icon: an absolute image path whose real path lies in the launch point's own app

@@ -67,6 +67,34 @@ def main(argv):
         elif t == 'supports':
             check(problems, r['before'] is False and r['level1'] is True and r['level2'] is True and r['level3'] is False
                   and r['apiVersion'] == spec['info']['x-apiVersion'], 'supports(level) after a level 2 reply: %s' % r)
+        elif t == 'supports-3':
+            check(problems, r['level3'] is True and r['level4'] is False, 'supports(3) after a level 3 reply: %s' % r)
+        elif t == 'bridge-life-events':
+            sent = [c for c in r['calls'] if 'uri' in c]
+            events = methods['getAppLifeEvents']['x-events']
+            check(problems, len(sent) == 1 and sent[0]['uri'] == service + '/getAppLifeEvents' and sent[0]['payload'] == {'subscribe': True},
+                  'life events: call %s' % sent)
+            check(problems, r['calls'].count({'cancel': True}) == 1 and not r['errors'], 'life events: cancel or errors: %s' % r)
+            check(problems, len(r['replies']) == 1 + len(events) and r['replies'][1:] == events and r['replies'][0].get('subscribed') is True
+                  and 'event' not in r['replies'][0], 'life events: the ack and %d events in order: %s' % (len(events), r['replies']))
+            check(problems, r['hasOneShot'] == 'undefined', 'life events: the client has a single-reply function for a stream')
+        elif t == 'mock-life-events':
+            events = r['mockEvents']
+            check(problems, not r['errors'] and len(r['replies']) == 1 + len(events) + 1, 'mock life events: %s' % r['replies'])
+            for reply in r['replies']:
+                found = reply_problems(spec, 'getAppLifeEvents', reply, sv)
+                replies += 1
+                check(problems, found == [] and reply.get('subscribed') is True, 'mock life event reply: %s %s' % (found, reply))
+            check(problems, 'event' not in r['replies'][0] and [x.get('event') for x in r['replies'][1:]] ==
+                  [e['event'] for e in events] + ['close'], 'mock life events: order: %s' % [x.get('event') for x in r['replies']])
+            check(problems, len(r['over']) == 1 and r['over'][0]['errorCode'] == 'tooManySubscriptions', 'mock life events cap: %s' % r['over'])
+            for key in ('plain', 'no'):
+                v = r[key].get('value') or {}  # lunaCall resolves with the reply whatever its returnValue
+                check(problems, r[key]['ok'] and v.get('returnValue') is False and v.get('errorCode') == 'badRequest',
+                      'mock getAppLifeEvents without subscribe true: %s' % r[key])
+            check(problems, r['sizes']['ok'] and [i.get('errorCode') for i in r['sizes']['value']['icons']] == ['noIcon', 'notFound'],
+                  'mock getIcons larger sizes: %s' % r['sizes'])
+            check(problems, not r['bad']['ok'] and r['bad']['error']['errorCode'] == 'badRequest', 'mock getIcons hugeIcon: %s' % r['bad'])
         elif t == 'request':
             want = spec['x-requestLaunch']
             sent = [c for c in r['calls'] if 'uri' in c]
@@ -118,7 +146,7 @@ def main(argv):
                       'mock ?hcmock-apps=%s: %d apps, %s' % (n, len(ids), found))
             check(problems, r['icon'].get('errorCode') == 'noIcon', 'mock getIcons of a made-up app: %s' % r['icon'])
         elif t == 'commonjs':
-            check(problems, set(r['methods']) == {'function'}, 'CommonJS export: %s' % r['methods'])
+            check(problems, set(r['methods']) == {'function'} and r['stream'] == ['undefined'], 'CommonJS export: %s' % r)
         elif t == 'mock-inert':
             check(problems, not r['hasMock'], 'the mock replaced the transport although a bridge exists')
         elif t == 'mock':

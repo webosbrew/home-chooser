@@ -17,6 +17,7 @@ bool on_launcher_list_apps(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_list_launch_points(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_list_inputs(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_get_icons(LSHandle *sh, LSMessage *msg, void *ctx);
+bool on_launcher_life_events(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_close_by_id(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_uninstall(LSHandle *sh, LSMessage *msg, void *ctx);

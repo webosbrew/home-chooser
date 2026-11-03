@@ -11,9 +11,10 @@
 //                  was not installed with your app. Call getInfo and branch.
 //   'transport'    nothing usable came back: no webOS service bridge, no reply in TIMEOUT_MS, not JSON.
 // subscribe(method, params, onReply, onError) keeps a method open that takes subscribe:
-//   listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+//   listApps, listRunning, getForegroundApp, listLaunchPoints, listInputs or getAppLifeEvents.
 // It gives the whole reply now and after every change, until cancel(). Home Chooser keeps no copy:
-// cache what you draw.
+// cache what you draw. getAppLifeEvents is the exception: a stream with no state, reached only through
+// subscribe(); onReply gets the acknowledgement, then one app life event per reply.
 // Types: homechooser.d.ts. Fake data for a desktop browser: homechooser-mock.js.
 (function (root, factory) {
 	var api = factory(root);
@@ -132,7 +133,7 @@
 	}
 
 	// subscribe(method, params, onReply, onError): a method that takes subscribe: true, that is
-	// listApps, listRunning, getForegroundApp, listLaunchPoints or listInputs.
+	// listApps, listRunning, getForegroundApp, listLaunchPoints, listInputs or getAppLifeEvents.
 	// onReply gets every reply with returnValue true: the whole state now, and the whole state again
 	// after each change; keep the latest and redraw. onError gets a HomeChooserError (sources
 	// as above) and the subscription is over; subscribe again later if you need to. Returns {cancel}.
@@ -252,7 +253,7 @@
 	}
 
 	var api = {
-		API_VERSION: 2,
+		API_VERSION: 3,
 		SERVICE: SERVICE,
 		PERMISSION: "org.webosbrew.homechooser.applications",
 		HOME_CHOOSER_ID: HOME_CHOOSER_ID,
@@ -344,6 +345,15 @@
 				"timeout",
 				"refused",
 				"badReply"
+			],
+			"getAppLifeEvents": [
+				"forbidden",
+				"notRoot",
+				"badRequest",
+				"noPermission",
+				"lookupFailed",
+				"timeout",
+				"tooManySubscriptions"
 			],
 			"closeApp": [
 				"forbidden",

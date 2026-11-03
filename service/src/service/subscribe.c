@@ -111,6 +111,23 @@ static void upstream_reply(const char *text, gboolean ended, void *context)
 	}
 	jvalue_ref reply = parse_object(text);
 	bool ok = reply && reply_ok(reply);
+	if (s->kind == HC_LIST_LIFE_EVENTS) {
+		/* a stream: each event goes out as it came, with no read, debounce or copy kept */
+		s->primed = true;
+		s->backoff_s = 1;
+		jvalue_ref out = ok ? life_event_reply(reply) : NULL;
+		if (out) {
+			LSError e;
+			LSErrorInit(&e);
+			if (!LSSubscriptionReply(g_sh, s->key, jvalue_stringify(out), &e)) {
+				LOGE("REPLY_FAILED", "%s: %s", s->key, e.message ? e.message : "?");
+				LSErrorFree(&e);
+			}
+			j_release(&out);
+		}
+		j_release(&reply);
+		return;
+	}
 	j_release(&reply);
 	if (!ok) return;
 	if (!s->primed) {

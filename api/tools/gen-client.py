@@ -85,7 +85,7 @@ def cap(name):
 
 # ---- TypeScript ----
 
-NAMED = ('AppId', 'App', 'RunningApp', 'LaunchPoint', 'Input', 'IconEntry')
+NAMED = ('AppId', 'App', 'RunningApp', 'LaunchPoint', 'Input', 'IconEntry', 'AppLifeEvent')
 
 
 def ts_type(spec, schema, indent):
@@ -138,7 +138,7 @@ def dts(spec):
            'export as namespace HomeChooser;', 'export = HomeChooser;', '', 'declare namespace HomeChooser {']
     out.append('\t/** %s */' % schemas['AppId']['description'])
     out.append('\ttype AppId = string;')
-    for name in ('App', 'RunningApp', 'LaunchPoint', 'Input'):
+    for name in ('App', 'RunningApp', 'LaunchPoint', 'Input', 'AppLifeEvent'):
         props, required = flatten(spec, schemas[name])
         doc = schemas[name].get('description')
         if doc:
@@ -201,7 +201,7 @@ def dts(spec):
     out.append('''	/**
 	 * True when the apiVersion Home Chooser's replies have reported so far is at least level. Call getInfo first;
 	 * false until a reply has come. Use supports(2) for listLaunchPoints, listInputs, getIcons and subscribe,
-	 * never apiVersion === 1: levels only add.
+	 * supports(3) for getAppLifeEvents, systemApp and the larger icon sizes, never apiVersion === 1: levels only add.
 	 */
 	function supports(level: number): boolean;''')
     out.append('\tconst SERVICE: %s;' % json.dumps(spec['servers'][0]['url']))
@@ -213,6 +213,8 @@ def dts(spec):
     out.append('\tconst ERROR_CODES: {\n%s\t};' % ''.join(
         '\t\t%s: %sErrorCode[];\n' % (m['name'], cap(m['name'])) for m in spec['methods']))
     for m in spec['methods']:
+        if m.get('x-stream'):
+            continue  # a stream has no single reply: subscribe() below
         out.append('\t/** %s %s */' % (m['summary'], method_needs(m)))
         if m['params']:
             optional = all(not p.get('required') for p in m['params'])
@@ -264,10 +266,14 @@ def dts(spec):
 		inputs: Input[];
 		/** App id (with "#largeIcon" for that size) -> {mimeType, data, byteLength}. */
 		icons: {[id: string]: {mimeType: string; data: string; byteLength: number}};
-		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#largeIcon") -> an icon entry. */
+		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#<size>" for a size other than icon) -> an icon entry. */
 		batchIcons: {[key: string]: IconEntry};
 		/** Sends the subscribers of a method its current mock state again, as after a change. */
 		notify(method: %(notify)s): void;
+		/** getAppLifeEvents: the events a new subscription is sent after its acknowledgement, in order. */
+		lifeEvents: AppLifeEvent[];
+		/** Sends one event to every getAppLifeEvents subscriber. */
+		emitLifeEvent(event: AppLifeEvent): void;
 		/** Payloads of the applicationManager/launch calls made. */
 		launches: object[];
 		delayMs: number;
@@ -277,12 +283,14 @@ def dts(spec):
     subs = ''
     for m in spec['methods']:
         if m.get('x-subscribes'):
-            subs += ('\t/** Subscribes to %s: onReply gets the whole reply now and again after every change; onError gets the\n'
+            what = ('onReply gets the acknowledgement, then each event as its own reply (never the whole state)' if m.get('x-stream')
+                    else 'onReply gets the whole reply now and again after every change')
+            subs += ('\t/** Subscribes to %s: ' + what + '; onError gets the\n'
                      '\t * failure that ended it (the subscription is over then). */\n'
                      '\tfunction subscribe(method: %s, params: %sParams | null, onReply: (reply: %sResult) => void,\n'
                      '\t\tonError?: (error: HomeChooserError) => void): Subscription;\n') % (
                 m['name'], json.dumps(m['name']), cap(m['name']), cap(m['name']))
-    notify = ' | '.join("'%s'" % m['name'] for m in spec['methods'] if m.get('x-subscribes'))
+    notify = ' | '.join("'%s'" % m['name'] for m in spec['methods'] if m.get('x-subscribes') and not m.get('x-stream'))
     return '\n'.join(out) % {'subscribe': subs.rstrip('\n'), 'notify': notify}
 
 
@@ -313,7 +321,8 @@ CLIENT_HEAD = '''// Home Chooser launcher API v1 client: one file, no dependenci
 // subscribe(method, params, onReply, onError) keeps a method open that takes subscribe:
 //   %(subscribing)s.
 // It gives the whole reply now and after every change, until cancel(). Home Chooser keeps no copy:
-// cache what you draw.
+// cache what you draw. getAppLifeEvents is the exception: a stream with no state, reached only through
+// subscribe(); onReply gets the acknowledgement, then one app life event per reply.
 // Types: homechooser.d.ts. Fake data for a desktop browser: homechooser-mock.js.
 (function (root, factory) {
 	var api = factory(root);
@@ -519,6 +528,8 @@ def client(spec):
         'subscribing': or_list([m['name'] for m in spec['methods'] if m.get('x-subscribes')]),
     }
     for m in spec['methods']:
+        if m.get('x-stream'):
+            continue  # reached through subscribe() only
         sig = '{%s}' % ', '.join(p['name'] + ('' if p.get('required') else '?') for p in m['params'])
         out += '\n\t// %s %s: %s %s\n' % (m['name'], sig, m['summary'], method_needs(m))
         out += '\t// Errors: %s.\n' % ', '.join(error_codes(spec, m))
@@ -530,7 +541,7 @@ def client(spec):
         'api_version': spec['info']['x-apiVersion'],
         'permission': json.dumps(spec['x-permission']['group']),
         'error_codes': js({m['name']: error_codes(spec, m) for m in spec['methods']}, 2),
-        'exports': ''.join('\t\t%s: %s,\n' % (m['name'], m['name']) for m in spec['methods']).rstrip('\n'),
+        'exports': ''.join('\t\t%s: %s,\n' % (m['name'], m['name']) for m in spec['methods'] if not m.get('x-stream')).rstrip('\n'),
     }
     return out
 
@@ -601,6 +612,8 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		inputs: copy(DATA.inputs),
 		icons: copy(DATA.icons),
 		batchIcons: copy(DATA.batchIcons),
+		lifeEvents: copy(DATA.lifeEvents),
+		lifeEventMs: 250,
 		launches: [],
 		delayMs: 30
 	};
@@ -632,6 +645,7 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 			var v = params[p.name];
 			if (p.pattern && (typeof v !== 'string' || !new RegExp(p.pattern).test(v))) return true;
 			if (p['enum'] && p['enum'].indexOf(v) < 0) return true;
+			if (Object.prototype.hasOwnProperty.call(p, 'const') && v !== p['const']) return true;
 		}
 		return false;
 	}
@@ -670,8 +684,8 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		}
 		if (found === null) return null;
 		if (Object.prototype.hasOwnProperty.call(item, 'size')) {
-			if (found.indexOf('inputId:') === 0 || (item.size !== 'icon' && item.size !== 'largeIcon')) return null;
-			if (item.size === 'largeIcon') found += '#largeIcon';
+			if (found.indexOf('inputId:') === 0 || DATA.iconSizes.indexOf(item.size) < 0) return null;
+			if (item.size !== 'icon') found += '#' + item.size;
 		}
 		if (found.indexOf('id:') === 0 && !new RegExp(DATA.appIdPattern).test(item.id)) return null;
 		return found;
@@ -701,6 +715,9 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
 			}
 			return success({icons: icons});
+		},
+		getAppLifeEvents: function () {
+			return success({subscribed: true});
 		},
 		listRunning: function (params) {
 			return list('running', mock.running, params);
@@ -761,6 +778,12 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 		for (var i = 0; i < list.length; i++) list[i](handlers[method]({subscribe: true}));
 	};
 
+	// getAppLifeEvents: one event per reply, to every subscriber, never kept.
+	mock.emitLifeEvent = function (event) {
+		var list = (subscribers.getAppLifeEvents || []).slice();
+		for (var i = 0; i < list.length; i++) list[i](success(merge({subscribed: true}, copy(event))));
+	};
+
 	HC.setSubscribeTransport(function (uri, payload, onMessage) {
 		var request = copy(payload || {}), method = uri.slice(DATA.service.length + 1), open = true;
 		function send(reply) {
@@ -773,6 +796,14 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 			subscribing = false;
 		}
 		send(reply);
+		if (subscribing && method === 'getAppLifeEvents') {
+			// the acknowledgement, then the sample events one after the other
+			mock.lifeEvents.forEach(function (event, i) {
+				setTimeout(function () {
+					if (open) onMessage(success(merge({subscribed: true}, copy(event))));
+				}, mock.delayMs + (i + 1) * mock.lifeEventMs);
+			});
+		}
 		if (!subscribing) return function () { open = false; };
 		(subscribers[method] = subscribers[method] || []).push(send);
 		return function () {
@@ -795,6 +826,7 @@ MOCK = '''// Fake Home Chooser for opening a launcher in a desktop browser: the 
 			if (!shown.length) return;
 			var app = shown[turn++ %% shown.length];
 			mock.foreground = {appId: app.id};
+			mock.emitLifeEvent({event: 'foreground', appId: app.id, windowType: '_WEBOS_WINDOW_TYPE_CARD', windowGroup: false});
 			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
 			mock.notify('getForegroundApp');
 			mock.notify('listRunning');
@@ -837,7 +869,7 @@ MOCK_MORE_APPS = [
     ('browser', 'Web Browser', {}),
     ('gallery', 'Art Gallery', {'bgColor': '#111111'}),
     ('yoga', 'Yoga', {'iconColor': '#6d757f'}),
-    ('helper', 'Background Helper', {'visible': False, 'removable': False}),
+    ('helper', 'Background Helper', {'visible': False, 'removable': False, 'systemApp': True}),
 ]
 
 
@@ -885,7 +917,7 @@ def mock(spec):
     items = next(p['value'] for p in ex['params'] if p['name'] == 'items')
     for item, entry in zip(items, ex['result']['value']['icons']):
         kind = next(k for k in ('id', 'launchPointId', 'inputId') if k in item)
-        batch['%s:%s%s' % (kind, item[kind], '#largeIcon' if item.get('size') == 'largeIcon' else '')] = entry
+        batch['%s:%s%s' % (kind, item[kind], '#' + item['size'] if item.get('size', 'icon') != 'icon' else '')] = entry
     methods = {}
     for m in spec['methods']:
         params = []
@@ -896,6 +928,8 @@ def mock(spec):
                 rule['pattern'] = schema['pattern']
             if 'enum' in schema:
                 rule['enum'] = schema['enum']
+            if 'const' in schema:
+                rule['const'] = schema['const']
             params.append(rule)
         methods[m['name']] = {'needsRoot': bool(m.get('x-needsRoot')), 'needsPermission': bool(m.get('x-needsPermission')),
                               'needsSelectedHome': bool(m.get('x-needsSelectedHome')), 'params': params}
@@ -918,6 +952,9 @@ def mock(spec):
         'launchPoints': first_success(spec, 'listLaunchPoints')['launchPoints'],
         'inputs': first_success(spec, 'listInputs')['inputs'],
         'batchIcons': batch,
+        'lifeEvents': [{k: v for k, v in e.items() if k not in ('returnValue', 'apiVersion', 'subscribed')}
+                       for e in next(m for m in spec['methods'] if m['name'] == 'getAppLifeEvents')['x-events']],
+        'iconSizes': ['icon'] + [x for x in resolve(spec, next(m for m in spec['methods'] if m['name'] == 'getIcons')['params'][0]['schema'])['items']['oneOf'][0]['properties']['size']['enum'] if x != 'icon'],
         'iconItemsMax': next(m for m in spec['methods'] if m['name'] == 'getIcons')['x-itemsMax'],
         'appIdPattern': spec['components']['schemas']['AppId']['pattern'],
         'subscribing': [m['name'] for m in spec['methods'] if m.get('x-subscribes')],

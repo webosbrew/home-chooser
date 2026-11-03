@@ -14,24 +14,26 @@
 #include "service/methods.h"
 #include "service/reply.h"
 
-static const char *const LIST_METHODS[] = {"listApps", "listLaunchPoints", "listInputs", "listRunning", "getForegroundApp"};
+static const char *const LIST_METHODS[] = {"listApps", "listLaunchPoints", "listInputs", "listRunning", "getForegroundApp", "getAppLifeEvents"};
 static const char *const LIST_URIS[] = {
 	SAM_URI "/listApps", SAM_URI "/listLaunchPoints", EIM_URI "/getAllInputStatus", SAM_URI "/running",
-	SAM_URI "/getForegroundAppInfo"
+	SAM_URI "/getForegroundAppInfo", SAM_URI "/getAppLifeEvents"
 };
 /* The array each platform reply carries, and the name the launcher reply gives it (none for the
  * foreground app, whose reply is an object of its own). */
-static const char *const PLATFORM_KEYS[] = {"apps", "launchPoints", "devices", "running", NULL};
-static const char *const REPLY_KEYS[] = {"apps", "launchPoints", "inputs", "running", NULL};
+static const char *const PLATFORM_KEYS[] = {"apps", "launchPoints", "devices", "running", NULL, NULL};
+static const char *const REPLY_KEYS[] = {"apps", "launchPoints", "inputs", "running", NULL, NULL};
 static const char *const WHO[] = {
-	"application manager", "application manager", "input manager", "application manager", "application manager"
+	"application manager", "application manager", "input manager", "application manager", "application manager",
+	"application manager"
 };
 static const char *const BAD_ARRAY[] = {
 	"The application manager did not return an app array",
 	"The application manager did not return a launch point array",
 	"The input manager did not return a device array",
 	"The application manager did not return an app array",
-	"The application manager returned an invalid appId"
+	"The application manager returned an invalid appId",
+	"The application manager returned an invalid event"
 };
 
 const char *list_method(HCListKind kind) { return LIST_METHODS[kind]; }
@@ -46,7 +48,7 @@ char *list_payload(HCListKind kind, bool subscribe)
 		for (int i = 0; LIST_FIELDS[i]; i++) jarray_append(props, jstring_create(LIST_FIELDS[i]));
 		jobject_set(q, key_buf("properties"), props);
 	}
-	if (subscribe) put_bool(q, "subscribe", true);
+	if (subscribe || kind == HC_LIST_LIFE_EVENTS) put_bool(q, "subscribe", true);
 	char *text = g_strdup(jvalue_stringify(q));
 	j_release(&q);
 	return text;
@@ -160,6 +162,7 @@ static jvalue_ref foreground_reply(jvalue_ref reply, bool subscribed)
 jvalue_ref list_reply(HCListKind kind, jvalue_ref reply, bool subscribed)
 {
 	if (kind == HC_LIST_FOREGROUND) return foreground_reply(reply, subscribed);
+	if (kind == HC_LIST_LIFE_EVENTS) return NULL;
 	jvalue_ref arr = reply ? jobject_get(reply, key_buf(PLATFORM_KEYS[kind])) : NULL;
 	if (!arr || !jis_valid(arr) || !jis_array(arr)) return NULL;
 	jvalue_ref o = jobject_create();
@@ -169,6 +172,22 @@ jvalue_ref list_reply(HCListKind kind, jvalue_ref reply, bool subscribed)
 	jobject_set(o, key_buf(REPLY_KEYS[kind]), kind == HC_LIST_APPS ? pick_fields(arr, LIST_FIELDS) :
 		kind == HC_LIST_LAUNCH_POINTS ? pick_launch_points(arr) : kind == HC_LIST_INPUTS ? pick_inputs(arr) :
 		pick_running(arr));
+	return o;
+}
+
+/* One SAM life event as the launcher gets it: the whitelisted fields, in a subscription reply. */
+jvalue_ref life_event_reply(jvalue_ref reply)
+{
+	jvalue_ref ev = reply ? jobject_get(reply, key_buf("event")) : NULL;
+	if (!ev || !jis_valid(ev) || !jis_string(ev)) return NULL;
+	jvalue_ref o = jobject_create();
+	put_bool(o, "returnValue", true);
+	put_int(o, "apiVersion", HC_API_VERSION);
+	put_bool(o, "subscribed", true);
+	for (int f = 0; hc_life_event_fields[f]; f++) {
+		jvalue_ref v = jobject_get(reply, key_buf(hc_life_event_fields[f]));
+		if (v && jis_valid(v) && !jis_null(v)) jobject_set(o, key_buf(hc_life_event_fields[f]), jvalue_duplicate(v));
+	}
 	return o;
 }
 
@@ -241,6 +260,39 @@ bool on_launcher_list_inputs(LSHandle *sh, LSMessage *msg, void *ctx)
 	return true;
 }
 
+/* getAppLifeEvents: a stream only. The first reply is the acknowledgement (no read of SAM); events follow
+ * from the shared upstream (subscribe.c). */
+static void life_next(LOp *op)
+{
+	if (!subs_room(op->sh, HC_LIST_LIFE_EVENTS)) {
+		LOGE("REFUSED", "%s subscription from %s: %d subscribers already", op->method, op->caller, HC_SUBSCRIBERS_MAX);
+		send_error_for(op->msg, op->method, "tooManySubscriptions", "This method has the most subscribers it takes; cancel one first");
+	} else {
+		jvalue_ref o = jobject_create();
+		put_bool(o, "returnValue", true);
+		put_int(o, "apiVersion", HC_API_VERSION);
+		put_bool(o, "subscribed", true);
+		send_reply(op->msg, o);
+		subs_add(op->sh, HC_LIST_LIFE_EVENTS, op->msg);
+	}
+	op_free(op);
+}
+
+bool on_launcher_life_events(LSHandle *sh, LSMessage *msg, void *ctx)
+{
+	(void)ctx;
+	LOp *op = launcher_open(sh, msg, "getAppLifeEvents", true, false, true, life_next);
+	if (!op) return true;
+	if (!wants_subscribe(msg)) { /* a stream only; refused before the permission lookup, like a bad id */
+		send_error_for(msg, op->method, "badRequest", "getAppLifeEvents is a stream: call it with subscribe: true");
+		op_free(op);
+		return true;
+	}
+	op->subscribe = true;
+	launcher_consent(op);
+	return true;
+}
+
 bool on_launcher_running(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)ctx;
@@ -259,9 +311,17 @@ bool on_launcher_get_foreground(LSHandle *sh, LSMessage *msg, void *ctx)
 
 enum { ITEM_APP, ITEM_LAUNCH_POINT, ITEM_INPUT };
 
+static bool icon_size_ok(const char *name)
+{
+	static const char *const SIZES[] = {"icon", "largeIcon", "mediumLargeIcon", "extraLargeIcon", NULL};
+	for (int i = 0; SIZES[i]; i++)
+		if (strcmp(name, SIZES[i]) == 0) return true;
+	return false;
+}
+
 /* items: 1 to HC_ICON_ITEMS_MAX objects, each with exactly one of id (an app id), launchPointId or
- * inputId (non-empty strings of at most 256 bytes), and an optional size (icon or largeIcon; not
- * for an input). Returns the normalized items [{kind, key, size}], or NULL. */
+ * inputId (non-empty strings of at most 256 bytes), and an optional size (icon, largeIcon, mediumLargeIcon or
+ * extraLargeIcon; not for an input). Returns the normalized items [{kind, key, size}], or NULL. */
 static jvalue_ref parse_items(jvalue_ref req)
 {
 	jvalue_ref items = req ? jobject_get(req, key_buf("items")) : NULL;
@@ -286,7 +346,7 @@ static jvalue_ref parse_items(jvalue_ref req)
 		jvalue_ref size = ok ? jobject_get(it, key_buf("size")) : NULL;
 		char *size_name = size && jis_valid(size) ? get_string(it, "size") : NULL;
 		if (ok && size && jis_valid(size))
-			ok = kind != ITEM_INPUT && size_name && (!strcmp(size_name, "icon") || !strcmp(size_name, "largeIcon"));
+			ok = kind != ITEM_INPUT && size_name && icon_size_ok(size_name);
 		if (ok) {
 			jvalue_ref o = jobject_create();
 			put_int(o, "kind", kind);
@@ -437,7 +497,7 @@ static void icons_next(LOp *op)
 	jvalue_ref apps = NULL, lps = NULL, inputs = NULL;
 	bool ok = true;
 	if (need[ITEM_APP]) {
-		ok = (apps = fetch_list(op, HC_LIST_APPS, "{\"properties\":[\"id\",\"folderPath\",\"icon\",\"largeIcon\"]}")) != NULL;
+		ok = (apps = fetch_list(op, HC_LIST_APPS, "{\"properties\":[\"id\",\"folderPath\",\"icon\",\"largeIcon\",\"mediumLargeIcon\",\"extraLargeIcon\"]}")) != NULL;
 	}
 	if (ok && need[ITEM_LAUNCH_POINT]) ok = (lps = fetch_list(op, HC_LIST_LAUNCH_POINTS, "{}")) != NULL;
 	if (ok && need[ITEM_INPUT]) ok = (inputs = fetch_list(op, HC_LIST_INPUTS, "{}")) != NULL;
@@ -468,7 +528,7 @@ bool on_launcher_get_icons(LSHandle *sh, LSMessage *msg, void *ctx)
 	j_release(&req);
 	if (!op->items) {
 		send_error_for(msg, op->method, "badRequest", "items must be 1 to 64 objects, each with one of id, "
-			"launchPointId or inputId, and size icon or largeIcon (not for an input)");
+			"launchPointId or inputId, and size icon, largeIcon, mediumLargeIcon or extraLargeIcon (not for an input)");
 		op_free(op);
 		return true;
 	}

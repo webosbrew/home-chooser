@@ -23,7 +23,7 @@
 	}
 
 	var DATA = {
-		"apiVersion": 2,
+		"apiVersion": 3,
 		"service": "luna://org.webosbrew.homechooser.service",
 		"serviceName": "org.webosbrew.homechooser.service",
 		"launchUri": "luna://com.webos.applicationManager/launch",
@@ -45,7 +45,7 @@
 			"noPermission": "The installed appinfo lacks org.webosbrew.homechooser.applications.",
 			"lookupFailed": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.",
 			"notHome": "The app is not the selected Home.",
-			"badRequest": "id is missing or not an app id, getAppIcon.size is invalid, or getIcons.items is not 1 to 64 valid items.",
+			"badRequest": "id is missing or not an app id, getAppIcon.size is invalid, getIcons.items is not 1 to 64 valid items, or getAppLifeEvents was called without subscribe: true.",
 			"notFound": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.",
 			"noIcon": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.",
 			"iconTooLarge": "getAppIcon: the icon exceeds 262144 bytes.",
@@ -94,7 +94,8 @@
 				"title": "Example",
 				"icon": "icon.png",
 				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.app",
-				"removable": true
+				"removable": true,
+				"systemApp": false
 			},
 			{
 				"id": "org.example.launcher",
@@ -264,7 +265,8 @@
 				"version": "1.0.0",
 				"folderPath": "/media/developer/apps/usr/palm/applications/org.example.helper",
 				"removable": false,
-				"visible": false
+				"visible": false,
+				"systemApp": true
 			}
 		],
 		"appCount": 20,
@@ -296,6 +298,7 @@
 				"lptype": "default",
 				"icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png",
 				"largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png",
+				"mediumLargeIcon": "/mnt/otncabi/usr/palm/applications/netflix/mediumLargeIcon.png",
 				"iconColor": "#ffffff",
 				"bgColor": "#ffffff",
 				"bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png",
@@ -362,6 +365,43 @@
 				"errorText": "No readable icon of the requested size"
 			}
 		},
+		"lifeEvents": [
+			{
+				"event": "launch",
+				"appId": "org.example.app",
+				"reason": "hotKey"
+			},
+			{
+				"event": "splash",
+				"appId": "org.example.app",
+				"title": "Example",
+				"showSplash": true,
+				"showSpinner": true,
+				"splashBackground": ""
+			},
+			{
+				"event": "foreground",
+				"appId": "org.example.app",
+				"windowType": "_WEBOS_WINDOW_TYPE_CARD",
+				"windowGroup": false
+			},
+			{
+				"event": "stop",
+				"appId": "org.example.app",
+				"reason": "windowPolicy"
+			},
+			{
+				"event": "close",
+				"appId": "org.example.app",
+				"reason": "windowPolicy"
+			}
+		],
+		"iconSizes": [
+			"icon",
+			"largeIcon",
+			"mediumLargeIcon",
+			"extraLargeIcon"
+		],
 		"iconItemsMax": 64,
 		"appIdPattern": "^[A-Za-z0-9._-]{1,128}$",
 		"subscribing": [
@@ -369,7 +409,8 @@
 			"listRunning",
 			"getForegroundApp",
 			"listLaunchPoints",
-			"listInputs"
+			"listInputs",
+			"getAppLifeEvents"
 		],
 		"subscribersMax": 16,
 		"methods": {
@@ -477,6 +518,18 @@
 					}
 				]
 			},
+			"getAppLifeEvents": {
+				"needsRoot": true,
+				"needsPermission": true,
+				"needsSelectedHome": false,
+				"params": [
+					{
+						"name": "subscribe",
+						"required": true,
+						"const": true
+					}
+				]
+			},
 			"closeApp": {
 				"needsRoot": true,
 				"needsPermission": true,
@@ -546,6 +599,8 @@
 		inputs: copy(DATA.inputs),
 		icons: copy(DATA.icons),
 		batchIcons: copy(DATA.batchIcons),
+		lifeEvents: copy(DATA.lifeEvents),
+		lifeEventMs: 250,
 		launches: [],
 		delayMs: 30
 	};
@@ -577,6 +632,7 @@
 			var v = params[p.name];
 			if (p.pattern && (typeof v !== 'string' || !new RegExp(p.pattern).test(v))) return true;
 			if (p['enum'] && p['enum'].indexOf(v) < 0) return true;
+			if (Object.prototype.hasOwnProperty.call(p, 'const') && v !== p['const']) return true;
 		}
 		return false;
 	}
@@ -615,8 +671,8 @@
 		}
 		if (found === null) return null;
 		if (Object.prototype.hasOwnProperty.call(item, 'size')) {
-			if (found.indexOf('inputId:') === 0 || (item.size !== 'icon' && item.size !== 'largeIcon')) return null;
-			if (item.size === 'largeIcon') found += '#largeIcon';
+			if (found.indexOf('inputId:') === 0 || DATA.iconSizes.indexOf(item.size) < 0) return null;
+			if (item.size !== 'icon') found += '#' + item.size;
 		}
 		if (found.indexOf('id:') === 0 && !new RegExp(DATA.appIdPattern).test(item.id)) return null;
 		return found;
@@ -646,6 +702,9 @@
 					{errorCode: 'notFound', errorText: 'No such item (mock)'})));
 			}
 			return success({icons: icons});
+		},
+		getAppLifeEvents: function () {
+			return success({subscribed: true});
 		},
 		listRunning: function (params) {
 			return list('running', mock.running, params);
@@ -706,6 +765,12 @@
 		for (var i = 0; i < list.length; i++) list[i](handlers[method]({subscribe: true}));
 	};
 
+	// getAppLifeEvents: one event per reply, to every subscriber, never kept.
+	mock.emitLifeEvent = function (event) {
+		var list = (subscribers.getAppLifeEvents || []).slice();
+		for (var i = 0; i < list.length; i++) list[i](success(merge({subscribed: true}, copy(event))));
+	};
+
 	HC.setSubscribeTransport(function (uri, payload, onMessage) {
 		var request = copy(payload || {}), method = uri.slice(DATA.service.length + 1), open = true;
 		function send(reply) {
@@ -718,6 +783,14 @@
 			subscribing = false;
 		}
 		send(reply);
+		if (subscribing && method === 'getAppLifeEvents') {
+			// the acknowledgement, then the sample events one after the other
+			mock.lifeEvents.forEach(function (event, i) {
+				setTimeout(function () {
+					if (open) onMessage(success(merge({subscribed: true}, copy(event))));
+				}, mock.delayMs + (i + 1) * mock.lifeEventMs);
+			});
+		}
 		if (!subscribing) return function () { open = false; };
 		(subscribers[method] = subscribers[method] || []).push(send);
 		return function () {
@@ -740,6 +813,7 @@
 			if (!shown.length) return;
 			var app = shown[turn++ % shown.length];
 			mock.foreground = {appId: app.id};
+			mock.emitLifeEvent({event: 'foreground', appId: app.id, windowType: '_WEBOS_WINDOW_TYPE_CARD', windowGroup: false});
 			if (!mock.running.some(function (r) { return r.id === app.id; })) mock.running.push({id: app.id});
 			mock.notify('getForegroundApp');
 			mock.notify('listRunning');

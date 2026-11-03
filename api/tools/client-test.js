@@ -53,6 +53,7 @@ function fakeBridge(script, calls) {
 async function bridgeTests() {
 	// Every spec example, as the bridge's answer to the example's params.
 	for (const m of spec.methods) {
+		if (m['x-stream']) continue; // no single reply: subscribeTests
 		for (const ex of m.examples) {
 			const calls = [];
 			const ctx = context({WebOSServiceBridge: fakeBridge([JSON.stringify(ex.result.value)], calls)});
@@ -80,6 +81,10 @@ async function bridgeTests() {
 		vm.runInContext(clientSource, ctx);
 		const before = ctx.HomeChooser.supports(1);
 		await settle(ctx.HomeChooser.getInfo());
+		const later = context({WebOSServiceBridge: fakeBridge([JSON.stringify({returnValue: true, apiVersion: 3, version: '1', root: true, permission: 'p', permitted: true, isSelectedHome: true})], [])});
+		vm.runInContext(clientSource, later);
+		await settle(later.HomeChooser.getInfo());
+		out({test: 'supports-3', level3: later.HomeChooser.supports(3), level4: later.HomeChooser.supports(4)});
 		out({test: 'supports', before, level1: ctx.HomeChooser.supports(1), level2: ctx.HomeChooser.supports(2), level3: ctx.HomeChooser.supports(3), apiVersion: ctx.HomeChooser.API_VERSION});
 	}
 	// requestHome: the x-requestLaunch payload, with the app id from PalmSystem.identifier by default.
@@ -104,7 +109,7 @@ async function bridgeTests() {
 	{
 		const mod = {exports: {}};
 		new Function('module', 'exports', clientSource)(mod, mod.exports);
-		out({test: 'commonjs', methods: spec.methods.map((m) => typeof mod.exports[m.name])});
+		out({test: 'commonjs', methods: spec.methods.filter((m) => !m['x-stream']).map((m) => typeof mod.exports[m.name]), stream: spec.methods.filter((m) => m['x-stream']).map((m) => typeof mod.exports[m.name])});
 	}
 	// The mock does nothing where a bridge exists.
 	{
@@ -131,7 +136,7 @@ const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms || 5));
 async function subscribeTests() {
 	const listInputs = spec.methods.find((m) => m.name === 'listInputs');
 	const first = listInputs.examples.find((ex) => ex.name === 'subscribe').result.value;
-	const failure = {returnValue: false, apiVersion: 2, errorCode: 'tooManySubscriptions', errorText: 'full'};
+	const failure = {returnValue: false, apiVersion: 3, errorCode: 'tooManySubscriptions', errorText: 'full'};
 	for (const [label, script] of [
 		['two-replies', [first, first].map((v) => JSON.stringify(v))],
 		['refused', [JSON.stringify(failure), JSON.stringify(first)]],
@@ -179,6 +184,46 @@ async function subscribeTests() {
 	out({test: 'mock-subscribe-foreground', replies: fg, errors});
 }
 
+// getAppLifeEvents: the acknowledgement, then one event per reply, through the bridge and through the mock.
+async function lifeEventTests() {
+	const m = spec.methods.find((x) => x.name === 'getAppLifeEvents');
+	const ack = m.examples.find((ex) => ex.name === 'subscribe').result.value;
+	const script = [ack].concat(m['x-events']).map((v) => JSON.stringify(v));
+	const calls = [], replies = [], errors = [];
+	const bctx = context({WebOSServiceBridge: streamBridge(script, calls)});
+	vm.runInContext(clientSource, bctx);
+	const sub = bctx.HomeChooser.subscribe('getAppLifeEvents', null, (r) => replies.push(r), (e) => errors.push(describe(e)));
+	await tick(30);
+	sub.cancel();
+	out({test: 'bridge-life-events', replies, errors, calls, hasOneShot: typeof bctx.HomeChooser.getAppLifeEvents});
+	// the mock: the acknowledgement and the sample events, emitLifeEvent, nothing after cancel, the cap, no single reply
+	const ctx = context({location: {search: ''}});
+	vm.runInContext(clientSource, ctx);
+	vm.runInContext(mockSource, ctx);
+	const HC = ctx.HomeChooser;
+	HC.mock.delayMs = 0;
+	HC.mock.lifeEventMs = 1;
+	const got = [], errs = [];
+	const one = HC.subscribe('getAppLifeEvents', null, (r) => got.push(r), (e) => errs.push(describe(e)));
+	await tick(60);
+	HC.mock.emitLifeEvent({event: 'close', appId: 'org.example.app', reason: 'userTimeout'});
+	await tick();
+	one.cancel();
+	HC.mock.emitLifeEvent({event: 'launch', appId: 'org.example.app'});
+	await tick();
+	const subs = [];
+	for (let i = 0; i < spec['x-luna'].subscribersMax; i++) subs.push(HC.subscribe('getAppLifeEvents', null, () => {}));
+	const over = [];
+	HC.subscribe('getAppLifeEvents', null, () => {}, (e) => over.push(describe(e)));
+	await tick();
+	subs.forEach((x) => x.cancel());
+	const plain = await settle(HC.lunaCall(HC.SERVICE + '/getAppLifeEvents', {}));
+	const no = await settle(HC.lunaCall(HC.SERVICE + '/getAppLifeEvents', {subscribe: false}));
+	const sizes = await settle(HC.getIcons({items: [{id: 'org.example.app', size: 'extraLargeIcon'}, {launchPointId: 'netflix_default', size: 'mediumLargeIcon'}]}));
+	const bad = await settle(HC.getIcons({items: [{id: 'org.example.app', size: 'hugeIcon'}]}));
+	out({test: 'mock-life-events', replies: got, errors: errs, over, plain, no, sizes, bad, mockEvents: HC.mock.lifeEvents});
+}
+
 async function mockTests() {
 	for (const scenario of ['selected-home', 'before-elevation', 'not-permitted', 'not-home', 'absent']) {
 		const ctx = context({location: {search: '?hcmock=' + scenario}});
@@ -188,6 +233,7 @@ async function mockTests() {
 		HC.mock.delayMs = 0;
 		const replies = {};
 		for (const m of spec.methods) {
+			if (m['x-stream']) continue;
 			replies[m.name] = [];
 			const params = m.examples.map((ex) => Object.fromEntries(ex.params.map((p) => [p.name, p.value])));
 			params.push({}, {id: '../bad'}, {id: 'org.example.app', size: null});
@@ -219,6 +265,7 @@ async function mockAppCountTests() {
 (async () => {
 	await bridgeTests();
 	await subscribeTests();
+	await lifeEventTests();
 	await mockTests();
 	await mockAppCountTests();
 	out({test: 'done'});

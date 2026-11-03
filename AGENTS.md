@@ -18,7 +18,7 @@ small luna API to launchers.
 
 Read these, in this order:
 
-1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, `apiVersion` 2 (a feature level that only grows; check `apiVersion >= N`, never `== 1`).
+1. [`api/launcher-v1.openrpc.json`](api/launcher-v1.openrpc.json): the API, `apiVersion` 3 (a feature level that only grows; check `apiVersion >= N`, never `== 1`).
    Methods, parameters, every reply and every `errorCode` as JSON Schema, with examples. The
    top-level `x-` fields hold the appinfo declarations, the permission and the request launch.
 2. [`api/client/`](api/client): `homechooser.js`, a one-file client to copy into a web launcher

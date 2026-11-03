@@ -1,4 +1,4 @@
-# Writing a launcher for Home Chooser (API level 2)
+# Writing a launcher for Home Chooser (API level 3)
 
 Home Chooser (`org.webosbrew.homechooser`) lets the owner of a rooted LG webOS TV choose which app
 the Home button opens. This guide is for the authors of such apps (launchers, docks, alternative
@@ -231,6 +231,7 @@ async function start() {
   }
   if (!(info.apiVersion >= 1)) return showUpdateHomeChooser(info);
   const hasLevel2 = info.apiVersion >= 2;   // listLaunchPoints, listInputs, getIcons, subscribe
+  const hasLevel3 = info.apiVersion >= 3;   // getAppLifeEvents, systemApp, larger icon sizes
   if (!info.root) return showOpenHomeChooser();
   if (!info.permitted) return showReinstallLauncher();
   const {apps} = await homeChooser('listApps');
@@ -261,7 +262,7 @@ Successful replies have `returnValue: true`. Every reply produced by a launcher 
 `apiVersion`. Failures from Home Chooser look like this:
 
 ```json
-{"returnValue": false, "apiVersion": 2, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
+{"returnValue": false, "apiVersion": 3, "errorCode": "notHome", "errorText": "Only the app selected as Home may call this method"}
 ```
 
 Show your own plain failure message to the user and keep `errorText` in your logs. Allow 70 seconds
@@ -283,6 +284,10 @@ per call. An uninstall request can make two 20 second appinfo calls, an 8 second
   subscription per method for the life of your app;
 * a failure reply (`returnValue: false`) ends the subscription. If Home Chooser loses the platform's
   feed it restarts it by itself, with a growing delay, and sends the whole state again when it is back.
+
+`getAppLifeEvents` (level 3) also takes `"subscribe": true`, but is a stream and the exception to the
+first two points: its first reply is only an acknowledgement and each later reply is one event, never
+the whole state ([`getAppLifeEvents`](#getapplifeevents-subscribe)). The other points hold.
 
 These are the methods whose platform call can itself be subscribed to: SAM's `listApps`,
 `listLaunchPoints`, `running` and `getForegroundAppInfo` declare `subscribe` in their schemas on
@@ -313,8 +318,10 @@ the page becomes visible again.
 
 All methods are on the service's root category. `listLaunchPoints`, `listInputs`, `getIcons`, the
 `subscribe` parameter and the `iconColor` and `bgColor` fields are level 2 (`apiVersion >= 2`;
-[Stability](#stability)); the rest is level 1. Check `apiVersion` before using a level 2 addition: a
-level 1 service answers an unknown method with the platform's error, and omits the new fields.
+[Stability](#stability)); `getAppLifeEvents`, the `systemApp` field and the `mediumLargeIcon` and
+`extraLargeIcon` fields and sizes are level 3 (`apiVersion >= 3`); the rest is level 1. Check
+`apiVersion` before using a level 2 or 3 addition: an older service answers an unknown method with the
+platform's error, and omits the new fields.
 
 | Method | Needs root | Needs the permission | Only the selected Home | Reply carries `apiVersion` |
 | --- | --- | --- | --- | --- |
@@ -327,6 +334,7 @@ level 1 service answers an unknown method with the platform's error, and omits t
 | `listLaunchPoints` | yes | yes | no | yes |
 | `listInputs` | yes | yes | no | yes |
 | `getIcons` | yes | yes | no | yes |
+| `getAppLifeEvents` | yes | yes | no | yes |
 | `closeApp` | yes | yes | yes | yes |
 | `uninstallApp` | yes | yes | yes | yes |
 
@@ -342,7 +350,7 @@ the owner's choice; this is not the same as what the Home key opens at this mome
 Feature detection and status. Works for any app, before elevation and without the permission.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
+{"returnValue": true, "apiVersion": 3, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
 ```
 
 * `apiVersion`: the feature level of this contract, independent of the package version; it only
@@ -364,15 +372,20 @@ prove Home Chooser is absent: it can also mean the permission is missing from yo
 
 ### `listApps {subscribe?}`
 
-Lists the installed apps. Level 1; `subscribe`, `iconColor` and `bgColor` are level 2.
+Lists the installed apps. Level 1; `subscribe`, `iconColor` and `bgColor` are level 2; `systemApp`, `mediumLargeIcon` and `extraLargeIcon` are level 3.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}
+{"returnValue": true, "apiVersion": 3, "apps": [{"id": "org.example.app", "title": "Example", "icon": "icon.png", "folderPath": "/media/developer/apps/usr/palm/applications/org.example.app", "removable": true}, {"id": "org.example.launcher", "title": "Example Launcher", "icon": "icon.png", "appCategory": ["home"], "removable": true}]}
 ```
 
 Each app carries `id`, `title`, `icon`, `largeIcon`, `folderPath`, `version`, `vendor`, `type`,
-`removable`, `visible`, `appCategory`, `iconColor` and `bgColor`, when the platform has them; absent
-fields are omitted. `appCategory` is the category array as sam reports it (for example `["home"]`),
+`removable`, `visible`, `appCategory`, `iconColor`, `bgColor`, `systemApp`, `mediumLargeIcon` and
+`extraLargeIcon`, when the platform has them; absent fields are omitted. `systemApp` (level 3) is
+SAM's own flag, passed through as it is: `true` for an app that is part of the firmware, `false` for an
+installed one; use it, not `removable`, to tell LG's apps from the owner's. `mediumLargeIcon` and
+`extraLargeIcon` (level 3) are two more appinfo icon paths like `largeIcon`; SAM often gives them as
+empty strings, and an empty string is passed through as it is (read it with `getIcons`, which answers
+`noIcon` for it). `appCategory` is the category array as sam reports it (for example `["home"]`),
 so a launcher can find the other launchers. `iconColor` and `bgColor` are the appinfo's colours (for
 example `"#6d757f"`), the only colour fields SAM's app description has; on webOS 5.6.1 about half of
 the apps give `iconColor` and one in ten `bgColor`. Values are passed through as the platform gives
@@ -393,7 +406,7 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 Lists running apps. Level 1; `subscribe` is level 2.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
+{"returnValue": true, "apiVersion": 3, "running": [{"id": "org.example.app", "instanceId": "instance", "processId": 123, "webProcessId": 456}]}
 ```
 
 Each item carries `id`, `instanceId`, `processId` and `webProcessId`, when present. The service
@@ -413,7 +426,7 @@ The platform's current foreground app (SAM's `getForegroundAppInfo`). Level 1; `
 level 2.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "appId": "org.example.app", "windowId": "window", "processId": 123}
+{"returnValue": true, "apiVersion": 3, "appId": "org.example.app", "windowId": "window", "processId": 123}
 ```
 
 `appId` is an empty string if the platform reports no foreground app. `windowId` is included when
@@ -435,10 +448,11 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 ### `getAppInfo {id}`
 
 Fetches one installed app without refreshing the full list. `app` has exactly the same documented
-fields and types as one `listApps` item, including `appCategory` when the platform supplies it.
+fields and types as one `listApps` item, including `appCategory` when the platform supplies it and, at
+level 3, `systemApp`.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}
+{"returnValue": true, "apiVersion": 3, "app": {"id": "org.example.app", "title": "Example", "icon": "icon.png", "appCategory": ["home"]}}
 ```
 
 Errors: `forbidden`, `notRoot`, `badRequest`, `noPermission`, `lookupFailed`, `notFound` for an
@@ -453,7 +467,7 @@ Reads the icon referenced in that app's appinfo inside that app's folder, for a 
 symlink escapes, are rejected. There is no fallback to the other icon field.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
+{"returnValue": true, "apiVersion": 3, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
 ```
 
 `data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 262144 bytes, so
@@ -473,12 +487,15 @@ pinned to Home included. This is the list LG Home reads (`applicationManager/lis
 the installed apps.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}
+{"returnValue": true, "apiVersion": 3, "launchPoints": [{"launchPointId": "netflix_default", "id": "netflix", "title": "Netflix", "lptype": "default", "icon": "/mnt/otncabi/usr/palm/applications/netflix/icon.png", "largeIcon": "/mnt/otncabi/usr/palm/applications/netflix/largeIcon.png", "iconColor": "#ffffff", "bgColor": "#ffffff", "bgImage": "/mnt/otncabi/usr/palm/applications/netflix/default_preview.png", "params": {}, "removable": true}]}
 ```
 
 Each launch point carries `launchPointId`, `id` (the app it launches), `title`, `lptype`, `icon`,
-`largeIcon`, `iconColor`, `bgColor`, `bgImage`, `params` and `removable`, when the platform has
-them. SAM gives an empty string for an absent value; Home Chooser omits those, like absent fields.
+`largeIcon`, `mediumLargeIcon`, `extraLargeIcon`, `iconColor`, `bgColor`, `bgImage`, `params` and
+`removable`, when the platform has them. SAM gives an empty string for an absent value; Home Chooser
+omits those, like absent fields. `mediumLargeIcon` and `extraLargeIcon` are level 3: SAM has the
+first key in every launch point on webOS 5.6.1 (mostly empty) and the second only on webOS 10 and
+later, so expect them to be absent on many launch points.
 `lptype` is `default` for an app's own launch point (`<app id>_default`) and `bookmark` for one an
 app added, such as a browser bookmark; `params` is what the launch point passes to its app. Icon
 paths are absolute, as SAM gives them; read them with `getIcons {launchPointId}`. Within an
@@ -505,7 +522,7 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 call.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
+{"returnValue": true, "apiVersion": 3, "inputs": [{"id": "com.webos.app.hdmi1", "inputId": "HDMI_1", "label": "HDMI 1", "port": 1, "connected": true, "activate": true, "signal": true, "params": {}, "icon": "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png"}]}
 ```
 
 Each input carries `id`, the input's app (`com.webos.app.hdmi1`): launch it with
@@ -533,12 +550,20 @@ Errors: `forbidden`, `notRoot`, `noPermission`, `lookupFailed`, `timeout`, `refu
 
 *Level 2.* Reads up to 64 icons in one call. `items` is an array of 1 to 64 objects, each one of:
 
-* `{"id": <app id>, "size"?: "icon" | "largeIcon"}`: the app's appinfo icon, exactly as `getAppIcon`;
-* `{"launchPointId": <id>, "size"?: "icon" | "largeIcon"}`: a launch point's icon;
+* `{"id": <app id>, "size"?: "icon" | "largeIcon" | "mediumLargeIcon" | "extraLargeIcon"}`: the app's
+  appinfo icon, exactly as `getAppIcon`;
+* `{"launchPointId": <id>, "size"?: "icon" | "largeIcon" | "mediumLargeIcon" | "extraLargeIcon"}`: a
+  launch point's icon;
 * `{"inputId": <id>}`: an input's icon.
 
+`mediumLargeIcon` and `extraLargeIcon` are level 3 sizes. A size names the field it reads (the app's
+appinfo field, or the launch point's field of the same name) and there is no fallback to another size:
+a field the platform leaves out or gives as an empty string is `noIcon` for that item. The folder
+limits, the per-icon limit and the per-reply budget are the same for every size. `getAppIcon` keeps
+`icon` and `largeIcon` only.
+
 ```json
-{"returnValue": true, "apiVersion": 2, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}]}
+{"returnValue": true, "apiVersion": 3, "icons": [{"mimeType": "image/png", "dataUrl": "data:image/png;base64,iVBORw0KGgo=", "byteLength": 8}, {"errorCode": "notFound", "errorText": "No such app"}]}
 ```
 
 `icons` has one entry per item, in request order: `{mimeType, dataUrl, byteLength}`, where
@@ -560,11 +585,57 @@ file afresh. An invalid `items` fails the whole call.
 Errors: `forbidden`, `notRoot`, `badRequest`, `noPermission`, `lookupFailed`, `timeout`, `refused`,
 `badReply`.
 
+### `getAppLifeEvents {subscribe}`
+
+*Level 3.* A stream of app life events from SAM (`applicationManager/getAppLifeEvents`): an app
+launching, coming to the foreground, showing its splash screen, stopping and closing. It is a stream
+only: call it with `{"subscribe": true}`, which is required. Without it (or with any other value) the
+reply is `badRequest`, before the permission is looked up.
+
+```json
+{"returnValue": true, "apiVersion": 3, "subscribed": true}
+```
+
+That is the first reply, the acknowledgement: it carries no `event` and is not an event. Every later
+reply is one event, in the order SAM sends them:
+
+```json
+{"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "launch", "appId": "org.example.app", "reason": "hotKey"}
+{"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "splash", "appId": "org.example.app", "title": "Example", "showSplash": true, "showSpinner": true, "splashBackground": ""}
+{"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "foreground", "appId": "org.example.app", "windowType": "_WEBOS_WINDOW_TYPE_CARD", "windowGroup": false}
+{"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "stop", "appId": "org.example.app", "reason": "windowPolicy"}
+{"returnValue": true, "apiVersion": 3, "subscribed": true, "event": "close", "appId": "org.example.app", "reason": "windowPolicy"}
+```
+
+An event has `event` (a string; `launch`, `relaunch`, `foreground`, `splash`, `stop` and `close` are
+the ones seen in captures: ignore any other) and, when SAM sends them, `appId`,
+`reason` (on `launch`, `stop` and `close`, for example `hotKey`, `windowPolicy`, `userTimeout` or the
+string `undefined`), `windowType` (on `foreground`, `_WEBOS_WINDOW_TYPE_CARD` or
+`_WEBOS_WINDOW_TYPE_OVERLAY`), `windowGroup`, `windowGroupOwner` and `windowGroupOwnerId` (on
+`foreground`) and `title`, `showSplash`, `showSpinner` and `splashBackground` (on `splash`). Home
+Chooser forwards exactly these fields and drops the rest of SAM's event.
+
+This is not a list. Unlike the other subscriptions ([Subscriptions](#subscriptions)) a reply is one
+event, not the whole state, so there is nothing to replace and no state to read: Home Chooser does not
+debounce, coalesce, repeat or keep events. Several events can come in quick succession and each is
+delivered; the same event may legitimately come twice. An event that happens while no subscription is
+open, or while Home Chooser restarts its own feed after the platform dropped it, is lost; after a
+subscription starts (and after an error you resubscribe from) read `listRunning` and
+`getForegroundApp` for the state, and use the events for what happens next. Overlay launchers see
+the `foreground` event of an overlay with `windowType` `_WEBOS_WINDOW_TYPE_OVERLAY`, which
+`getForegroundApp` may not report. The method takes at most 16 subscribers; keep one for the life of
+your app. Cancel with the bus's own cancel. The client has it only as
+`HomeChooser.subscribe('getAppLifeEvents', null, onEvent, onError)` (the first call of `onEvent` is
+the acknowledgement); it has no single-reply function for it.
+
+Errors: `forbidden`, `notRoot`, `badRequest` when `subscribe` is not `true`, `noPermission`,
+`lookupFailed`, `timeout`, `tooManySubscriptions`.
+
 ### `closeApp {id, force?}`
 
 Closes an app. Only the selected Home may call it. `id` is an application id; `force: true` (a JSON
 boolean) asks the platform for a forced close. Reply
-`{"returnValue": true, "apiVersion": 2, "id": "<id>"}`.
+`{"returnValue": true, "apiVersion": 3, "id": "<id>"}`.
 
 There is no restriction on the target: the Home app may close any app, including Home Chooser,
 Homebrew Channel, LG Home and itself. Errors: `forbidden`, `notRoot`, `notHome`, `badRequest`
@@ -587,7 +658,7 @@ and Cancel; if the alert is refused it opens its own confirmation screen with th
 Your launcher cannot confirm for the owner and cannot call the confirmation method.
 
 ```json
-{"returnValue": true, "apiVersion": 2, "pending": true, "id": "org.example.app", "confirmation": "alert"}
+{"returnValue": true, "apiVersion": 3, "pending": true, "id": "org.example.app", "confirmation": "alert"}
 ```
 
 `confirmation` is `alert` or `screen`. **A pending uninstall is not a completed removal.** There is no
@@ -616,7 +687,7 @@ answers with a string `errorCode` from the table.
 | `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
 | `lookupFailed` | The service could not read the caller's installed appinfo, from SAM or its file fallback (a timeout or an unreadable reply in that lookup is `timeout` or `badReply`) | Retry later; log `errorText` |
 | `notHome` | Your app is not the selected Home | Send the `request` launch, wait for the owner |
-| `badRequest` | `id` is missing or not an app id, `getAppIcon.size` is invalid, or `getIcons.items` is not 1 to 64 valid items | A bug in the launcher |
+| `badRequest` | `id` is missing or not an app id, `getAppIcon.size` is invalid, `getIcons.items` is not 1 to 64 valid items, or `getAppLifeEvents` was called without `subscribe: true` | A bug in the launcher |
 | `notFound` | A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent | Refresh the list |
 | `noIcon` | `getAppIcon`: no readable icon from the requested appinfo field inside that app's folder (in `getIcons`, an item's code) | Show a placeholder |
 | `iconTooLarge` | `getAppIcon`: the icon exceeds 262144 bytes (in `getIcons`, an item's code) | Show a placeholder |
@@ -744,6 +815,13 @@ means not checked on that release, not that it fails there.
 | `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `listApps {subscribe}` from a launcher page: a reply on install and on removal | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `listRunning {subscribe}`, `getForegroundApp {subscribe}` | untested | untested | untested | untested | untested | untested | untested | untested |
+| Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | untested | untested | untested | untested |
+| Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | untested | untested | untested | untested |
+
+The level 3 additions are covered by the offline contract and subscription tests only, and by
+captures of SAM's own replies (`getAppLifeEvents` events from end-to-end test runs; `systemApp` on
+5.6.1; `mediumLargeIcon` in 5.6.1 launch points and `extraLargeIcon` in 10.3.1 and 12.0.0 ones). They
+have not been run on a device through Home Chooser's service.
 
 On 10.3.1, 11.2.0 and 12.0.0, one `getIcons` call for 20 apps took 40 to 160 ms, where 20 single
 `getAppIcon` calls took 720 to 2890 ms.
@@ -956,6 +1034,7 @@ What each level added:
 
 * Level 1: the eight methods as frozen at tag `api-v1` (`getInfo`, `listApps`, `listRunning`, `getAppInfo`, `getAppIcon`, `getForegroundApp`, `closeApp`, `uninstallApp`), the permission, the `appCategory:["home"]` and `requiredPermissions` appinfo declarations, and the `request` launch parameter.
 * Level 2: `listLaunchPoints`, `listInputs` (with each input's `params` and, where the input manager has it, `signal`), `getIcons`, the `subscribe` parameter of `listApps`, `listLaunchPoints`, `listInputs`, `listRunning` and `getForegroundApp`, and the `iconColor` and `bgColor` fields of `listApps` and `getAppInfo`.
+* Level 3: `getAppLifeEvents` (a stream of app life events; `subscribe: true` required), the `systemApp` field of `listApps` and `getAppInfo`, the `mediumLargeIcon` and `extraLargeIcon` fields of `listApps`, `getAppInfo` and `listLaunchPoints`, and `mediumLargeIcon` and `extraLargeIcon` as `size` values of `getIcons`.
 
 A machine-readable description of every level is [`api/launcher-v1.openrpc.json`](../api/launcher-v1.openrpc.json); `x-since` marks what a level added. The file name keeps `v1` as the name of the API family.
 

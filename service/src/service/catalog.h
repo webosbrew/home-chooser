@@ -8,7 +8,7 @@
 
 /* Each is one platform read whose call also takes subscribe: true (docs/launcher-api.md "Subscriptions"). */
 typedef enum {
-	HC_LIST_APPS, HC_LIST_LAUNCH_POINTS, HC_LIST_INPUTS, HC_LIST_RUNNING, HC_LIST_FOREGROUND, HC_LIST_COUNT
+	HC_LIST_APPS, HC_LIST_LAUNCH_POINTS, HC_LIST_INPUTS, HC_LIST_RUNNING, HC_LIST_FOREGROUND, HC_LIST_LIFE_EVENTS, HC_LIST_COUNT
 } HCListKind;
 
 /* At most this many subscribers per method; one more is refused with tooManySubscriptions. */
@@ -24,6 +24,11 @@ const char *list_method(HCListKind kind);
 const char *list_uri(HCListKind kind);
 char *list_payload(HCListKind kind, bool subscribe);
 jvalue_ref list_reply(HCListKind kind, jvalue_ref platform_reply, bool subscribed);
+
+/* getAppLifeEvents (level 3): a stream of events, not a list. Its upstream replies are forwarded one by one
+ * (never debounced, coalesced or kept) through life_event_reply, which returns NULL for a reply that is
+ * not an event (the subscription acknowledgement). */
+jvalue_ref life_event_reply(jvalue_ref platform_reply);
 
 /* subscribe.c: one shared upstream subscription per method, fanned out to the launcher subscribers. */
 void subs_init(LSHandle *sh);

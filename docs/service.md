@@ -77,7 +77,7 @@ This archive is a build artifact, not part of the package.
 | `service/call.c` | Allow-listed forwarding and settings icon requests |
 | `service/run.c` | Named command RPC and log tail |
 | `service/launcher.c`, `service/launcher.h` | Launcher gates, consent, requests and private uninstall tokens |
-| `service/catalog.c`, `service/catalog.h` | The launcher methods that subscribe (`listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`) and `getIcons` |
+| `service/catalog.c`, `service/catalog.h` | The launcher methods that subscribe (`listApps`, `listLaunchPoints`, `listInputs`, `listRunning`, `getForegroundApp`), the `getAppLifeEvents` stream and `getIcons` |
 | `service/subscribe.c` | Their subscriptions: one shared upstream child per method, fan-out through the LS2 catalog |
 | `service/system.c` | Retained reboot prompt method |
 
@@ -138,7 +138,8 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
 | `listLaunchPoints` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, launchPoints:[…]}`; SAM's launch points, selected fields |
 | `listInputs` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, inputs:[…]}`; eim `getAllInputStatus`, selected fields, plus `params` (the picker's launch params) and `signal` (`hdmiSignalExist`, where present) |
-| `getIcons` | `{items}` | `{returnValue, apiVersion, icons:[…]}`; one entry per item, at most 64 items and 1 MiB of icons |
+| `getIcons` | `{items}` | `{returnValue, apiVersion, icons:[…]}`; one entry per item, at most 64 items and 1 MiB of icons; `size` is `icon`, `largeIcon`, `mediumLargeIcon` or `extraLargeIcon` (the last two level 3), with no fallback between sizes |
+| `getAppLifeEvents` | `{subscribe: true}` | Level 3, a stream: first `{returnValue, apiVersion, subscribed}` (no SAM read), then one reply per SAM event with the whitelisted fields (`hc_life_event_fields`); `subscribe` other than `true` is `badRequest` |
 | `closeApp` | `{id, force?}` | `{returnValue, apiVersion, id}`; selected Home only |
 | `uninstallApp` | `{id}` | `{returnValue, apiVersion, pending:true, id, confirmation}` (`alert` or `screen`); selected Home only |
 | `uninstallConfirmed` | `{token}` | `{returnValue, id, route}`; screen fallback only |
@@ -347,6 +348,13 @@ change. A failed read is retried with the same backoff. A method takes 16 subscr
 `tooManySubscriptions` refuses more. Idle cost: nothing without subscribers; one luna-send child per
 subscribed method. `getAppInfo`, `getAppIcon` and `getIcons` take no `subscribe`: SAM's `getAppInfo`
 has no subscription (its schema has only `id` and `properties`), and icon files have no change feed.
+
+`getAppLifeEvents` (level 3) shares this machinery (one upstream child, the 16-subscriber cap, the
+restart backoff) but is a stream, not a state: its first reply is the service's own acknowledgement
+with no SAM read, and each upstream reply that carries a string `event` goes to every subscriber at
+once through `LSSubscriptionReply`, cut to `hc_life_event_fields`. There is no debounce, no read and
+no copy: SAM sends one event per message, so coalescing would lose events, and events missed while
+the upstream is down are not replayed. The upstream's own acknowledgement (no `event`) is dropped.
 
 Why children rather than the LS2 client API: the service's own identity cannot make the privileged
 calls (`listApps` and `listLaunchPoints` are in non-public groups; [Privileged luna

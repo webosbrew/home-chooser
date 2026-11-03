@@ -29,6 +29,12 @@ declare namespace HomeChooser {
 		iconColor?: string;
 		/** The appinfo's background colour as the platform gives it, for example "#ffffff". */
 		bgColor?: string;
+		/** The platform's own flag: true for an app that is part of the firmware, false for an installed one. Passed through as the application manager reports it. */
+		systemApp?: boolean;
+		/** Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size mediumLargeIcon. */
+		mediumLargeIcon?: string;
+		/** Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size extraLargeIcon. */
+		extraLargeIcon?: string;
 	}
 	interface RunningApp {
 		id?: string;
@@ -49,6 +55,10 @@ declare namespace HomeChooser {
 		icon?: string;
 		/** Absolute path. */
 		largeIcon?: string;
+		/** Absolute path. Present on webOS 5 and later where SAM gives a non-empty one; getIcons reads it with size mediumLargeIcon. */
+		mediumLargeIcon?: string;
+		/** Absolute path. SAM has the key on webOS 10 and later only, and often leaves it empty; getIcons reads it with size extraLargeIcon. */
+		extraLargeIcon?: string;
 		iconColor?: string;
 		bgColor?: string;
 		/** Absolute path of the background image. */
@@ -77,6 +87,24 @@ declare namespace HomeChooser {
 		};
 		/** Absolute path of the input manager's icon (iconPrefix + icon). */
 		icon?: string;
+	}
+	/** One app life event as the application manager sends it, cut to the published fields (level 3). Within an apiVersion this field list only grows; ignore unknown fields. */
+	interface AppLifeEvent {
+		/** Seen: launch, relaunch, foreground, splash, stop, close. Absent on the acknowledgement. */
+		event?: string;
+		appId?: string;
+		/** Why: for example hotKey, windowPolicy, userTimeout, or the string undefined. */
+		reason?: string;
+		/** foreground: for example _WEBOS_WINDOW_TYPE_CARD or _WEBOS_WINDOW_TYPE_OVERLAY. */
+		windowType?: string;
+		windowGroup?: boolean;
+		windowGroupOwner?: boolean;
+		windowGroupOwnerId?: string;
+		/** splash: the title the splash shows. */
+		title?: string;
+		showSplash?: boolean;
+		showSpinner?: boolean;
+		splashBackground?: string;
 	}
 	/** One getIcons item's answer, in request order: the icon, or why there is none. */
 	type IconEntry = {
@@ -162,6 +190,12 @@ declare namespace HomeChooser {
 			iconColor?: string;
 			/** The appinfo's background colour as the platform gives it, for example "#ffffff". */
 			bgColor?: string;
+			/** The platform's own flag: true for an app that is part of the firmware, false for an installed one. Passed through as the application manager reports it. */
+			systemApp?: boolean;
+			/** Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size mediumLargeIcon. */
+			mediumLargeIcon?: string;
+			/** Appinfo path, usually relative to folderPath; may be an empty string where the platform gives none. getIcons reads it with size extraLargeIcon. */
+			extraLargeIcon?: string;
 		};
 	}
 	type GetAppInfoErrorCode = "forbidden" | "notRoot" | "badRequest" | "noPermission" | "lookupFailed" | "notFound" | "refused" | "badReply" | "timeout";
@@ -214,13 +248,39 @@ declare namespace HomeChooser {
 		/** What to read, at most 64. */
 		items: ({
 			id: AppId;
-			size?: "icon" | "largeIcon";
+			/** mediumLargeIcon and extraLargeIcon are level 3. */
+			size?: "icon" | "largeIcon" | "mediumLargeIcon" | "extraLargeIcon";
 		} | {
 			launchPointId: string;
-			size?: "icon" | "largeIcon";
+			/** mediumLargeIcon and extraLargeIcon are level 3. */
+			size?: "icon" | "largeIcon" | "mediumLargeIcon" | "extraLargeIcon";
 		} | {
 			inputId: string;
 		})[];
+	}
+	/** The reply of getAppLifeEvents when returnValue is true. */
+	interface GetAppLifeEventsResult extends Success {
+		/** Seen: launch, relaunch, foreground, splash, stop, close. Absent on the acknowledgement. */
+		event?: string;
+		appId?: string;
+		/** Why: for example hotKey, windowPolicy, userTimeout, or the string undefined. */
+		reason?: string;
+		/** foreground: for example _WEBOS_WINDOW_TYPE_CARD or _WEBOS_WINDOW_TYPE_OVERLAY. */
+		windowType?: string;
+		windowGroup?: boolean;
+		windowGroupOwner?: boolean;
+		windowGroupOwnerId?: string;
+		/** splash: the title the splash shows. */
+		title?: string;
+		showSplash?: boolean;
+		showSpinner?: boolean;
+		splashBackground?: string;
+		subscribed: true;
+	}
+	type GetAppLifeEventsErrorCode = "forbidden" | "notRoot" | "badRequest" | "noPermission" | "lookupFailed" | "timeout" | "tooManySubscriptions";
+	interface GetAppLifeEventsParams {
+		/** Must be true (a JSON boolean). The method has no single-reply form. */
+		subscribe: true;
 	}
 	/** The reply of closeApp when returnValue is true. */
 	interface CloseAppResult extends Success {
@@ -281,11 +341,11 @@ declare namespace HomeChooser {
 	};
 
 	/** The highest apiVersion level this client was generated for. Do not compare a reply against it with ===: use supports(level). */
-	const API_VERSION: 2;
+	const API_VERSION: 3;
 	/**
 	 * True when the apiVersion Home Chooser's replies have reported so far is at least level. Call getInfo first;
 	 * false until a reply has come. Use supports(2) for listLaunchPoints, listInputs, getIcons and subscribe,
-	 * never apiVersion === 1: levels only add.
+	 * supports(3) for getAppLifeEvents, systemApp and the larger icon sizes, never apiVersion === 1: levels only add.
 	 */
 	function supports(level: number): boolean;
 	const SERVICE: "luna://org.webosbrew.homechooser.service";
@@ -304,6 +364,7 @@ declare namespace HomeChooser {
 		listLaunchPoints: ListLaunchPointsErrorCode[];
 		listInputs: ListInputsErrorCode[];
 		getIcons: GetIconsErrorCode[];
+		getAppLifeEvents: GetAppLifeEventsErrorCode[];
 		closeApp: CloseAppErrorCode[];
 		uninstallApp: UninstallAppErrorCode[];
 	};
@@ -353,6 +414,10 @@ declare namespace HomeChooser {
 	 * failure that ended it (the subscription is over then). */
 	function subscribe(method: "listInputs", params: ListInputsParams | null, onReply: (reply: ListInputsResult) => void,
 		onError?: (error: HomeChooserError) => void): Subscription;
+	/** Subscribes to getAppLifeEvents: onReply gets the acknowledgement, then each event as its own reply (never the whole state); onError gets the
+	 * failure that ended it (the subscription is over then). */
+	function subscribe(method: "getAppLifeEvents", params: GetAppLifeEventsParams | null, onReply: (reply: GetAppLifeEventsResult) => void,
+		onError?: (error: HomeChooserError) => void): Subscription;
 	/**
 	 * Replaces the subscription transport (homechooser-mock.js uses it). fn(uri, payload, onMessage) starts a
 	 * call that may answer many times, calls onMessage(reply) for each reply or onMessage(null, error) when the
@@ -392,10 +457,14 @@ declare namespace HomeChooser {
 		inputs: Input[];
 		/** App id (with "#largeIcon" for that size) -> {mimeType, data, byteLength}. */
 		icons: {[id: string]: {mimeType: string; data: string; byteLength: number}};
-		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#largeIcon") -> an icon entry. */
+		/** getIcons: "id:<app>", "launchPointId:<id>" or "inputId:<id>" (with "#<size>" for a size other than icon) -> an icon entry. */
 		batchIcons: {[key: string]: IconEntry};
 		/** Sends the subscribers of a method its current mock state again, as after a change. */
 		notify(method: 'listApps' | 'listRunning' | 'getForegroundApp' | 'listLaunchPoints' | 'listInputs'): void;
+		/** getAppLifeEvents: the events a new subscription is sent after its acknowledgement, in order. */
+		lifeEvents: AppLifeEvent[];
+		/** Sends one event to every getAppLifeEvents subscriber. */
+		emitLifeEvent(event: AppLifeEvent): void;
 		/** Payloads of the applicationManager/launch calls made. */
 		launches: object[];
 		delayMs: number;
