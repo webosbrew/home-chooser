@@ -7,7 +7,8 @@ from ..alerts import alert_service_proof
 from ..constants import (APP_ID, BOOT_INPUT_WAIT, BOOT_SCRIPT, REBOOT_ASKED_TEXT, REBOOT_BUTTONS, REBOOT_PROMPT,
     RESTART_NOW, SCRIPTS_DIR, STOCK)
 from ..evidence import messages_command, service_log_command
-from ..releases import boot_input_verdict, parse_reboot_ask, uses_home_gate
+from ..releases import (BOOTD_LOG, boot_gate_expectation, boot_input_verdict, bootd_first_app, parse_reboot_ask,
+    uses_home_gate)
 
 
 class RebootSteps:
@@ -192,17 +193,41 @@ class RebootSteps:
             return
         self.verify_reboot_apply()
 
+    def boot_first_app(self):
+        """(kind, app, detail) of what bootd launched first on this boot, read from /var/log/bootd.log
+        (docs/home-gate.md "At boot"); the two auto-launch settings are read for the record only."""
+        rc, text = self.dev.sh('cat %s 2>&1' % BOOTD_LOG)
+        settings = self.dev.luna('luna://com.webos.settingsservice/getSystemSettings',
+                                 '{"category":"general","keys":["homeAutoLaunch","lgChannelAutoLaunch"]}')
+        found = bootd_first_app(text)
+        self.rec.note('bootd first app of this boot: %s %s (settings are read for the log only)' % found[:2],
+                      found[2] + '\n' + settings.strip()[:400])
+        return found
+
     def check_gate_front(self, label):
-        """6.x to 9.x after a boot: the gate (mounted, stock Home not running: check_home_gate) put the
-        chosen full-screen launcher in front; for an overlay launcher the last input app is in front."""
+        """6.x to 9.x after a boot: the launcher is in front only where bootd would have opened LG Home
+        (homeAutoLaunch on, lgChannelAutoLaunch off): the gate (mounted, stock Home not running:
+        check_home_gate) put the chosen full-screen launcher in front.  Where bootd booted another app
+        (lgChannelAutoLaunch on: Live TV), that app stays and only the Home key opens the launcher.  For an
+        overlay launcher the last input app is in front.  What bootd did is read from its log, not guessed."""
         r = self.rec
         overlay = self.L.overlay
-        want = lambda fg: bool(fg) and fg != STOCK and (overlay or fg == self.launcher)
-        ok = self.wait(lambda: want(self.dev.foreground()[0]), 180, 5)
-        fg = self.dev.foreground()
-        r.check('%s: %s in front (the gate ran at boot)' % (
-                label, 'the last input app (overlay launcher)' if overlay else 'the chosen launcher ' + self.launcher),
-                bool(ok), fg[1])
+        kind, app, detail = self.boot_first_app()
+        want_launcher, why = boot_gate_expectation(kind, app)
+        if want_launcher is None and not overlay:
+            r.check('%s: bootd.log tells what the TV booted to' % label, False, detail)
+        elif want_launcher is False and not overlay:
+            r.note(why, detail)
+            r.check('%s: bootd booted to %s, not LG Home' % (label, app), app != STOCK, detail)
+            self.wait(lambda: STOCK not in self.running_ids(), 60, 5)
+            self.home_press(self.launcher, 'after-reboot-home')
+        else:
+            want = lambda fg: bool(fg) and fg != STOCK and (overlay or fg == self.launcher)
+            ok = self.wait(lambda: want(self.dev.foreground()[0]), 180, 5)
+            fg = self.dev.foreground()
+            r.check('%s: %s in front (the gate ran at boot)' % (
+                    label, 'the last input app (overlay launcher)' if overlay else 'the chosen launcher ' + self.launcher),
+                    bool(ok), fg[1])
         r.check(label + ': the gate is mounted and the real stock Home is not running',
                 self.gate_mount_count() >= 1 and STOCK not in self.running_ids(), repr(self.running_ids()))
 

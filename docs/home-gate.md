@@ -20,6 +20,24 @@ unchanged; 10.x and later close LG Home once the launcher is in front instead
 watcher opens the last input once after each boot by the same rule as the gate
 ([settings-app.md](settings-app.md#the-last-input-after-a-boot-webos-10-and-later)).
 
+## At boot
+
+At boot on 6.x to 9.x the launcher appears where LG Home would have. The first app of a boot is
+bootd's choice, not SAM's: bootd (`/var/log/bootd.log`) reads `general/homeAutoLaunch` and
+`general/lgChannelAutoLaunch`. With `homeAutoLaunch` on and `lgChannelAutoLaunch` off it launches
+`com.webos.app.home` with `params.boot: true` (`Request: {"launchHidden":false,"id":"com.webos.app.home",
+"noSplash":true,"params":{"boot":true}}`); the Home that opens is the gate, which opens the chosen
+launcher. With `lgChannelAutoLaunch` on (the default of some countries, for example USA and DEU) bootd logs
+`lgChannelAutoLaunch(on): do not support Home boot mode` and launches Live TV or LG Channels instead. That
+is left alone: the TV boots to that app, nothing is overridden, and the Home key opens the launcher. LG's
+own Home then only appears as a preload at about 26 s, which the watcher's preload-off and the gate handle.
+
+The end-to-end runner reads the first app of the boot from `bootd.log` (the part after the last
+`BOOTD_START`), with the two settings read for the log only. It expects the chosen launcher in front after
+a reboot only when bootd launched LG Home with `boot: true`; when bootd launched another app it checks that
+LG Home is not running and the gate is mounted, then proves Home opens the launcher with a Home press. A log
+that cannot be read fails the check rather than being guessed.
+
 ## The gate program
 
 `homechooser-home-gate` ([service/src/gate/](../service/src/gate/)) is native C, built by the same

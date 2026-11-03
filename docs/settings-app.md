@@ -273,6 +273,10 @@ hold and close on every release (P01–P14).
 
 ### The last input after a boot, webOS 10 and later
 
+Boot on 6–9 is not part of this: there the launcher is in front after a boot only where bootd would have
+opened LG Home, and a TV set to start LG Channels or Live TV (`lgChannelAutoLaunch` on) boots to that;
+see [At boot](home-gate.md#at-boot).
+
 With an overlay launcher the override's `idleApp` is `{"support": false}`, so SAM brings back the
 last input when the foreground empties. After a boot SAM refuses that fallback until the first app
 launch of the boot (`LAUNCH_LASTINPUT_ERR {"reason":"not_in_mode"}`, `first_app_launched: false`,

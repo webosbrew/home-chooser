@@ -141,3 +141,51 @@ def parse_reboot_ask(text):
                 if a:
                     out['alert_id'] = a[-1]
     return out
+
+
+BOOTD_LOG = '/var/log/bootd.log'
+
+
+def bootd_first_app(text):
+    """What bootd launched as the first app in the LAST boot of a bootd log (6.x to 9.x): (kind, app, detail).
+    kind is 'home' (com.webos.app.home with params.boot true), 'other' (another app), or 'unknown' (no
+    readable evidence).  The log is cut at the last BOOTD_START so an older boot is never read; the launch is
+    the first applicationManager/launch call after "Try to launch first app", its id read from the call line
+    or the next few lines (Request: {...}).  With lgChannelAutoLaunch on bootd logs "do not support Home boot
+    mode" and launches the input app (Live TV or LG Channels) instead."""
+    lines = (text or '').splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        if 'BOOTD_START' in line:
+            start = i
+    lines = lines[start:]
+    first = next((i for i, l in enumerate(lines) if 'Try to launch first app' in l), None)
+    if first is None:
+        return 'unknown', '', 'no "Try to launch first app" in the last boot of bootd.log'
+    no_home = next((l.strip() for l in lines if 'do not support Home boot mode' in l), '')
+    for i in range(first, len(lines)):
+        if 'applicationManager/launch' not in lines[i] or 'applicationManager/launchPoint' in lines[i] \
+                or 'applicationManager/launchPoints' in lines[i] or 'listLaunchPoints' in lines[i]:
+            continue
+        window = ' '.join(lines[i:i + 3])
+        m = re.search(r'"id"\s*:\s*"([^"]+)"', window)
+        if not m:
+            continue
+        app = m.group(1)
+        if app == STOCK and re.search(r'"boot"\s*:\s*true', window):
+            return 'home', app, 'bootd launched ' + app + ' with boot:true'
+        return 'other', app, ('bootd launched ' + app + (' (' + no_home + ')' if no_home else ''))
+    set_id = next((re.search(r'set id\s+(\S+)', l) for l in lines if 'set id' in l and 'lgChannelAutoLaunch' in l), None)
+    if set_id and no_home:
+        return 'other', set_id.group(1), no_home + '; set id ' + set_id.group(1) + ' (no launch call read)'
+    return 'unknown', '', 'no first-app launch call in the last boot of bootd.log'
+
+
+def boot_gate_expectation(kind, app):
+    """(launcher expected in front, note) for the 6.x to 9.x reboot check: the launcher is in front after a boot
+    only where bootd would have opened LG Home (docs/home-gate.md "At boot"); None when unreadable."""
+    if kind == 'home':
+        return True, ''
+    if kind == 'other':
+        return False, 'bootd booted to %s (lgChannelAutoLaunch on): launcher not expected at boot' % app
+    return None, 'the first app of this boot could not be read from bootd.log'

@@ -3544,6 +3544,56 @@ class AwaitsLanTest(unittest.TestCase):
             host.info = lambda vm, info=info: info
             self.assertEqual(host.awaits_lan('x'), want, info)
 
+
+class BootdFirstAppTests(unittest.TestCase):
+    """What bootd launched at boot decides whether the launcher is expected in front (6.x to 9.x)."""
+    START = 'PERFORMANCE(  6.711645736) : Boot) BOOTD_START\n'
+    TRY = 'DEBUG( 10.588595715) : BootSequencer) Try to launch first app\n'
+    HOME = ('DEBUG( 13.480130399) : General) AppInfo=appId(com.webos.app.home), Visible(true), LaunchSplash(false), MVPD(false), Launched(true)\n'
+            'DEBUG( 13.480140602) : Client) Call luna://com.webos.applicationManager/launch\n'
+            'DEBUG( 13.480187732) : Client) Request: {"launchHidden":false,"id":"com.webos.app.home","noSplash":true,"params":{"boot":true}}\n'
+            'DEBUG( 13.508727102) : Client) Response:launch success({"returnValue":true})\n')
+    LISTING = ('DEBUG( 11.160741344) : Client) Call luna://com.webos.applicationManager/listLaunchPoints - Request: {}\n')
+    LIVETV = ('DEBUG( 10.9) : Settings) lgChannelAutoLaunch(on): do not support Home boot mode\n'
+              'DEBUG( 11.0) : Settings) Action (Input App) and lgChannelAutoLaunch (on): set id livetv\n')
+    TV_LAUNCH = ('DEBUG( 13.4) : Client) Call luna://com.webos.applicationManager/launch\n'
+                 'DEBUG( 13.5) : Client) Request: {"launchHidden":false,"id":"com.webos.app.livetv","noSplash":true}\n')
+
+    def test_home_launch_with_boot_true(self):
+        kind, app, _ = hc_e2e.releases.bootd_first_app(self.START + self.TRY + self.LISTING + self.HOME)
+        self.assertEqual((kind, app), ('home', 'com.webos.app.home'))
+        self.assertEqual(hc_e2e.releases.boot_gate_expectation(kind, app), (True, ''))
+
+    def test_livetv_launch_when_lgchannel_autolaunch_is_on(self):
+        text = self.START + self.LIVETV + self.TRY + self.LISTING + self.TV_LAUNCH
+        kind, app, detail = hc_e2e.releases.bootd_first_app(text)
+        self.assertEqual((kind, app), ('other', 'com.webos.app.livetv'))
+        self.assertIn('do not support Home boot mode', detail)
+        want, why = hc_e2e.releases.boot_gate_expectation(kind, app)
+        self.assertFalse(want)
+        self.assertIn('bootd booted to com.webos.app.livetv (lgChannelAutoLaunch on): launcher not expected at boot', why)
+
+    def test_set_id_line_without_a_launch_call(self):
+        kind, app, _ = hc_e2e.releases.bootd_first_app(self.START + self.LIVETV + self.TRY)
+        self.assertEqual((kind, app), ('other', 'livetv'))
+
+    def test_only_the_last_boot_counts(self):
+        text = self.START + self.TRY + self.HOME + self.START + self.LIVETV + self.TRY + self.TV_LAUNCH
+        self.assertEqual(hc_e2e.releases.bootd_first_app(text)[:2], ('other', 'com.webos.app.livetv'))
+        text = self.START + self.LIVETV + self.TRY + self.TV_LAUNCH + self.START + self.TRY + self.HOME
+        self.assertEqual(hc_e2e.releases.bootd_first_app(text)[0], 'home')
+
+    def test_home_without_boot_flag_is_not_the_boot_launch(self):
+        text = self.START + self.TRY + self.HOME.replace(',"params":{"boot":true}', '')
+        self.assertEqual(hc_e2e.releases.bootd_first_app(text)[0], 'other')
+
+    def test_unreadable_evidence_is_unknown(self):
+        for text in ('', 'no such file', self.START, self.START + self.TRY + self.LISTING):
+            kind, app, detail = hc_e2e.releases.bootd_first_app(text)
+            self.assertEqual(kind, 'unknown', text)
+            self.assertIsNone(hc_e2e.releases.boot_gate_expectation(kind, app)[0])
+
+
 if __name__ == '__main__':
     unittest.main()
 
