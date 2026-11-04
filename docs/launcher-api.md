@@ -576,9 +576,11 @@ call).
 Where Home Chooser reads: an app icon only inside that app's `folderPath`; a launch point icon only
 inside its own app's folder under `/usr/palm/applications`, `/mnt/otncabi/usr/palm/applications`,
 `/media/cryptofs/apps/usr/palm/applications` or `/media/developer/apps/usr/palm/applications`; an
-input icon only under `/usr/palm/plugins/inputapps/assets`. Symlinks and `..` are resolved first, and
-the file must have an image extension. Bookmark icons lie elsewhere, in a directory not yet verified,
-so a bookmark's icon is `noIcon` for now: draw the bookmark's title and `iconColor`. Each call reads
+input icon only under `/usr/palm/plugins/inputapps/assets`; the icon of a bookmark launch point
+(`lptype` `bookmark`, app `com.webos.app.browser`, a website pinned to Home from LG's browser) only
+inside the browser's favicon cache `/mnt/lg/cache/webbrowser/chrome/Default/favicon`. Symlinks and `..`
+are resolved first, and the file must have an image extension. A bookmark whose icon file is missing is
+`noIcon`: draw its title and `iconColor`. Each call reads
 the lists it needs once (the installed apps for `id` items, the launch points, the inputs) and every
 file afresh. An invalid `items` fails the whole call.
 
@@ -817,8 +819,12 @@ means not checked on that release, not that it fails there.
 | `listRunning {subscribe}`, `getForegroundApp {subscribe}`, `getAppLifeEvents {subscribe}` from a launcher page: an acknowledgement, then replies for an app's launch and close | untested | untested | untested | untested | verified (9.x) | untested | verified (11.x) | untested |
 | Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
+| `getIcons` for a bookmark launch point (a website pinned to Home from LG's browser), as the app | untested | untested | untested | untested | untested | untested | verified (11.x) | untested |
 
-The three subscriptions in the row above were held by a launcher page through `homechooser.js`, with the
+On other releases the browser may keep favicons elsewhere; a bookmark whose icon is outside the folder above
+is `noIcon` there.
+
+The three subscriptions in the rows above were held by a launcher page through `homechooser.js`, with the
 page's own bus permissions, while a disposable app was opened and closed: each acknowledged with
 `subscribed: true`, `listRunning` listed the app and then dropped it, `getForegroundApp` named it and then
 changed, and `getAppLifeEvents` sent its launch and close.

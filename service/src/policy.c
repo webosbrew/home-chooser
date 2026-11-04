@@ -413,9 +413,15 @@ static bool resolve_inside(const char *path, const char *dir, char *out, size_t 
 	return true;
 }
 
-bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *path, char *out, size_t outlen)
+bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *lptype, const char *path,
+	char *out, size_t outlen)
 {
 	if (!prefix || !hc_app_id_ok(app_id)) return false;
+	if (lptype && strcmp(lptype, "bookmark") == 0 && strcmp(app_id, HC_BOOKMARK_APP_ID) == 0) {
+		char dir[PATH_MAX];
+		if (snprintf(dir, sizeof dir, "%s%s", prefix, HC_BOOKMARK_ICON_DIR) < (int)sizeof dir &&
+			resolve_inside(path, dir, out, outlen)) return true;
+	}
 	for (int i = 0; LAUNCH_POINT_ICON_ROOTS[i]; i++) {
 		char dir[PATH_MAX];
 		if (snprintf(dir, sizeof dir, "%s%s/%s", prefix, LAUNCH_POINT_ICON_ROOTS[i], app_id) >= (int)sizeof dir) continue;
