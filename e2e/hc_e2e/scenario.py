@@ -9,6 +9,7 @@ from .steps.demo import DemoSteps
 from .steps.home_press import HomePress
 from .steps.home_proof import HomeProofSteps
 from .steps.level3 import Level3Steps
+from .steps.page_probe import PageProbeSteps
 from .steps.panel import PanelSteps
 from .steps.popups import PopupsAndNotifications
 from .steps.preload import PreloadPolicy
@@ -24,7 +25,7 @@ from .steps.update import UpdateSteps
 # ---------------------------------------------------------------------------------------------
 class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, HomePress, BaselineSteps,
                ScreensaverSteps, ChooseSteps, PanelSteps, RebootSteps, HomeProofSteps, DemoSteps, ApiSteps,
-               Level3Steps, UpdateSteps, RemovalSteps):
+               Level3Steps, PageProbeSteps, UpdateSteps, RemovalSteps):
     def __init__(self, args, host, rec, row, launcher, launchers=None):
         self.a, self.host, self.rec = args, host, rec
         self.L = launcher

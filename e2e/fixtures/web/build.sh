@@ -44,7 +44,14 @@ for v in normal overlay; do
 	mkdir -p "$stage"
 	cp "$TMP/icon.png" "$stage/icon.png"
 	cp "$TMP/oversize.png" "$stage/oversize.png"
-	sed -e "s/@VARIANT@/$v/g" "$HERE/index.html" > "$stage/index.html"
+	# The permission-declaring (--api-check) build also holds the page probe (probe.js, see its header); the plain
+	# fixtures stay inert.
+	probe=
+	if [ -n "${HC_FIXTURE_PERMISSION:-}" ]; then
+		cp "$HERE/../../../api/client/homechooser.js" "$HERE/probe.js" "$stage/"
+		probe='<script src="homechooser.js"></script><script src="probe.js"></script>'
+	fi
+	sed -e "s/@VARIANT@/$v/g" -e "s|@PROBE@|$probe|" "$HERE/index.html" > "$stage/index.html"
 	python3 -I - "$stage/appinfo.json" "$id" "$v" <<'PY'
 import json, os, sys
 dst, appid, v = sys.argv[1:4]

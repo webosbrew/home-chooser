@@ -34,14 +34,14 @@ class Inspector:
         except OSError:
             pass
 
-    def _page(self):
+    def _page(self, app_id=APP_ID):
         try:
             with urllib.request.urlopen('http://127.0.0.1:%d/json' % self.port, timeout=5) as r:
                 pages = json.loads(r.read().decode())
         except Exception:
             return None
         for p in pages:
-            if APP_ID in p.get('url', ''):
+            if app_id in p.get('url', ''):
                 return p
         return None
 
@@ -54,15 +54,15 @@ class Inspector:
             pages = 'unreadable: %r' % (e,)
         print('  inspector evaluate -> None (%s); /json pages: %s' % (why, pages), flush=True)
 
-    def evaluate(self, expr):
-        """Runtime.evaluate in the Home Chooser page; None if it is not there.  Why a call gave None is
+    def evaluate(self, expr, app_id=APP_ID):
+        """Runtime.evaluate in the page of `app_id` (default: Home Chooser's); None if it is not there.  Why a call gave None is
         kept in self.last_error (no page, the forward gone, a socket error, an error reply, a JS exception)."""
         self.last_error = None
-        page = self._page()
+        page = self._page(app_id)
         if not page:
             self.last_error = 'no page for %s in /json (forward %s)' % (
-                APP_ID, 'alive' if self.proc.poll() is None else 'exited rc=%s' % self.proc.returncode)
-            self.log_pages('no page for %s' % APP_ID)
+                app_id, 'alive' if self.proc.poll() is None else 'exited rc=%s' % self.proc.returncode)
+            self.log_pages('no page for %s' % app_id)
             return None
         s = None
         try:
