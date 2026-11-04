@@ -443,10 +443,12 @@ static jvalue_ref icon_entry(jvalue_ref item, jvalue_ref apps, jvalue_ref lps, j
 	} else if (kind == ITEM_LAUNCH_POINT) {
 		found = find_by(lps, "launchPoints", "launchPointId", key);
 		char *app = found ? get_string(found, "id") : NULL;
+		char *lptype = found ? get_string(found, "lptype") : NULL;
 		char *path = found ? get_string(found, size) : NULL;
-		if (path && hc_launch_point_icon_resolve(hc_fs_prefix(), app, path, resolved, sizeof resolved))
+		if (path && hc_launch_point_icon_resolve(hc_fs_prefix(), app, lptype, path, resolved, sizeof resolved))
 			result = read_icon_file(resolved, &bytes, &length, &mime);
 		g_free(app);
+		g_free(lptype);
 		g_free(path);
 	} else {
 		found = find_by(inputs, "devices", "id", key);
