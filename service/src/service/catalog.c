@@ -468,7 +468,7 @@ static jvalue_ref icon_entry(jvalue_ref item, jvalue_ref apps, jvalue_ref lps, j
 	} else if (result == ICON_NONE) {
 		o = item_error("noIcon", "No readable icon of the requested size");
 	} else if (result == ICON_TOO_BIG) {
-		o = item_error("iconTooLarge", "The icon exceeds 262144 bytes");
+		o = item_error("iconTooLarge", "The icon exceeds 1048576 bytes");
 	} else if (length > *budget) {
 		o = item_error("overBudget", "The reply is full; ask for this icon again");
 	} else {

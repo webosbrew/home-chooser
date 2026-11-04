@@ -114,7 +114,7 @@ declare namespace HomeChooser {
 		/** Decoded byte count. */
 		byteLength: number;
 	} | {
-		/** notFound: no such app, launch point or input. noIcon: no readable icon of that size in the allowed directory. iconTooLarge: over 262144 bytes. overBudget: the reply already holds 1 MiB of icons; ask again. */
+		/** notFound: no such app, launch point or input. noIcon: no readable icon of that size in the allowed directory. iconTooLarge: over 1048576 bytes. overBudget: the reply already holds 1 MiB of icons; ask again. */
 		errorCode: "notFound" | "noIcon" | "iconTooLarge" | "overBudget";
 		errorText: string;
 	};

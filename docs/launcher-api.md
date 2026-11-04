@@ -470,9 +470,9 @@ symlink escapes, are rejected. There is no fallback to the other icon field.
 {"returnValue": true, "apiVersion": 3, "mimeType": "image/png", "data": "iVBORw0KGgo=", "byteLength": 8}
 ```
 
-`data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 262144 bytes, so
-the base64 payload is at most 349528 characters. Luna replies carry the base64 as JSON; the cap
-keeps that message near 350 KiB and matches the existing internal icon reader. This is Home
+`data` is base64; `byteLength` counts the decoded bytes. An icon may be at most 1048576 bytes, so
+the base64 payload is at most 1398104 characters. Luna replies carry the base64 as JSON; the cap
+keeps that message near 1.4 MB and matches the existing internal icon reader. This is Home
 Chooser's own conservative limit, not a platform one. On 11.x, LG Home's appinfo advertises
 `icon.png` but has no file at that path; `getAppIcon` reports `noIcon` for it. Show a placeholder
 for this case.
@@ -569,7 +569,7 @@ limits, the per-icon limit and the per-reply budget are the same for every size.
 `icons` has one entry per item, in request order: `{mimeType, dataUrl, byteLength}`, where
 `dataUrl` goes straight into an `img` `src`, or `{errorCode, errorText}` for that item alone:
 `notFound` (no such app, launch point or input), `noIcon` (no readable image of that size in the
-place Home Chooser reads it from), `iconTooLarge` (the file is over 262144 bytes) or `overBudget`
+place Home Chooser reads it from), `iconTooLarge` (the file is over 1048576 bytes) or `overBudget`
 (one reply carries at most 1048576 icon bytes and this icon did not fit: ask for it again in another
 call).
 
@@ -692,7 +692,7 @@ answers with a string `errorCode` from the table.
 | `badRequest` | `id` is missing or not an app id, `getAppIcon.size` is invalid, `getIcons.items` is not 1 to 64 valid items, or `getAppLifeEvents` was called without `subscribe: true` | A bug in the launcher |
 | `notFound` | A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent | Refresh the list |
 | `noIcon` | `getAppIcon`: no readable icon from the requested appinfo field inside that app's folder (in `getIcons`, an item's code) | Show a placeholder |
-| `iconTooLarge` | `getAppIcon`: the icon exceeds 262144 bytes (in `getIcons`, an item's code) | Show a placeholder |
+| `iconTooLarge` | `getAppIcon`: the icon exceeds 1048576 bytes (in `getIcons`, an item's code) | Show a placeholder |
 | `tooManySubscriptions` | The method already has 16 subscribers | Cancel the subscriptions you no longer need; keep one per method |
 | `protected` | `uninstallApp`: target is Home Chooser, Homebrew Channel or the caller | Do not offer uninstall for this app |
 | `notRemovable` | `uninstallApp`: target is marked `removable:false` or outside the user app folders (system apps are) | Do not offer uninstall for this app |

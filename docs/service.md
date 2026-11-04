@@ -127,7 +127,7 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `readFile` | `{path}` | `{returnValue, exists, text}` (at most 64 KiB) |
 | `writeFile` | `{path, text}` | `{returnValue}`; creates the directory, writes `<path>.tmp` and renames it, mode 0644; at most 256 KiB |
 | `removeFile` | `{path}` | `{returnValue}`; a missing file is fine |
-| `readIcon` | `{appId}` | `{returnValue, mime, data}` with `data` base64; at most 256 KiB |
+| `readIcon` | `{appId}` | `{returnValue, mime, data}` with `data` base64; at most 1 MiB |
 | `link` / `unlink` / `linkStatus` | `{}` | the boot entry, below |
 | `run` | `{command}` | `{returnValue, exitCode, stdoutString, stderrString}` |
 | `getInfo` | `{}` | `{returnValue, apiVersion, version, root, permission, permitted, isSelectedHome}` |
@@ -135,7 +135,7 @@ All methods are on category `/`, take and return JSON, and answer `{"returnValue
 | `listRunning` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, running:[…]}`; selected process fields only |
 | `getForegroundApp` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, appId, windowId?, processId?}`; one SAM lookup per reply |
 | `getAppInfo` | `{id}` | `{returnValue, apiVersion, app:{…}}`; one `listApps` item |
-| `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 256 KiB decoded |
+| `getAppIcon` | `{id, size?}` | `{returnValue, apiVersion, mimeType, data, byteLength}`; base64, at most 1 MiB decoded |
 | `listLaunchPoints` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, launchPoints:[…]}`; SAM's launch points, selected fields |
 | `listInputs` | `{subscribe?}` | `{returnValue, apiVersion, subscribed?, inputs:[…]}`; eim `getAllInputStatus`, selected fields, plus `params` (the picker's launch params) and `signal` (`hdmiSignalExist`, where present) |
 | `getIcons` | `{items}` | `{returnValue, apiVersion, icons:[…]}`; one entry per item, at most 64 items and 1 MiB of icons; `size` is `icon`, `largeIcon`, `mediumLargeIcon` or `extraLargeIcon` (the last two level 3), with no fallback between sizes |
@@ -394,7 +394,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 * **Icons**: `readIcon`, `getAppIcon` and `getIcons` (for app items) ask SAM for the app's `folderPath` and chosen icon field.
   They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
-  file of at most 256 KiB.
+  file of at most 1 MiB.
 * **Boot entry**: `link` creates `/var/lib/webosbrew/init.d`, sets mode 755 on the installed scripts,
   on 5/10–12 stages `homechooser-daemon` and boot/access helpers in `/var/lib/webosbrew/homechooser/boot`, then links
   `/var/lib/webosbrew/init.d/homechooser` to that boot copy on 5/10–12, or to the installed entry on 6–9 (replacing an earlier entry). The entry queues `homechooser-daemon --boot` in a nonblocking transient unit, before RPC name registration; it becomes the watcher after apply. `unlink`

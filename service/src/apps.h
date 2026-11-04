@@ -4,7 +4,7 @@
 #include <glib.h>
 #include <pbnjson.h>
 
-#define ICON_MAX_BYTES 262144
+#define ICON_MAX_BYTES 1048576
 #define LIST_FIELDS hc_launcher_list_fields
 
 typedef enum { ICON_OK, ICON_NONE, ICON_TOO_BIG } IconResult;

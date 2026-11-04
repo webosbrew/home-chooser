@@ -98,7 +98,7 @@
     "badRequest": {"cause": "id is missing or not an app id, getAppIcon.size is invalid, getIcons.items is not 1 to 64 valid items, or getAppLifeEvents was called without subscribe: true.", "action": "A bug in the launcher."},
     "notFound": {"cause": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.", "action": "Refresh the list."},
     "noIcon": {"cause": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.", "action": "Show a placeholder."},
-    "iconTooLarge": {"cause": "getAppIcon: the icon exceeds 262144 bytes.", "action": "Show a placeholder."},
+    "iconTooLarge": {"cause": "getAppIcon: the icon exceeds 1048576 bytes.", "action": "Show a placeholder."},
     "protected": {"cause": "uninstallApp: target is Home Chooser, Homebrew Channel or the caller.", "action": "Do not offer uninstall for this app."},
     "notRemovable": {"cause": "uninstallApp: target is marked removable:false or outside the user app folders (system apps are).", "action": "Do not offer uninstall for this app."},
     "confirmFailed": {"cause": "uninstallApp: the owner could not be asked.", "action": "Try again later; tell the user."},
@@ -449,7 +449,7 @@
     {
       "name": "getAppIcon",
       "summary": "Reads an app's icon for a jailed launcher.",
-      "description": "Reads the icon referenced in that app's appinfo inside that app's folder. Paths that leave the app folder, including symlink escapes, are rejected. There is no fallback to the other icon field. data is base64; byteLength counts the decoded bytes. An icon may be at most 262144 bytes, so data is at most 349528 characters. mimeType comes from the file name's extension (png, jpg, jpeg, gif, svg, webp).",
+      "description": "Reads the icon referenced in that app's appinfo inside that app's folder. Paths that leave the app folder, including symlink escapes, are rejected. There is no fallback to the other icon field. data is base64; byteLength counts the decoded bytes. An icon may be at most 1048576 bytes, so data is at most 1398104 characters. mimeType comes from the file name's extension (png, jpg, jpeg, gif, svg, webp).",
       "paramStructure": "by-name",
       "params": [
         {"name": "id", "required": true, "description": "The app whose icon to read.", "schema": {"$ref": "#/components/schemas/AppId"}},
@@ -461,7 +461,7 @@
       "x-needsSelectedHome": false,
       "x-subscribes": false,
       "x-forJailedLauncher": true,
-      "x-iconMaxBytes": 262144,
+      "x-iconMaxBytes": 1048576,
       "x-doc": "docs/launcher-api.md#getappicon-id-size",
       "x-notes": [
         "On 11.x, LG Home's appinfo advertises icon.png but has no file at that path; getAppIcon reports noIcon for it. Show a placeholder."
@@ -628,7 +628,7 @@
       "name": "getIcons",
       "x-since": 2,
       "summary": "Reads several icons in one call, for a jailed launcher.",
-      "description": "items: 1 to 64 objects, each {id, size?} (an app's appinfo icon, as getAppIcon), {launchPointId, size?} (a launch point's icon) or {inputId} (an input's icon); size is icon (default), largeIcon, or, at level 3, mediumLargeIcon or extraLargeIcon (not for an input); the size names the appinfo field or launch point field to read, and there is no fallback to another size: a missing or empty one is noIcon. The reply's icons array has one entry per item in request order: {mimeType, dataUrl, byteLength} or {errorCode, errorText} with errorCode notFound, noIcon, iconTooLarge or overBudget. Each call reads the platform's lists once and the files afresh. An app icon must lie in the app's folder; a launch point icon in its app's folder under /usr/palm/applications, /mnt/otncabi/usr/palm/applications, /media/cryptofs/apps/usr/palm/applications or /media/developer/apps/usr/palm/applications; an input icon under /usr/palm/plugins/inputapps/assets. Symlinks and .. are resolved first; anything else is noIcon. One icon is at most 262144 bytes; one reply holds at most 1048576 icon bytes, later icons that do not fit are overBudget.",
+      "description": "items: 1 to 64 objects, each {id, size?} (an app's appinfo icon, as getAppIcon), {launchPointId, size?} (a launch point's icon) or {inputId} (an input's icon); size is icon (default), largeIcon, or, at level 3, mediumLargeIcon or extraLargeIcon (not for an input); the size names the appinfo field or launch point field to read, and there is no fallback to another size: a missing or empty one is noIcon. The reply's icons array has one entry per item in request order: {mimeType, dataUrl, byteLength} or {errorCode, errorText} with errorCode notFound, noIcon, iconTooLarge or overBudget. Each call reads the platform's lists once and the files afresh. An app icon must lie in the app's folder; a launch point icon in its app's folder under /usr/palm/applications, /mnt/otncabi/usr/palm/applications, /media/cryptofs/apps/usr/palm/applications or /media/developer/apps/usr/palm/applications; an input icon under /usr/palm/plugins/inputapps/assets. Symlinks and .. are resolved first; anything else is noIcon. One icon is at most 1048576 bytes; one reply holds at most 1048576 icon bytes, later icons that do not fit are overBudget.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -644,7 +644,7 @@
       "x-needsSelectedHome": false,
       "x-subscribes": false,
       "x-forJailedLauncher": true,
-      "x-iconMaxBytes": 262144,
+      "x-iconMaxBytes": 1048576,
       "x-batchMaxBytes": 1048576,
       "x-itemsMax": 64,
       "x-doc": "docs/launcher-api.md#geticons-items",
@@ -1074,8 +1074,8 @@
                 "required": ["mimeType", "data", "byteLength"],
                 "properties": {
                   "mimeType": {"type": "string", "enum": ["image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"]},
-                  "data": {"type": "string", "maxLength": 349528, "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "description": "Standard base64 of the icon file."},
-                  "byteLength": {"type": "integer", "minimum": 0, "maximum": 262144, "description": "Decoded byte count."}
+                  "data": {"type": "string", "maxLength": 1398104, "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$", "description": "Standard base64 of the icon file."},
+                  "byteLength": {"type": "integer", "minimum": 0, "maximum": 1048576, "description": "Decoded byte count."}
                 }
               }
             ]
@@ -1149,11 +1149,11 @@
               },
               "dataUrl": {
                 "type": "string",
-                "maxLength": 349560,
+                "maxLength": 1398136,
                 "pattern": "^data:image/(png|jpeg|gif|svg\\+xml|webp);base64,(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
                 "description": "data:<mimeType>;base64,<file>, ready for an img src."
               },
-              "byteLength": {"type": "integer", "minimum": 0, "maximum": 262144, "description": "Decoded byte count."}
+              "byteLength": {"type": "integer", "minimum": 0, "maximum": 1048576, "description": "Decoded byte count."}
             }
           },
           {
@@ -1164,7 +1164,7 @@
               "errorCode": {
                 "type": "string",
                 "enum": ["notFound", "noIcon", "iconTooLarge", "overBudget"],
-                "description": "notFound: no such app, launch point or input. noIcon: no readable icon of that size in the allowed directory. iconTooLarge: over 262144 bytes. overBudget: the reply already holds 1 MiB of icons; ask again."
+                "description": "notFound: no such app, launch point or input. noIcon: no readable icon of that size in the allowed directory. iconTooLarge: over 1048576 bytes. overBudget: the reply already holds 1 MiB of icons; ask again."
               },
               "errorText": {"type": "string"}
             }

@@ -112,6 +112,18 @@ class ApiSteps:
                         raw[:400] if method == 'getAppInfo' else repr((reply or {}).get('mimeType'))))
                 if method == 'getAppInfo':
                     app_info = (reply or {}).get('app') or {}
+            if appid == self.launcher and self.L.is_fixture and app_info is not None:
+                # The fixture's own icon is exactly 1 MiB (ICON_MAX_BYTES): the largest reply the bus must carry.
+                reply, raw = self.api('getAppIcon', {'id': appid})
+                r.check('%s: getAppIcon returns the 1 MiB fixture icon' % label,
+                        bool(reply) and reply.get('returnValue') is True and reply.get('byteLength') == 1048576
+                        and len(reply.get('data', '')) == 1398104, '%d reply bytes; %s' % (len(raw.encode()), raw[:120]))
+                reply, raw = self.api('getIcons', {'items': [{'id': appid}, {'id': STOCK}]})
+                icons = (reply or {}).get('icons') or [{}, {}]
+                r.check('%s: getIcons returns the 1 MiB icon and refuses the next one as overBudget' % label,
+                        icons[0].get('byteLength') == 1048576 and len(icons[0].get('dataUrl', '')) == 22 + 1398104
+                        and icons[1].get('errorCode') in ('overBudget', 'noIcon', 'notFound') and len(icons) == 2,
+                        '%d reply bytes; %s' % (len(raw.encode()), repr(icons[1])[:200]))
             if app_info is not None:
                 reply, raw = self.api('getAppIcon', {'id': appid, 'size': 'largeIcon'})
                 if appid == self.launcher and self.L.is_fixture and app_info.get('largeIcon') == 'oversize.png':

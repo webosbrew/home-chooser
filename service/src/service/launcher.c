@@ -307,7 +307,7 @@ static void appinfo_done(Call *c, jvalue_ref reply)
 			if (result == ICON_NONE) {
 				send_error_for(op->msg, op->method, "noIcon", "The app has no readable icon of the requested size");
 			} else if (result == ICON_TOO_BIG) {
-				send_error_for(op->msg, op->method, "iconTooLarge", "The icon exceeds 262144 bytes");
+				send_error_for(op->msg, op->method, "iconTooLarge", "The icon exceeds 1048576 bytes");
 			} else {
 				char *data = icon_base64(bytes, length);
 				jvalue_ref o = jobject_create();

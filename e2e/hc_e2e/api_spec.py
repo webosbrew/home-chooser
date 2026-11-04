@@ -133,7 +133,7 @@ def launcher_methods():
     return list(perm['grants']) + list(perm['notNeededFor'])
 
 
-ICON_MAX_BYTES = 262144  # service/src/apps.h
+ICON_MAX_BYTES = 1048576  # service/src/apps.h
 
 
 def too_large_refusal(reply, size):
