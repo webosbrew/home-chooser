@@ -114,6 +114,16 @@ def fixture_specs():
     return ['fixture:%s.%s' % (t, w) for t in FIXTURE_TYPES for w in FIXTURE_WINDOWS]
 
 
+def has_probe_page(path):
+    """The ipk carries the page probe (probe.js and the client it needs): an --api-check web fixture built before
+    probe.js existed has the permission and the large icon but records nothing in window.__hcProbe."""
+    try:
+        names = {n.rsplit('/', 1)[-1] for n in ipk_files(path)}
+    except (OSError, ValueError):
+        return False
+    return {'probe.js', 'homechooser.js'} <= names
+
+
 def api_fixture_ipks(announce=print):
     """--api-check: the web fixtures built with requiredPermissions ["org.webosbrew.homechooser.applications"] and the
     disposable non-home app, in build/fixtures-api/ (offline, built once).  {app id: ipk}."""
@@ -124,7 +134,8 @@ def api_fixture_ipks(announce=print):
             info = ipk_appinfo(g[-1]) if g and ident != DISPOSABLE_ID else {}
             if g and (ident == DISPOSABLE_ID or (
                     API_GROUP in info.get('requiredPermissions', [])
-                    and info.get('largeIcon') == 'oversize.png')):
+                    and info.get('largeIcon') == 'oversize.png'
+                    and has_probe_page(g[-1]))):
                 out[ident] = g[-1]
         return out
     have = found()

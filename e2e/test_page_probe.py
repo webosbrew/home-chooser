@@ -3,13 +3,16 @@
 """Offline tests of hc_e2e.page_probe: the verdict on what the launcher page recorded from its own
 listRunning, getForegroundApp and getAppLifeEvents subscriptions."""
 import copy
+import io
 import json
 import os
 import sys
+import tarfile
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from hc_e2e import page_probe  # noqa: E402
+from hc_e2e import launchers, page_probe  # noqa: E402
 
 APP = 'org.webosbrew.hcfixture.disposable'
 
@@ -88,6 +91,30 @@ class PageProbeTest(unittest.TestCase):
             if r.get('appId'):
                 r['appId'] = 'other'
         self.assertTrue(any('no launch event' in p for p in page_probe.probe_problems(d, APP)))
+
+
+def fake_ipk(path, files):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as t:
+        for n in files:
+            ti = tarfile.TarInfo('./usr/palm/applications/x/' + n)
+            ti.size = 1
+            t.addfile(ti, io.BytesIO(b'x'))
+    d = buf.getvalue()
+    with open(path, 'wb') as f:
+        f.write(b'!<arch>\n' + b'data.tar.gz/'.ljust(16) + b'0'.ljust(12) + b'0'.ljust(6) + b'0'.ljust(6)
+                + b'100644'.ljust(8) + str(len(d)).encode().ljust(10) + b'`\n' + d + (b'\n' if len(d) & 1 else b''))
+
+
+class ProbeIpkTest(unittest.TestCase):
+    def test_stale_api_build_without_probe_is_not_current(self):
+        with tempfile.TemporaryDirectory() as d:
+            old, new = os.path.join(d, 'old.ipk'), os.path.join(d, 'new.ipk')
+            fake_ipk(old, ['index.html', 'appinfo.json'])
+            fake_ipk(new, ['index.html', 'appinfo.json', 'homechooser.js', 'probe.js'])
+            self.assertFalse(launchers.has_probe_page(old))
+            self.assertTrue(launchers.has_probe_page(new))
+            self.assertFalse(launchers.has_probe_page(os.path.join(d, 'missing.ipk')))
 
 
 if __name__ == '__main__':
