@@ -1228,6 +1228,15 @@ class Luna(unittest.TestCase):
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, data='not-base64')))
 
+    def test_too_large_icon_refusal_is_a_valid_answer_for_a_big_file(self):
+        refused = {'returnValue': False, 'errorCode': 'iconTooLarge', 'apiVersion': 3}
+        tl = hc_e2e.api_spec.too_large_refusal
+        self.assertTrue(tl(refused, 307678))
+        self.assertFalse(tl(refused, 172), 'a small file must not be refused')
+        self.assertFalse(tl(refused, None), 'size unknown')
+        self.assertFalse(tl(dict(refused, errorCode='noIcon'), 307678))
+        self.assertFalse(tl({'returnValue': True, 'apiVersion': 3}, 307678))
+
     def test_refusals(self):
         self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': 'noPermission'}))
         self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': -1, 'errorText': 'Denied method call'}))
@@ -3325,6 +3334,42 @@ class ApiModes(unittest.TestCase):
             with patch.object(sys, 'argv', ['runner', '--device', 'tv'] + argv), patch.object(hc_e2e.cli, 'run_device_api', fake):
                 hc_e2e.cli.main()
             self.assertEqual(seen['api'], api)
+
+
+class DeviceKitPath(unittest.TestCase):
+    """--device (the author's compatibility kit): plain ares by default, Beanjar only by the maintainer's env var."""
+
+    def env(self, **kw):
+        from unittest.mock import patch
+        return patch.dict(os.environ, kw, clear=False)
+
+    def test_plain_by_default(self):
+        import hc_e2e.device_api as da
+        with self.env(**{da.VIA_BEANJAR_ENV: ''}):
+            d = da.device_for('my-tv')
+        self.assertFalse(d.beanjar)
+        self.assertEqual(d.argv('install', ['-l']), ['ares-install', '-d', 'my-tv', '-l'])
+
+    def test_maintainer_env_goes_through_beanjar(self):
+        import hc_e2e.device_api as da
+        with self.env(**{da.VIA_BEANJAR_ENV: '1'}):
+            d = da.device_for('pi/w24g-ombre')
+        self.assertEqual(d.argv('launch', ['a.b']), ['beanjar', 'ares-launch', '-d', 'pi/w24g-ombre', 'a.b'])
+        self.assertEqual(d.argv('do', ['key'], root=True), ['beanjar', 'ares-do', '--root', '-d', 'pi/w24g-ombre', 'key'])
+
+    def test_missing_tools_are_named(self):
+        import hc_e2e.device_api as da
+        from unittest.mock import patch
+        with self.env(**{da.VIA_BEANJAR_ENV: ''}), patch('shutil.which', lambda t: None if t == 'ares-novacom' else '/x/' + t):
+            self.assertEqual(da.missing_tools(), ['ares-novacom'])
+        with self.env(**{da.VIA_BEANJAR_ENV: '1'}), patch('shutil.which', lambda t: None):
+            self.assertEqual(len(da.missing_tools()), 1)
+            self.assertIn('beanjar', da.missing_tools()[0])
+
+    def test_result_dir_is_one_name(self):
+        import hc_e2e.device_api as da
+        self.assertEqual(da.result_dir_name('pi/w24g-ombre'), 'pi-w24g-ombre')
+        self.assertEqual(da.result_dir_name('my-tv'), 'my-tv')
 
 
 class PanelOpen(unittest.TestCase):

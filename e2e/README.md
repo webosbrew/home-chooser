@@ -80,6 +80,21 @@ The output is `e2e/results/<device>-<timestamp>/results.json` and `run.log`.
 on `PATH`. The root ares name must support `ares-do exec` and the web inspector forward. See
 [Testing your launcher](../docs/launcher-api.md#testing-your-launcher) for manual calls.
 
+### Maintainer: the author kit on a Beanjar VM
+
+Our test TVs are Beanjar VMs, which have no plain ares device entry. Setting
+`HC_E2E_ARES_VIA_BEANJAR=1` makes `--device` take a Beanjar target (`[HOST/]NAME`) and send every call
+through `beanjar ares-TOOL [--root] -d TARGET` (the `Device` class's VM form); nothing else changes, and an
+author never sets it. The VM must already have the `hbchannel` layer, Home Chooser installed and LG Home
+chosen. The result directory is `e2e/results/HOST-NAME-<timestamp>/`.
+
+```sh
+HC_E2E_ARES_VIA_BEANJAR=1 python3 -I e2e/homechooser_e2e.py --device pi/w24g-ombre --api-check \
+  --launcher org.webosbrew.hcfixture.web.normal \
+  --launcher-ipk build/fixtures-api/org.webosbrew.hcfixture.web.normal_1.0.0_all.ipk \
+  --hc-ipk <home chooser ipk, only if it is not installed>
+```
+
 ## Maintainer VM scenario
 
 This mode runs the full Home-key lifecycle on one Beanjar VM. It needs the maintainer's Beanjar

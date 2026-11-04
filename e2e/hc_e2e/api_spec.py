@@ -133,6 +133,16 @@ def launcher_methods():
     return list(perm['grants']) + list(perm['notNeededFor'])
 
 
+ICON_MAX_BYTES = 262144  # service/src/apps.h
+
+
+def too_large_refusal(reply, size):
+    """True when `reply` is the documented iconTooLarge refusal and the icon file (`size` bytes, None when not
+    known) really is over the limit: a launcher whose own icon is that big is refused, which is correct."""
+    return (api_refused(reply) and reply.get('errorCode') == 'iconTooLarge' and reply.get('apiVersion') == API_VERSION
+            and isinstance(size, int) and size > ICON_MAX_BYTES)
+
+
 def api_refused(reply):
     """A refusal: a JSON reply with returnValue false (the service's errorCode, or the hub's denial)."""
     return isinstance(reply, dict) and reply.get('returnValue') is False
