@@ -814,9 +814,14 @@ means not checked on that release, not that it fails there.
 | `getInfo`, `listApps`, `listLaunchPoints`, `listInputs`, `closeApp`, `uninstallApp` from a launcher page, no reboot | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `listApps {subscribe}` from a launcher page: a reply on install and on removal | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
-| `listRunning {subscribe}`, `getForegroundApp {subscribe}` | untested | untested | untested | untested | untested | untested | untested | untested |
+| `listRunning {subscribe}`, `getForegroundApp {subscribe}`, `getAppLifeEvents {subscribe}` from a launcher page: an acknowledgement, then replies for an app's launch and close | untested | untested | untested | untested | verified (9.x) | untested | verified (11.x) | untested |
 | Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
+
+The three subscriptions in the row above were held by a launcher page through `homechooser.js`, with the
+page's own bus permissions, while a disposable app was opened and closed: each acknowledged with
+`subscribed: true`, `listRunning` listed the app and then dropped it, `getForegroundApp` named it and then
+changed, and `getAppLifeEvents` sent its launch and close.
 
 The level 3 additions are covered by the offline contract and subscription tests, and were run
 through Home Chooser's service on 9.x and 11.2.0 "as the app": `luna-send -a <launcher id>`, which

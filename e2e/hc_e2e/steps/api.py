@@ -226,6 +226,7 @@ class ApiSteps:
             self.stream_check('selected')
         finally:
             self.stream_end()
+        self.page_probe_step('selected')
         if getattr(self.a, 'uninstall_via', 'later') == 'alert':
             self.api_uninstall_cancel()
             self.api_uninstall_confirm()
@@ -484,6 +485,7 @@ class ApiSteps:
             self.stream_check('selected')
         finally:
             self.stream_end()
+        self.page_probe_step('selected')
         # The native fixture is optional; use it where a package was built and remove it afterward.
         native = sorted(glob.glob(os.path.join(FIXTURE_DIR, FIXTURE_ID % ('native', 'normal') + '_*.ipk')))
         if native and self.major == 9 and not getattr(self.a, 'device', None):

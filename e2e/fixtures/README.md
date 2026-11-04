@@ -64,6 +64,9 @@ needs none to stay registered with sam and WAM. `build.sh` sets the body class p
 `requiredPermissions: ["org.webosbrew.homechooser.applications"]`, the launcher API's opt-in (`docs/launcher-api.md`); the runner's
 web fixture also declares a valid oversized `largeIcon` to check `getAppIcon`'s `iconTooLarge` reply.
 `--api-check` builds them so into `build/fixtures-api/`, apart from the plain ones.
+That build also loads `homechooser.js` and `web/probe.js`, which holds `listRunning`, `getForegroundApp` and
+`getAppLifeEvents` subscriptions and keeps the replies in `window.__hcProbe`; the runner reads it through the web
+inspector while it launches and closes the disposable app (`hc_e2e/page_probe.py`). The plain fixtures stay inert.
 
 ## web.demo
 
