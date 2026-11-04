@@ -2782,6 +2782,8 @@ class HostInput(unittest.TestCase):
                     stack.enter_context(patch.object(hc_e2e.cli, 'make_launcher', return_value=SimpleNamespace(spec='test', id='test')))
                     # no build/ipk in a clean checkout: current_home_chooser_ipk would run npm
                     stack.enter_context(patch.object(hc_e2e.cli, 'current_home_chooser_ipk', return_value='/fake/hc.ipk'))
+                    # learn_country reads the TV's settings over ares, which a CI runner doesn't have
+                    stack.enter_context(patch.object(hc_e2e.mitm, 'learn_country', return_value=None))
                     stack.enter_context(patch.object(hc_e2e.beanjar.BeanjarHost, 'from_config', return_value=host))
                     stack.enter_context(patch.object(hc_e2e.cli, 'Recorder', return_value=rec))
                     stack.enter_context(patch.object(hc_e2e.cli, 'Scenario', return_value=scenario))
