@@ -1,0 +1,142 @@
+name: Build
+
+# Offline tests, then the release ipk. A pushed v* tag also makes a draft GitHub release.
+# Docs: docs/build.md ("Releasing").
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  NODE_VERSION: 24.20.0
+  # webOS Homebrew native toolchain (Buildroot 2025.02.1, GCC 14.2.0), Linux x86_64.
+  # Released by openlgtv/buildroot-nc4 the way hyperion-webos and PicCap pin it: URL plus SHA-256.
+  TOOLCHAIN_URL: https://github.com/openlgtv/buildroot-nc4/releases/download/webos-a38c582/arm-webos-linux-gnueabi_sdk-buildroot-x86_64.tar.gz
+  TOOLCHAIN_SHA256: 04ad3311b48b4557a7002aef56ae2e167478e8e129f37daac04649bddf813616
+  # webOS CLI (Rust port) for ares-package.
+  ARES_URL: https://github.com/webosbrew/ares-cli-rs/releases/download/v0.7.0/ares-cli-rs-v0.7.0-linux-x86_64.tar.gz
+  ARES_SHA256: be49153274939dba1ba180940144e3b1265911538a013c4c17342c6bc41fc5fc
+
+jobs:
+  test:
+    name: Offline tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Service and launcher API tests
+        run: |
+          cmake -S service/test -B build/service-host -DQEMU_TESTS=OFF
+          cmake --build build/service-host
+          ctest --test-dir build/service-host --output-on-failure
+
+      - name: App lint and tests
+        working-directory: app
+        run: |
+          npm ci
+          npm run lint
+          CI=true npm test
+
+      - name: End-to-end runner tests
+        run: python3 -I -m unittest discover -s e2e -p 'test_*.py'
+
+  build:
+    name: Build ipk
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(node -p "require('./app/package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match app/package.json version ${version} (expected v${version})"
+            exit 1
+          fi
+
+      - name: Install the webOS native toolchain
+        run: |
+          mkdir -p "${RUNNER_TEMP}/toolchain"
+          curl -fsSL -o "${RUNNER_TEMP}/toolchain.tar.gz" "${TOOLCHAIN_URL}"
+          echo "${TOOLCHAIN_SHA256}  ${RUNNER_TEMP}/toolchain.tar.gz" | sha256sum -c -
+          tar xzf "${RUNNER_TEMP}/toolchain.tar.gz" -C "${RUNNER_TEMP}/toolchain"
+          sdk="${RUNNER_TEMP}/toolchain/arm-webos-linux-gnueabi_sdk-buildroot"
+          (cd "${sdk}" && ./relocate-sdk.sh)
+          echo "SDK=${sdk}" >> "${GITHUB_ENV}"
+
+      - name: Install the webOS CLI
+        run: |
+          mkdir -p "${RUNNER_TEMP}/ares"
+          curl -fsSL -o "${RUNNER_TEMP}/ares.tar.gz" "${ARES_URL}"
+          echo "${ARES_SHA256}  ${RUNNER_TEMP}/ares.tar.gz" | sha256sum -c -
+          tar xzf "${RUNNER_TEMP}/ares.tar.gz" -C "${RUNNER_TEMP}/ares" --strip-components=1
+          echo "${RUNNER_TEMP}/ares" >> "${GITHUB_PATH}"
+
+      - name: Build the ipk
+        working-directory: app
+        run: |
+          npm ci
+          npm run package
+
+      - name: Create the release manifest
+        working-directory: app
+        run: npm run release-manifest
+
+      - name: Upload the ipk and manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: homechooser-release
+          path: |
+            build/ipk/*.ipk
+            build/ipk/*.manifest.json
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: homechooser-release
+          path: release
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l release
+          gh release create "${GITHUB_REF_NAME}" release/*.ipk release/*.manifest.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --draft \
+            --title "Home Chooser ${GITHUB_REF_NAME#v}" \
+            --notes "Draft built from ${GITHUB_SHA}. See CHANGELOG.md for the changes."
