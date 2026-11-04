@@ -371,6 +371,8 @@ def runner_command(args, rest):
             argv += ['--uninstall-via', args.uninstall_via]
         if getattr(args, 'update_offer', None):
             argv += ['--update-offer', args.update_offer]
+        if getattr(args, 'country_reply', None):
+            argv += ['--country-reply', args.country_reply]
         if args.launcher_update_check:
             argv.append('--launcher-update-check')
         return argv + rest
@@ -419,6 +421,8 @@ def main(argv=None, lister=None, busy=None):
                     help='passed to every run')
     ap.add_argument('--update-offer', choices=['off', 'keep'], default=None,
                     help="passed to every run (their default: off, LG's update check answered 'no new version' by the VM's mitmweb)")
+    ap.add_argument('--country-reply', choices=['off', 'keep'], default=None,
+                    help="passed to every run (their default: off, the initservices reply carries the TV's own country)")
     ap.add_argument('--uninstall-via', choices=['later', 'alert'], default=None, help='passed to every run')
     ap.add_argument('--launcher-update-check', action='store_true', help='passed to every run')
     args, rest = ap.parse_known_args(argv)

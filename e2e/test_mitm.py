@@ -50,6 +50,70 @@ class Reply(unittest.TestCase):
         self.assertEqual(re.sub(regex, lambda _: 'X', 'PGE+\nPGI+', flags=re.DOTALL), 'X')
 
 
+class Country(unittest.TestCase):
+    BODY = ('{"initServices":{"services":{"clientIP":"1.2.3.4","country":{"code":"JP","ricCode":"AIC",'
+            '"threecode":"JPN"},"enableCBSPolicy":"N","eulaList":{"x":"_us_"}}}}')
+
+    def apply(self, body, specs):
+        for spec in specs:
+            flt, regex, repl = spec[1:].split(spec[0], 2)
+            body = re.sub(regex, lambda _: repl, body, flags=re.DOTALL)  # mitmproxy: literal
+        return body
+
+    def test_only_the_country_object_changes(self):
+        out = self.apply(self.BODY, mitm.country_specs('US', 'USA'))
+        self.assertEqual(out, self.BODY.replace('"JP"', '"US"').replace('"JPN"', '"USA"'))
+        self.assertIn('"ricCode":"AIC"', out)
+        self.assertEqual(json.loads(out)['initServices']['services']['country'],
+                         {'code': 'US', 'ricCode': 'AIC', 'threecode': 'USA'})
+
+    # 8.x (W22O 13.30.56, /rest/sdp/v14.0/initservices): pretty-printed, threecode before ricCode
+    BODY8 = ('{\n  "initServices" : {\n    "services" : {\n      "country" : {\n        "code" : "JP",\n'
+             '        "threecode" : "JPN",\n        "ricCode" : "AIC"\n      },\n      "x" : {"code" : "JP"}\n'
+             '    }\n  }\n}')
+
+    def test_pretty_printed_reply_with_other_field_order(self):
+        out = self.apply(self.BODY8, mitm.country_specs('US', 'USA'))
+        self.assertEqual(out, self.BODY8.replace('"JP",\n        "threecode" : "JPN"',
+                                                 '"US",\n        "threecode" : "USA"'))
+        self.assertEqual(json.loads(out)['initServices']['services']['country'],
+                         {'code': 'US', 'ricCode': 'AIC', 'threecode': 'USA'})
+        self.assertEqual(json.loads(out)['initServices']['services']['x'], {'code': 'JP'})
+
+    def test_rules_are_response_of_initservices_only(self):
+        for spec in mitm.country_specs('US', 'USA'):
+            self.assertEqual(spec[1:].split(spec[0], 2)[0], '~s & ~u initservices')
+            self.assertNotIn(spec[0], spec[1:].split(spec[0], 2)[1] + spec[1:].split(spec[0], 2)[2][-3:])
+
+    def test_other_bodies_are_untouched(self):
+        other = '{"foo":{"code":"JP"},"bar":"threecode"}'
+        self.assertEqual(self.apply(other, mitm.country_specs('US', 'USA')), other)
+
+    def test_bad_country_gives_no_rule(self):
+        for a, b in (('us', 'USA'), ('US', 'US'), ('', ''), (None, None), ('U|', 'USA')):
+            self.assertIsNone(mitm.country_specs(a, b))
+
+    def test_cache_round_trip_and_unknown(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(mitm.load_country('pi', 'v', d))
+            mitm.save_country('pi', 'v', 'US', 'USA', d)
+            self.assertEqual(mitm.load_country('pi', 'v', d), ('US', 'USA'))
+            self.assertIsNone(mitm.load_country('rockpi4a-1', 'v', d))
+
+    def test_read_country(self):
+        class Dev:
+            def __init__(self, out):
+                self.out = out
+
+            def luna(self, uri, payload='{}'):
+                return self.out
+        ok = '{"returnValue":true,"settings":{"smartServiceCountryCode2":"US","smartServiceCountryCode3":"USA"}}'
+        self.assertEqual(mitm.read_country(Dev(ok)), ('US', 'USA'))
+        self.assertIsNone(mitm.read_country(Dev('{"returnValue":false}')))
+        self.assertIsNone(mitm.read_country(Dev('garbage')))
+
+
 class FakeInspector:
     log = []
     early = []
@@ -113,6 +177,28 @@ class Turn(unittest.TestCase):
         self.assertFalse(self.run_it())
         self.assertIn('did not keep', ' '.join(self.said))
 
+    def test_country_rules_join_the_update_rule_in_one_list(self):
+        import tempfile
+        orig = mitm.COUNTRY_DIR
+        with tempfile.TemporaryDirectory() as d:
+            mitm.COUNTRY_DIR = d
+            try:
+                self.assertTrue(self.run_it())  # country not known: only the update rule, and it is said
+                self.assertEqual(FakeInspector.log[1], ('set', 'modify_body', [mitm.modify_body_spec(FW)]))
+                self.assertIn('not known yet', ' '.join(self.said))
+                mitm.save_country('pi', 'w22o-ponytail-us', 'US', 'USA')
+                FakeInspector.log.clear()
+                self.assertTrue(self.run_it())
+                self.assertEqual(FakeInspector.log[1][2],
+                                 [mitm.modify_body_spec(FW)] + mitm.country_specs('US', 'USA'))
+                self.assertIn('country US/USA', ' '.join(self.said))
+                FakeInspector.log.clear()  # the country rule alone
+                self.assertTrue(mitm.turn_off_update_offer(FakeHost(), 'w22o-ponytail-us', self.said.append,
+                                                           FakeInspector, update=False))
+                self.assertEqual(FakeInspector.log[1][2], mitm.country_specs('US', 'USA'))
+            finally:
+                mitm.COUNTRY_DIR = orig
+
     def test_unknown_firmware_name_touches_nothing(self):
         self.assertFalse(self.run_it(FakeHost('weird')))
         self.assertEqual(FakeInspector.log, [])
@@ -133,10 +219,15 @@ class Wiring(unittest.TestCase):
         self.assertEqual(ap.parse_args(['--vm', '10.x']).update_offer, 'off')
         self.assertEqual(ap.parse_args(['--vm', '10.x', '--update-offer', 'keep']).update_offer, 'keep')
 
+    def test_country_reply_default_is_off_and_keep_exists(self):
+        ap = hc_e2e.cli.build_parser()
+        self.assertEqual(ap.parse_args(['--vm', '10.x']).country_reply, 'off')
+        self.assertEqual(ap.parse_args(['--vm', '10.x', '--country-reply', 'keep']).country_reply, 'keep')
+
     def test_host_start_sets_the_rule_only_when_off(self):
         calls = []
         orig = mitm.turn_off_update_offer
-        mitm.turn_off_update_offer = lambda host, vm, say: calls.append(vm)
+        mitm.turn_off_update_offer = lambda host, vm, say, update=True, country=True: calls.append(vm)
         try:
             for mode, expect in (('off', ['v']), ('keep', [])):
                 calls.clear()
