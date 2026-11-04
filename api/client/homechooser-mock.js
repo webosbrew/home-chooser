@@ -48,7 +48,7 @@
 			"badRequest": "id is missing or not an app id, getAppIcon.size is invalid, getIcons.items is not 1 to 64 valid items, or getAppLifeEvents was called without subscribe: true.",
 			"notFound": "A target lookup reports absence, or SAM's ambiguous refusal is resolved against the installed app list and the id is absent.",
 			"noIcon": "getAppIcon: no readable icon from the requested appinfo field inside that app's folder.",
-			"iconTooLarge": "getAppIcon: the icon exceeds 262144 bytes.",
+			"iconTooLarge": "getAppIcon: the icon exceeds 1048576 bytes.",
 			"protected": "uninstallApp: target is Home Chooser, Homebrew Channel or the caller.",
 			"notRemovable": "uninstallApp: target is marked removable:false or outside the user app folders (system apps are).",
 			"confirmFailed": "uninstallApp: the owner could not be asked.",

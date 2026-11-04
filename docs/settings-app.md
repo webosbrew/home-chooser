@@ -49,7 +49,7 @@ Home Chooser is in English only.
 * **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon
-  is read by the service (`readIcon`, at most 256 KB, once per session) and shown as a `data:` URL; a generic
+  is read by the service (`readIcon`, at most 1 MiB, once per session) and shown as a `data:` URL; a generic
   icon stands in when that fails.
 
 ## Root access
