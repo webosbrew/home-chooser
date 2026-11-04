@@ -99,6 +99,39 @@ If the package and its watcher are both absent, the volatile filter still refere
 file outside the package; reboot resets it to firmware defaults without a recovery executable.
 An active watcher handles normal uninstall immediately.
 
+## Configd puts the stock list back
+
+A volatile `setConfigs` value lives in configd's memory next to its layered configuration. When configd
+re-selects its layers (log line `Broadcast Profile default ==> tunerless_exception: selection is changed`),
+it can insert the firmware's own keyFilters list again and the volatile entry is gone. Seen once, on a W22O
+VM's first boot after a simulated 7.4.0 to 8.3.0 firmware update: the watcher had applied the filter about 25 s
+after boot, configd re-selected about 6 s later, and the live list was stock for the rest of the boot
+(`homechooser-homekey status` said `active=no`, the settings app said the Home button was not set up).
+The mounted home gate still opened the launcher. Nothing in the 218 "active=yes after the boot" checks of
+the saved matrix runs (55 runs, 6-9 VMs) shows it on an ordinary boot, but those runs keep no guest
+`/var/log/messages`, so whether an ordinary boot never re-selects is not established.
+
+Before this, the watcher learned of the live list only when it applied it: at boot, on a settings or
+app-list event that left `baked` unset or different, and never again once `baked` named the choice.
+
+The watcher now subscribes to `getConfigs` for the keyFilters config (`subscribe:true`, configd's schema
+accepts it; the compositor's own reload relies on the same change notification) on 6-9, and every reply
+goes to `key_follow` ([restore.c](../service/src/watcher/restore.c)). The 300 s ticker polls the same
+config as a fallback for a lost subscription or a change configd does not announce. `key_follow` acts only when
+all of these hold:
+
+- the filter is believed baked (`baked` is set: the last refresh made `active=yes`), and the stored choice is still that app;
+- the reply is a list with a stock `systemUi.js` entry and none of ours (an error, an empty or foreign
+  list, or our own file is left alone, so the echo of our own write does nothing);
+- fewer than 5 re-applies in the last 10 minutes and the last was 20 s or more ago. A configd that keeps
+  re-inserting gets one log line and is left alone until the quiet period or the next boot.
+
+It then runs the ordinary `refresh`, which is the same volatile, read-back-verified transaction as at boot (stock
+list saved again, a new `systemUi-*.js`), and re-syncs the gate. A stock list that is stock on purpose is never
+touched: a failed or refused refresh, a disabled hook, an unknown stock shape, a missing app or no choice all
+leave `baked` unset (or the choice different), so the stock list stays and the gate stays unmounted. No service
+is restarted, nothing is written to configd's factory database, and webOS 5 and 10+ do not subscribe.
+
 ## Status and tests
 
 `active=yes` means that configd selects a Home Chooser JS version; `active=no` means it does not.

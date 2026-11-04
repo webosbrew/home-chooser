@@ -30,12 +30,13 @@ HCWatchConfig hc_watch_config(void);
 HCWatch *hc_watch_new(const HCWatchConfig *config, const HCWatchOps *ops);
 void hc_watch_free(HCWatch *watch);
 void hc_watch_start(HCWatch *watch);
-/* S/A/T/F/L/B: settings/apps/ticker/foreground/life/preload-ready. Lowercase
+/* S/A/T/F/L/B/K: settings/apps/ticker/foreground/life/preload-ready/keyFilters config. Lowercase
  * subscription tag means transport ended. Settings loss is fatal, others degrade. */
 void hc_watch_event(HCWatch *watch, char tag, const char *text);
 void hc_watch_stop(HCWatch *watch, int status, const char *reason);
 int hc_watch_status(HCWatch *watch); /* -1 while running */
 gboolean hc_watch_idle(HCWatch *watch);
+gboolean hc_watch_keys(HCWatch *watch); /* TRUE on 6-9: the keyFilters config subscription is wanted */
 int hc_watcher_main(void);
 /* Configurable paths for offline integration tests; production always uses defaults. */
 int hc_watch_run(const HCWatchConfig *config, gboolean boot);

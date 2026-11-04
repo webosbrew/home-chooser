@@ -157,14 +157,17 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
      * watcher shutdown starts only after boot apply, as with the former exec. */
     for (unsigned i = 0; i < G_N_ELEMENTS(signals); i++) sigaction(signals[i], &action, &previous[i]);
     if (hc_watch_status(r.watch) < 0) hc_watch_start(r.watch);
-    Feed feeds[] = {{&r, 'S', NULL}, {&r, 'A', NULL}, {&r, 'F', NULL}, {&r, 'L', NULL}};
-    const char *uris[] = {SETTINGS "getSystemSettings", SAM "listApps", SAM "getForegroundAppInfo", SAM "getAppLifeEvents"};
+    Feed feeds[] = {{&r, 'S', NULL}, {&r, 'A', NULL}, {&r, 'F', NULL}, {&r, 'L', NULL}, {&r, 'K', NULL}};
+    const char *uris[] = {SETTINGS "getSystemSettings", SAM "listApps", SAM "getForegroundAppInfo", SAM "getAppLifeEvents",
+        "luna://com.webos.service.config/getConfigs"};
     const char *payloads[] = {"{\"category\":\"general\",\"keys\":[\"defaultApps\"],\"subscribe\":true}",
-        "{\"subscribe\":true}", "{\"subscribe\":true}", "{\"subscribe\":true}"};
+        "{\"subscribe\":true}", "{\"subscribe\":true}", "{\"subscribe\":true}",
+        "{\"configNames\":[\"com.webos.surfacemanager.keyFilters\"],\"subscribe\":true}"};
     guint tick = 0;
     if (hc_watch_status(r.watch) < 0) {
         /* Every release: the previous-launcher close follows the foreground and life events (previous.c). */
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
+            if (feeds[i].tag == 'K' && !hc_watch_keys(r.watch)) continue; /* 6-9 only */
             feeds[i].subscription = hc_luna_subscribe(r.luna, uris[i], payloads[i], subscription, &feeds[i]);
             if (!feeds[i].subscription) enqueue(&r, g_ascii_tolower(feeds[i].tag), NULL);
         }
