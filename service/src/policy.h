@@ -124,10 +124,16 @@ extern const char *const hc_launch_point_fields[];
 extern const char *const hc_life_event_fields[];
 /* The directory eim's input icons (iconPrefix + icon) are read from. */
 #define HC_INPUT_ICON_DIR "/usr/palm/plugins/inputapps/assets"
+/* The browser's favicon cache, where the icon of a website pinned to Home lies (webOS 11, verified), and
+ * the app that owns those launch points. */
+#define HC_BOOKMARK_ICON_DIR "/mnt/lg/cache/webbrowser/chrome/Default/favicon"
+#define HC_BOOKMARK_APP_ID "com.webos.app.browser"
 /* A launch point icon: an absolute image path whose real path lies in the launch point's own app
  * folder under a known application root (prefixed by prefix, "" on the device). Rejects "..",
- * symlink escapes and other directories (bookmark icons, until their directory is verified). */
-bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *path, char *out, size_t outlen);
+ * symlink escapes and other directories. A bookmark launch point (lptype "bookmark", pinned by LG's
+ * browser, app HC_BOOKMARK_APP_ID) may in addition use a file inside prefix + HC_BOOKMARK_ICON_DIR. */
+bool hc_launch_point_icon_resolve(const char *prefix, const char *app_id, const char *lptype, const char *path,
+	char *out, size_t outlen);
 /* An input icon: an absolute image path whose real path lies in prefix + HC_INPUT_ICON_DIR. */
 bool hc_input_icon_resolve(const char *prefix, const char *path, char *out, size_t outlen);
 

@@ -361,8 +361,9 @@
 				"byteLength": 8
 			},
 			"launchPointId:com.webos.app.browser_bookmark1": {
-				"errorCode": "noIcon",
-				"errorText": "No readable icon of the requested size"
+				"mimeType": "image/jpeg",
+				"dataUrl": "data:image/jpeg;base64,/9j/4A==",
+				"byteLength": 4
 			}
 		},
 		"lifeEvents": [

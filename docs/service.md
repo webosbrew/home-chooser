@@ -368,8 +368,11 @@ absolute path; it must resolve (`realpath`, no `..`, image extension) inside
 `/media/developer/apps/usr/palm/applications` (5.6.1: SAM joins the app folder into launch point
 icons, `/mnt/otncabi/usr/palm/applications/netflix/icon.png`). An input icon is eim's
 `iconPrefix + icon` and must resolve under `/usr/palm/plugins/inputapps/assets` (5.6.1 device; the
-directory exists on 6.6.0, 7.6.0 and 11.2.0 roots). Browser bookmark icons are not read until their
-directory is verified on a device.
+directory exists on 6.6.0, 7.6.0 and 11.2.0 roots). A bookmark launch point (`lptype` `bookmark`, app
+`com.webos.app.browser`) has its icon in the browser's favicon cache, and that directory is allowed for
+it alone: `/mnt/lg/cache/webbrowser/chrome/Default/favicon/<number>.jpg` (11.x device: a JPEG, 0644
+owned by the browser's user, in a directory the browser's user can write, which is why the real path is
+checked). Its `favicon` field is a generic browser asset and is not forwarded.
 
 ## Allow-lists
 

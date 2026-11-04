@@ -194,7 +194,7 @@ static void test_fixed_icon_dirs(void)
 	CHECK(mkdtemp(root) != NULL);
 	CHECK(realpath(root, prefix) != NULL);
 	const char *const dirs[] = {"/mnt/otncabi/usr/palm/applications/netflix", "/mnt/otncabi/usr/palm/applications/other",
-		"/usr/palm/plugins/inputapps/assets/small", "/tmp", NULL};
+		"/usr/palm/plugins/inputapps/assets/small", "/mnt/lg/cache/webbrowser/chrome/Default/favicon", "/tmp", NULL};
 	for (int i = 0; dirs[i]; i++) {
 		char d[1200], *slash;
 		snprintf(d, sizeof d, "%s%s", prefix, dirs[i]);
@@ -202,7 +202,8 @@ static void test_fixed_icon_dirs(void)
 		CHECK(mkdir(d, 0700) == 0);
 	}
 	const char *const files[] = {"/mnt/otncabi/usr/palm/applications/netflix/icon.png", "/mnt/otncabi/usr/palm/applications/netflix/notes.txt",
-		"/mnt/otncabi/usr/palm/applications/other/icon.png", "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png", "/tmp/x.png", NULL};
+		"/mnt/otncabi/usr/palm/applications/other/icon.png", "/usr/palm/plugins/inputapps/assets/small/HDMI_1.png", "/mnt/lg/cache/webbrowser/chrome/Default/favicon/659505974.jpg",
+		"/mnt/lg/cache/webbrowser/chrome/Default/favicon/note.txt", "/tmp/x.png", NULL};
 	for (int i = 0; files[i]; i++) {
 		snprintf(path, sizeof path, "%s%s", prefix, files[i]);
 		FILE *f = fopen(path, "w");
@@ -212,17 +213,34 @@ static void test_fixed_icon_dirs(void)
 	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/escape.png", prefix);
 	CHECK(symlink("../../../../../../tmp/x.png", path) == 0);
 	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/icon.png", prefix);
-	CHECK(hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved) && strcmp(resolved, path) == 0);
-	CHECK(!hc_launch_point_icon_resolve(prefix, "other", path, resolved, sizeof resolved));      /* another app's folder */
-	CHECK(!hc_launch_point_icon_resolve(prefix, "../x", path, resolved, sizeof resolved));       /* not an app id */
-	CHECK(!hc_launch_point_icon_resolve("", "netflix", path, resolved, sizeof resolved));       /* not under the real root */
+	CHECK(hc_launch_point_icon_resolve(prefix, "netflix", NULL, path, resolved, sizeof resolved) && strcmp(resolved, path) == 0);
+	CHECK(!hc_launch_point_icon_resolve(prefix, "other", NULL, path, resolved, sizeof resolved));      /* another app's folder */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "../x", NULL, path, resolved, sizeof resolved));       /* not an app id */
+	CHECK(!hc_launch_point_icon_resolve("", "netflix", NULL, path, resolved, sizeof resolved));       /* not under the real root */
 	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/notes.txt", prefix);
-	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* not an image */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", NULL, path, resolved, sizeof resolved));   /* not an image */
 	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/escape.png", prefix);
-	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* symlink escape */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", NULL, path, resolved, sizeof resolved));   /* symlink escape */
 	snprintf(path, sizeof path, "%s/mnt/otncabi/usr/palm/applications/netflix/../other/icon.png", prefix);
-	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", path, resolved, sizeof resolved));   /* ".." */
-	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", "icon.png", resolved, sizeof resolved)); /* relative */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", NULL, path, resolved, sizeof resolved));   /* ".." */
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", NULL, "icon.png", resolved, sizeof resolved)); /* relative */
+	/* a bookmark's icon in the browser's favicon cache */
+	const char *fav = "/mnt/lg/cache/webbrowser/chrome/Default/favicon";
+	char bpath[1200];
+	snprintf(bpath, sizeof bpath, "%s%s/659505974.jpg", prefix, fav);
+	CHECK(hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "bookmark", bpath, resolved, sizeof resolved) && strcmp(resolved, bpath) == 0);
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "default", bpath, resolved, sizeof resolved));  /* not a bookmark */
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, NULL, bpath, resolved, sizeof resolved));
+	CHECK(!hc_launch_point_icon_resolve(prefix, "netflix", "bookmark", bpath, resolved, sizeof resolved));          /* not the browser */
+	snprintf(path, sizeof path, "%s%s/note.txt", prefix, fav);
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "bookmark", path, resolved, sizeof resolved));  /* not an image */
+	snprintf(path, sizeof path, "%s/tmp/x.png", prefix);
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "bookmark", path, resolved, sizeof resolved));  /* arbitrary path */
+	snprintf(path, sizeof path, "%s%s/escape.png", prefix, fav);
+	CHECK(symlink("../../../../../../../../../tmp/x.png", path) == 0);
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "bookmark", path, resolved, sizeof resolved));  /* symlink escape */
+	snprintf(path, sizeof path, "%s%s/../favicon/659505974.jpg", prefix, fav);
+	CHECK(!hc_launch_point_icon_resolve(prefix, HC_BOOKMARK_APP_ID, "bookmark", path, resolved, sizeof resolved));  /* ".." */
 	snprintf(path, sizeof path, "%s/usr/palm/plugins/inputapps/assets/small/HDMI_1.png", prefix);
 	CHECK(hc_input_icon_resolve(prefix, path, resolved, sizeof resolved) && strcmp(resolved, path) == 0);
 	snprintf(path, sizeof path, "%s/tmp/x.png", prefix);
