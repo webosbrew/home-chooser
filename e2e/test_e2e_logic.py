@@ -3327,6 +3327,42 @@ class ApiModes(unittest.TestCase):
             self.assertEqual(seen['api'], api)
 
 
+class DeviceKitPath(unittest.TestCase):
+    """--device (the author's compatibility kit): plain ares by default, Beanjar only by the maintainer's env var."""
+
+    def env(self, **kw):
+        from unittest.mock import patch
+        return patch.dict(os.environ, kw, clear=False)
+
+    def test_plain_by_default(self):
+        import hc_e2e.device_api as da
+        with self.env(**{da.VIA_BEANJAR_ENV: ''}):
+            d = da.device_for('my-tv')
+        self.assertFalse(d.beanjar)
+        self.assertEqual(d.argv('install', ['-l']), ['ares-install', '-d', 'my-tv', '-l'])
+
+    def test_maintainer_env_goes_through_beanjar(self):
+        import hc_e2e.device_api as da
+        with self.env(**{da.VIA_BEANJAR_ENV: '1'}):
+            d = da.device_for('pi/w24g-ombre')
+        self.assertEqual(d.argv('launch', ['a.b']), ['beanjar', 'ares-launch', '-d', 'pi/w24g-ombre', 'a.b'])
+        self.assertEqual(d.argv('do', ['key'], root=True), ['beanjar', 'ares-do', '--root', '-d', 'pi/w24g-ombre', 'key'])
+
+    def test_missing_tools_are_named(self):
+        import hc_e2e.device_api as da
+        from unittest.mock import patch
+        with self.env(**{da.VIA_BEANJAR_ENV: ''}), patch('shutil.which', lambda t: None if t == 'ares-novacom' else '/x/' + t):
+            self.assertEqual(da.missing_tools(), ['ares-novacom'])
+        with self.env(**{da.VIA_BEANJAR_ENV: '1'}), patch('shutil.which', lambda t: None):
+            self.assertEqual(len(da.missing_tools()), 1)
+            self.assertIn('beanjar', da.missing_tools()[0])
+
+    def test_result_dir_is_one_name(self):
+        import hc_e2e.device_api as da
+        self.assertEqual(da.result_dir_name('pi/w24g-ombre'), 'pi-w24g-ombre')
+        self.assertEqual(da.result_dir_name('my-tv'), 'my-tv')
+
+
 class PanelOpen(unittest.TestCase):
     """Opening Home Chooser for the switch and 3u-app: in front, held, one retry, every rc logged."""
     APP = hc_e2e.constants.APP_ID

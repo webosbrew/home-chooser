@@ -16,12 +16,38 @@ from .releases import stock_baseline_ok, stock_home_id
 from .scenario import Scenario
 
 
+# Maintainer only: set to reach --device NAME through `beanjar ares-TOOL -d NAME` (NAME as Beanjar takes it,
+# [HOST/]VM) instead of plain `ares-TOOL -d NAME`.  An author never sets it; unset, nothing changes.
+VIA_BEANJAR_ENV = 'HC_E2E_ARES_VIA_BEANJAR'
+ARES_TOOLS = ('ares-install', 'ares-launch', 'ares-do', 'ares-shell', 'ares-novacom')
+
+
+def via_beanjar():
+    return os.environ.get(VIA_BEANJAR_ENV, '') not in ('', '0')
+
+
+def device_for(name):
+    return Device(name, beanjar=True) if via_beanjar() else Device.tv(name)
+
+
+def missing_tools():
+    """What the run needs from PATH and is not there: the ares tools (plain), or beanjar and its wrapper."""
+    if via_beanjar():
+        return [] if shutil.which('beanjar') else ['beanjar (%s is set)' % VIA_BEANJAR_ENV]
+    return [t for t in ARES_TOOLS if not shutil.which(t)]
+
+
+def result_dir_name(device):
+    """A device name as one directory name: a Beanjar target is HOST/NAME."""
+    return device.replace('/', '-')
+
+
 class DeviceApiScenario(Scenario):
     """API contract on an existing rooted ares device; no Beanjar or reboot operations."""
 
     def __init__(self, args, rec, launcher):
         super().__init__(args, None, rec, ('device', args.device, 'luna', 'ares', 'author TV'), launcher)
-        self.dev = Device.tv(args.device)
+        self.dev = device_for(args.device)
         self.dev.say = rec.say
         self.major, os_release = self.dev.release()
         self.rec.note('device release', os_release)
@@ -169,18 +195,19 @@ def run_device_api(args, ap):
     if args.vm or not args.api_check or args.launchers or args.update_check or args.reboot_check or args.build:
         ap.error('--device requires --api-check and cannot be combined with VM, matrix, update, reboot or build options')
     args.input = 'ares'
+    lacking = missing_tools()
+    if lacking:
+        ap.error('--device needs these on PATH: %s' % ', '.join(lacking))
     spec = args.launcher or 'fixture:web.normal'
     launcher = make_launcher(spec, args.launcher_ipk, api=True)
     args.disposable_ipk = api_fixture_ipks()[DISPOSABLE_ID]
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' %
-                                        (args.device, time.strftime('%Y%m%d-%H%M%S')))
+                                        (result_dir_name(args.device), time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
     rec = Recorder(outdir)
     rec.say('ares-only device API contract: %s; artefacts: %s' % (args.device, outdir))
     scenario = None
     try:
-        if not shutil.which('ares-do'):
-            raise RuntimeError('ares-do not on PATH')
         scenario = DeviceApiScenario(args, rec, launcher)
         scenario.run_contract()
     except Exception as error:
