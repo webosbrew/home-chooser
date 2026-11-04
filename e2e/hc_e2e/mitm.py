@@ -66,17 +66,19 @@ def modify_body_spec(fw):
 
 
 def country_specs(code2, code3):
-    """The two modify_body rules that give the initservices reply the TV's own country: only `code` and
-    `threecode` inside the reply's country object change (the groups put every other byte back, ricCode
-    included, whatever the order of the three fields and the JSON's whitespace: 12.x sends it compact with
-    ricCode in the middle, 8.x pretty-printed with threecode before ricCode, at /rest/sdp/v14.0/initservices), only in the response
-    of initservices.  None for a country that is not two and three capitals."""
+    """The two modify_body rules that give the initservices reply the TV's own country, only in the response of
+    initservices.  modify_body replaces with a literal string (no group references), so each rule matches just
+    the value, by what follows it: the two-letter `code` is the value followed by threecode or ricCode, the
+    three-letter `threecode` the one followed by the closing brace (12.x: compact, code/ricCode/threecode) or
+    by ricCode (8.x, /rest/sdp/v14.0/initservices: pretty-printed, code/threecode/ricCode, where ricCode is
+    followed by whitespace and the brace and so is left alone).  Everything else, ricCode included, stays as
+    LG sent it.  None for a country that is not two and three capitals."""
     if not (re.fullmatch(r'[A-Z]{2}', code2 or '') and re.fullmatch(r'[A-Z]{3}', code3 or '')):
         return None
     flt = '~s & ~u %s' % re.escape(INIT)
-    obj = r'("country"\s*:\s*\{[^{}]*?"%s"\s*:\s*")%s(")'
-    return ['|%s|%s|%s' % (flt, obj % ('code', '[A-Z]{2}'), r'\g<1>' + code2 + r'\g<2>'),
-            '|%s|%s|%s' % (flt, obj % ('threecode', '[A-Z]{3}'), r'\g<1>' + code3 + r'\g<2>')]
+    # '#' separates the parts: the regexes use '|' themselves
+    return ['#%s#%s#%s' % (flt, r'(?<=")[A-Z]{2}(?="\s*,\s*"(?:threecode|ricCode)"\s*:)', code2),
+            '#%s#%s#%s' % (flt, r'(?<=")[A-Z]{3}(?="(?:\}|\s*,\s*"ricCode"\s*:))', code3)]
 
 
 COUNTRY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results', 'country')

@@ -57,7 +57,7 @@ class Country(unittest.TestCase):
     def apply(self, body, specs):
         for spec in specs:
             flt, regex, repl = spec[1:].split(spec[0], 2)
-            body = re.sub(regex, repl, body, flags=re.DOTALL)
+            body = re.sub(regex, lambda _: repl, body, flags=re.DOTALL)  # mitmproxy: literal
         return body
 
     def test_only_the_country_object_changes(self):
