@@ -22,8 +22,8 @@ static const char *stock_js, *fixture_source;
 static HCWatchConfig config;
 static char *test_root, *installed_binary, *fixture_root, *program;
 static jvalue_ref record, filters;
-static int fifo[4];
-static const char *methods[]={"getSystemSettings","listApps","getForegroundAppInfo","getAppLifeEvents"};
+static int fifo[5];
+static const char *methods[]={"getSystemSettings","listApps","getForegroundAppInfo","getAppLifeEvents","getConfigs"};
 static void write_file(const char *p,const char *text) {
     char *dir=g_path_get_dirname(p);mkdir_p(dir);g_free(dir);CHECK("fixture file",g_file_set_contents(p,text,-1,NULL));
 }
@@ -199,7 +199,7 @@ static void test_runtime(int mode) {
     fixture_open(root);
     save_state(FALSE);
     config.luna_send=program;
-    runtime_case=mode;expected_subs=4;ticks=0;initial_tasks=task_count();
+    runtime_case=mode;expected_subs=mode==5?5:4; /* the fifth feed, the keyFilters config, is 6-9 only */ticks=0;initial_tasks=task_count();
     char *mapped=NULL,*copy=NULL;gsize mapped_size=0,copy_size=0;
     CHECK("W02 running image readable before unlink",g_file_get_contents("/proc/self/exe",&mapped,&mapped_size,NULL));
     guint driver=g_timeout_add(10,runtime_drive,NULL);

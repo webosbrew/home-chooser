@@ -85,7 +85,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         if (eq(method, "setConfigs")) { if (f->keylist) j_release(&f->keylist); f->keylist = jvalue_duplicate(member(member(p, "configs"), key)); }
         r = response(TRUE);
         if (eq(method, "getConfigs")) {
-            jvalue_ref configs = jobject_create(); jobject_set(configs, key_buf(key), jvalue_duplicate(f->keylist)); jobject_set(r, key_buf("configs"), configs);
+            jvalue_ref configs = jobject_create(); if (f->keylist) jobject_set(configs, key_buf(key), jvalue_duplicate(f->keylist)); jobject_set(r, key_buf("configs"), configs);
         }
     } else if (eq(method, "getSystemSettings")) {
         r = response(!f->absent_record);
@@ -964,6 +964,54 @@ static void test_previous(void) {
     f = switch_setup(7, "my.home", NULL, ""); proc_setup(f); f->home_pid = "100"; start(f);
     CHECK("P14 no change in Home Chooser: stock Home closed at mount", f->closes == 1 && !f->w->prev_hold); teardown(f);
 }
+/* K: configd re-inserts the stock keyFilters after Home Chooser baked its filter (first boot after a firmware
+ * change, 8.3.0 VM run): the filter is applied again, once per change, bounded, and never "fixed" when stock on purpose. */
+static char *key_text(Fixture *f, gboolean ours) {
+    char *file = ours ? g_strdup_printf("%s/systemUi-abc123.js", f->c.state_dir) : g_strdup("/usr/lib/qt5/qml/KeyFilters/systemUi.js");
+    char *text = g_strdup_printf("{\"returnValue\":true,\"subscribed\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":["
+        "{\"file\":\"%s\",\"handler\":\"handleKeyEvent\"},{\"file\":\"/usr/lib/qt5/qml/KeyFilters/other.js\",\"handler\":\"x\"}]}}", file);
+    g_free(file); return text;
+}
+static void test_key_follow(void) {
+    for (int major = 5; major <= 12; major++) {
+        Fixture *f = setup(major, "my.home"); start(f);
+        char *stock = key_text(f, FALSE), *mine = key_text(f, TRUE);
+        int base_calls = f->key_calls, want = major >= 6 && major <= 9;
+        event(f, 'K', mine); CHECK("K01 our own list: nothing", f->key_calls == base_calls);
+        event(f, 'K', stock);
+        CHECK("K02 stock re-inserted: applied again (6-9 only)", f->key_calls == base_calls + want);
+        /* repeated re-inserts: the gap, then the cap, never a loop */
+        event(f, 'K', stock); event(f, 'K', stock);
+        CHECK("K03 re-inserts inside the gap: not again", f->key_calls == base_calls + want);
+        for (int i = 0; i < 12; i++) { f->clock += 30; event(f, 'K', stock); }
+        CHECK("K04 capped", f->key_calls == base_calls + (want ? 5 : 0));
+        f->clock += 1000; event(f, 'K', stock);
+        CHECK("K05 quiet for long: allowed again", f->key_calls == base_calls + (want ? 6 : 0));
+        g_free(stock); g_free(mine); teardown(f);
+    }
+    /* stock on purpose: nothing baked (refresh refused, disabled, unknown shape), no choice, another choice, bad replies */
+    Fixture *f = setup(8, "my.home"); f->key_fail = 1; start(f); CHECK("K10 not baked", !f->w->baked);
+    char *stock = key_text(f, FALSE); int calls = f->key_calls;
+    event(f, 'K', stock); CHECK("K11 not baked: left stock", f->key_calls == calls); teardown(f);
+    f = setup(8, "my.home"); start(f); calls = f->key_calls;
+    choice(f, "other.home"); event(f, 'K', stock); CHECK("K12 choice changed: not this path", f->key_calls == calls);
+    unlink(f->w->choice_file); event(f, 'K', stock); CHECK("K13 no choice: left stock", f->key_calls == calls);
+    choice(f, "my.home");
+    event(f, 'K', "{\"returnValue\":false,\"errorText\":\"x\"}"); event(f, 'K', "{}"); event(f, 'K', "garbage");
+    event(f, 'K', "{\"returnValue\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":[]}}");
+    event(f, 'K', "{\"returnValue\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":[{\"file\":\"/x/y.js\",\"handler\":\"h\"}]}}");
+    CHECK("K14 unreadable or foreign lists: left alone", f->key_calls == calls);
+    event(f, 'k', NULL); CHECK("K15 subscription end degrades", hc_watch_status(f->w) == -1 && f->key_calls == calls);
+    /* the periodic check polls configd: stock found -> applied again, once */
+    f->keylist = jdom_create(key_buf("[{\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"h\"}]"), jschema_all(), NULL);
+    event(f, 'T', NULL); CHECK("K16 poll finds stock: applied again", f->key_calls == calls + 1);
+    event(f, 'T', NULL); CHECK("K17 poll again inside the gap: not again", f->key_calls == calls + 1);
+    g_free(stock); teardown(f);
+    /* a failing re-apply keeps baked (retried within the cap); an inactive result is the refresh's own business */
+    f = setup(8, "my.home"); start(f); stock = key_text(f, FALSE); calls = f->key_calls; f->key_fail = 1;
+    event(f, 'K', stock); CHECK("K18 failed re-apply tried once", f->key_calls == calls + 1 && eq(f->w->baked, "my.home"));
+    g_free(stock); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -976,6 +1024,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_key_follow(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

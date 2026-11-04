@@ -39,6 +39,52 @@ void sync_baked(HCWatch *w, const char *id)
     if (eq(w->baked, id) || app_state(w, id) != 1) return;
     if (!key_refresh(w, FALSE)) { g_free(w->baked); w->baked = g_strdup(id); }
 }
+#define KEY_CONFIG "com.webos.surfacemanager.keyFilters"
+#define KEY_GET "luna://com.webos.service.config/getConfigs"
+#define KEY_REAPPLY_GAP_S 20
+#define KEY_REAPPLY_MAX 5
+#define KEY_QUIET_S 600
+/* TRUE only for a list that plainly is the firmware's own: a stock systemUi entry and none of ours. Anything
+ * else (no list, an error reply, our file present, no systemUi entry) is not a change to put right. */
+static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
+{
+    jvalue_ref list = member(member(reply, "configs"), KEY_CONFIG);
+    if (!jis_array(list)) return FALSE;
+    char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL);
+    gboolean stock = FALSE, mine = FALSE;
+    for (ssize_t i = 0; i < jarray_size(list); i++) {
+        char *file = get_string(jarray_get(list, i), "file");
+        if (g_str_has_prefix(file ? file : "", ours)) mine = TRUE;
+        if (eq(file, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || eq(file, "/usr/lib/qml/KeyFilters/systemUi.js")) stock = TRUE;
+        g_free(file);
+    }
+    g_free(ours); return stock && !mine;
+}
+void key_follow(HCWatch *w, const char *text)
+{
+    if (w->major < 6 || w->major > 9 || !w->baked || w->status >= 0) return;
+    jvalue_ref reply;
+    if (text) reply = parse_object(text);
+    else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
+    gboolean stock = list_is_stock(w, reply);
+    j_release(&reply);
+    if (!stock) return;
+    /* Only the choice the baked filter was made for: a changed or removed choice has its own path. */
+    char *want = watch_choice(w);
+    gboolean same = eq(want, w->baked); g_free(want);
+    if (!same) return;
+    gint64 now = watch_now(w);
+    if (w->key_last && now - w->key_last > KEY_QUIET_S) { w->key_reapplies = 0; w->key_logged = FALSE; }
+    /* configd may re-select its layers more than once, or fight us: bounded, never a loop. */
+    if (w->key_reapplies >= KEY_REAPPLY_MAX || (w->key_last && now - w->key_last < KEY_REAPPLY_GAP_S)) {
+        if (!w->key_logged) { w->key_logged = TRUE; watch_log(w, "Home key: configd keeps putting the stock keyFilters back, not applying again for now"); }
+        return;
+    }
+    w->key_last = now; w->key_reapplies++; w->key_logged = FALSE;
+    watch_log(w, "Home key: configd put the stock keyFilters back, applying the filter again (%u)", w->key_reapplies);
+    key_refresh(w, FALSE);
+    gate_sync(w);
+}
 static gboolean remove_home(HCWatch *w)
 {
     char *id = current_home(w);

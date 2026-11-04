@@ -43,6 +43,10 @@ struct HCWatch {
     char *prev_front, *prev_logged;
     gint64 prev_mtime;
     gboolean gate_held_logged;
+    /* restore.c key_follow: the stock list configd put back after we baked; a bounded, rate-limited re-apply */
+    gint64 key_last;
+    unsigned key_reapplies;
+    gboolean key_logged;
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
@@ -70,6 +74,9 @@ void reconcile(HCWatch *w, const char *id);
 int app_state(HCWatch *w, const char *id); /* 1 yes, 0 unknown, -1 no */
 int key_refresh(HCWatch *w, gboolean stock);
 void sync_baked(HCWatch *w, const char *id);
+/* 6-9: a keyFilters reply (subscription event or poll, `text`) showing the stock list while we think the filter is baked:
+ * apply it again, once per change. NULL text polls configd. */
+void key_follow(HCWatch *w, const char *text);
 void check_apps(HCWatch *w, char why);
 void check_hc(HCWatch *w);
 void repair_leftover(HCWatch *w);

@@ -89,7 +89,7 @@ uses GLib sources for confirmation/backoff, preload deadlines and child I/O. Sub
 use `-i`; one-shot children use `-n 1` with a deadline while subscription I/O keeps running.
 There is no shell or awk between the daemon and luna-send. Child EOF/exit ends a stream:
 settings loss exits 1 for unit restart, apps loss keeps the 300 s ticker, foreground/life loss logs
-and continues. JSON false replies alone are not EOF. Children inherit the daemon process group,
+and continues; the keyFilters feed (6-9 only, [home-key-hook.md](home-key-hook.md#configd-puts-the-stock-list-back)) loss logs and leaves it to the 300 s ticker. JSON false replies alone are not EOF. Children inherit the daemon process group,
 are killed/reaped on cancellation and clean shutdown, and receive SIGKILL through
 `PR_SET_PDEATHSIG` if their parent is killed. The systemd unit cgroup remains the outer cleanup
 boundary. SIGCHLD uses a self-pipe, avoiding GLib child-watch worker threads.

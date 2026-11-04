@@ -181,6 +181,7 @@ void hc_watch_stop(HCWatch *w, int status, const char *reason)
 }
 int hc_watch_status(HCWatch *w) { return w->status; }
 gboolean hc_watch_idle(HCWatch *w) { return w->depth == 0; }
+gboolean hc_watch_keys(HCWatch *w) { return w->major >= 6 && w->major <= 9; }
 
 void hc_watch_start(HCWatch *w)
 {
@@ -219,6 +220,8 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
     w->depth++;
     if (tag == 's') hc_watch_stop(w, 1, "subscription ended");
     else if (tag == 'a') watch_log(w, "apps subscription ended, relying on the periodic check");
+    else if (tag == 'k') watch_log(w, "keyFilters subscription ended, relying on the periodic check");
+    else if (tag == 'K') key_follow(w, text);
     else if (tag == 'f' || tag == 'l') watch_log(w, "foreground subscription ended; the stock-home and previous-launcher closes rely on the periodic check");
     else if (w->only_close && (tag == 'S' || tag == 'A' || tag == 'T')) {
         /* Only closing the previous launcher: a stored choice brings the whole watcher back. */
@@ -229,7 +232,11 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
         else previous_check(w, NULL, tag);
         g_free(id);
     }
-    else if (tag == 'A' || tag == 'T') { check_apps(w, tag); if (w->status < 0) previous_check(w, NULL, tag); }
+    else if (tag == 'A' || tag == 'T') {
+        check_apps(w, tag);
+        if (w->status < 0 && tag == 'T') key_follow(w, NULL);
+        if (w->status < 0) previous_check(w, NULL, tag);
+    }
     else if (tag == 'B') { close_foreground(w); previous_check(w, NULL, tag); }
     else {
         jvalue_ref r = parse_object(text);
