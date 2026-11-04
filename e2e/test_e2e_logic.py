@@ -1228,6 +1228,15 @@ class Luna(unittest.TestCase):
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, byteLength=4)))
         self.assertTrue(hc_e2e.api_spec.api_reply_problems('getAppIcon', dict(icon, data='not-base64')))
 
+    def test_too_large_icon_refusal_is_a_valid_answer_for_a_big_file(self):
+        refused = {'returnValue': False, 'errorCode': 'iconTooLarge', 'apiVersion': 3}
+        tl = hc_e2e.api_spec.too_large_refusal
+        self.assertTrue(tl(refused, 307678))
+        self.assertFalse(tl(refused, 172), 'a small file must not be refused')
+        self.assertFalse(tl(refused, None), 'size unknown')
+        self.assertFalse(tl(dict(refused, errorCode='noIcon'), 307678))
+        self.assertFalse(tl({'returnValue': True, 'apiVersion': 3}, 307678))
+
     def test_refusals(self):
         self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': 'noPermission'}))
         self.assertTrue(hc_e2e.api_spec.api_refused({'returnValue': False, 'errorCode': -1, 'errorText': 'Denied method call'}))

@@ -11,7 +11,7 @@ import urllib.request
 from .. import timing
 from ..alerts import RebootAlertMonitor, alert_service_proof
 from ..api_spec import (API_GROUP, API_VERSION, DISPOSABLE_ID, api_refused, api_reply_problems, launcher_methods,
-    spec_reply_problems)
+    spec_reply_problems, too_large_refusal)
 from ..constants import APP_ID, SCRIPTS_DIR, STOCK, SVC_ID
 from ..evidence import messages_command, parse_luna, service_log_command
 from ..inspector import Inspector
@@ -75,6 +75,12 @@ class ApiSteps:
                         and reply.get('apiVersion') == API_VERSION), 'appinfo path is missing: %s' % path
             if not presence.strip().endswith('present'):
                 return False, 'could not inspect appinfo path: %s (%s)' % (path, presence[:200])
+            if api_refused(reply) and reply.get('errorCode') == 'iconTooLarge':
+                _, wc = self.dev.sh('wc -c < %s' % shlex.quote(path))
+                digits = wc.strip().split()[-1:] or ['']
+                size = int(digits[0]) if digits[0].isdigit() else None
+                if too_large_refusal(reply, size):
+                    return True, 'appinfo path exists but is %d bytes: refused with iconTooLarge' % size
             return not api_reply_problems('getAppIcon', reply), 'appinfo path exists: %s' % path
         start = time.monotonic()
         foreground, raw = self.api('getForegroundApp')
