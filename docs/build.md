@@ -115,6 +115,18 @@ of the ipk, relative to the manifest) and `ipkHash.sha256`. It refuses a version
 `appinfo.json` and `package.json`, or an ipk whose name is not `<id>_<version>_*`. Attach both files
 to the release; the manifest's hash is of the ipk as built, so do not rebuild the ipk afterwards.
 
+## Releasing
+
+`.github/workflows/build.yml` builds the release package on GitHub. On every push and pull request to `main` it runs the offline tests (the service and launcher API tests with `-DQEMU_TESTS=OFF`, the app's lint and Jest, the e2e runner's unit tests), then builds the ipk and uploads it with its manifest as the `homechooser-release` artifact. The build job downloads the webOS native toolchain (the `openlgtv/buildroot-nc4` `webos-a38c582` release, Buildroot 2025.02.1 and GCC 14.2.0) and the webOS CLI (`webosbrew/ares-cli-rs` 0.7.0, for `ares-package`), each checked against a SHA-256 in the workflow's `env`, and Node.js 24.20.0. Change a pin there together with the version named in [Toolchain](#toolchain).
+
+To release:
+
+1. Set the version with `npm version <x.y.z>` in `app/` and commit it (the commit must be on `main`'s history).
+2. Tag that commit `v<x.y.z>` (`git tag v0.1.0 && git push origin v0.1.0`). The build job fails when the tag differs from `v` plus the `version` in `app/package.json`.
+3. When the workflow finishes, the repository has a draft release for the tag with the ipk and `org.webosbrew.homechooser.manifest.json` attached. Check them, write the release notes, and publish the draft. The workflow never publishes.
+
+The release job is the only one with `contents: write`. The ipk is not byte-identical between two builds of one commit (Enact stamps a build time into `main.js` as `ilib_cache_id` and `ares-package` keeps file times); the native binaries are. The manifest's hash is of the ipk the workflow attached, so publish that one rather than rebuilding.
+
 Enact copies all of iLib's locale data (83 MB, a 15 MB package) and its CLI has no switch to
 limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the build and
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
