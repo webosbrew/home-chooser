@@ -21,6 +21,7 @@ from unittest.mock import patch
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hc_e2e.beanjar  # noqa: E402
+import hc_e2e.launchers  # noqa: E402
 import hc_e2e.matrix  # noqa: E402
 import hc_e2e.tiers  # noqa: E402
 import hc_e2e.timing  # noqa: E402
@@ -300,6 +301,7 @@ class Main(Fixture):
             import sys
             sys.path.insert(0, %r)
             import run_matrix
+            run_matrix.hc_e2e.launchers.make_launcher = lambda *a, **kw: None  # no fixture build (needs the SDK)
             run_matrix.RUNNER = [sys.executable, '-I', %r]
             sys.exit(run_matrix.main(['--vms', 'w20l-jhericurl,w22h-ombre,w24g-spacebuns', '--hosts-file', %r,
                                       '--hc-ipk', %r, '--results', %r],
@@ -331,7 +333,9 @@ class Main(Fixture):
         saved = run_matrix.RUNNER
         run_matrix.RUNNER = [sys.executable, '-I', self.runner]
         try:
-            with contextlib.redirect_stdout(io.StringIO()) as out:
+            # the fixture ipks are built by e2e/fixtures/build.sh with the cross SDK: not in a unit test
+            with contextlib.redirect_stdout(io.StringIO()) as out, \
+                    patch.object(hc_e2e.launchers, 'make_launcher', return_value=None):
                 rc = run_matrix.main(['--vms', 'w20l-jhericurl,w22h-ombre,w24g-spacebuns', '--hosts-file', hosts,
                                       '--hc-ipk', hc,
                                       '--results', self.tmp, '--wait-popup', '60', '--reboot-check'],
