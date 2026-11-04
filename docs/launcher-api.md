@@ -819,8 +819,12 @@ means not checked on that release, not that it fails there.
 | `listRunning {subscribe}`, `getForegroundApp {subscribe}`, `getAppLifeEvents {subscribe}` from a launcher page: an acknowledgement, then replies for an app's launch and close | untested | untested | untested | untested | verified (9.x) | untested | verified (11.x) | untested |
 | Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
+| `getIcons` for a bookmark launch point (a website pinned to Home from LG's browser), as the app | untested | untested | untested | untested | untested | untested | verified (11.x) | untested |
 
-The three subscriptions in the row above were held by a launcher page through `homechooser.js`, with the
+On other releases the browser may keep favicons elsewhere; a bookmark whose icon is outside the folder above
+is `noIcon` there.
+
+The three subscriptions in the rows above were held by a launcher page through `homechooser.js`, with the
 page's own bus permissions, while a disposable app was opened and closed: each acknowledged with
 `subscribed: true`, `listRunning` listed the app and then dropped it, `getForegroundApp` named it and then
 changed, and `getAppLifeEvents` sent its launch and close.
