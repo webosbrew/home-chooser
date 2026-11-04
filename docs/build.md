@@ -96,6 +96,25 @@ it as `version` in `status` and `getInfo`. `services.json` has no
 version. The ipk's control file is written by `ares-package`, which fills in
 `Maintainer: N/A <nobody@example.com>` itself; that placeholder is left as it is.
 
+## Release package
+
+A release is the ipk and the apps-repo manifest, attached to one GitHub release. Set the version with
+`npm version <x.y.z>` in `app/` (it updates `appinfo.json`), then:
+
+```
+cd app
+npm run package           # build/ipk/org.webosbrew.homechooser_<version>_arm.ipk (the only ipk there)
+npm run release-manifest  # build/ipk/org.webosbrew.homechooser.manifest.json
+```
+
+`app/scripts/release-manifest.py <ipk>` (Python 3, standard library only) writes the manifest next to
+the ipk and prints its path. It has the keys of Homebrew Channel's release manifest: `id`, `version`,
+`type`, `title` and `appDescription` (the README tagline), `iconUri` and `sourceUrl` (fixed URLs of
+the `webosbrew/home-chooser` repository), `rootRequired` (always `true`), `ipkUrl` (the bare file name
+of the ipk, relative to the manifest) and `ipkHash.sha256`. It refuses a version that differs between
+`appinfo.json` and `package.json`, or an ipk whose name is not `<id>_<version>_*`. Attach both files
+to the release; the manifest's hash is of the ipk as built, so do not rebuild the ipk afterwards.
+
 Enact copies all of iLib's locale data (83 MB, a 15 MB package) and its CLI has no switch to
 limit it for a non-isomorphic build, so `scripts/prune-ilib.js` runs between the build and
 `ares-package`. It keeps the top-level data files and the `en`, `und` and `zoneinfo` locale
