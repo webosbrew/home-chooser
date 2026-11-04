@@ -67,13 +67,16 @@ def modify_body_spec(fw):
 
 def country_specs(code2, code3):
     """The two modify_body rules that give the initservices reply the TV's own country: only `code` and
-    `threecode` inside the reply's country object change (lookbehind/lookahead keep every other byte, ricCode
-    included), only in the response of initservices.  None for a country that is not two and three capitals."""
+    `threecode` inside the reply's country object change (the groups put every other byte back, ricCode
+    included, whatever the order of the three fields and the JSON's whitespace: 12.x sends it compact with
+    ricCode in the middle, 8.x pretty-printed with threecode before ricCode, at /rest/sdp/v14.0/initservices), only in the response
+    of initservices.  None for a country that is not two and three capitals."""
     if not (re.fullmatch(r'[A-Z]{2}', code2 or '') and re.fullmatch(r'[A-Z]{3}', code3 or '')):
         return None
     flt = '~s & ~u %s' % re.escape(INIT)
-    return ['|%s|%s|%s' % (flt, r'(?<="country":\{"code":")[A-Z]{2}(?=")', code2),
-            '|%s|%s|%s' % (flt, r'(?<="threecode":")[A-Z]{3}(?="\})', code3)]
+    obj = r'("country"\s*:\s*\{[^{}]*?"%s"\s*:\s*")%s(")'
+    return ['|%s|%s|%s' % (flt, obj % ('code', '[A-Z]{2}'), r'\g<1>' + code2 + r'\g<2>'),
+            '|%s|%s|%s' % (flt, obj % ('threecode', '[A-Z]{3}'), r'\g<1>' + code3 + r'\g<2>')]
 
 
 COUNTRY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results', 'country')

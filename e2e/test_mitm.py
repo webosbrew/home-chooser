@@ -57,7 +57,7 @@ class Country(unittest.TestCase):
     def apply(self, body, specs):
         for spec in specs:
             flt, regex, repl = spec[1:].split(spec[0], 2)
-            body = re.sub(regex, lambda _: repl, body, flags=re.DOTALL)
+            body = re.sub(regex, repl, body, flags=re.DOTALL)
         return body
 
     def test_only_the_country_object_changes(self):
@@ -66,6 +66,19 @@ class Country(unittest.TestCase):
         self.assertIn('"ricCode":"AIC"', out)
         self.assertEqual(json.loads(out)['initServices']['services']['country'],
                          {'code': 'US', 'ricCode': 'AIC', 'threecode': 'USA'})
+
+    # 8.x (W22O 13.30.56, /rest/sdp/v14.0/initservices): pretty-printed, threecode before ricCode
+    BODY8 = ('{\n  "initServices" : {\n    "services" : {\n      "country" : {\n        "code" : "JP",\n'
+             '        "threecode" : "JPN",\n        "ricCode" : "AIC"\n      },\n      "x" : {"code" : "JP"}\n'
+             '    }\n  }\n}')
+
+    def test_pretty_printed_reply_with_other_field_order(self):
+        out = self.apply(self.BODY8, mitm.country_specs('US', 'USA'))
+        self.assertEqual(out, self.BODY8.replace('"JP",\n        "threecode" : "JPN"',
+                                                 '"US",\n        "threecode" : "USA"'))
+        self.assertEqual(json.loads(out)['initServices']['services']['country'],
+                         {'code': 'US', 'ricCode': 'AIC', 'threecode': 'USA'})
+        self.assertEqual(json.loads(out)['initServices']['services']['x'], {'code': 'JP'})
 
     def test_rules_are_response_of_initservices_only(self):
         for spec in mitm.country_specs('US', 'USA'):
