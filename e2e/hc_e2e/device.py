@@ -11,7 +11,7 @@ import threading
 import time
 
 from . import timing
-from .constants import HB_ELEVATE, STOCK, SVC_ID
+from .constants import APP_ID, HB_ELEVATE, STOCK, SVC_ID
 from .evidence import parse_luna
 
 # ---------------------------------------------------------------------------------------------
@@ -342,6 +342,16 @@ class Device:
         rc, out = self.sh("ps -eo user,args | grep '[h]omechooser-service'")
         return out.strip()
 
+    def service_procs(self):
+        """[(user, pid)] of the running homechooser-service processes, by ps."""
+        rc, out = self.sh("ps -eo user,pid,args | grep '[h]omechooser-service'")
+        procs = []
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) >= 3 and f[1].isdigit() and 'homechooser-service' in line:
+                procs.append((f[0], f[1]))
+        return procs
+
 
 # ---------------------------------------------------------------------------------------------
 # Elevation strategies
@@ -377,14 +387,32 @@ class RootShellElevation(Elevation):
     service so the hub starts the rewritten, root instance (what the app does after elevating)."""
     name = 'root-shell'
 
+    QUIT_WAIT = 10
+
     def prepare(self, dev, rec):
         rc, out = dev.sh('%s %s; echo rc=$?' % (HB_ELEVATE, SVC_ID), 90)
         rec.note('elevate-service ' + SVC_ID, out.strip())
-        # the (jailed) instance is started on demand by any call; call it, then make it quit
-        dev.luna('luna://%s/status' % SVC_ID)
-        dev.luna('luna://%s/quit' % SVC_ID)
-        timing.sleep(2)
-        dev.luna('luna://%s/status' % SVC_ID)
+        # The service answers only the app (hc_sender_ok): quit and status go out as the app, or a
+        # running instance answers `forbidden` and stays alive.
+        before = dev.service_procs()
+        rec.note('service before quit', repr(before) if before else '(not running)')
+        if before:
+            rc, raw, _ = dev.luna_as(APP_ID, 'luna://%s/quit' % SVC_ID)
+            rec.note('quit as ' + APP_ID, raw or '(no reply)')
+            end = time.time() + timing.seconds(self.QUIT_WAIT)
+            left = dev.service_procs()
+            while left and time.time() < end:
+                timing.sleep(1)
+                left = dev.service_procs()
+            rec.note('service after quit', repr(left) if left else '(gone)')
+            if left:
+                rec.check('elevation (%s): old service instance exited after quit' % self.name, False,
+                          'pid %s (uid %s) still alive %s s after quit; quit reply: %s'
+                          % (left[0][1], left[0][0], self.QUIT_WAIT, raw or '(no reply)'))
+                return
+        # the (rewritten, root) instance is started on demand by any call
+        rc, raw, _ = dev.luna_as(APP_ID, 'luna://%s/status' % SVC_ID)
+        rec.note('status as ' + APP_ID, raw or '(no reply)')
 
 
 ELEVATIONS = {'luna': LunaElevation, 'root-shell': RootShellElevation}
