@@ -182,7 +182,9 @@ Calls go to `luna://org.webosbrew.homechooser.service/<method>` with a JSON obje
 single request with a single reply, except the methods that take `"subscribe": true`
 ([Subscriptions](#subscriptions)). The service takes the caller
 from the application id that the system reports for the message; nothing in the payload can name
-another caller, and a shell `luna-send` (no application id) is refused.
+another caller, and a shell `luna-send` (no application id) is refused. A native launcher's messages
+carry no application id; the service identifies it another way
+([Calling from a native launcher](#calling-from-a-native-launcher)).
 
 A web app can use the platform's bridge directly. This is the same call shape as Home Chooser's own
 client (`app/src/platform/bridge.js`), with no dependencies:
@@ -256,7 +258,43 @@ answers the same calls with example data in a desktop browser.
 `webOS.service.request` from webOSTV.js does the same through the same bridge; its failure callback
 receives the same `returnValue:false` object. A native or QML launcher uses its own luna client
 (libluna-service2, or the QML `LunaService` element) and the same URI and payloads. No native or QML
-example is given here because the bridge example is sufficient to show the API shape.
+example is given here because the bridge example is sufficient to show the API shape. A QML app runs
+in the platform's QML container, which stamps its application id on its calls, so it is an ordinary
+app caller. A native app is not: read the next section.
+
+### Calling from a native launcher
+
+The platform stamps an application id on a message only for the web, QML and node containers. A
+native executable's messages have none (`luna-send -a` is a shell tool and does not show that). So
+Home Chooser identifies a native launcher by the **service name its own luna handle is registered
+under**, and admits it as the app with that id when all of these hold:
+
+* the name is exactly the app's id (no `.service` suffix, no instance suffix such as `-1234`), as
+  the application manager lists it, and the app's `type` is `native`;
+* the app has `"home"` in `appCategory`, the same rule that makes it a candidate for Home;
+* the app is installed in the developer apps folder
+  (`/media/developer/apps/usr/palm/applications/<id>`);
+* no executable but the app's own can register that name: every role file that the hub reads (the
+  manifests' role lists, the legacy role directories and the `roles.d` directories, system and
+  developer) that allows the name must belong to the app's own executable in that folder, and at
+  least one does. A package whose own id is a prefix of yours may declare a service named like your
+  app (the installer only requires that a service name starts with its package's id and a dot), and
+  such a service can register your name; while one is installed Home Chooser refuses your app
+  rather than guess which process is calling. A role that allows every name (`*`: LG's own tools,
+  executables Homebrew Channel has elevated to root) is not counted; those run as root anyway.
+
+If one of these fails the call is refused with `forbidden`, exactly as a call without an
+application id. An admitted native caller is treated like an app caller with the same id for every
+method: `getInfo`, the lists, icons, subscriptions, `getAppLifeEvents`, `closeApp`, `uninstallApp`
+and its confirmation, including `isSelectedHome` and the selected-Home checks; `permitted` is still
+whether the installed appinfo lists `org.webosbrew.homechooser.applications`.
+
+What a native launcher must do: call from the app's own process, on the handle that the platform's
+native app library (libhelpers, which SDL uses) registers under the app id, or register the exact app
+id yourself. What it must not do: call from a companion service or any other name (the `<id>.service`
+of your package is a different caller and is refused), through a name with a suffix, or through
+`luna-send -a`; and it should not declare a service whose name is another app's id.
+
 
 Successful replies have `returnValue: true`. Every reply produced by a launcher method includes
 `apiVersion`. Failures from Home Chooser look like this:
@@ -339,7 +377,9 @@ platform's error, and omits the new fields.
 | `uninstallApp` | yes | yes | yes | yes |
 
 Every method needs a caller with a valid application id: the id the platform reports for the message,
-up to its first space, must be 1 to 128 characters of `A-Za-z0-9._-`.
+up to its first space, must be 1 to 128 characters of `A-Za-z0-9._-`. A native launcher has none and
+is admitted by its service name instead ([Calling from a native launcher](#calling-from-a-native-launcher));
+after that it is the same caller as the app id.
 When several checks fail, the first of these is reported: `forbidden`, `notRoot`, `notHome`,
 `badRequest`, `noPermission`. "The permission" is `org.webosbrew.homechooser.applications` in your installed
 `requiredPermissions`. "The selected Home" means your app id is the one Home Chooser has stored as
@@ -347,7 +387,9 @@ the owner's choice; this is not the same as what the Home key opens at this mome
 
 ### `getInfo {}`
 
-Feature detection and status. Works for any app, before elevation and without the permission.
+Feature detection and status. Works for any app with an application id and for an admitted native
+launcher ([Calling from a native launcher](#calling-from-a-native-launcher)), before elevation and
+without the permission.
 
 ```json
 {"returnValue": true, "apiVersion": 3, "version": "0.1.0", "root": true, "permission": "org.webosbrew.homechooser.applications", "permitted": true, "isSelectedHome": true}
@@ -364,7 +406,7 @@ Feature detection and status. Works for any app, before elevation and without th
   the watcher puts LG Home back but keeps the stored choice, so this can be true while the Home key
   opens LG Home.
 
-Errors: `forbidden` (no valid application id).
+Errors: `forbidden` (no valid application id, and not an admitted native launcher).
 
 There is no capability list. To detect the service, use the platform's own failure
 (the service is unknown, or the method is unknown) and `apiVersion`. A denial by itself does not
@@ -684,7 +726,7 @@ answers with a string `errorCode` from the table.
 | `errorCode` | Cause | What to do |
 | --- | --- | --- |
 | platform error (service or method unknown, `Denied method call`) | Home Chooser is not installed or too old; or, on 11.x and 12.x, its access file is not in place yet, or your `requiredACG` leaves out `application.query` or `application.launcher` (see [Permission on 5.x to 10.x and on 11.x and 12.x](#permission-on-5x-to-10x-and-on-11x-and-12x)) | Call `getInfo`; offer to install or open Home Chooser; check `requiredACG` |
-| `forbidden` | The caller has no valid application id | Call from the app. A shell `luna-send` needs `-a <app id>` |
+| `forbidden` | The caller has no valid application id and is not an admitted native launcher | Call from the app. A shell `luna-send` needs `-a <app id>`. A native launcher calls from its own process under its app id ([Calling from a native launcher](#calling-from-a-native-launcher)) |
 | `notRoot` | The service is not elevated | Ask the owner to open Home Chooser |
 | `noPermission` | The installed appinfo lacks `org.webosbrew.homechooser.applications` | Fix `requiredPermissions`, reinstall |
 | `lookupFailed` | The service could not read the caller's installed appinfo, from SAM or its file fallback (a timeout or an unreadable reply in that lookup is `timeout` or `badReply`) | Retry later; log `errorText` |

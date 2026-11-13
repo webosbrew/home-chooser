@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 
 from . import timing
-from .api_spec import API_FIXTURE_DIR, API_GROUP, DISPOSABLE_ID
+from .api_spec import API_FIXTURE_DIR, API_GROUP, DISPOSABLE_ID, NATIVE_IDS
 from .constants import HERE, REPO
 
 # ---------------------------------------------------------------------------------------------
@@ -129,7 +129,7 @@ STAMP_NAME = '.inputs-stamp'
 # What each build script copies in, relative to the repo: the stamp of a fixture cache hashes these (the scripts
 # are among them), so a change to any of them rebuilds the cache and nothing else does.  *.md files are never
 # packaged (web/build.sh skips them for the demo) and do not count.
-_API_INPUTS = ('e2e/fixtures/web', 'e2e/fixtures/disposable', 'examples/web-launcher', 'api/client/homechooser.js')
+_API_INPUTS = ('e2e/fixtures/web', 'e2e/fixtures/disposable', 'e2e/fixtures/nativeid', 'examples/web-launcher', 'api/client/homechooser.js')
 _PLAIN_INPUTS = ('e2e/fixtures', 'examples/web-launcher')
 
 
@@ -185,12 +185,12 @@ def build_api_cache(announce):
         pass
     env = dict(os.environ, HC_FIXTURE_PERMISSION=API_GROUP)
     ok = True
-    for script in ('web', 'disposable'):
+    for script in ('web', 'disposable', 'nativeid'):
         try:
             p = subprocess.run(['sh', os.path.join(HERE, 'fixtures', script, 'build.sh'), API_FIXTURE_DIR],
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600, env=env)
             announce(p.stdout.decode('utf-8', 'replace').strip()[-400:])
-            ok = ok and p.returncode == 0
+            ok = ok and (p.returncode == 0 or script == 'nativeid')  # nativeid needs the cross SDK: optional
         except subprocess.TimeoutExpired:
             announce('%s/build.sh timed out' % script)
             ok = False
@@ -201,7 +201,7 @@ def build_api_cache(announce):
 
 def api_fixture_ipks(announce=print):
     """--api-check: the web fixtures built with requiredPermissions ["org.webosbrew.homechooser.applications"] and the
-    disposable non-home app, in build/fixtures-api/ (offline).  Built again when a stamp of their inputs is missing or differs.  {app id: ipk}."""
+    disposable non-home app and the native-caller packages, in build/fixtures-api/ (offline).  Built again when a stamp of their inputs is missing or differs.  {app id: ipk}."""
     def found():
         out = {}
         for ident in [FIXTURE_ID % ('web', w) for w in FIXTURE_WINDOWS] + [DISPOSABLE_ID]:
@@ -212,6 +212,10 @@ def api_fixture_ipks(announce=print):
                     and info.get('largeIcon') == 'oversize.png'
                     and has_probe_page(g[-1]))):
                 out[ident] = g[-1]
+        # the native-caller packages need the cross SDK to build: without them that check is skipped
+        native = {i: sorted(glob.glob(os.path.join(API_FIXTURE_DIR, i + '_*.ipk'))) for i in NATIVE_IDS}
+        if all(native.values()):
+            out.update({i: g[-1] for i, g in native.items()})
         return out
     have = found()
     current = cache_current(API_FIXTURE_DIR, api_stamp())

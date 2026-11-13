@@ -157,7 +157,7 @@ class FixtureCacheStampTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 self.api_dir(d)
                 have, built = self.run_cache(d, stamp)
-                self.assertEqual(len(built), 2, stamp)  # web, disposable
+                self.assertEqual(len(built), 3, stamp)  # web, disposable, nativeid
                 self.assertTrue(launchers.cache_current(d, launchers.api_stamp()))
                 _, built = self.run_cache(d, launchers.api_stamp())
                 self.assertEqual(built, [])

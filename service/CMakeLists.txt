@@ -53,7 +53,7 @@ include_directories(
 	"${SYSROOT}/usr/include/glib-2.0"
 	"${SYSROOT}/usr/lib/glib-2.0/include")
 
-set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c)
+set(COMMON_SOURCES src/json.c src/luna.c src/proc.c src/fs.c src/policy.c src/nameowner.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c)
 set(SERVICE_SOURCES src/main.c src/apps.c src/bootlink.c src/notify.c
 	src/service/main.c src/service/reply.c src/service/files.c src/service/call.c
 	src/service/run.c src/service/launcher.c src/service/catalog.c src/service/subscribe.c
@@ -104,7 +104,7 @@ hc_test_program(test-gate-mount SOURCES test/test-gate-mount.c src/gate-mount.c 
 # and /dev/urandom are the case's (see test/test-launcher-contract.c).
 hc_test_program(test-launcher-contract
 	SOURCES test/test-launcher-contract.c test/fake-ls2.c src/service/launcher.c src/service/reply.c
-		src/service/catalog.c src/service/subscribe.c src/apps.c src/luna.c src/json.c src/fs.c src/policy.c
+		src/service/catalog.c src/service/subscribe.c src/apps.c src/luna.c src/json.c src/fs.c src/policy.c src/nameowner.c
 	LIBS ${DAEMON_LIBS})
 target_link_options(test-launcher-contract PRIVATE
 	"LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice,--wrap=open64,--wrap=hc_fs_prefix")
@@ -113,7 +113,7 @@ target_link_options(test-launcher-contract PRIVATE
 hc_test_program(test-launcher-subscribe
 	SOURCES test/test-launcher-subscribe.c test/fake-ls2.c src/service/launcher.c src/service/reply.c
 		src/service/catalog.c src/service/subscribe.c src/luna-child.c src/apps.c src/luna.c src/proc.c src/json.c
-		src/fs.c src/policy.c
+		src/fs.c src/policy.c src/nameowner.c
 	LIBS ${DAEMON_LIBS})
 target_link_options(test-launcher-subscribe PRIVATE "LINKER:--wrap=run_argv,--wrap=geteuid,--wrap=read_choice")
 

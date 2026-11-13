@@ -25,7 +25,7 @@
     "subscribersMax": 16,
     "subscriptionModel": "listApps, listLaunchPoints, listInputs, listRunning and getForegroundApp take subscribe: true (a JSON boolean; any other value is a single reply): the methods whose platform call can be subscribed to. The first reply is a fresh read of the whole state with subscribed: true; after every change the platform reports, the subscriber gets the whole state again, the same reply with subscribed: true. Every reply is a full state, never a delta, and one may repeat the previous one. Cancel with the bus's own cancel (the bridge's cancel(), LSCallCancel). A method takes at most 16 subscribers (tooManySubscriptions). Home Chooser keeps no copy: a launcher caches what it shows and refreshes it from these replies. getAppLifeEvents (level 3) is a stream and takes subscribe: true only: its first reply is the acknowledgement {returnValue, apiVersion, subscribed: true} and every later reply is one app life event, in the order the application manager sends them. Events are never debounced, coalesced, repeated or kept: an event that happens while no subscription is open, or while the service restarts its own upstream subscription, is not delivered later.",
     "paramStructure": "by-name",
-    "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden.",
+    "caller": "The service takes the caller from the application id the hub reports for the message, up to its first space (1 to 128 characters of A-Za-z0-9._-). Nothing in the payload can name another caller. A message without an application id (a shell luna-send without -a) is refused with forbidden, except from a native launcher: a native executable has no application id on the bus, and the service admits it as the app with that id when the service name its handle is registered under is exactly the id of an installed home-category app of type native in the developer apps folder, and no role file of the hub allows that name for another executable than the app's own. It is then the same caller as the app id for every method.",
     "clientTimeoutSeconds": 70,
     "clientTimeoutReason": "uninstallApp can make two 20 second appinfo calls, an 8 second alert call and a 15 second screen launch, about 63 seconds in the worst case."
   },
@@ -90,7 +90,7 @@
     "platformErrors": "The luna bus itself answers when the service is unknown, a method is unknown, or the bus denies delivery: returnValue false, the platform's own errorText (for example Denied method call) and often a numeric errorCode, and no apiVersion. Those replies do not come from Home Chooser and are not described by the result schemas here. Treat them as: Home Chooser absent or too old, or the permission was not installed with the app."
   },
   "x-errors": {
-    "forbidden": {"cause": "The caller has no valid application id.", "action": "Call from the app. A shell luna-send needs -a <app id>."},
+    "forbidden": {"cause": "The caller has no valid application id and is not an admitted native launcher.", "action": "Call from the app. A shell luna-send needs -a <app id>. A native launcher calls from its own process under its app id."},
     "notRoot": {"cause": "The service is not elevated.", "action": "Ask the owner to open Home Chooser."},
     "noPermission": {"cause": "The installed appinfo lacks org.webosbrew.homechooser.applications.", "action": "Fix requiredPermissions, reinstall."},
     "lookupFailed": {"cause": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.", "action": "Retry later; log errorText."},
@@ -139,7 +139,7 @@
     {
       "name": "getInfo",
       "summary": "Feature detection and status.",
-      "description": "Works for any app with an application id, before elevation and without the permission. Reports the API version, the package version, whether the service is root, the permission name, whether the caller's installed appinfo lists it and whether the caller is the stored Home choice. There is no capability list.",
+      "description": "Works for any app with an application id and for an admitted native launcher, before elevation and without the permission. Reports the API version, the package version, whether the service is root, the permission name, whether the caller's installed appinfo lists it and whether the caller is the stored Home choice. There is no capability list.",
       "paramStructure": "by-name",
       "params": [],
       "result": {"name": "reply", "schema": {"$ref": "#/components/schemas/GetInfoReply"}},

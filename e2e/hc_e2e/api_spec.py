@@ -15,6 +15,12 @@ import launcher_schema  # noqa: E402  (the launcher spec's own schema checker)
 API_GROUP = 'org.webosbrew.homechooser.applications'
 API_VERSION = 3  # the level this build of Home Chooser reports; the contract itself only requires >= 1
 DISPOSABLE_ID = 'org.webosbrew.hcfixture.disposable'
+# The native-caller check (e2e/fixtures/nativeid): a native launcher, one without the home category, and an app whose id is
+# a prefix of the first one's with a service named like it.
+NATIVE_PROBE_ID = 'org.webosbrew.hcfixture.native.probe'
+NATIVE_NOHOME_ID = 'org.webosbrew.hcfixture.native.probenohome'
+NATIVE_IMPOSTOR_ID = 'org.webosbrew.hcfixture.native'
+NATIVE_IDS = (NATIVE_PROBE_ID, NATIVE_NOHOME_ID, NATIVE_IMPOSTOR_ID)
 API_FIXTURE_DIR = os.path.join(REPO, 'build', 'fixtures-api')
 API_INFO_FIELDS = ('apiVersion', 'version', 'root', 'permission', 'permitted', 'isSelectedHome')
 API_LIST_FIELDS = ('id', 'title', 'icon', 'largeIcon', 'folderPath', 'version', 'vendor', 'type', 'removable', 'visible', 'appCategory',

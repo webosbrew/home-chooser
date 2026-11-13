@@ -40,7 +40,7 @@
 			"noPermission"
 		],
 		"errors": {
-			"forbidden": "The caller has no valid application id.",
+			"forbidden": "The caller has no valid application id and is not an admitted native launcher.",
 			"notRoot": "The service is not elevated.",
 			"noPermission": "The installed appinfo lacks org.webosbrew.homechooser.applications.",
 			"lookupFailed": "The service could not read the caller's installed appinfo, from SAM or its file fallback. A timeout or an unreadable reply in that lookup is timeout or badReply.",

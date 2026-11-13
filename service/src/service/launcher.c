@@ -11,6 +11,7 @@
 #include "json.h"
 #include "log.h"
 #include "policy.h"
+#include "nameowner.h"
 #include "service/methods.h"
 #include "service/launcher.h"
 #include "service/reply.h"
@@ -46,17 +47,40 @@ void op_free(LOp *op)
 	g_free(op);
 }
 
-/* Root, a real application id, and (need_home) the caller being the selected home. Fills `caller`.
- * Replies and returns false on refusal. */
-static bool launcher_gate(LSMessage *msg, const char *method, bool need_root, bool need_home, char *caller, size_t callerlen)
+/* Who is calling. An app's calls carry its application id. A native launcher's do not (the hub stamps
+ * an id only on calls from the web, QML and node containers), so it is identified by the service name
+ * its own handle is registered under, and only when that name is the id of an app that the platform
+ * installed as a native home-category app and whose own executable alone may register that name
+ * (nameowner.c). The hub's answer about the app comes later, in consent_done. */
+typedef enum { WHO_APP, WHO_NATIVE, WHO_REFUSED } Who;
+
+static Who launcher_who(LSMessage *msg, const char *method, char *caller, size_t callerlen)
 {
 	const char *app = LSMessageGetApplicationID(msg);
-	if (!hc_caller_id(app, caller, callerlen)) {
-		const char *svc = LSMessageGetSenderServiceName(msg);
-		LOGE("REFUSED", "%s from application id '%s', service name '%s'", method, app ? app : "(none)", svc ? svc : "(none)");
-		send_error_for(msg, method, "forbidden", app && app[0] ? "The caller has a malformed application id" : "This method is for apps; the caller has no application id");
-		return false;
+	if (hc_caller_id(app, caller, callerlen)) return WHO_APP;
+	const char *svc = LSMessageGetSenderServiceName(msg);
+	if (!app || !app[0]) {
+		if (svc && svc[0] && hc_app_id_ok(svc) && strlen(svc) < callerlen) {
+			char why[256];
+			if (hc_name_owned(hc_fs_prefix(), svc, why, sizeof why)) {
+				g_strlcpy(caller, svc, callerlen);
+				return WHO_NATIVE;
+			}
+			LOGE("REFUSED", "%s from service name '%s' with no application id: not a native launcher's own name: %s", method, svc, why);
+		} else {
+			LOGE("REFUSED", "%s from application id '(none)', service name '%s'", method, svc ? svc : "(none)");
+		}
+		send_error_for(msg, method, "forbidden", "This method is for apps; the caller has no application id");
+		return WHO_REFUSED;
 	}
+	LOGE("REFUSED", "%s from application id '%s', service name '%s'", method, app, svc ? svc : "(none)");
+	send_error_for(msg, method, "forbidden", "The caller has a malformed application id");
+	return WHO_REFUSED;
+}
+
+/* Root and (need_home) the caller being the selected home. Replies and returns false on refusal. */
+static bool launcher_policy(LSMessage *msg, const char *method, bool need_root, bool need_home, const char *caller, bool native)
+{
 	if (need_root && geteuid() != 0) {
 		LOGI("NOT_ROOT", "%s refused: uid %d", method, (int)geteuid());
 		send_error_for(msg, method, "notRoot", "The service is not running as root; open Home Chooser once to set it up");
@@ -72,13 +96,53 @@ static bool launcher_gate(LSMessage *msg, const char *method, bool need_root, bo
 			return false;
 		}
 	}
-	LOGI("CALL", "%s from %s", method, caller);
+	LOGI("CALL", "%s from %s (%s)", method, caller, native ? "native service name" : "application id");
 	return true;
+}
+
+/* A native caller's eligibility, from the platform's appinfo of the app with that id. Replies on refusal. */
+static bool native_eligible(LOp *op, jvalue_ref info)
+{
+	char *type = info && jis_object(info) ? get_string(info, "type") : NULL;
+	char *folder = info && jis_object(info) ? get_string(info, "folderPath") : NULL;
+	char expected[256];
+	g_snprintf(expected, sizeof expected, "%s%s", HC_DEV_APPS_DIR, op->caller);
+	bool home = false;
+	jvalue_ref cats = info && jis_object(info) ? jobject_get(info, key_buf("appCategory")) : NULL;
+	if (cats && jis_valid(cats) && jis_array(cats)) {
+		for (ssize_t i = 0; i < jarray_size(cats) && i < 64; i++) {
+			jvalue_ref c = jarray_get(cats, i);
+			if (!jis_string(c)) continue;
+			raw_buffer b = jstring_get_fast(c);
+			if (b.m_len == 4 && memcmp(b.m_str, "home", 4) == 0) home = true;
+		}
+	}
+	const char *why = NULL;
+	if (!info || !jis_object(info)) why = "the platform has no appinfo for it";
+	else if (!type || strcmp(type, "native") != 0) why = "its type is not native";
+	else if (!home) why = "its appCategory does not contain home";
+	else if (!folder || strcmp(folder, expected) != 0) why = "its folder is not the developer apps folder of that id";
+	bool ok = !why;
+	if (!ok) {
+		LOGE("REFUSED", "%s from service name '%s' with no application id: %s", op->method, op->caller, why);
+		send_error_for(op->msg, op->method, "forbidden", "This method is for apps; the caller has no application id");
+	}
+	g_free(type);
+	g_free(folder);
+	return ok;
 }
 
 static void consent_done(Call *c, jvalue_ref reply)
 {
 	LOp *op = c->ctx;
+	if (op->native) {
+		jvalue_ref ni = reply && reply_ok(reply) ? jobject_get(reply, key_buf("appInfo")) : NULL;
+		if (!ni || !jis_valid(ni) || !jis_object(ni)) ni = NULL;
+		if (!native_eligible(op, ni) || !launcher_policy(op->msg, op->method, op->need_root, op->need_home, op->caller, true)) {
+			op_free(op);
+			return;
+		}
+	}
 	if (op->need_consent && (!reply || !reply_ok(reply))) {
 		char *sam_text = reply ? get_string(reply, "errorText") : NULL;
 		const char *code = !reply ? hc_unusable_reply_code(c->status) : "lookupFailed";
@@ -153,8 +217,13 @@ LOp *launcher_open(LSHandle *sh, LSMessage *msg, const char *method, bool need_r
 	bool need_consent, void (*next)(LOp *))
 {
 	char caller[130];
-	if (!launcher_gate(msg, method, need_root, need_home, caller, sizeof caller)) return NULL;
+	Who who = launcher_who(msg, method, caller, sizeof caller);
+	if (who == WHO_REFUSED) return NULL;
+	if (who == WHO_APP && !launcher_policy(msg, method, need_root, need_home, caller, false)) return NULL;
 	LOp *op = g_new0(LOp, 1);
+	op->native = who == WHO_NATIVE;
+	op->need_root = need_root;
+	op->need_home = need_home;
 	op->msg = msg;
 	LSMessageRef(msg);
 	op->sh = sh;

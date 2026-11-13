@@ -10,7 +10,7 @@ import urllib.request
 
 from .. import timing
 from ..alerts import RebootAlertMonitor, alert_service_proof
-from ..api_spec import (API_GROUP, API_VERSION, DISPOSABLE_ID, api_refused, api_reply_problems, launcher_methods,
+from ..api_spec import (API_GROUP, API_VERSION, DISPOSABLE_ID, NATIVE_IMPOSTOR_ID, NATIVE_NOHOME_ID, NATIVE_PROBE_ID, api_refused, api_reply_problems, launcher_methods,
     spec_reply_problems, too_large_refusal)
 from ..constants import APP_ID, SCRIPTS_DIR, STOCK, SVC_ID
 from ..evidence import messages_command, parse_luna, service_log_command
@@ -192,7 +192,95 @@ class ApiSteps:
         return 'full' if getattr(self.a, 'api_check', None) == 'full' else 'smoke'
 
     def api_before(self):
-        return self.api_before_selection() if self.api_mode() == 'full' else self.api_smoke_before()
+        done = self.api_before_selection() if self.api_mode() == 'full' else self.api_smoke_before()
+        self.api_native_identity()
+        return done
+
+    def read_probe(self, appid, timeout=40):
+        """The reply a native probe recorded in /tmp (the probe's own file, deleted first by the caller): (parsed, raw)."""
+        path = '/tmp/%s.getinfo' % appid
+        got = []
+
+        def read():
+            rc, out = self.dev.sh('cat %s 2>/dev/null' % path, 30)
+            rep = parse_luna(out) if rc == 0 else None
+            got[:] = [(rep, out.strip())] if rep is not None else []
+            return bool(got)
+        self.wait(read, timeout, 2)
+        return got[0] if got else (None, 'no record in %s after %ds' % (path, timeout))
+
+    def api_native_identity(self):
+        """A native launcher's own process calls getInfo (e2e/fixtures/nativeid): the native process has no
+        application id on the bus, so the service identifies it by the service name its handle is registered under.
+        An app of the same kind without the home category is refused, and so is an executable that registers the
+        service name of that app without being it (its package's app id is a prefix of the name)."""
+        r, d = self.rec, self.dev
+        ipks = getattr(self.a, 'native_probe_ipks', None)
+        if not ipks:
+            self.rec.note('native-caller check skipped: the fixture packages need the cross SDK (e2e/fixtures/nativeid/build.sh)', '')
+            return
+        r.begin('2b launcher API as a native launcher (--api-check)')
+        taken = [i for i in ipks if d.app_installed(i)]
+        if not r.check('the native probe packages are not already installed', not taken, ', '.join(taken) or 'none installed'):
+            return
+        installed = []
+        mark = self.messages_mark()
+        try:
+            for ident in (NATIVE_PROBE_ID, NATIVE_NOHOME_ID):
+                rc, out = d.install(ipks[ident])
+                if not r.check('install %s' % ident, rc == 0, out.strip()[-300:]):
+                    return
+                installed.append(ident)
+            d.sh('rm -f /tmp/%s.getinfo /tmp/%s.getinfo' % (NATIVE_PROBE_ID, NATIVE_NOHOME_ID), 30)
+            # a native launcher: its process calls getInfo from its own luna handle
+            rc, out = d.launch(NATIVE_PROBE_ID)
+            r.note('launch the native probe', out.strip()[-200:])
+            rep, raw = self.read_probe(NATIVE_PROBE_ID)
+            problems = api_reply_problems('getInfo', rep)
+            r.check('native launcher (its own process, no luna-send -a): getInfo is answered, with the documented fields',
+                    not problems, '%s\n%s' % ('; '.join(problems) or 'conforms', raw[:600]))
+            if rep:
+                self.check_spec_schema('getInfo', {}, NATIVE_PROBE_ID + ' (native process)', rep, raw)
+            as_app = (self.dev.luna_as(NATIVE_PROBE_ID, 'luna://%s/getInfo' % SVC_ID, '{}')[2] or {})
+            same = bool(rep) and all(rep.get(k) == as_app.get(k) for k in ('root', 'permitted', 'isSelectedHome'))
+            r.check('the native process gets the same root, permitted and isSelectedHome as the app id does',
+                    same, 'native %s; as app id %s' % (json.dumps(rep), json.dumps(as_app)))
+            r.check('the native launcher declared the group and is permitted', bool(rep) and rep.get('permitted') is True, json.dumps(rep))
+            # not eligible: no home category
+            rc, out = d.launch(NATIVE_NOHOME_ID)
+            rep, raw = self.read_probe(NATIVE_NOHOME_ID)
+            r.check('a native app without the home category is refused (forbidden)',
+                    isinstance(rep, dict) and rep.get('returnValue') is False and rep.get('errorCode') == 'forbidden', raw[:400])
+            # a name its executable does not own: installed last, because while it is installed the probe above is refused too
+            d.close(NATIVE_PROBE_ID)
+            rc, out = d.install(ipks[NATIVE_IMPOSTOR_ID])
+            if not r.check('install %s' % NATIVE_IMPOSTOR_ID, rc == 0, out.strip()[-300:]):
+                return
+            installed.append(NATIVE_IMPOSTOR_ID)
+            text = d.luna('luna://%s/try' % NATIVE_PROBE_ID, '{}')
+            rep = parse_luna(text)
+            if rep and rep.get('errorCode') == 'forbidden':
+                r.check('an executable that registered the probe\'s service name (package id %s) is refused (forbidden)'
+                        % NATIVE_IMPOSTOR_ID, True, json.dumps(rep))
+            elif rep and rep.get('returnValue') is True:
+                r.check('an executable that registered the probe\'s service name (package id %s) is refused (forbidden)'
+                        % NATIVE_IMPOSTOR_ID, False, 'it was answered: %s' % text[:400])
+            else:
+                r.note('the impostor service could not take the name or was not reached; nothing to refuse', text[:400])
+            rc, log = d.sh(service_log_command(mark, 'REFUSED') + ' | tail -5; ' + service_log_command(mark, 'CALL') + ' | grep -F "native service name" | tail -3', 60)
+            r.note('service log: which path admitted or refused the native callers', log.strip()[-900:])
+        finally:
+            for ident in reversed(installed):
+                d.close(ident)
+                rc, out = d.remove(ident)
+                r.check('remove %s' % ident, rc == 0, out.strip()[-200:])
+            d.sh('rm -f /tmp/%s.getinfo /tmp/%s.getinfo' % (NATIVE_PROBE_ID, NATIVE_NOHOME_ID), 30)
+            # the probes took the foreground and sam closed Home Chooser's overlay window: open it again, on a new page
+            if self.insp:
+                self.close_insp()
+                self.insp = Inspector(self.dev)
+            d.launch(APP_ID)
+            self.wait(lambda: self.ui() is not None, 60, 1)
 
     def api_selected(self):
         return self.step_api() if self.api_mode() == 'full' else self.api_smoke_selected()

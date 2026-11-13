@@ -7,7 +7,7 @@ import signal
 import time
 
 from . import mitm, timing
-from .api_spec import DISPOSABLE_ID
+from .api_spec import DISPOSABLE_ID, NATIVE_IDS
 from .beanjar import BeanjarHost
 from .constants import HERE, REPO
 from .device import Device, ELEVATIONS
@@ -141,7 +141,9 @@ class VmSession:
                      for i, sp in enumerate(specs)]
         if args.scenario != 'lifecycle' and any(not launcher.is_fixture or launcher.overlay for launcher in launchers):
             ap.error('--scenario screensaver/all requires a normal fixture launcher')
-        args.disposable_ipk = api_fixture_ipks(lambda t: print(t, flush=True))[DISPOSABLE_ID] if args.api_check else None
+        api_ipks = api_fixture_ipks(lambda t: print(t, flush=True)) if args.api_check else {}
+        args.disposable_ipk = api_ipks.get(DISPOSABLE_ID)
+        args.native_probe_ipks = {i: api_ipks[i] for i in NATIVE_IDS if i in api_ipks}
         args.demo_target_ipk = demo_target_ipk(lambda t: print(t, flush=True)) \
             if any(getattr(launcher, 'is_demo', False) for launcher in launchers) else None
         host = BeanjarHost.from_config(cfg, args.host or cfg['default'], args.host_mode, args.host_device)

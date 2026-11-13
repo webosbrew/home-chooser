@@ -6,7 +6,7 @@ import shutil
 import time
 
 from .alerts import RebootAlertMonitor
-from .api_spec import DISPOSABLE_ID
+from .api_spec import DISPOSABLE_ID, NATIVE_IDS
 from .constants import APP_ID, FULLHOME, HERE, STOCK
 from .device import Device, ELEVATIONS
 from .inspector import Inspector
@@ -200,7 +200,9 @@ def run_device_api(args, ap):
         ap.error('--device needs these on PATH: %s' % ', '.join(lacking))
     spec = args.launcher or 'fixture:web.normal'
     launcher = make_launcher(spec, args.launcher_ipk, api=True)
-    args.disposable_ipk = api_fixture_ipks()[DISPOSABLE_ID]
+    api_ipks = api_fixture_ipks()
+    args.disposable_ipk = api_ipks[DISPOSABLE_ID]
+    args.native_probe_ipks = {i: api_ipks[i] for i in NATIVE_IDS if i in api_ipks}
     outdir = args.outdir or os.path.join(HERE, 'results', '%s-%s' %
                                         (result_dir_name(args.device), time.strftime('%Y%m%d-%H%M%S')))
     os.makedirs(outdir)
