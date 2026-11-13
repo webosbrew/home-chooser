@@ -4042,3 +4042,91 @@ class DebugModeSetting(unittest.TestCase):
     def test_the_option_defaults_to_release(self):
         src = open(os.path.join(HERE, 'hc_e2e', 'cli.py')).read()
         self.assertIn("'--debug-mode', choices=['release', 'debug', 'event', 'keep'], default='release'", src)
+
+
+class NativeCallerDev:
+    """The device side of the native-caller check: installs, the probes' records in /tmp, the impostor's reply."""
+    ADMIT = ('{"returnValue":true,"apiVersion":3,"version":"0.1.0","root":true,"permission":"%s","permitted":true,"isSelectedHome":false}'
+             % hc_e2e.api_spec.API_GROUP)
+    REFUSE = '{"returnValue":false,"apiVersion":3,"errorCode":"forbidden","errorText":"This method is for apps; the caller has no application id"}'
+
+    def __init__(self, admit=True, refuse_impostor=True):
+        self.installed, self.removed, self.records, self.admit, self.refuse_impostor = set(), [], {}, admit, refuse_impostor
+
+    def app_installed(self, appid):
+        return appid in self.installed
+
+    def install(self, ipk):
+        self.installed.add(ipk.split('/')[-1].rsplit('_', 2)[0])
+        return 0, 'Installed'
+
+    def remove(self, appid):
+        self.installed.discard(appid)
+        self.removed.append(appid)
+        return 0, 'removed'
+
+    def launch(self, appid, params=None):
+        if appid == hc_e2e.api_spec.NATIVE_PROBE_ID:
+            self.records[appid] = self.ADMIT if self.admit else self.REFUSE
+        elif appid == hc_e2e.api_spec.NATIVE_NOHOME_ID:
+            self.records[appid] = self.REFUSE
+        return 0, 'Launched'
+
+    def close(self, appid):
+        return 0, ''
+
+    def sh(self, cmd, timeout=60):
+        if cmd.startswith('cat /tmp/'):
+            return 0, self.records.get(cmd.split('/tmp/')[1].split('.getinfo')[0], '')
+        return 0, ''
+
+    def luna(self, uri, payload='{}'):
+        return self.REFUSE if self.refuse_impostor else self.ADMIT
+
+    def luna_as(self, app, uri, payload='{}', timeout=60):
+        return 0, self.ADMIT, hc_e2e.evidence.parse_luna(self.ADMIT)
+
+
+class NativeCallerCheck(unittest.TestCase):
+    IPKS = {i: '/x/%s_1.0.0_arm.ipk' % i for i in hc_e2e.api_spec.NATIVE_IDS}
+
+    def run_check(self, dev, ipks=IPKS):
+        from types import SimpleNamespace
+        s = scenario(9)
+        s.dev, s.a = dev, SimpleNamespace(native_probe_ipks=ipks)
+        s.rec.begin = lambda title: None
+        s.insp, s.ui = None, lambda: {}
+        s.wait = lambda cond, timeout, every=3: cond()
+        s.messages_mark = lambda: '2026-11-13T00:00:00'
+        s.check_spec_schema = lambda *a: None
+        s.api_native_identity()
+        return s.rec
+
+    def test_skipped_without_the_packages(self):
+        rec = self.run_check(NativeCallerDev(), ipks={})
+        self.assertEqual(rec.checks, [])
+        self.assertTrue(any('skipped' in n for n in rec.notes))
+
+    def test_passes_and_removes_everything(self):
+        dev = NativeCallerDev()
+        rec = self.run_check(dev)
+        self.assertTrue(all(ok for _, ok in rec.checks), rec.checks)
+        self.assertEqual(sorted(dev.removed), sorted(hc_e2e.api_spec.NATIVE_IDS))
+        self.assertEqual(dev.installed, set())
+
+    def test_a_refused_native_launcher_fails_the_check(self):
+        rec = self.run_check(NativeCallerDev(admit=False))
+        self.assertIn(('native launcher (its own process, no luna-send -a): getInfo is answered, with the documented fields', False), rec.checks)
+
+    def test_an_admitted_impostor_fails_the_check(self):
+        dev = NativeCallerDev(refuse_impostor=False)
+        rec = self.run_check(dev)
+        self.assertTrue(any(not ok and 'registered the probe' in name for name, ok in rec.checks), rec.checks)
+        self.assertEqual(dev.installed, set())
+
+    def test_already_installed_packages_stop_the_check_untouched(self):
+        dev = NativeCallerDev()
+        dev.installed.add(hc_e2e.api_spec.NATIVE_PROBE_ID)
+        rec = self.run_check(dev)
+        self.assertEqual(dev.removed, [])
+        self.assertEqual(rec.checks[0][1], False)

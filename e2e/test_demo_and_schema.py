@@ -175,8 +175,8 @@ class DemoLauncher(unittest.TestCase):
                 ipk = hc_e2e.launchers.demo_target_ipk(lambda t: None)
                 self.assertEqual(ipk, os.path.join(tmp, hc_e2e.launchers.DEMO_TARGET_ID + '_1.0.0_all.ipk'))
                 self.assertEqual(hc_e2e.launchers.demo_target_ipk(lambda t: None), ipk)
-                self.assertEqual(run.call_count, 2)  # web and disposable, once; the second call reused them
-                self.assertTrue(run.call_args.args[0][1].endswith(os.path.join('fixtures', 'disposable', 'build.sh')))
+                self.assertEqual(run.call_count, 3)  # web, disposable and nativeid, once; the second call reused them
+                self.assertTrue(run.call_args_list[1].args[0][1].endswith(os.path.join('fixtures', 'disposable', 'build.sh')))
         finally:
             shutil.rmtree(tmp)
         tmp = tempfile.mkdtemp()
