@@ -73,14 +73,31 @@ static void test_judge(void)
 	/* escapes and odd layouts */
 	CHECK(hc_role_judge("{\"exeName\":\"" APPS "org.webosbrew.dock\\/x\",\"allowedNames\":[\"org.webosbrew.\\u0064ock\"]}", n) == HC_ROLE_OWN);
 	CHECK(hc_role_judge("{\"allowedNames\":[\"org.webosbrew.dock\"],\"permissions\":[{\"allowedNames\":1}],\"exeName\":\"" APPS "org.webosbrew.dock/x\"}", n) == HC_ROLE_OWN);
+	/* a firmware role: several permission objects, one member per line */
+	CHECK(hc_role_judge("{\n    \"exeName\":\"/usr/sbin/accountmanager\",\n    \"type\": \"regular\",\n"
+		"    \"allowedNames\": [\"com.webos.service.accountmanager\", \"x\"],\n    \"permissions\": [\n        {\n"
+		"            \"service\":\"x\",\n            \"outbound\":[\"*\"]\n        },\n        {\n            \"service\":\"y\",\n"
+		"            \"outbound\":[\"*\"]\n        }\n    ]\n}\n", n) == HC_ROLE_UNRELATED);
+	/* a long name list: the match after the 300th entry still counts */
+	{
+		char *big = malloc(20000);
+		size_t k = (size_t)sprintf(big, "{\"exeName\":\"/x\",\"allowedNames\":[");
+		for (int i = 0; i < 300; i++) k += (size_t)sprintf(big + k, "\"svc.n%d\",", i);
+		sprintf(big + k, "\"org.webosbrew.dock\"]}");
+		CHECK(hc_role_judge(big, n) == HC_ROLE_FOREIGN);
+		free(big);
+	}
 	/* not role files */
-	CHECK(hc_role_judge("", n) == HC_ROLE_INVALID);
+	CHECK(hc_role_judge("", n) == HC_ROLE_UNRELATED); /* empty files exist in the firmware */
+	CHECK(hc_role_judge("{\"exeName\":\"/x\",\"allowedNames\":[\"a\",],\"p\":[{\"s\":1},],}", n) == HC_ROLE_UNRELATED); /* trailing commas */
 	CHECK(hc_role_judge("[]", n) == HC_ROLE_INVALID);
 	CHECK(hc_role_judge("{", n) == HC_ROLE_INVALID);
-	CHECK(hc_role_judge("{\"exeName\":\"/x\"}", n) == HC_ROLE_INVALID);
-	CHECK(hc_role_judge("{\"allowedNames\":[\"a\"]}", n) == HC_ROLE_INVALID);
+	CHECK(hc_role_judge("{\"exeName\":\"/x\"}", n) == HC_ROLE_UNRELATED); /* no names: allows nothing */
+	CHECK(hc_role_judge("{\"com.webos.app.x-*\":[\"public\"]}", n) == HC_ROLE_UNRELATED); /* a permission map in a role directory */
+	CHECK(hc_role_judge("{\"allowedNames\":[\"org.webosbrew.dock\"]}", n) == HC_ROLE_FOREIGN); /* names but no executable */
+	CHECK(hc_role_judge("/* @@@LICENSE\n * x */\n\n{ // c\n\"exeName\":\"/x\",\"allowedNames\":[\"a\"]}", n) == HC_ROLE_UNRELATED);
+	CHECK(hc_role_judge("/* open", n) == HC_ROLE_INVALID);
 	CHECK(hc_role_judge("{\"exeName\":\"/x\",\"allowedNames\":[\"a\"]} x", n) == HC_ROLE_INVALID);
-	CHECK(hc_role_judge("{\"exeName\":\"/x\",\"allowedNames\":[\"a\"],}", n) == HC_ROLE_INVALID);
 	CHECK(hc_role_judge(NULL, n) == HC_ROLE_INVALID);
 }
 

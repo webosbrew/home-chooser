@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 
 #define ROLE_MAX 262144
-#define LIST_MAX 64
+#define LIST_MAX 256
 
 bool hc_name_glob(const char *p, const char *s)
 {
@@ -40,9 +40,21 @@ typedef struct {
 	bool bad;
 } Rd;
 
+/* White space and the comments some firmware role files carry (a license header, the hub accepts them). */
 static void ws(Rd *r)
 {
-	while (*r->p == ' ' || *r->p == '\t' || *r->p == '\n' || *r->p == '\r') r->p++;
+	for (;;) {
+		while (*r->p == ' ' || *r->p == '\t' || *r->p == '\n' || *r->p == '\r') r->p++;
+		if (r->p[0] == '/' && r->p[1] == '*') {
+			const char *end = strstr(r->p + 2, "*/");
+			if (!end) { r->bad = true; r->p += strlen(r->p); return; }
+			r->p = end + 2;
+		} else if (r->p[0] == '/' && r->p[1] == '/') {
+			while (*r->p && *r->p != '\n') r->p++;
+		} else {
+			return;
+		}
+	}
 }
 
 /* A string literal at r->p into a malloc'ed copy (escapes \" \\ \/ and \uXXXX below 0x80 are decoded). */
@@ -113,8 +125,8 @@ static char *read_string(Rd *r)
 typedef struct {
 	char *exe;
 	char *appid;
-	char *names[LIST_MAX];
-	int nnames;
+	const char *test;  /* the name to match allowedNames against, as they are read (never stored: lists can be long) */
+	bool matched;
 	bool names_seen;
 	char *lists[3][LIST_MAX]; /* roleFiles, roleFilesPub, roleFilesPrv */
 	int nlists[3];
@@ -124,7 +136,6 @@ static void found_free(Found *f)
 {
 	free(f->exe);
 	free(f->appid);
-	for (int i = 0; i < f->nnames; i++) free(f->names[i]);
 	for (int k = 0; k < 3; k++)
 		for (int i = 0; i < f->nlists[k]; i++) free(f->lists[k][i]);
 }
@@ -140,6 +151,8 @@ static void skip_container(Rd *r, char close, int depth)
 		return;
 	}
 	for (;;) {
+		ws(r);
+		if (*r->p == close) { r->p++; return; } /* a trailing comma, which the hub accepts */
 		if (close == '}') {
 			free(read_string(r));
 			ws(r);
@@ -168,7 +181,7 @@ static void skip_value(Rd *r, int depth)
 }
 
 /* Strings of an array; other elements are skipped. */
-static void read_strings(Rd *r, char **list, int *count)
+static void read_strings(Rd *r, Found *f, char **list, int *count)
 {
 	ws(r);
 	if (*r->p != '[') { skip_value(r, 1); return; }
@@ -177,11 +190,20 @@ static void read_strings(Rd *r, char **list, int *count)
 	if (*r->p == ']') { r->p++; return; }
 	for (;;) {
 		ws(r);
+		if (*r->p == ']') { r->p++; return; }
 		if (*r->p == '"') {
 			char *s = read_string(r);
 			if (r->bad) { free(s); return; }
-			if (*count < LIST_MAX) list[(*count)++] = s;
-			else { free(s); r->bad = true; return; }
+			if (!list) {
+				if (f->test && strcmp(s, "*") != 0 && hc_name_glob(s, f->test)) f->matched = true;
+				free(s);
+			} else if (*count < LIST_MAX) {
+				list[(*count)++] = s;
+			} else {
+				free(s);
+				r->bad = true;
+				return;
+			}
 		} else {
 			skip_value(r, 2);
 			if (r->bad) return;
@@ -203,6 +225,7 @@ static void walk_object(Rd *r, Found *f, int depth)
 	if (*r->p == '}') { r->p++; return; }
 	for (;;) {
 		ws(r);
+		if (*r->p == '}') { r->p++; return; }
 		char *key = read_string(r);
 		if (r->bad) { free(key); return; }
 		ws(r);
@@ -213,7 +236,7 @@ static void walk_object(Rd *r, Found *f, int depth)
 			walk_object(r, f, 1); /* the legacy ls2 files wrap the role: {"role": {...}, "permissions": [...]} */
 		} else if (strcmp(key, "allowedNames") == 0 && *r->p == '[') {
 			f->names_seen = true;
-			read_strings(r, f->names, &f->nnames);
+			read_strings(r, f, NULL, NULL);
 		} else if (strcmp(key, "exeName") == 0 && *r->p == '"') {
 			free(f->exe);
 			f->exe = read_string(r);
@@ -221,11 +244,11 @@ static void walk_object(Rd *r, Found *f, int depth)
 			free(f->appid);
 			f->appid = read_string(r);
 		} else if (depth == 0 && strcmp(key, "roleFiles") == 0) {
-			read_strings(r, f->lists[0], &f->nlists[0]);
+			read_strings(r, f, f->lists[0], &f->nlists[0]);
 		} else if (depth == 0 && strcmp(key, "roleFilesPub") == 0) {
-			read_strings(r, f->lists[1], &f->nlists[1]);
+			read_strings(r, f, f->lists[1], &f->nlists[1]);
 		} else if (depth == 0 && strcmp(key, "roleFilesPrv") == 0) {
-			read_strings(r, f->lists[2], &f->nlists[2]);
+			read_strings(r, f, f->lists[2], &f->nlists[2]);
 		} else {
 			skip_value(r, depth + 1);
 		}
@@ -239,10 +262,13 @@ static void walk_object(Rd *r, Found *f, int depth)
 	}
 }
 
-static bool parse(const char *text, Found *f)
+static bool parse(const char *text, const char *test, Found *f)
 {
 	Rd r = {text, false};
 	memset(f, 0, sizeof *f);
+	f->test = test;
+	ws(&r);
+	if (!*r.p && !r.bad) return true; /* an empty file (some firmware ships one) allows nothing */
 	walk_object(&r, f, 0);
 	if (!r.bad) {
 		ws(&r);
@@ -255,16 +281,10 @@ static bool parse(const char *text, Found *f)
 HcRoleVerdict hc_role_judge(const char *text, const char *name)
 {
 	Found f;
-	if (!text || !name || !name[0] || !parse(text, &f)) return HC_ROLE_INVALID;
+	if (!text || !name || !name[0] || !parse(text, name, &f)) return HC_ROLE_INVALID;
+	/* A file with no allowedNames cannot allow a name (the legacy ls2 directories also hold permission maps). */
 	HcRoleVerdict v = HC_ROLE_UNRELATED;
-	if (!f.names_seen || (!f.exe && !f.appid)) {
-		found_free(&f);
-		return HC_ROLE_INVALID;
-	}
-	bool match = false;
-	for (int i = 0; i < f.nnames && !match; i++)
-		if (strcmp(f.names[i], "*") != 0 && hc_name_glob(f.names[i], name)) match = true;
-	if (match) {
+	if (f.matched) {
 		char own[512];
 		int n = snprintf(own, sizeof own, "%s%s/", HC_DEV_APPS_DIR, name);
 		bool inside = n > 0 && (size_t)n < sizeof own && f.exe && strncmp(f.exe, own, (size_t)n) == 0 &&
@@ -361,7 +381,7 @@ static void manifest_file(Scan *s, const char *path)
 		return;
 	}
 	Found f;
-	if (!parse(text, &f)) {
+	if (!parse(text, NULL, &f)) {
 		free(text);
 		fail(s, "not a manifest:", path, "");
 		return;
