@@ -71,8 +71,8 @@ stays under an overlay window.
   asks the owner first.
 
 What it needs: a TV with Homebrew Channel and a Home Chooser service running as root. On 5.x to
-10.x, opening Home Chooser asks Homebrew Channel to elevate the service. On 11.x and 12.x the
-current Homebrew Channel may refuse that request; see [Per-release notes](#per-release-notes).
+10.x, opening Home Chooser asks Homebrew Channel to elevate the service. On 11.x and 12.x that
+needs Homebrew Channel 0.8.0 or later; see [Per-release notes](#per-release-notes).
 Until elevation, only `getInfo` works, and it tells you so.
 
 See [Stability](#stability) for the version policy.
@@ -921,9 +921,8 @@ declaration Home Chooser reads to permit a launcher, and it is not something the
 in it, or on 11.x and 12.x the bus refuses the methods of the group it left out (`Denied method
 call`) before Home Chooser sees them. Without `requiredACG` nothing is needed.
 
-Also on 11.x and 12.x, the current Homebrew Channel refuses to elevate Home Chooser's service from an
-ordinary app (`Denied method call`), so `root` stays false until the owner elevates it by other means
-or a newer Homebrew Channel allows it. The layout of the access files is in
+Also on 11.x and 12.x, elevating Home Chooser's service needs Homebrew Channel 0.8.0 or later. Older
+releases refuse the call from an ordinary app (`Denied method call`), so `root` stays false. The layout of the access files is in
 [the service reference](service.md#luna-access-files).
 
 ### The stock home

@@ -3,7 +3,7 @@
 //   status -> if not root: Homebrew Channel elevateService -> quit -> status again.
 // Failures are FatalErrors whose `kind` the screen maps to a message:
 //   'unreachable' Homebrew Channel is not installed / not running
-//   'denied'      Homebrew Channel refuses the call from an app (webOS 26 and later)
+//   'denied'      Homebrew Channel refuses the call from an app (webOS 26 and later, before 0.8.0)
 //   'notRoot'     the service answered after elevation but is still not root
 //   'failed'      anything else
 import {classifyExecFailure} from '../homechooser/diagnose';
