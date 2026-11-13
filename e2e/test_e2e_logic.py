@@ -1652,6 +1652,7 @@ class StockCloseBeforeHomeProof(unittest.TestCase):
         from unittest.mock import Mock
         s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
         s.rec, s.launcher = Mock(), 'org.x.web.overlay'
+        s.major, s.L, s.shot = 9, Mock(overlay=True), Mock()
         s.dev = Mock()
         s.dev.foreground.return_value = ('a', '{}')
         s.dev.sh.side_effect = lambda cmd, *a, **k: (0, log if 'homechooser-home.log' in cmd else '1')
@@ -1667,6 +1668,24 @@ class StockCloseBeforeHomeProof(unittest.TestCase):
         s = self.scenario('closeByAppId com.webos.app.home after org.x.web.overlay in front: {}')
         s.step3()
         s.dev.launch.assert_not_called()
+
+    def test_overlay_must_survive_the_first_home_press(self):
+        for major, overlay, running, want in ((8, True, ['org.x.web.overlay'], True), (8, True, [], False),
+                                              (8, False, [], None), (11, True, [], None)):
+            s = self.scenario('closeByAppId com.webos.app.home after org.x.web.overlay in front: {}')
+            s.major, s.L.overlay, s.running_ids = major, overlay, lambda running=running: running
+            with unittest.mock.patch.object(hc_e2e.timing, 'sleep') as sleep:
+                s.step3()
+            checks = [c for c in s.rec.check.call_args_list if 'still running' in c[0][0]]
+            if want is None:
+                self.assertFalse(checks); sleep.assert_not_called()
+            else:
+                self.assertEqual(len(checks), 1); self.assertIs(checks[0][0][1], want)
+                sleep.assert_called_once_with(hc_e2e.checks.OVERLAY_HOLD)
+
+    def test_overlay_survives_verdict(self):
+        self.assertTrue(hc_e2e.checks.overlay_survives(['a', 'l'], 'l')[0])
+        self.assertFalse(hc_e2e.checks.overlay_survives(['a'], 'l')[0])
 
     def test_restart_before_the_close(self):
         s = self.scenario('2026 sam relaunched something')
