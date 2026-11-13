@@ -68,8 +68,8 @@ At startup the app makes sure the service is root (`[HomeChooser]` lines in the 
 (which rewrites the service's launch line so it is no longer jailed and runs as root); `quit`, so
 the next call starts the elevated binary; `status` again, retried a few times. Every step has a
 timeout. The failures map to the problem screens: Homebrew Channel absent (`unreachable`),
-`elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with the current
-Homebrew Channel), the service still not root after elevation (`notRoot`), anything else
+`elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with a Homebrew Channel
+older than 0.8.0), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
 content never meets a shell. Boot and Home-key entry scripts invoke `homechooser-daemon`. The
 watcher policy runs in C and uses luna-send child transport; access-file edits retain the shell helper.
