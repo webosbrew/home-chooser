@@ -197,6 +197,54 @@ uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that 
 still Home, and first tries `removeLaunchPoint` before the appropriate `appInstallService` route.
 The settings app allows 120 seconds for screen confirmation.
 
+### Native launchers
+
+A native executable's luna messages carry no application id: the hub stamps one only on calls from
+the web, QML and node containers (`LSRegisterApplicationService` is refused outside
+`/usr/share/luna-service2/containers.d`, and `LSCallFromApplication` needs a privileged role, which
+Homebrew Channel's elevation does not give: its roles keep type `regular`). So `launcher_gate` falls
+back, only when the application id is empty, to the sender service name, which the hub fixes from the
+role (a native app's own handle is registered under its app id; ls-monitor shows
+`org.webosbrew.dock` as the caller of `getInfo`). The name is admitted as the app of that id when SAM's
+`getAppInfo` says `type` `native`, `appCategory` has `home` and `folderPath` is the developer apps
+folder of that id, and `nameowner.c` finds that every role file that allows the name belongs to the app's
+own executable (`/media/developer/apps/usr/palm/applications/<id>/...`), with at least one. It scans the
+hub's own data: the role lists of every manifest in `ManifestsDirectories` and
+`ManifestsVolatileDirectories` (read from `/etc/luna-service2/ls-hubd.conf`, plus the fixed
+defaults), the legacy `ls2/roles/{pub,prv}` and `ls2-dev/roles/{pub,prv}` directories and the `roles.d`
+directories, system and developer. Allowed names are glob patterns (`*`, `?`) as in the hub. A role
+whose pattern is exactly `*` is not counted (firmware tools such as luna-send and node, and
+executables Homebrew Channel elevated, among them this service). Unreadable or malformed data refuses. The
+log says which path admitted a caller (`CALL ... (native service name)` or `(application id)`) and why a
+native candidate was refused (`REFUSED ... not a native launcher's own name: <why>`). After admission
+every launcher method treats the caller as the app id, including the selected-Home checks; the SAM
+check runs before `notRoot` and `notHome`, so the order of refusals is unchanged.
+
+Concluded facts (webOS 5.6.1, 6.5.2, 8.3.0, 9.2.4 and 11.2.0 unless noted; firmware trees for the static
+parts of 5.6.1, 5.6.2, 6.6.0, 7.6.0 and 11.2.0):
+
+* appinstalld accepts a service only if its id starts with `<package app id>.` (error `WRONG_SERVICEID`).
+  A package `org.webosbrew.hcfixture.native` with the service `org.webosbrew.hcfixture.native.probe` installs
+  and its executable registers that name, which is another app's id (the E2E kit does this on 5.6.1,
+  8.3.0, 9.2.4 and 11.2.0). The hub itself only matches the name against the role's `allowedNames`.
+* The hub reads manifests (`/var/luna-service2-dev/manifests.d/<package>.json`: `roleFiles`,
+  `roleFilesPub`, `roleFilesPrv`). On 5.6.1 to 9.2.4 the app's role is
+  `/var/palm/ls2-dev/roles/{pub,prv}/<id>.json` (`{"role": {exeName, type, allowedNames}, "permissions": [...]}`),
+  a service's is `/var/luna-service2-dev/roles.d/<service id>.service.json` (flat). On 11.2.0 both are in
+  `roles.d` (`<id>.app.json`, `<service id>.service.json`) and `ls2-dev` is absent. The app's role has type
+  `regular` and `allowedNames` `[..., "<id>", ""]`. Firmware roles are in `/usr/share/luna-service2/roles.d`,
+  and in the legacy `/usr/share/ls2/roles/{pub,prv}` (which also holds permission maps, and files with
+  comments, trailing commas or no content). 10.x was not examined.
+* `requiredPermissions` of a native app does not reach its bus role: its client-permissions file is
+  `{"<id>": ["public", "<id>.service.group"]}` (5.6.1, 6.5.2, 8.3.0, 9.2.4); on 11.2.0 the file lists LG's
+  groups. The calls reach the service through its public API file, as for web apps, so `permitted` stays
+  the service's own reading of the installed appinfo. Before elevation the hub denies the call
+  (reported by the Dock project, not re-run).
+* No firmware's `libluna-service2.so` here exports `LSMessageGetSenderExePath` or `LSMessageGetSenderPid`
+  (`nm -D` on 12 trees), so the sender's executable cannot be read; the role files are the only evidence.
+* While a package with a conflicting role is installed, the real app is refused too (fail closed).
+* Not seen: a native app calling `applicationManager/launch` from its own handle.
+
 See [Launcher API level 2](launcher-api.md) for the contract, fields, errors, caller rules,
 selection requests and absence detection. Plain shell callers have no application id and are
 refused by launcher gates.

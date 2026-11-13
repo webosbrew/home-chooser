@@ -116,3 +116,11 @@ open the launcher): sam's own record naming the id, plus the id in `applicationM
 * A relaunch of a launcher that is already running (overlay launchers stay running) shows as a `relaunch` event and,
   where sam logs it, a `RelaunchAsCommon` line naming the id. The runner closes a launcher before each press, so the
   normal path is a fresh launch; the relaunch signals are accepted too.
+
+## nativeid/
+
+`--api-check` also installs three packages built by `nativeid/build.sh` (needs the cross SDK; without them the check is
+skipped): a headless native launcher (`idprobe.c`, home category and the permission group) that calls `getInfo` once
+from its own process through libhelpers and records the reply in `/tmp/<id>.getinfo`; the same without the home category,
+which must be refused; and an app whose id is a prefix of the first one's with a service named like it (`impostor.c`),
+whose `getInfo` must be refused. The runner reads the records (hc_e2e/steps/api.py, `api_native_identity`).
