@@ -306,8 +306,8 @@ TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
 | 9.x | `w22h-ombre` | luna | verified: 9.2.1 |
 | 9.x | `w24g-ombre` | luna | verified: 9.2.4 (`w24p-ombre` runs the same firmware) |
 | 10.x | `w22o-ponytail-us` | luna | verified: 10.3.1 |
-| 11.x | `w22o-queue-us` | root-shell | verified: 11.2.0 (`w22o-queue`, `w22o-queue-jp` run the same firmware) |
-| 12.x | `w24g-spacebuns` | root-shell | verified: 12.0.0 (os-release) |
+| 11.x | `w22o-queue-us` | luna | verified: 11.2.0 (`w22o-queue`, `w22o-queue-jp` run the same firmware) |
+| 12.x | `w24g-spacebuns` | luna | verified: 12.0.0 (os-release) |
 
 The runner checks the release it finds (`/usr/lib/os-release`) against the row and records the
 result.
@@ -320,7 +320,7 @@ A change gets the runs its reach calls for, not the whole matrix every time (the
 | --- | --- |
 | Any change | The offline suites: `service/scripts/tests/test-*.sh`, `cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host`, `cd app && npm run lint && CI=true npm test` |
 | Code gated by release (a `MAJOR` bound, the 5.x branch, the 11/12 profile path, the hook version gate) | The releases inside the gate, plus one just outside it |
-| Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (Home key hook), 11.x (root-shell elevation, profile path) |
+| Shared code (the apply flow, the watcher's main loop, the uninstall cleanup) | One release per family: 5.x, 9.x (Home key hook), 11.x (profile path, LG access groups) |
 | Only the runner or the docs | `--tier smoke` |
 | A release or a tag | `--tier release` |
 | A new launcher runtime, a fixture change, an API method or errorCode on the device | `--tier full` |
@@ -621,15 +621,17 @@ depend on it: it runs `beanjar` on each machine over ssh, which works whether or
 
 ## Elevation strategies
 
-* `luna` (webOS 5 to 10): the app elevates its own service through Homebrew Channel's
-  `elevateService`; the runner only verifies the service runs as root (`ps`).
-* `root-shell` (11.x and 12.x): Homebrew Channel refuses `elevateService` from ordinary apps there
-  (README "Decisions", `Denied method call`). The runner runs Homebrew Channel's own helper as
-  root (`beanjar ares-shell --root`), `…/org.webosbrew.hbchannel.service/elevate-service
-  org.webosbrew.homechooser.service` (what `services/service.ts` runs), then makes the service quit
-  so the root instance starts, and verifies the same outcome. **This is a test-harness substitute
-  for the missing luna path: the app's own elevation is not exercised on those releases.** The
-  strategy used is written at the top of every run log. This path is untested so far.
+* `luna` (every release, the default): the app elevates its own service through Homebrew Channel's
+  `elevateService`; the runner only verifies the service runs as root (`ps`). On 11.x and 12.x this
+  needs Homebrew Channel 0.8.0 or later, which serves `elevateService` to ordinary apps there; older
+  releases refuse it with `Denied method call`. The full tier passed with it on 11.2.0 and 12.0.0
+  on 2026-11-13 (`w22o-queue-us`, `w24g-spacebuns` on rockpi4a-1).
+* `root-shell` (`--elevation root-shell`, 11.x and 12.x with an older Homebrew Channel): the runner
+  runs Homebrew Channel's own helper as root (`beanjar ares-shell --root`),
+  `…/org.webosbrew.hbchannel.service/elevate-service org.webosbrew.homechooser.service` (what
+  `services/service.ts` runs), then makes the service quit so the root instance starts, and verifies
+  the same outcome. It is a test-harness substitute: the app's own elevation is not exercised. The
+  strategy used is written at the top of every run log.
   The `--update-check` step reinstalls the service, which loses that root, so after the update the runner repeats
   the elevation (and verifies it) before it opens the app again.
 
@@ -807,8 +809,7 @@ the watcher makes no preload call, so the checks only assert the policy is not d
   input app (anything but stock Home) for an overlay one. On 5.x there is no preload call.
 
 A check that fails where the docs name a limitation is recorded `XFAIL` with the citation
-(`Recorder.check(..., expected=...)`); nothing uses it yet, since 11.x and 12.x run with
-root-shell elevation.
+(`Recorder.check(..., expected=...)`), as the qml gate does on releases without Qt (12.x).
 
 The log also has a "home-app residency" section at five points (before selecting, after "Use as
 Home", after the Home press, after the launcher uninstall, after the Home Chooser uninstall): is the

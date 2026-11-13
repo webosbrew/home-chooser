@@ -10,6 +10,7 @@ These changes are planned for 0.1.0.
 ### Added
 
 - Choose a Home app on rooted webOS TVs from webOS 5 through 12, on 6 through 9 through a Home key filter that takes effect live, with no restart.
+- Elevate the service through Homebrew Channel on every release; on webOS 11 and later this needs Homebrew Channel 0.8.0 or later.
 - Persist the choice across boots; restore LG Home and notify the owner when a chosen launcher or Home Chooser is removed.
 - Stop stock Home preloading while another Home is chosen, then restore the policy when LG Home returns.
 - On webOS 6 through 9, keep stock LG Home from running while another Home is chosen: a home gate takes its place for every SAM launch and opens the chosen launcher, or the last input under an overlay launcher.

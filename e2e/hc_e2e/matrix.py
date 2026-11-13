@@ -10,9 +10,10 @@ from .constants import HERE
 #   verified  = booted and os-release read by a run of this runner
 #   docs      = the firmware is named for that release in docs/research/home-key-and-home-app.md
 #   listing   = only `beanjar list` (platform column, firmware string); os-release not read
-# elevation: luna = Homebrew Channel's luna elevateService (the app does it); root-shell = the
-# runner runs Homebrew Channel's elevate-service helper as root (webOS 11.x/12.x, where
-# Homebrew Channel refuses `elevateService` from apps: README.md "Decisions").
+# elevation: luna = Homebrew Channel's luna elevateService (the app does it), on every release:
+# from Homebrew Channel 0.8.0 it serves apps on 11.x/12.x too (full tier, 2026-11-13).
+# root-shell = the runner runs Homebrew Channel's elevate-service helper as root, kept as an
+# --elevation override for 11.x/12.x sets with an older Homebrew Channel (e2e/README.md).
 # ---------------------------------------------------------------------------------------------
 MATRIX = [
     # release, vm, elevation, sure, note
@@ -24,8 +25,8 @@ MATRIX = [
     ('8.x', 'w22o-number1', 'luna', 'verified', 'W22O 13.30.56.01 = 8.3.0; os-release read 2026-10-22 (beanjar lists it as "webOS 23", a platform label)'),
     ('9.x', 'w22h-ombre', 'luna', 'verified', 'W22H 23.21.20.01 = 9.2.1; os-release read'),
     ('10.x', 'w22o-ponytail-us', 'luna', 'verified', 'W22O 33.31.61.01 = 10.3.1; os-release read 2026-10-22'),
-    ('11.x', 'w22o-queue-us', 'root-shell', 'verified', 'W22O 43.21.89.01 = 11.2.0; os-release read 2026-10-22; w22o-queue and w22o-queue-jp run the same firmware'),
-    ('12.x', 'w24g-spacebuns', 'root-shell', 'verified', 'W24G 02.68.80.01 = 12.0.0; os-release read 2026-10-22'),
+    ('11.x', 'w22o-queue-us', 'luna', 'verified', 'W22O 43.21.89.01 = 11.2.0; os-release read 2026-10-22; w22o-queue and w22o-queue-jp run the same firmware'),
+    ('12.x', 'w24g-spacebuns', 'luna', 'verified', 'W24G 02.68.80.01 = 12.0.0; os-release read 2026-10-22'),
 ]
 KEEP_LAUNCHER_VMS = {'w21p-kisscurl'}
 

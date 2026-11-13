@@ -154,7 +154,7 @@ class DeviceApiScenario(Scenario):
             installed_disposable = rc == 0
             if not r.check('install disposable API control', installed_disposable, out.strip()[-400:]):
                 return
-            strategy = ELEVATIONS[self.a.elevation or ('root-shell' if self.major >= 11 else 'luna')]()
+            strategy = ELEVATIONS[self.a.elevation or 'luna']()
             strategy.prepare(d, r)
             self.insp = Inspector(self.dev)
             d.launch(APP_ID)
