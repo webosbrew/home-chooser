@@ -975,8 +975,12 @@ nothing is written, and a reboot starts with the stock policy until Home Chooser
 is left alone.
 
 On 6.x to 9.x the [home gate](home-gate.md) takes the stock home's place while your launcher is
-chosen, and the running stock home is closed once. A launch of `com.webos.app.home` then runs the
-gate, so `listRunning` can briefly list that id while the gate decides.
+chosen, and the running stock home is closed once: at once for a full-screen launcher, and for an
+overlay launcher once a full-screen app other than the stock home is in front (an app your launcher
+opened, Live TV, an input), since closing it under an overlay that is alone in front would empty the
+foreground and the gate would open the last input over your launcher. Until then the stock home stays
+loaded and `listRunning` lists it. A launch of `com.webos.app.home` runs the gate, so `listRunning` can
+briefly list that id while the gate decides.
 
 On 10.x Home Chooser does not close LG Home: the system relaunches the stock home at once as the
 last-input app, so a close frees nothing. It can stay resident until the next reboot, and

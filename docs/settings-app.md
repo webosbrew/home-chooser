@@ -503,7 +503,7 @@ What happens to a stock home that is already running depends on the release:
 | Release | Stock home while a launcher is chosen |
 | --- | --- |
 | 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
-| 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted, after Home Chooser left the screen when the change was made there ([The previous launcher](#the-previous-launcher)) |
+| 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted, after Home Chooser left the screen when the change was made there ([The previous launcher](#the-previous-launcher)); under an overlay launcher it waits for a full-screen app other than LG Home to be in front ([below](#close-later-under-an-overlay-launcher-webos-6-to-9)) |
 | 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot. Under an overlay launcher the watcher opens the last input once after boot ([above](#the-last-input-after-a-boot-webos-10-and-later)), which is the full-screen app the close waits for |
 
 * **When.** The watcher keeps one state, off or on, and calls only when it changes: once at start
@@ -552,6 +552,21 @@ What happens to a stock home that is already running depends on the release:
   it, and closing LG Home beneath an overlay also closes the overlay. Closing it during selection would let the compositor close Home Chooser's own panel
   before its completion toast, which is why the hold also covers it. With a nonstock full-screen app in front, or beneath the overlay,
   the close sticks.
+
+### Close later under an overlay launcher (webOS 6 to 9)
+
+The 10.x rule above applies to the gate's stock Home close too. With an overlay launcher chosen the
+close is kept pending while nothing full-screen other than LG Home is in front, because closing LG Home
+with only the overlay up empties the foreground: SAM's idle relaunch (or the watcher's settle check on
+6.5.2) runs the gate, the gate finds nothing in front and opens the last input, and that Live TV card makes
+surface-manager (`windowPolicy`) or the memory manager (`memoryReclaim`) close the overlay launcher, within
+1 to 20 s of the first Home press (6.5.2, 7.6.0, 8.3.0 and 9.2.4). The close goes ahead on the first foreground
+event, or 10 s check, that names an app which is neither a stock home, Home Chooser nor the launcher
+(`card_beneath()` in [watcher/preload.c](../service/src/watcher/preload.c), the function the 10+ close uses
+too). A full-screen launcher is closed as before, and the [previous-launcher hold](#the-previous-launcher) still
+comes first. If nothing full-screen ever comes to the front, LG Home stays loaded: no timer closes it into an
+empty screen, and the settle launch of the home id is skipped while the close is deferred. Logged once per
+choice: `home gate: stock Home close waits: overlay launcher <id> in front (<app or nothing> beneath)`.
 
 ## Restoring the stock home
 

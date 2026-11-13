@@ -142,6 +142,12 @@ closed.
 - While the [previous-launcher hold](settings-app.md#the-previous-launcher) is on, no attempt is made
   and nothing is counted; the first attempt follows when the hold ends (`home gate: stock Home close
   waits until Home Chooser is off screen` is logged once).
+- Under an overlay launcher the close also waits until a full-screen app other than a stock home, Home
+  Chooser or the launcher is in front (a foreground event, or the 10 s check): closing Home with only the
+  overlay up empties the foreground and the gate would open the last input over the launcher. It makes no
+  attempt, counts none and starts no timer meanwhile, and logs `home gate: stock Home close waits: overlay
+  launcher <id> in front (<app or nothing> beneath)` once per choice. A full-screen launcher is not
+  affected. See [Close later under an overlay launcher](settings-app.md#close-later-under-an-overlay-launcher-webos-6-to-9).
 - After a close that confirmed by `closeByAppId` (Home really was running), the watcher waits
   `gate_settle_ms` (20 s) and asks `getForegroundAppInfo` once. SAM does not always relaunch after
   that close: on 6.5.2 at boot it logged `LAUNCH_LASTAPP on_foreground_null triggered` about 10 s

@@ -5,6 +5,10 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- On webOS 6 through 9 with an overlay launcher chosen while LG Home was still loaded, the launcher was closed within seconds of the first Home press: closing LG Home under the overlay emptied the foreground, and the home gate opened the last input over it. The close of LG Home now waits until a full-screen app other than LG Home is in front.
+
 ## [0.1.1] - 2026-11-13
 
 ### Added
