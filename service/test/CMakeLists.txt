@@ -2,6 +2,7 @@
 # Host-side tests of the native code, run with CTest:
 #   cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host
 #   test-policy        the pure policy, built natively with the address and undefined sanitizers
+#   test-nameowner         which role files allow a service name (a native launcher's identity), same sanitizers
 #   test-homekey       native live-filter transactions with fake Luna             } ARM programs from
 #   test-fwupdate      the Home key guard across simulated firmware updates (fwupdate-guard.py drives it)
 #   test-watcher       native watcher policy                                       } ../CMakeLists.txt,
@@ -30,6 +31,12 @@ add_executable(test-policy test-policy.c "${src}/policy.c")
 target_include_directories(test-policy PRIVATE "${src}")
 target_compile_options(test-policy PRIVATE -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined)
 target_link_options(test-policy PRIVATE -fsanitize=address,undefined)
+# test-nameowner builds a scratch role tree under /tmp and removes it.
+add_executable(test-nameowner test-nameowner.c "${src}/nameowner.c")
+target_include_directories(test-nameowner PRIVATE "${src}")
+target_compile_options(test-nameowner PRIVATE -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined)
+target_link_options(test-nameowner PRIVATE -fsanitize=address,undefined)
+add_test(NAME test-nameowner COMMAND test-nameowner)
 set(work "${CMAKE_CURRENT_BINARY_DIR}")
 # test-policy makes and removes test/iconXXXXXX under its working directory.
 add_test(NAME test-policy COMMAND test-policy WORKING_DIRECTORY "${work}/policy-test")
