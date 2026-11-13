@@ -51,7 +51,7 @@ void op_free(LOp *op)
  * an id only on calls from the web, QML and node containers), so it is identified by the service name
  * its own handle is registered under, and only when that name is the id of an app that the platform
  * installed as a native home-category app and whose own executable alone may register that name
- * (roles.c). The hub's answer about the app comes later, in consent_done. */
+ * (nameowner.c). The hub's answer about the app comes later, in consent_done. */
 typedef enum { WHO_APP, WHO_NATIVE, WHO_REFUSED } Who;
 
 static Who launcher_who(LSMessage *msg, const char *method, char *caller, size_t callerlen)
