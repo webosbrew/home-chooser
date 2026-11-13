@@ -59,9 +59,26 @@ class ScreenInput:
         return (getattr(getattr(self, 'a', None), 'input_mode', 'keys') == 'click'
                 and self.host is not None and self.host.click_available())
 
+    # Beanjar answers `elements` with NoPicture while the guest has not drawn since a switch; the picture comes
+    # within a few seconds, so wait up to 20 s (a guest that is still blank after that is a real fault) in 2 s steps.
+    NO_PICTURE = 'org.beanjar.Display1.Error.NoPicture'
+    NO_PICTURE_WAIT = 20
+    NO_PICTURE_STEP = 2
+
     def elements(self, label):
-        rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
-        self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
+        waited, retries = 0, 0
+        while True:
+            rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
+            self.rec.say('%s elements (rc=%s):\n%s' % (label, rc, raw))
+            if not rc or self.NO_PICTURE not in raw:
+                break
+            if waited >= self.NO_PICTURE_WAIT:
+                raise RuntimeError('elements failed after %d NoPicture retries over %d s: %s' % (retries, waited, raw))
+            retries += 1
+            self.rec.say('%s elements: NoPicture, the guest has not drawn yet; retry %d in %d s (%d of %d s waited)'
+                         % (label, retries, self.NO_PICTURE_STEP, waited, self.NO_PICTURE_WAIT))
+            timing.sleep(self.NO_PICTURE_STEP)
+            waited += self.NO_PICTURE_STEP
         if rc:
             raise RuntimeError('elements failed: ' + raw)
         frame = json.loads(raw)

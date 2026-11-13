@@ -489,7 +489,8 @@ selects exactly one element by exact text, optional kind and region, and clicks 
 `beanjar remote click HOST/NAME X Y --frame WxH`. Missing or ambiguous matches fail without input.
 Launcher labels accept text/button kinds, excluding icons which can repeat the label. Each action
 logs its input path and checks its effect using a fresh screen read or the existing state assertions.
-The screen/source dimensions, scale and offsets are noted once per run. Hosts without
+A read that answers `NoPicture` (the guest has not drawn since a switch) is retried every 2 s for up to 20 s, each retry logged;
+any other error fails at once. The screen/source dimensions, scale and offsets are noted once per run. Hosts without
 `remote click` use keys with an explicit NOTE. `--input-mode keys` selects the old navigation.
 HOME proofs, Back cancellation and the probe proving remote keys reach Home Chooser always use keys.
 The ares-only `--device` contract keeps keys because it has no Beanjar display host.
