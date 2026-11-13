@@ -24,6 +24,8 @@ typedef struct LOp {
 	jvalue_ref items;  /* getIcons: the validated items */
 	void (*next)(struct LOp *op);
 	bool need_consent;
+	bool native;       /* identified by its service name, not an application id; not yet checked against the appinfo */
+	bool need_root, need_home; /* the checks a native caller gets after its appinfo */
 	char *target_title;
 	char *target_folder;
 	char *lookup_text; /* Original SAM refusal while resolving an ambiguous target id. */
