@@ -53,7 +53,7 @@ uninstall the launcher you chose, the Home button opens LG Home again.
 
 ## Known limitations
 
-* On webOS 11 and later, current Homebrew Channel releases don't give apps root access, so Home Chooser can't work there yet.
+* On webOS 11 and later, Home Chooser needs Homebrew Channel 0.8.0 or later. Earlier releases don't give apps root access there.
 * Only apps that declare themselves Home apps are listed. If your launcher is missing, ask its
   author.
 

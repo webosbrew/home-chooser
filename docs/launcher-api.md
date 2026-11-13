@@ -954,8 +954,8 @@ never closes a stock home while you select a launcher. Details are in
 >
 > 1. A rooted TV with Homebrew Channel.
 > 2. Home Chooser installed and opened once.
-> 3. `getInfo` shows `root: true`. On webOS 11 and later current Homebrew Channel releases don't give
->    apps root access (see the [README](../README.md#known-limitations)).
+> 3. `getInfo` shows `root: true`. On webOS 11 and later that needs Homebrew Channel 0.8.0 or later
+>    (see the [README](../README.md#known-limitations)).
 > 4. Then install your launcher.
 
 **In a desktop browser.** Load
