@@ -10,6 +10,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hc_e2e import launchers, page_probe  # noqa: E402
@@ -115,6 +117,82 @@ class ProbeIpkTest(unittest.TestCase):
             self.assertFalse(launchers.has_probe_page(old))
             self.assertTrue(launchers.has_probe_page(new))
             self.assertFalse(launchers.has_probe_page(os.path.join(d, 'missing.ipk')))
+
+
+class FixtureCacheStampTest(unittest.TestCase):
+    """The fixture caches are rebuilt when the stamp of their inputs is missing or differs, and only then."""
+
+    def api_dir(self, d):
+        ids = [launchers.FIXTURE_ID % ('web', w) for w in launchers.FIXTURE_WINDOWS] + [launchers.DISPOSABLE_ID]
+        for i in ids:
+            open(os.path.join(d, i + '_1.0.0_all.ipk'), 'w').close()
+        return ids
+
+    def run_cache(self, d, stamp_text):
+        info = {'requiredPermissions': [launchers.API_GROUP], 'largeIcon': 'oversize.png'}
+        built = []
+
+        def build(argv, **kw):
+            built.append(argv)
+            self.api_dir(d)
+            return SimpleNamespace(returncode=0, stdout=b'')
+        if stamp_text is not None:
+            with open(os.path.join(d, launchers.STAMP_NAME), 'w') as f:
+                f.write(stamp_text)
+        with patch.object(launchers, 'API_FIXTURE_DIR', d), patch.object(launchers, 'ipk_appinfo', return_value=info), \
+                patch.object(launchers, 'has_probe_page', return_value=True), \
+                patch.object(launchers.subprocess, 'run', side_effect=build):
+            have = launchers.api_fixture_ipks(lambda t: None)
+        return have, built
+
+    def test_matching_stamp_reuses_the_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.api_dir(d)
+            have, built = self.run_cache(d, launchers.api_stamp())
+            self.assertEqual(built, [])
+            self.assertEqual(len(have), 3)
+
+    def test_stale_or_missing_stamp_rebuilds_and_stamps(self):
+        for stamp in ('0' * 64, None):
+            with tempfile.TemporaryDirectory() as d:
+                self.api_dir(d)
+                have, built = self.run_cache(d, stamp)
+                self.assertEqual(len(built), 2, stamp)  # web, disposable
+                self.assertTrue(launchers.cache_current(d, launchers.api_stamp()))
+                _, built = self.run_cache(d, launchers.api_stamp())
+                self.assertEqual(built, [])
+
+    def test_stamp_follows_the_inputs(self):
+        with tempfile.TemporaryDirectory() as repo:
+            os.makedirs(os.path.join(repo, 'src'))
+            f = os.path.join(repo, 'src', 'a.js')
+            open(f, 'w').write('one')
+            open(os.path.join(repo, 'src', 'README.md'), 'w').write('docs')
+            with patch.object(launchers, 'REPO', repo):
+                a = launchers.inputs_stamp(('src',))
+                open(os.path.join(repo, 'src', 'README.md'), 'w').write('other docs')
+                self.assertEqual(launchers.inputs_stamp(('src',)), a)  # *.md is not packaged
+                open(f, 'w').write('two')
+                self.assertNotEqual(launchers.inputs_stamp(('src',)), a)
+                self.assertNotEqual(launchers.inputs_stamp(('src',), 'x'), launchers.inputs_stamp(('src',)))
+
+    def test_api_stamp_covers_what_the_builders_copy(self):
+        for rel in launchers._API_INPUTS + launchers._PLAIN_INPUTS:
+            self.assertTrue(os.path.exists(os.path.join(launchers.REPO, rel)), rel)
+
+    def test_plain_cache_rebuilds_on_stale_stamp_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            ident = launchers.FIXTURE_ID % ('web', 'normal')
+            open(os.path.join(d, ident + '_1.0.0_all.ipk'), 'w').close()
+            with patch.object(launchers, 'FIXTURE_DIR', d), patch.object(launchers, 'ipk_appinfo', return_value={}), \
+                    patch.object(launchers.timing, 'run', return_value=(0, 'ok')) as run:
+                launchers.make_launcher('fixture:web.normal', announce=lambda t: None)
+                self.assertEqual(run.call_count, 1)  # no stamp: built, then stamped
+                launchers.make_launcher('fixture:web.normal', announce=lambda t: None)
+                self.assertEqual(run.call_count, 1)
+                open(os.path.join(d, launchers.STAMP_NAME), 'w').write('stale\n')
+                launchers.make_launcher('fixture:web.normal', announce=lambda t: None)
+                self.assertEqual(run.call_count, 2)
 
 
 if __name__ == '__main__':

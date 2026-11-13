@@ -84,7 +84,8 @@ class DemoLauncher(unittest.TestCase):
         try:
             ipk = os.path.join(tmp, hc_e2e.launchers.DEMO_ID + '_1.0.0_all.ipk')
             open(ipk, 'w').close()
-            with patch.object(hc_e2e.launchers, 'FIXTURE_DIR', tmp), \
+            hc_e2e.launchers.write_stamp(tmp, hc_e2e.launchers.plain_stamp())
+            with patch.object(hc_e2e.launchers, 'FIXTURE_DIR', tmp), patch.object(hc_e2e.timing, 'run', side_effect=AssertionError('no build')), \
                     patch.object(hc_e2e.launchers, 'ipk_appinfo', return_value={'id': hc_e2e.launchers.DEMO_ID, 'title': 'HC Fixture web demo'}), \
                     patch.object(hc_e2e.launchers, 'api_fixture_ipks', side_effect=AssertionError('not the API build')):
                 for api in (False, True):
@@ -166,17 +167,22 @@ class DemoLauncher(unittest.TestCase):
     def test_demo_target_ipk_builds_once_and_checks_the_title(self):
         tmp = tempfile.mkdtemp()
         try:
-            def build(argv, timeout):
+            def build(argv, **kw):
                 open(os.path.join(tmp, hc_e2e.launchers.DEMO_TARGET_ID + '_1.0.0_all.ipk'), 'w').close()
-                return 0, 'built'
-            with patch.object(hc_e2e.launchers, 'API_FIXTURE_DIR', tmp), patch.object(hc_e2e.timing, 'run', side_effect=build) as run, \
+                return SimpleNamespace(returncode=0, stdout=b'built')
+            with patch.object(hc_e2e.launchers, 'API_FIXTURE_DIR', tmp), patch.object(hc_e2e.launchers.subprocess, 'run', side_effect=build) as run, \
                     patch.object(hc_e2e.launchers, 'ipk_appinfo', return_value={'title': hc_e2e.launchers.DEMO_TARGET_TITLE}):
                 ipk = hc_e2e.launchers.demo_target_ipk(lambda t: None)
                 self.assertEqual(ipk, os.path.join(tmp, hc_e2e.launchers.DEMO_TARGET_ID + '_1.0.0_all.ipk'))
                 self.assertEqual(hc_e2e.launchers.demo_target_ipk(lambda t: None), ipk)
-                self.assertEqual(run.call_count, 1)
+                self.assertEqual(run.call_count, 2)  # web and disposable, once; the second call reused them
                 self.assertTrue(run.call_args.args[0][1].endswith(os.path.join('fixtures', 'disposable', 'build.sh')))
-            with patch.object(hc_e2e.launchers, 'API_FIXTURE_DIR', tmp), patch.object(hc_e2e.timing, 'run', return_value=(1, 'no')), \
+        finally:
+            shutil.rmtree(tmp)
+        tmp = tempfile.mkdtemp()
+        try:
+            with patch.object(hc_e2e.launchers, 'API_FIXTURE_DIR', tmp), \
+                    patch.object(hc_e2e.launchers.subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout=b'no')), \
                     patch.object(hc_e2e.launchers, 'ipk_appinfo', return_value={'title': 'an old title'}):
                 with self.assertRaises(SystemExit):
                     hc_e2e.launchers.demo_target_ipk(lambda t: None)
