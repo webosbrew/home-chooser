@@ -139,6 +139,44 @@ class ClickInput(unittest.TestCase):
             s.elements('test')
         rec.note.assert_called_once()
 
+    def no_picture_scenario(self, replies):
+        from unittest.mock import Mock
+        s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)
+        s.host, s.rec, s.vm = Mock(), Mock(), 'vm'
+        s.host.remote_target.return_value = 'local/vm'
+        s.host.display_beanjar.side_effect = list(replies)
+        s.host._frame_mapping_logged = True
+        return s
+
+    NO_PICTURE = (1, '{"error": "the display\'s front end: GDBus.Error:org.beanjar.Display1.Error.NoPicture: no picture yet"}')
+
+    def test_elements_retries_no_picture_then_reads(self):
+        from unittest.mock import patch
+        s = self.no_picture_scenario([self.NO_PICTURE, self.NO_PICTURE, (0, json.dumps(self.frame()))])
+        with patch.object(hc_e2e.timing, 'sleep') as slept:
+            self.assertEqual(s.elements('test'), self.frame())
+        self.assertEqual(slept.call_count, 2)
+        self.assertEqual(sum('NoPicture' in c.args[0] and 'retry' in c.args[0] for c in s.rec.say.call_args_list), 2)
+
+    def test_elements_no_picture_beyond_the_bound_raises_naming_retries(self):
+        from unittest.mock import patch
+        s = self.no_picture_scenario([self.NO_PICTURE] * 50)
+        with patch.object(hc_e2e.timing, 'sleep') as slept:
+            with self.assertRaises(RuntimeError) as cm:
+                s.elements('test')
+        self.assertEqual(slept.call_count, 10)
+        self.assertIn('after 10 NoPicture retries over 20 s', str(cm.exception))
+        self.assertIn('NoPicture', str(cm.exception))
+
+    def test_elements_other_error_raises_at_once(self):
+        from unittest.mock import patch
+        s = self.no_picture_scenario([(1, '{"error": "GDBus.Error:org.beanjar.Display1.Error.Other: boom"}')])
+        with patch.object(hc_e2e.timing, 'sleep') as slept:
+            with self.assertRaises(RuntimeError) as cm:
+                s.elements('test')
+        slept.assert_not_called()
+        self.assertTrue(str(cm.exception).startswith('elements failed: '))
+
     def test_click_effect_and_fresh_read(self):
         from unittest.mock import Mock
         s = hc_e2e.scenario.Scenario.__new__(hc_e2e.scenario.Scenario)

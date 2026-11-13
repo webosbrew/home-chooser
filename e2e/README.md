@@ -489,7 +489,8 @@ selects exactly one element by exact text, optional kind and region, and clicks 
 `beanjar remote click HOST/NAME X Y --frame WxH`. Missing or ambiguous matches fail without input.
 Launcher labels accept text/button kinds, excluding icons which can repeat the label. Each action
 logs its input path and checks its effect using a fresh screen read or the existing state assertions.
-The screen/source dimensions, scale and offsets are noted once per run. Hosts without
+A read that answers `NoPicture` (the guest has not drawn since a switch) is retried every 2 s for up to 20 s, each retry logged;
+any other error fails at once. The screen/source dimensions, scale and offsets are noted once per run. Hosts without
 `remote click` use keys with an explicit NOTE. `--input-mode keys` selects the old navigation.
 HOME proofs, Back cancellation and the probe proving remote keys reach Home Chooser always use keys.
 The ares-only `--device` contract keeps keys because it has no Beanjar display host.
@@ -824,7 +825,8 @@ scenario"). The hub then takes the caller to
 be that installed app, with its own client permissions. The launcher must declare
 `requiredPermissions: ["org.webosbrew.homechooser.applications"]` and `appCategory: ["home"]`. The default launcher is the
 web fixture built with the permission (`HC_FIXTURE_PERMISSION=org.webosbrew.homechooser.applications sh
-e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself). The native and qml fixtures cannot
+e2e/fixtures/web/build.sh build/fixtures-api`, which the runner does itself, again whenever the stamp
+`build/fixtures-api/.inputs-stamp` of the build scripts, fixture sources and `api/client/homechooser.js` differs). The native and qml fixtures cannot
 declare it and are refused as the first launcher of a run; later in a `--launchers` list they are the plain builds and
 make no API calls. The run also installs a disposable non-home app,
 `org.webosbrew.hcfixture.disposable` (`e2e/fixtures/disposable/build.sh`, no category and no permission).
@@ -920,7 +922,7 @@ UI). The run removes your launcher at the end like any other.
 The default launcher is `fixture:web.normal`. A real launcher is tested as an app id with `--launcher-ipk <path>`
 (see "Checking your own launcher"); there is no built-in special case for any one project. The six fixtures
 (`e2e/fixtures/README.md`; built into `build/fixtures/` by `sh e2e/fixtures/build.sh`, which the runner calls itself if
-an ipk is missing) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
+an ipk is missing or the sources changed since: `build/fixtures/.inputs-stamp` holds their hash) are `fixture:{native,qml,web}.{normal,overlay}`. Home Chooser supports a launcher only through
 `appCategory: ["home"]` in its appinfo, so the fixtures declare nothing else and draw nothing but a solid colour.
 
 * **Overlay or not no longer changes the preload expectations**: on 6.x to 9.x the home gate keeps the stock

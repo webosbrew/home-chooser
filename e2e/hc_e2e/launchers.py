@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Launchers and ipks: the fixtures, building them, the demo, and the Home Chooser builds."""
 import glob
+import hashlib
 import io
 import json
 import os
@@ -124,9 +125,83 @@ def has_probe_page(path):
     return {'probe.js', 'homechooser.js'} <= names
 
 
+STAMP_NAME = '.inputs-stamp'
+# What each build script copies in, relative to the repo: the stamp of a fixture cache hashes these (the scripts
+# are among them), so a change to any of them rebuilds the cache and nothing else does.  *.md files are never
+# packaged (web/build.sh skips them for the demo) and do not count.
+_API_INPUTS = ('e2e/fixtures/web', 'e2e/fixtures/disposable', 'examples/web-launcher', 'api/client/homechooser.js')
+_PLAIN_INPUTS = ('e2e/fixtures', 'examples/web-launcher')
+
+
+def inputs_stamp(inputs, extra=''):
+    """sha256 over the names and bytes of every file under `inputs` (repo-relative files or directories) and `extra`
+    (settings that reach the build through the environment)."""
+    h = hashlib.sha256(extra.encode('utf-8') + b'\0')
+    for rel in inputs:
+        top = os.path.join(REPO, rel)
+        files = [top] if os.path.isfile(top) else sorted(
+            os.path.join(d, f) for d, dirs, names in os.walk(top) for f in names
+            if '__pycache__' not in d and not f.endswith(('.md', '.pyc')))
+        for f in files:
+            h.update(os.path.relpath(f, REPO).encode('utf-8') + b'\0')
+            try:
+                h.update(open(f, 'rb').read())
+            except OSError:
+                h.update(b'<unreadable>')
+            h.update(b'\0')
+    return h.hexdigest()
+
+
+def cache_current(cache_dir, stamp):
+    try:
+        return open(os.path.join(cache_dir, STAMP_NAME)).read().strip() == stamp
+    except OSError:
+        return False
+
+
+def write_stamp(cache_dir, stamp):
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(os.path.join(cache_dir, STAMP_NAME), 'w') as f:
+        f.write(stamp + '\n')
+
+
+def api_stamp():
+    return inputs_stamp(_API_INPUTS, API_GROUP)
+
+
+def plain_stamp():
+    return inputs_stamp(_PLAIN_INPUTS)
+
+
+def build_api_cache(announce):
+    """Build every ipk of build/fixtures-api/ from the current sources (the old ones are removed first) and stamp it."""
+    stamp = api_stamp()
+    os.makedirs(API_FIXTURE_DIR, exist_ok=True)
+    for old in glob.glob(os.path.join(API_FIXTURE_DIR, 'org.webosbrew.hcfixture.*.ipk')):
+        os.remove(old)
+    try:
+        os.remove(os.path.join(API_FIXTURE_DIR, STAMP_NAME))
+    except OSError:
+        pass
+    env = dict(os.environ, HC_FIXTURE_PERMISSION=API_GROUP)
+    ok = True
+    for script in ('web', 'disposable'):
+        try:
+            p = subprocess.run(['sh', os.path.join(HERE, 'fixtures', script, 'build.sh'), API_FIXTURE_DIR],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600, env=env)
+            announce(p.stdout.decode('utf-8', 'replace').strip()[-400:])
+            ok = ok and p.returncode == 0
+        except subprocess.TimeoutExpired:
+            announce('%s/build.sh timed out' % script)
+            ok = False
+    if ok:
+        write_stamp(API_FIXTURE_DIR, stamp)
+    return ok
+
+
 def api_fixture_ipks(announce=print):
     """--api-check: the web fixtures built with requiredPermissions ["org.webosbrew.homechooser.applications"] and the
-    disposable non-home app, in build/fixtures-api/ (offline, built once).  {app id: ipk}."""
+    disposable non-home app, in build/fixtures-api/ (offline).  Built again when a stamp of their inputs is missing or differs.  {app id: ipk}."""
     def found():
         out = {}
         for ident in [FIXTURE_ID % ('web', w) for w in FIXTURE_WINDOWS] + [DISPOSABLE_ID]:
@@ -139,18 +214,12 @@ def api_fixture_ipks(announce=print):
                 out[ident] = g[-1]
         return out
     have = found()
-    if len(have) < len(FIXTURE_WINDOWS) + 1:
-        announce('API fixtures missing: building the web fixtures with %s and the disposable app into %s (offline)'
-                 % (API_GROUP, API_FIXTURE_DIR))
-        os.makedirs(API_FIXTURE_DIR, exist_ok=True)
-        env = dict(os.environ, HC_FIXTURE_PERMISSION=API_GROUP)
-        for script in ('web', 'disposable'):
-            try:
-                p = subprocess.run(['sh', os.path.join(HERE, 'fixtures', script, 'build.sh'), API_FIXTURE_DIR],
-                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600, env=env)
-                announce(p.stdout.decode('utf-8', 'replace').strip()[-400:])
-            except subprocess.TimeoutExpired:
-                announce('%s/build.sh timed out' % script)
+    current = cache_current(API_FIXTURE_DIR, api_stamp())
+    if len(have) < len(FIXTURE_WINDOWS) + 1 or not current:
+        announce('API fixtures %s: building the web fixtures with %s and the disposable app into %s (offline)'
+                 % ('missing' if len(have) < len(FIXTURE_WINDOWS) + 1 else 'built from other sources than the current ones',
+                    API_GROUP, API_FIXTURE_DIR))
+        build_api_cache(announce)
         have = found()
     if len(have) < len(FIXTURE_WINDOWS) + 1:
         raise SystemExit('could not build the API fixtures in %s' % API_FIXTURE_DIR)
@@ -163,12 +232,10 @@ def demo_target_ipk(announce=print):
         g = sorted(glob.glob(os.path.join(API_FIXTURE_DIR, DEMO_TARGET_ID + '_*.ipk')))
         return g[-1] if g and ipk_appinfo(g[-1]).get('title') == DEMO_TARGET_TITLE else None
     ipk = found()
-    if not ipk:
-        announce('demo target missing: building %s with fixtures/disposable/build.sh into %s (offline)'
-                 % (DEMO_TARGET_ID, API_FIXTURE_DIR))
-        os.makedirs(API_FIXTURE_DIR, exist_ok=True)
-        rc, out = timing.run(['sh', os.path.join(HERE, 'fixtures', 'disposable', 'build.sh'), API_FIXTURE_DIR], 600)
-        announce(out.strip()[-400:])
+    if not ipk or not cache_current(API_FIXTURE_DIR, api_stamp()):
+        announce('demo target %s: building %s into %s with the other API fixtures (offline)'
+                 % ('missing' if not ipk else 'stale', DEMO_TARGET_ID, API_FIXTURE_DIR))
+        build_api_cache(announce)
         ipk = found()
     if not ipk:
         raise SystemExit('could not build %s in %s' % (DEMO_TARGET_ID, API_FIXTURE_DIR))
@@ -189,10 +256,14 @@ def make_launcher(spec, ipk_override=None, announce=print, api=False):
                                  'or your own launcher with --launcher-ipk' % API_GROUP)
             return Launcher(spec, ident, api_fixture_ipks(announce)[ident], 'fixture')
         found = sorted(glob.glob(os.path.join(FIXTURE_DIR, ident + '_*.ipk')))
-        if not found:
-            announce('fixture ipk for %s missing: running e2e/fixtures/build.sh (offline)' % ident)
+        if not found or not cache_current(FIXTURE_DIR, plain_stamp()):
+            announce('fixture ipk for %s %s: running e2e/fixtures/build.sh (offline)'
+                     % (ident, 'missing' if not found else 'built from other sources than the current ones'))
+            stamp = plain_stamp()
             rc, out = timing.run(['sh', os.path.join(HERE, 'fixtures', 'build.sh')], 600)
             announce(out.strip()[-400:])
+            if rc == 0:
+                write_stamp(FIXTURE_DIR, stamp)
             found = sorted(glob.glob(os.path.join(FIXTURE_DIR, ident + '_*.ipk')))
         if not found:
             raise SystemExit('could not build the fixture ipk for %s' % ident)
