@@ -236,6 +236,7 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
         check_apps(w, tag);
         if (w->status < 0 && tag == 'T') key_follow(w, NULL);
         if (w->status < 0) previous_check(w, NULL, tag);
+        if (w->status < 0 && tag == 'T') gate_front(w, NULL);
     }
     else if (tag == 'B') { close_foreground(w); previous_check(w, NULL, tag); }
     else {
@@ -275,5 +276,6 @@ void hc_watch_free(HCWatch *w)
     if (w->input_source) g_source_remove(w->input_source);
     g_free(w->choice_file); g_free(w->missing); g_free(w->baked);
     previous_free(w);
+    g_free(w->gate_wait_logged);
     g_free(w->title_id); g_free(w->title); g_free(w->close_choice); g_free(w);
 }

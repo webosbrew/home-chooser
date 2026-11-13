@@ -964,6 +964,45 @@ static void test_previous(void) {
     f = switch_setup(7, "my.home", NULL, ""); proc_setup(f); f->home_pid = "100"; start(f);
     CHECK("P14 no change in Home Chooser: stock Home closed at mount", f->closes == 1 && !f->w->prev_hold); teardown(f);
 }
+/* G22: 6-9, overlay launcher chosen: the stock Home close waits for a full-screen app beneath it, so the
+ * foreground never empties (SAM's relaunch would run the gate, which opens the last input over the overlay). */
+static void test_gate_overlay(void) {
+    for (int major = 6; major <= 9; major++) {
+        Fixture *f = setup(major, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "";
+        g_hash_table_insert(f->windows, "my.home", "overlay"); f->w->c.gate_settle_ms = 0; start(f);
+        CHECK("G22 overlay alone in front: Home not closed", !f->closes && f->w->gate_pending && f->w->gate_waiting);
+        CHECK("G22 no timer, no launch of the home id", !f->w->gate_source && !f->w->gate_settle_source && !f->launches);
+        CHECK("G22 logged", logged(f, "home gate: stock Home close waits: overlay launcher my.home in front"));
+        event(f, 'A', "{}"); event(f, 'T', NULL); front(f, STOCK); front(f, HC_APP_ID);
+        CHECK("G22 stock Home or Home Chooser in front: still waiting", !f->closes && f->w->gate_pending && !f->launches);
+        front(f, LIVETV);
+        CHECK("G22 a full-screen app in front: Home closed once", f->closes == 1 && count_of(f->closed, STOCK) == 1 && !f->w->gate_pending && !f->w->gate_waiting);
+        front(f, "netflix"); event(f, 'T', NULL);
+        CHECK("G22 not again", f->closes == 1);
+        f->foreground = ""; pump();
+        CHECK("G22 no launch of the home id on the way", !f->launches || f->w->gate_settle_source == 0);
+        char *log = watch_read(f->c.log); const char *a = strstr(log, "stock Home close waits: overlay"); CHECK("G22 logged once", a && !strstr(a + 1, "stock Home close waits: overlay")); g_free(log);
+        teardown(f);
+    }
+    /* The periodic check finds the full-screen app when the foreground event was lost. */
+    Fixture *f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "";
+    g_hash_table_insert(f->windows, "my.home", "overlay"); start(f);
+    f->foreground = LIVETV; event(f, 'T', NULL);
+    CHECK("G22 periodic check closes it", f->closes == 1 && !f->w->gate_pending); teardown(f);
+    /* A full-screen launcher closes as before, with nothing in front. */
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "";
+    g_hash_table_insert(f->windows, "my.home", "fullscreen"); start(f);
+    CHECK("G22 full-screen launcher: closed at once", f->closes == 1 && !f->w->gate_pending && !f->w->gate_waiting && !logged(f, "close waits: overlay")); teardown(f);
+    /* The foreground does not answer: not a close, retried on the cadence, bounded. */
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = NULL;
+    g_hash_table_insert(f->windows, "my.home", "overlay"); start(f);
+    CHECK("G22 foreground unknown: nothing closed", !f->closes && f->w->gate_pending); teardown(f);
+    /* Changing to a full-screen launcher while waiting closes it. */
+    f = setup(7, "my.home"); proc_setup(f); f->home_pid = "100"; f->foreground = "";
+    g_hash_table_insert(f->windows, "my.home", "overlay"); start(f);
+    g_hash_table_insert(f->windows, "my.home", "fullscreen"); event(f, 'A', "{}");
+    CHECK("G22 launcher no longer an overlay: closed", f->closes == 1 && !f->w->gate_pending); teardown(f);
+}
 /* K: configd re-inserts the stock keyFilters after Home Chooser baked its filter (first boot after a firmware
  * change, 8.3.0 VM run): the filter is applied again, once per change, bounded, and never "fixed" when stock on purpose. */
 static char *key_text(Fixture *f, gboolean ours) {
@@ -1024,6 +1063,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_key_follow(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

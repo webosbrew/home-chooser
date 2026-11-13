@@ -95,6 +95,13 @@ static char *foreground_now(HCWatch *w)
     char *id = reply_ok(r) ? get_string(r, "appId") : NULL;
     j_release(&r); return id;
 }
+/* The rule both the 10+ LG Home close and the 6-9 gate's stock Home close apply for an overlay launcher:
+ * the foreground names an app that is neither a stock home nor Home Chooser, so closing Home leaves a
+ * full-screen card beneath the overlay and the foreground does not empty. */
+gboolean card_beneath(const char *foreground)
+{
+    return foreground && *foreground && !stock_id(foreground) && !eq(foreground, HC_APP_ID);
+}
 static void maybe_close(HCWatch *w, const char *foreground, gboolean fresh)
 {
     if (!close_choice(w) || previous_holding(w)) return;
@@ -107,7 +114,7 @@ static void maybe_close(HCWatch *w, const char *foreground, gboolean fresh)
     }
     if (w->window == 2) {
         if (!fresh) return;
-        if (!foreground || !*foreground || stock_id(foreground) || eq(foreground, HC_APP_ID)) {
+        if (!card_beneath(foreground)) {
             watch_log(w, "overlay %s has no safe full-screen card beneath it; stock home left running", w->close_choice);
             return;
         }
@@ -130,6 +137,7 @@ void handle_foreground(HCWatch *w, jvalue_ref r)
     char *id = get_string(r, "appId");
     if (!id || !*id) { g_free(id); return; }
     input_seen(w, id);
+    gate_front(w, id);
     maybe_close(w, id, w->close_launched);
     previous_check(w, id, 'F');
     if (w->close_done && eq(id, STOCK) && !w->relaunch_logged) {
