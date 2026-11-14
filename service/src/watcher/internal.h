@@ -43,6 +43,8 @@ struct HCWatch {
     char *prev_front, *prev_logged;
     gint64 prev_mtime;
     gboolean gate_held_logged;
+    char *gate_wait_logged; /* 6-9: the overlay launcher whose "close waits" line was logged (gate.c) */
+    gboolean gate_waiting; /* the stock Home close waits for a full-screen app beneath an overlay launcher */
     /* restore.c key_follow: the stock list configd put back after we baked; a bounded, rate-limited re-apply */
     gint64 key_last;
     unsigned key_reapplies;
@@ -87,6 +89,10 @@ int gate_apply(HCWatch *w, const char *choice);
 /* After the previous-launcher hold: the stock Home close it kept waiting, if still wanted. */
 void gate_resume(HCWatch *w);
 void gate_sync(HCWatch *w);
+/* 6-9, overlay launcher: the foreground (`front`, NULL asks SAM) may now allow the deferred stock Home close. */
+void gate_front(HCWatch *w, const char *front);
+/* preload.c: the rule shared by the 10+ and 6-9 closes for an overlay launcher, see its comment. */
+gboolean card_beneath(const char *foreground);
 /* 10+, overlay launcher: open the last input once per boot when nothing full-screen is in front. */
 void input_arm(HCWatch *w);
 void input_seen(HCWatch *w, const char *foreground);

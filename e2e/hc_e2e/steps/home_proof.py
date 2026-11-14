@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Phases home-proof (step 3) and window-home."""
 from ..constants import STOCK
-from ..releases import closes_stock_home
+from .. import timing
+from ..checks import OVERLAY_HOLD, overlay_survives
+from ..releases import closes_stock_home, uses_home_gate
 
 
 class HomeProofSteps:
@@ -25,6 +27,13 @@ class HomeProofSteps:
                           % bool(running), 'rc=%s %s' % (rc, out.strip()[-200:]))
         self.home_press(self.launcher, '3-home')
         self.residency('after the Home press')
+        if uses_home_gate(self.major) and self.L.overlay:
+            # 6-9: the watcher must not close stock Home under an overlay launcher that is alone in front.
+            timing.sleep(OVERLAY_HOLD)
+            ok, why = overlay_survives(self.running_ids(), self.launcher)
+            r0 = self.rec
+            r0.check('overlay launcher still running %d s after the first Home press' % OVERLAY_HOLD, ok, why)
+            self.shot('3-home-overlay-%ds' % OVERLAY_HOLD)
         r, d = self.rec, self.dev
         rc, out = d.sh('ps -eo args | grep -c "[%s]"' % self.launcher[:1] + self.launcher[1:])
         r.note('processes mentioning the launcher id', out.strip())

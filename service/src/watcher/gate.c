@@ -11,6 +11,31 @@ static HCGateOps gate_ops(HCWatch *w)
     return ops;
 }
 static gboolean gate_retry(gpointer context);
+/* 6-9 only. 0: close now (a full-screen launcher, or a full-screen app other than Home in front beneath
+ * the overlay). 1: wait, no timer: an overlay launcher with nothing full-screen in front; gate_front tries
+ * again on the next foreground. 2: getAppInfo or the foreground did not answer; the retry cadence. */
+static int gate_overlay_wait(HCWatch *w)
+{
+    char *id = watch_choice(w);
+    if (!id || stock_id(id)) { g_free(id); return 0; }
+    int window = window_type(w, id), result = 0;
+    char *front = NULL;
+    if (!window) result = 2;
+    else if (window == 2) {
+        jvalue_ref r = watch_call(w, SAM "getForegroundAppInfo", "{}", 5);
+        if (!reply_ok(r)) result = 2;
+        else {
+            front = get_string(r, "appId");
+            result = card_beneath(front) && !eq(front, id) ? 0 : 1;
+        }
+        j_release(&r);
+    }
+    if (result == 1 && !eq(w->gate_wait_logged, id)) {
+        watch_log(w, "home gate: stock Home close waits: overlay launcher %s in front (%s beneath)", id, front && *front ? front : "nothing");
+        g_free(w->gate_wait_logged); w->gate_wait_logged = g_strdup(id);
+    }
+    g_free(front); g_free(id); return result;
+}
 static gboolean gate_settled(gpointer context);
 /* One attempt to close a stock Home that is the real binary (docs/home-gate.md). Retried on the
  * preload cadence, bounded, and at each gate sync, until `running` or closeByAppId confirms. */
@@ -24,6 +49,15 @@ static void gate_close(HCWatch *w)
         return;
     }
     w->gate_held_logged = FALSE;
+    /* An overlay launcher chosen: closing Home with only the overlay up empties the foreground, SAM's
+     * relaunch runs the gate and the gate opens the last input, which closes the overlay. */
+    int wait = gate_overlay_wait(w);
+    w->gate_waiting = wait == 1;
+    if (wait == 1) return;
+    if (wait == 2) {
+        if (!w->gate_source && w->gate_attempts < w->c.preload_tries) w->gate_source = g_timeout_add(w->c.preload_retry_ms, gate_retry, w);
+        return;
+    }
     HCGateOps ops = gate_ops(w);
     GString *log = g_string_new(NULL);
     gboolean closed = FALSE;
@@ -58,6 +92,8 @@ static gboolean gate_settled(gpointer context)
     HCWatch *w = context;
     w->gate_settle_source = 0;
     if (w->status >= 0 || !w->gate_active || w->gate_released) return G_SOURCE_REMOVE;
+    /* A deferred close (an overlay launcher alone in front) is not a close that left nothing to show. */
+    if (w->gate_waiting) return G_SOURCE_REMOVE;
     /* The gate already ran since the close (SAM's idle relaunch): getForegroundAppInfo can stay empty
      * for 10+ s after a web launcher opens, so the empty answer is not evidence that nothing opened. */
     char *decided = hc_gate_decided(w->c.gate_dir);
@@ -88,6 +124,16 @@ void gate_resume(HCWatch *w)
     gate_close(w);
 }
 
+void gate_front(HCWatch *w, const char *front)
+{
+    if (!w->gate_waiting || !w->gate_pending || !w->gate_active || w->status >= 0) return;
+    if (front && !card_beneath(front)) return;
+    w->depth++;
+    w->gate_attempts = 0;
+    gate_close(w);
+    w->depth--;
+}
+
 /* choice NULL unmounts. 0 ok or nothing to do, 1 failed. */
 int gate_apply(HCWatch *w, const char *choice)
 {
@@ -114,7 +160,7 @@ int gate_apply(HCWatch *w, const char *choice)
     }
     if (!w->gate_active || result == HC_GATE_RELEASED) {
         /* Unmounted or released: nothing left to close, and a pending retry must not fire. */
-        w->gate_pending = FALSE;
+        w->gate_pending = w->gate_waiting = FALSE;
         if (w->gate_source) { g_source_remove(w->gate_source); w->gate_source = 0; }
         if (w->gate_settle_source) { g_source_remove(w->gate_settle_source); w->gate_settle_source = 0; }
     } else if (!was_active || result == HC_GATE_MOUNTED) { w->gate_pending = TRUE; w->gate_attempts = 0; }

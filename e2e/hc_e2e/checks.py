@@ -14,6 +14,18 @@ def preload_settled(major, gate_mounts, stock_running, close_logged):
     return bool(close_logged)
 
 
+OVERLAY_HOLD = 15  # seconds an overlay launcher must still be there after the first Home press
+
+
+def overlay_survives(running, launcher):
+    """(ok, why) for the check after the first Home press with an overlay launcher on 6-9, OVERLAY_HOLD s on.
+    The launcher must still be in SAM's running list: when stock Home was closed under it the foreground
+    emptied, the gate opened the last input and surface-manager (or memorymanager) closed the overlay."""
+    if launcher in running:
+        return True, '%s still running' % launcher
+    return False, '%s is gone (closed after the Home press; running: %s)' % (launcher, sorted(running))
+
+
 def panel_in_front(foreground, page_listed):
     """Home Chooser counts as in front once SAM's getForegroundAppInfo names it or once its page is in the
     inspector's /json.  The foreground alone cannot say no: on 9.x it names the card beneath our overlay
