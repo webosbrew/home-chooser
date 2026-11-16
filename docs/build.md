@@ -139,6 +139,11 @@ checks the result. `scripts/stage-service.js` copies the three binaries from `bu
 three entry scripts from `service/scripts/` (at mode 755) and their `scripts/lib/` helpers into the
 service package. The app bundle carries no scripts.
 
-The build targets `chrome 68` (the browser of webOS 5) through the `browserslist` entry in
-`app/package.json`. `service/scripts/tests/test-*.sh` hold the shell tests (see [Persistence](settings-app.md#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
+The build targets `chrome 53` (the browser of webOS 4.5) through the `browserslist` entry in
+`app/package.json`: Babel turns arrow functions, `const`, classes, spread and `async` into code Chrome 53 runs
+(generators stay, Chrome 50 has them), the `@enact/*` packages are transpiled the same way, and core-js
+polyfills the missing built-ins for that target. Other `node_modules` (React, ilib) are ES5 already.
+`npm run check-es` (part of `npm run package`) parses the built `dist/main.js` with acorn as ES2016 and fails on newer syntax.
+Enact leaves the web polyfills (`URL`, `URLSearchParams`, `queueMicrotask`) out of core-js; Chrome 53 has the first
+two and the bundle feature-tests the third. `service/scripts/tests/test-*.sh` hold the shell tests (see [Persistence](settings-app.md#persistence)). The Jest tests drive `apply` and `restoreStock` with a fake `rootLuna` for 5.6.1,
 6.6.0, 8.3.0, 9.2.1, 10.3.1 and 11.2.0 and assert the payloads.
