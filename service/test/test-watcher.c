@@ -1069,6 +1069,51 @@ static void test_key_follow(void) {
     event(f, 'K', stock); CHECK("K18 failed re-apply tried once", f->key_calls == calls + 1 && eq(f->w->baked, "my.home"));
     g_free(stock); teardown(f);
 }
+/* webOS 4.0: the Home key filter is the whole redirect (an entry of ours, homekey40-*.js): the watcher applies it, applies it
+ * again when configd puts the stock list back, never touches the settings record or the profile, and restores the stock keyFilters
+ * when Home Chooser goes. 4.5 (launchHomeApp in the stock file) takes none of these paths. */
+static Fixture *setup40(const char *id, gboolean really40) {
+    Fixture *f = setup(4, NULL);
+    f->c.stock_js = path(f, f->c.runtime, "stock-systemUi.js");
+    file(f->c.stock_js, really40 ? "function handleSystemKeys(key, pressed, autoRepeat) {\n global.prepareToGoHome(); global.gotoRecents;\n}\n"
+        : "function launchHomeApp(key) {}\nfunction handleSystemKeys(k) { global.prepareToGoHome(); global.gotoRecents; launchHomeApp(k); }\n");
+    file(f->c.release_file, really40 ? "Rockhopper release 4.4.3-22 (goldilocks-gorongosa)\n" : "Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n");
+    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .gate = fake_gate, .now = now, .wait = wait_ms, .context = f};
+    hc_watch_free(f->w); f->w = hc_watch_new(&f->c, &ops);
+    if (id) choice(f, id);
+    return f;
+}
+static void test_webos40(void) {
+    Fixture *f = setup40("my.home", TRUE);
+    CHECK("F01 4.0 watches the keyFilters", hc_watch_keys(f->w) && f->w->key_mode == HC_KEY_INSERT);
+    record(f, "{\"home\":\"other.home\"}");
+    start(f);
+    CHECK("F02 4.0 applies the filter and is baked", f->key_calls >= 1 && eq(f->w->baked, "my.home"));
+    event(f, 'S', "{\"settings\":{\"defaultApps\":{\"home\":\"other.home\"}}}");
+    event(f, 'A', "{}");
+    CHECK("F03 4.0 writes no record and no profile", f->sets == 0 && f->defaults == 0 && f->scans == 0);
+    char *own = g_strdup_printf("{\"returnValue\":true,\"subscribed\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":["
+        "{\"file\":\"%s/homekey40-abc123.js\",\"handler\":\"handleHomeChooserKeys\"},{\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"handleSystemKeys\"}]}}", f->c.state_dir);
+    char *stock = key_text(f, FALSE);
+    int calls = f->key_calls;
+    event(f, 'K', own); CHECK("F04 our own entry present: nothing", f->key_calls == calls);
+    event(f, 'K', stock); CHECK("F05 configd put the stock list back: applied again", f->key_calls == calls + 1);
+    event(f, 'K', stock); CHECK("F06 inside the gap: not again", f->key_calls == calls + 1);
+    installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+    CHECK("F07 uninstall: clean exit, stock keyFilters restored, record never written", hc_watch_status(f->w) == 0 && f->stock_calls >= 1 && f->sets == 0 && f->defaults == 0);
+    CHECK("F08 uninstall: choice, state and boot entry gone", !g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+    g_free(own); g_free(stock); teardown(f);
+    /* a missing launcher: stock list back, no record */
+    f = setup40("gone.app", TRUE); start(f);
+    CHECK("F10 missing launcher: filter restored to stock, nothing baked", f->stock_calls >= 1 && !f->w->baked && f->sets == 0 && f->defaults == 0);
+    teardown(f);
+    /* 4.5: the stock file has launchHomeApp, so none of this */
+    f = setup40("my.home", FALSE);
+    CHECK("F20 4.5 is not 4.0", f->w->key_mode == HC_KEY_NONE && !hc_watch_keys(f->w));
+    start(f); stock = key_text(f, FALSE); calls = f->key_calls;
+    event(f, 'K', stock); CHECK("F21 4.5: no filter calls", f->key_calls == calls);
+    g_free(stock); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -1081,6 +1126,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_webos40(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }
