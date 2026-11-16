@@ -14,6 +14,10 @@ from ..inspector import FOCUS_JS
 from ..recorder import screenshot_reason
 
 
+class AlertActionLost(RuntimeError):
+    """The alert closed after the button press but its action never ran (a platform refusal, not a missed press)."""
+
+
 class ScreenInput:
     """Screen input and capture: screenshots, element clicks, keys, alert actions, key focus."""
 
@@ -136,6 +140,12 @@ class ScreenInput:
             result = verify()
             if result:
                 return result
+            if not self.use_click() and closed():
+                # Keys: the alert took the verified press and went away, yet nothing happened.  Record it as a
+                # failed check and let the caller go on, instead of aborting every later phase.
+                evidence = '%s closed after a verified %s press, without its action' % (message, target)
+                self.rec.check(label + ': the %s button ran its action' % target, False, evidence)
+                raise AlertActionLost(label + ': ' + evidence)
             if not self.use_click() or not closed():
                 raise RuntimeError(label + ': alert action was not observed')
             evidence = '%s closed without %s; attempt %s' % (message, target, attempt + 1)

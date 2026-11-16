@@ -15,7 +15,12 @@ class DeviceState:
     """Device state the steps read: watcher, hook status, compositor and crash windows, reboots, residency."""
 
     def watcher_active(self):
-        rc, out = self.dev.sh('systemctl is-active homechooser-home')
+        # webOS 4.0/4.5 run upstart, no systemd: the watcher is a setsid shell loop whose pid is in a file on tmpfs
+        rc, out = self.dev.sh(
+            'if command -v systemctl >/dev/null 2>&1; then systemctl is-active homechooser-home; '
+            'else p=$(cat /tmp/homechooser-runtime/watcher.pid 2>/dev/null); '
+            'if [ -n "$p" ] && grep -q homechooser-boot /proc/$p/cmdline 2>/dev/null; then echo active; '
+            'else echo inactive; fi; fi')
         return out.strip()
 
     def state(self):
