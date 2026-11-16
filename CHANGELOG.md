@@ -5,6 +5,10 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- On webOS 11 and later, if the panel was closed during first-time setup after the launcher access files were written but before the service restarted, the next open did not restart it, so launchers could stay refused. The next open now asks for the restart again.
+
 ## [0.1.2] - 2026-11-16
 
 ### Fixed
