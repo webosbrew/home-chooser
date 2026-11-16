@@ -7,9 +7,6 @@ the remote opens: LG's own Home, or a launcher you have installed, such as a doc
 home screen. Your choice stays in place after the TV restarts, and Home Chooser puts LG Home back by
 itself if the launcher or Home Chooser is removed.
 
-> **Not released yet.** There is no release package so far. Launcher authors can already build
-> against the [launcher API](docs/launcher-api.md): `apiVersion` is a feature level that only grows and stays backward compatible.
-
 ## Requirements
 
 * An LG TV running webOS 5 to 12.
@@ -20,8 +17,12 @@ itself if the launcher or Home Chooser is removed.
 
 ## Installing
 
-Install the Home Chooser package (`.ipk`) like any other homebrew app, for example with webOS Dev
-Manager or `ares-install`. Then open Home Chooser once from the app list.
+Open Homebrew Channel on the TV, find Home Chooser in its app list and install it. Then open Home
+Chooser once from the TV's app list.
+
+Without Homebrew Channel's list, download the `.ipk` from the
+[latest release](https://github.com/webosbrew/home-chooser/releases/latest) and install it like any
+other homebrew app, for example with webOS Dev Manager or `ares-install`.
 
 ## Choosing a launcher
 
@@ -41,6 +42,10 @@ Manager or `ares-install`. Then open Home Chooser once from the app list.
 
 The change takes effect at once; no restart is needed. Nothing changes unless you confirm.
 
+On webOS 6 to 9, with a launcher that draws over the screen (a dock or a bar), the first Home press
+after choosing it can show LG Home's own screen underneath. It goes once you open an app or a TV
+input.
+
 ## Going back to LG Home
 
 Open Home Chooser, choose "LG Home (stock)" and confirm. The Home button opens LG Home again
@@ -54,6 +59,8 @@ uninstall the launcher you chose, the Home button opens LG Home again.
 ## Known limitations
 
 * On webOS 11 and later, Home Chooser needs Homebrew Channel 0.8.0 or later. Earlier releases don't give apps root access there.
+* On webOS 5, LG Home stays loaded in the background after you choose another launcher, until the
+  TV restarts.
 * Only apps that declare themselves Home apps are listed. If your launcher is missing, ask its
   author.
 
