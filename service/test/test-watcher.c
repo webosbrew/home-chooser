@@ -385,6 +385,24 @@ static void test_idle_app(void) {
         CHECK("I07 confirmed once", f->wait_count == (gone ? 1 : 0)); teardown(f);
     }
 }
+/* S: 5.x to 9.x put back the stock Home the owner last used (the `stock` file), only when installed; a record already naming
+ * a stock Home stays; no file: fullhome when installed. */
+static void test_stock_variant(void) {
+    const char *saved[] = {"com.webos.app.home", "com.webos.app.fullhome", "bogus.id", NULL};
+    for (int major = 5; major <= 9; major += 4) for (int full = 0; full <= 1; full++) for (int i = 0; i < 3; i++) {
+        Fixture *f = setup(major, "my.home"); installed(f, FULLHOME, full ? 1 : -1);
+        file(path(f, f->c.state_dir, "stock"), saved[i]); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        const char *want = (i == 0 || (i == 1 && full)) ? saved[i] : (full ? FULLHOME : STOCK);
+        CHECK("S01 remembered stock variant restored", home_is(f, want)); teardown(f);
+    }
+    for (int full = 0; full <= 1; full++) {
+        Fixture *f = setup(5, "my.home"); installed(f, FULLHOME, full ? 1 : -1);
+        file(path(f, f->c.state_dir, "stock"), FULLHOME); record(f, "{\"home\":\"com.webos.app.home\"}"); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        CHECK("S02 record already stock stays", home_is(f, STOCK) && !f->sets); teardown(f);
+    }
+}
 static void test_remove_return(void) {
     for (int major = 5; major <= 12; major++) for (int full = 0; full <= 1; full++) {
         Fixture *f = setup(major, "my.home"); installed(f, FULLHOME, full ? 1 : -1); start(f);
@@ -1063,6 +1081,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

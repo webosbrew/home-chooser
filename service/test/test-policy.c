@@ -30,6 +30,7 @@ static void test_files(void)
 	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/homekey"));
 	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/previous"));
 	CHECK(!hc_file_allowed("/var/lib/webosbrew/homechooser/previous.tmp"));
+	CHECK(hc_file_allowed("/var/lib/webosbrew/homechooser/stock"));
 	CHECK(hc_file_allowed("/var/webos-profile/override/org.webosbrew.homechooser.json"));
 	CHECK(!hc_file_allowed(NULL));
 	CHECK(!hc_file_allowed("/etc/passwd"));

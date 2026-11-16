@@ -97,15 +97,32 @@ static gboolean remove_home(HCWatch *w)
     else watch_log(w, "home cleared (null) in the record");
     g_free(id); return ok;
 }
+/* The stock Home to put back on 5.x to 9.x: the one the record already names, else the one the owner last used
+ * (the `stock` file, written by the app when it switched away from it), each only when installed; else
+ * fullhome when installed, else com.webos.app.home. */
+static char *stock_to_restore(HCWatch *w, const char *found)
+{
+    char *saved = NULL;
+    if (stock_id(found) && (eq(found, STOCK) || app_state(w, found) == 1)) return g_strdup(found);
+    char *path = g_build_filename(w->c.state_dir, "stock", NULL), *text = watch_read(path);
+    g_free(path);
+    if (text) saved = g_strdup(g_strstrip(text));
+    g_free(text);
+    if (stock_id(saved) && (eq(saved, STOCK) || app_state(w, saved) == 1)) return saved;
+    g_free(saved);
+    return g_strdup(app_state(w, FULLHOME) == 1 ? FULLHOME : STOCK);
+}
 static gboolean revert_platform(HCWatch *w)
 {
     watch_log(w, "putting the platform back to stock");
     if (w->major >= 5 && w->major <= 9) {
-        const char *stock = app_state(w, FULLHOME) == 1 ? FULLHOME : STOCK;
-        char *found = current_home(w);
-        gboolean matches = eq(found, stock); g_free(found);
+        char *found = current_home(w), *stock = stock_to_restore(w, found);
+        gboolean matches = eq(found, stock);
         if (matches) watch_log(w, "home is already %s", stock);
-        return matches || merged_write(w, stock);
+        else watch_log(w, "restoring %s", stock);
+        gboolean ok = matches || merged_write(w, stock);
+        g_free(found); g_free(stock);
+        return ok;
     }
     drop_override(w); return remove_home(w);
 }
@@ -123,7 +140,7 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "previous", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);

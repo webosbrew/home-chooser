@@ -19,6 +19,9 @@
 /* Written by the app at each change of Home: the previous launchers still to close, one id a line. The watcher
  * holds every close while it is fresh and closes them later (docs/settings-app.md, "The previous launcher"). */
 #define HC_PREVIOUS_FILE HC_STATE_DIR "/previous"
+/* The stock Home the owner last used on 4.5 and 5.x (com.webos.app.home or com.webos.app.fullhome): where a removed
+ * launcher or Home Chooser itself puts Home back (docs/settings-app.md, "Which stock Home"). */
+#define HC_STOCK_FILE HC_STATE_DIR "/stock"
 #define HC_OVERRIDE_FILE "/var/webos-profile/override/" HC_APP_ID ".json"
 #define HC_INIT_DIR "/var/lib/webosbrew/init.d"
 #define HC_INIT_LINK HC_INIT_DIR "/homechooser"
