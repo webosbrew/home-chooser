@@ -170,7 +170,7 @@ class DeviceState:
         if running is None:
             lines.append('running: unreadable: ' + out[:200])
         else:
-            homes = [('previous home', STOCK)] + ([('5.x fullhome', 'com.webos.app.fullhome')] if self.major == 5 else [])
+            homes = [('previous home', STOCK)] + ([('4.5/5.x fullhome', 'com.webos.app.fullhome')] if self.major <= 5 else [])
             for label, aid in homes + [('chosen launcher', self.launcher)]:
                 a = running.get(aid)
                 if not a:
@@ -202,7 +202,7 @@ class DeviceState:
         baked_emptied: the watcher ran `refresh stock` (a launcher removal; not after an uninstall,
         where the worker went with the app directory).  10+: null/unset, no override, idleApp stock."""
         r = self.rec
-        want = {5: 'a stock launcher (%s or %s)' % (FULLHOME, STOCK)}.get(self.major) or (
+        want = ('a stock launcher (%s or %s)' % (FULLHOME, STOCK) if self.major <= 5 else None) or (
             'the stock id %s, not null' % self.stock_id if self.uses_home_key_hook() else 'null or unset')
         r.check(label + ': record home is %s' % want, self.stock_record_ok(s['record_home']), s['record_raw'])
         if self.uses_override():

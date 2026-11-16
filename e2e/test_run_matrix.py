@@ -124,8 +124,8 @@ class Planning(unittest.TestCase):
         self.assertEqual(list(cfg['hosts']), ['b'])
         with self.assertRaises(SystemExit):
             run_matrix.select_hosts(CFG, 'missing')
-        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', hc_e2e.matrix.MATRIX[1][1])])
-        rk = hc_e2e.matrix.candidates(hc_e2e.matrix.MATRIX[1][1])[0]
+        self.assertEqual(run_matrix.wanted_vms(['6.x']), [('6.x', hc_e2e.matrix.entry('6.x')[1])])
+        rk = hc_e2e.matrix.candidates(hc_e2e.matrix.entry('6.x')[1])[0]
         self.assertEqual(run_matrix.wanted_vms([rk]), [('6.x', rk)])
         q, problems = run_matrix.plan(run_matrix.wanted_vms(['6.x']), cfg, {'b': {rk}})
         self.assertEqual(problems, [])
@@ -158,7 +158,7 @@ class Planning(unittest.TestCase):
     def test_releases_map_to_matrix_vms_once(self):
         first9 = next(m[1] for m in hc_e2e.matrix.MATRIX if m[0] == '9.x')
         self.assertEqual(run_matrix.wanted_vms(['9.x', first9, '5.x']),
-                         [('9.x', first9), ('5.x', hc_e2e.matrix.MATRIX[0][1])])
+                         [('9.x', first9), ('5.x', hc_e2e.matrix.entry('5.x')[1])])
         self.assertEqual(len(run_matrix.wanted_vms([])), len({m[1] for m in hc_e2e.matrix.MATRIX}))
 
     def test_a_failing_host_is_reported_and_the_rest_discovered(self):
@@ -543,7 +543,7 @@ BEANJAR_LIST = {
     'rockpi4a-2': ['w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us', 'w24g-spacebuns'],
 }
 # minutes one release-tier run takes on the Pi (matrix-20261102-*/summary.md: the Rock Pi 4A takes about twice as long)
-PI_MINUTES = {'5.x': 6.0, '6.x': 6.2, '7.x': 5.8, '8.x': 5.2, '9.x': 6.4, '10.x': 8.8, '11.x': 8.9, '12.x': 9.4}
+PI_MINUTES = {'4.x': 6.0, '5.x': 6.0, '6.x': 6.2, '7.x': 5.8, '8.x': 5.2, '9.x': 6.4, '10.x': 8.8, '11.x': 8.9, '12.x': 9.4}
 
 
 class CommittedPlan(unittest.TestCase):
@@ -613,7 +613,7 @@ class CommittedPlan(unittest.TestCase):
             rc = run_matrix.main(['--dry-run', '--tier', 'release', '--results', tmp], lister=lambda h: BEANJAR_LIST[h])
         self.assertEqual(rc, 0)
         text = out.getvalue()
-        self.assertIn('pi (ssh raspberrypi): 6 run(s)', text)
+        self.assertIn('pi (ssh raspberrypi): 7 run(s)', text)
         self.assertIn('rockpi4a-1 (ssh mariotaku@rockpi4a-1.lan): 4 run(s)', text)
         self.assertNotIn('rockpi4a-2', text)
         self.assertNotIn('w21p-kisscurl', text)

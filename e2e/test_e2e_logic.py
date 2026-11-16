@@ -1011,12 +1011,15 @@ class StockRecord(unittest.TestCase):
             '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
         })
 
-    def test_5x_is_unchanged_a_stock_launcher(self):
-        for home in (FULL, HOME):
-            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home))
-            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home, FULL))  # the id is not pinned on 5.x
-        for home in (None, '', 'null', 'org.example.launcher'):
-            self.assertFalse(hc_e2e.releases.stock_record_ok(5, home))
+    def test_4_and_5x_are_unchanged_a_stock_launcher(self):
+        for major in (4, 5):
+            for home in (FULL, HOME):
+                self.assertTrue(hc_e2e.releases.stock_record_ok(major, home))
+                self.assertTrue(hc_e2e.releases.stock_record_ok(major, home, FULL))  # the id is not pinned on 4.5/5.x
+            for home in (None, '', 'null', 'org.example.launcher'):
+                self.assertFalse(hc_e2e.releases.stock_record_ok(major, home))
+            self.assertEqual(hc_e2e.releases.stock_home_id(major, True), FULL)
+            self.assertEqual(hc_e2e.releases.stock_home_id(major, False), HOME)
 
     def test_6_to_9_require_the_stock_id_not_null(self):
         for major in (6, 7, 8, 9):

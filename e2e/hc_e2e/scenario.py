@@ -38,7 +38,7 @@ class Scenario(ScreenInput, DeviceState, PopupsAndNotifications, PreloadPolicy, 
         self.insp = None
         self.capture_broken = False
         self.viewer_opened = False
-        self.major = 0  # webOS TV release, 5..12
+        self.major = 0  # webOS TV release, 4..12
         self.stock_id = None  # what restore/removal/uninstall write as home (stock_home_id), from the baseline
 
     # -- steps

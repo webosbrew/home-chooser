@@ -109,18 +109,18 @@ def platform_stock(major, record_home, stock_id, override, idle):
 
 
 def stock_home_id(major, fullhome_installed):
-    """The id restore/removal/uninstall write as `home` on 5.x to 9.x (docs/settings-app.md): fullhome
+    """The id restore/removal/uninstall write as `home` on 4.5 to 9.x (docs/settings-app.md): fullhome
     if it is installed, else com.webos.app.home.  10+ write null: None."""
-    if 5 <= major <= 9:
+    if 4 <= major <= 9:
         return FULLHOME if fullhome_installed else STOCK
     return None
 
 
 def stock_record_ok(major, home, stock_id=None):
     """The record's `home` after a restore, a launcher removal or a Home Chooser uninstall.
-    5.x: a stock launcher (unchanged).  6.x to 9.x: the stock id, not null (34a4ff9); exactly
+    4.5 and 5.x: a stock launcher (unchanged).  6.x to 9.x: the stock id, not null (34a4ff9); exactly
     `stock_id` when it is known.  10+: null or unset."""
-    if major == 5:
+    if major <= 5:
         return home in (FULLHOME, STOCK)
     if uses_home_key_hook(major):
         return home == stock_id if stock_id else home in (FULLHOME, STOCK)

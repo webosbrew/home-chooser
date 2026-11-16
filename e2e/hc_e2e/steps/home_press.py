@@ -19,8 +19,8 @@ class HomePress:
         if proof:
             self.popup_mark = self.popup_mark_now()
             self.life_begin()
-        if expect == STOCK and (self.major == 5 or self.stock_id == FULLHOME):
-            # webOS 5: Home starts com.webos.app.fullhome as an overlay over the app in front
+        if expect == STOCK and (self.major <= 5 or self.stock_id == FULLHOME):
+            # webOS 4.5 and 5: Home starts com.webos.app.fullhome as an overlay over the app in front
             # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
             # a launcher: closed first, running afterwards.  6.x to 9.x with fullhome installed: the
             # record names it, so it is what opens (not seen on a device yet).
