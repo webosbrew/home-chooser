@@ -95,7 +95,7 @@ endif()
 # The ARM programs: ../CMakeLists.txt configured with the webOS toolchain in a build directory of its own.
 include(ExternalProject)
 set(arm "${CMAKE_CURRENT_BINARY_DIR}/arm")
-set(programs test-homekey test-fwupdate test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract
+set(programs test-homekey test-homekey40 test-fwupdate test-watcher test-watcher-luna test-gate test-gate-mount test-launcher-contract
 	test-launcher-subscribe)
 set(cache_args -DSDK:PATH=${SDK} -DSYSROOT:PATH=${SYSROOT} -DCROSS:STRING=${CROSS})
 foreach(name VERSION EXTRA_CFLAGS)
@@ -122,6 +122,17 @@ add_test(NAME watcher-runtime-image COMMAND "${CMAKE_COMMAND}" -E copy "${arm}/t
 set_tests_properties(watcher-runtime-image PROPERTIES FIXTURES_SETUP runtime-image FIXTURES_REQUIRED scratch)
 
 add_test(NAME test-homekey COMMAND ${qemu} "${arm}/test-homekey" "${work}/keyfilter-test" "${system_ui}")
+# webOS 4.0: the filter entry inserted before handleSystemKeys; the real 4.0, 4.5 and 6-9 systemUi.js files tell the modes apart (skipped when absent).
+set(fw40 "${FIRMWARES}/05.50.70.01-HE_DTV_W18R_AFAAABAA/rootfs/usr/lib/qt5/qml/KeyFilters/systemUi.js")
+set(fw45 "${FIRMWARES}/05.40.97.01-HE_DTV_W19P_AFADABAA/rootfs/usr/lib/qt5/qml/KeyFilters/systemUi.js")
+add_test(NAME test-homekey40 COMMAND ${qemu} "${arm}/test-homekey40" "${work}/keyfilter40-test" "${fw40}" "${fw45}" "${system_ui}")
+# The generated filter run against a mock of the compositor's filter scope (needs the files test-homekey40 writes).
+if(NODE)
+	add_test(NAME test-homekey40-filter COMMAND "${NODE}" "${CMAKE_CURRENT_SOURCE_DIR}/homekey40-filter.js"
+		"${work}/keyfilter40-test/filter-fullscreen.js" "${work}/keyfilter40-test/filter-overlay.js")
+	set_tests_properties(test-homekey40-filter PROPERTIES FIXTURES_REQUIRED homekey40)
+	set_tests_properties(test-homekey40 PROPERTIES FIXTURES_SETUP homekey40)
+endif()
 # Firmware update simulations: real systemUi.js pairs from the corpus (skipped when absent) and synthetic ones.
 add_test(NAME test-fwupdate COMMAND "${PYTHON3}" -I "${CMAKE_CURRENT_SOURCE_DIR}/fwupdate-guard.py" "${arm}/test-fwupdate"
 	"${work}/fwupdate-test" "${system_ui}" ${qemu})
@@ -134,7 +145,7 @@ add_test(NAME test-gate-mount COMMAND ${qemu} "${arm}/test-gate-mount" "${work}/
 add_test(NAME test-launcher-contract COMMAND ${launcher_spec} contract "${api}/launcher-v1.openrpc.json" "${launcher_cases}"
 	"${arm}/test-launcher-contract" "${work}/launcher-contract-test" ${qemu})
 add_test(NAME test-launcher-subscribe COMMAND ${qemu} "${arm}/test-launcher-subscribe" "${work}/launcher-subscribe-test" "${fake_luna_send}")
-set_tests_properties(test-homekey test-fwupdate test-watcher test-gate test-gate-mount test-launcher-contract test-launcher-subscribe PROPERTIES FIXTURES_REQUIRED scratch)
+set_tests_properties(test-homekey test-homekey40 test-fwupdate test-watcher test-gate test-gate-mount test-launcher-contract test-launcher-subscribe PROPERTIES FIXTURES_REQUIRED scratch)
 set_tests_properties(test-watcher-luna PROPERTIES FIXTURES_REQUIRED "scratch;runtime-image")
 # The two watcher programs share watcher-test; never run them at once.
 set_tests_properties(test-watcher test-watcher-luna watcher-runtime-image PROPERTIES RESOURCE_LOCK watcher-test)

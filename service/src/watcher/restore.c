@@ -23,7 +23,7 @@ static gboolean on_disk(HCWatch *w, const char *id)
 }
 int key_refresh(HCWatch *w, gboolean stock)
 {
-    if (w->major < 6 || w->major > 9) return 0;
+    if (w->key_mode == HC_KEY_NONE) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
     HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000};
     GString *out = g_string_new(NULL);
@@ -50,19 +50,19 @@ static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
 {
     jvalue_ref list = member(member(reply, "configs"), KEY_CONFIG);
     if (!jis_array(list)) return FALSE;
-    char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL);
+    char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL), *ours40 = g_build_filename(w->c.state_dir, "homekey40-", NULL);
     gboolean stock = FALSE, mine = FALSE;
     for (ssize_t i = 0; i < jarray_size(list); i++) {
         char *file = get_string(jarray_get(list, i), "file");
-        if (g_str_has_prefix(file ? file : "", ours)) mine = TRUE;
+        if (g_str_has_prefix(file ? file : "", ours) || g_str_has_prefix(file ? file : "", ours40)) mine = TRUE;
         if (eq(file, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || eq(file, "/usr/lib/qml/KeyFilters/systemUi.js")) stock = TRUE;
         g_free(file);
     }
-    g_free(ours); return stock && !mine;
+    g_free(ours); g_free(ours40); return stock && !mine;
 }
 void key_follow(HCWatch *w, const char *text)
 {
-    if (w->major < 6 || w->major > 9 || !w->baked || w->status >= 0) return;
+    if (w->key_mode == HC_KEY_NONE || !w->baked || w->status >= 0) return;
     jvalue_ref reply;
     if (text) reply = parse_object(text);
     else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
@@ -114,6 +114,7 @@ static char *stock_to_restore(HCWatch *w, const char *found)
 }
 static gboolean revert_platform(HCWatch *w)
 {
+    if (filter_only(w)) { watch_log(w, "webOS 4.0: no settings record to put back, the Home key filter is restored on its own"); return TRUE; }
     watch_log(w, "putting the platform back to stock");
     if (w->major >= 5 && w->major <= 9) {
         char *found = current_home(w), *stock = stock_to_restore(w, found);

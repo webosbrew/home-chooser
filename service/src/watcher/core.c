@@ -79,6 +79,13 @@ HCWatch *hc_watch_new(const HCWatchConfig *c, const HCWatchOps *ops)
     HCWatch *w = g_new0(HCWatch, 1);
     w->c = *c; w->ops = *ops; w->status = -1;
     w->major = major_version(c->release_file);
+    {
+        char *release = NULL, *stock = NULL;
+        g_file_get_contents(c->release_file, &release, NULL, NULL);
+        if (c->stock_js) g_file_get_contents(c->stock_js, &stock, NULL, NULL);
+        w->key_mode = hc_key_mode(release, stock);
+        g_free(release); g_free(stock);
+    }
     w->choice_file = g_build_filename(c->state_dir, "home", NULL);
     w->prev_mtime = G_MININT64; /* nothing read yet */
     return w;
@@ -170,7 +177,7 @@ void hc_watch_stop(HCWatch *w, int status, const char *reason)
 }
 int hc_watch_status(HCWatch *w) { return w->status; }
 gboolean hc_watch_idle(HCWatch *w) { return w->depth == 0; }
-gboolean hc_watch_keys(HCWatch *w) { return w->major >= 6 && w->major <= 9; }
+gboolean hc_watch_keys(HCWatch *w) { return w->key_mode != HC_KEY_NONE; }
 
 void hc_watch_start(HCWatch *w)
 {

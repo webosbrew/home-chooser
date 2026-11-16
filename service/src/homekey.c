@@ -37,10 +37,38 @@ static char *readfile(const char *p) {
 static gboolean stock_path(const char *s) {
     return s && (!strcmp(s, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || !strcmp(s, "/usr/lib/qml/KeyFilters/systemUi.js"));
 }
-static gboolean owned(const HCKeyOps *o, const char *s) {
-    char *prefix = path(o, "systemUi-");
+/* Our generated files: systemUi-XXXXXX.js (6-9, a changed copy of the stock file) and homekey40-XXXXXX.js (4.0,
+ * the filter entry inserted before handleSystemKeys). */
+static gboolean owned_named(const HCKeyOps *o, const char *s, const char *name) {
+    char *prefix = path(o, name);
     gboolean yes = s && g_str_has_prefix(s, prefix) && g_str_has_suffix(s, ".js") && !strchr(s + strlen(prefix), '/');
     g_free(prefix); return yes;
+}
+static gboolean owned_patch(const HCKeyOps *o, const char *s) { return owned_named(o, s, "systemUi-"); }
+static gboolean owned_insert(const HCKeyOps *o, const char *s) { return owned_named(o, s, "homekey40-"); }
+static gboolean owned(const HCKeyOps *o, const char *s) { return owned_patch(o, s) || owned_insert(o, s); }
+#define INSERT_HANDLER "handleHomeChooserKeys"
+#define STOCK_HANDLER "handleSystemKeys"
+/* Index of the stock handleSystemKeys entry (found by name: the list differs between device layers), -1 when
+ * there is none of the stock systemUi.js. */
+static ssize_t insert_index(jvalue_ref list) {
+    for (ssize_t i = 0; jis_array(list) && i < jarray_size(list); i++) {
+        char *file = str(jarray_get(list, i), "file"), *handler = str(jarray_get(list, i), "handler");
+        gboolean hit = stock_path(file) && handler && !strcmp(handler, STOCK_HANDLER);
+        g_free(file); g_free(handler);
+        if (hit) return i;
+    }
+    return -1;
+}
+/* A copy of a list without our 4.0 entries (the list as configd had it before the insert). */
+static jvalue_ref without_inserted(const HCKeyOps *o, jvalue_ref list) {
+    jvalue_ref out = jarray_create(NULL);
+    for (ssize_t i = 0; i < jarray_size(list); i++) {
+        char *file = str(jarray_get(list, i), "file");
+        if (!owned_insert(o, file)) jarray_append(out, jvalue_duplicate(jarray_get(list, i)));
+        g_free(file);
+    }
+    return out;
 }
 /* Reject malformed/empty lists. Every entry and all metadata/order are retained. */
 static gboolean valid(const HCKeyOps *o, jvalue_ref list, gboolean allow_ours) {
@@ -51,8 +79,8 @@ static gboolean valid(const HCKeyOps *o, jvalue_ref list, gboolean allow_ours) {
         if (!jis_object(item)) return FALSE;
         char *file = str(item, "file"), *handler = str(item, "handler");
         gboolean ok = file && *file && handler && *handler;
-        if (stock_path(file) || (allow_ours && owned(o, file))) systems++;
-        else if (owned(o, file)) ok = FALSE;
+        if (stock_path(file) || (allow_ours && owned_patch(o, file))) systems++;
+        else if (owned(o, file) && !(allow_ours && owned_insert(o, file))) ok = FALSE;
         g_free(file); g_free(handler);
         if (!ok) return FALSE;
     }
@@ -137,30 +165,34 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL, *lockpath = NULL;
     char *stock_file = path(o, "keyfilters-stock.json");
     char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->release_file);
+    gboolean overlay = FALSE;
     jvalue_ref current = jinvalid(), stock = jinvalid(), next = jinvalid();
     gboolean boot = !strcmp(action, "boot"), status = !strcmp(action, "status"), prepare = !strcmp(action, "prepare");
     /* The existing 5/10-12 policy is owned by the watcher, never this hook. */
     int major = hc_release_major(os);
+    source = readfile(o->stock_js);
+    HCKeyMode mode = hc_key_mode(os, source);
     g_free(os);
-    if (major >= 10 && !status && !prepare) {
-        /* An update from 6-9 leaves the generated filters and the snapshot behind; 10+ has no use for them. */
+    if ((major >= 10 || (major == 4 && mode == HC_KEY_NONE)) && !status && !prepare) {
+        /* An update from 6-9 (or from 4.0 to 4.5) leaves the generated filters and the snapshot behind; they have no use there. */
         GDir *d = g_dir_open(o->state_dir, 0, NULL); const char *name;
         while (d && (name = g_dir_read_name(d))) {
-            if (!strcmp(name, "keyfilters-stock.json") || (g_str_has_prefix(name, "systemUi-") && g_str_has_suffix(name, ".js"))) {
+            if (!strcmp(name, "keyfilters-stock.json") || ((g_str_has_prefix(name, "systemUi-") || g_str_has_prefix(name, "homekey40-")) && g_str_has_suffix(name, ".js"))) {
                 char *p = path(o, name); unlink(p); g_free(p);
             }
         }
         if (d) g_dir_close(d);
     }
-    if (major < 6 || major > 9) { g_string_append(out, "active=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
+    if (mode == HC_KEY_NONE) { g_string_append(out, "active=no\npatch=not-needed\nreboot=no\n"); rc = 0; goto done; }
     if (boot && !ready(o)) { reason = g_strdup("boot readiness timed out; stock Home retained"); goto done; }
-    source = readfile(o->stock_js);
-    generated = source ? hc_key_generate(source, "org.webosbrew.homechooser.probe", &reason) : NULL;
+    if (mode == HC_KEY_INSERT) generated = hc_key40_generate("org.webosbrew.homechooser.probe", FALSE, &reason);
+    else generated = source ? hc_key_generate(source, "org.webosbrew.homechooser.probe", &reason) : NULL;
     if (!generated && !reason) reason = g_strdup("stock systemUi.js is unreadable");
     if (prepare) { rc = generated ? 0 : 2; goto done; }
     if (status) {
         current = get_list(o);
-        g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", generated ? "possible" : "refused");
+        gboolean possible = generated && (mode != HC_KEY_INSERT || insert_index(current) >= 0 || has_ours(o, current));
+        g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", possible ? "possible" : "refused");
         rc = 0; goto done;
     }
     /* A restore with no state dir has nothing to restore (stock keyFilters are saved in it, and the
@@ -195,8 +227,8 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         char *saved = readfile(stock_file); stock = parse(saved); g_free(saved);
         if (!valid(o, stock, FALSE)) { reason = g_strdup("stock list unavailable; retaining loaded files"); goto done; }
         /* Refuse to overwrite concurrent third-party edits while an override is active. */
-        jvalue_ref normalized = jvalue_duplicate(current);
-        if (jarray_size(stock) == jarray_size(normalized)) {
+        jvalue_ref normalized = mode == HC_KEY_INSERT ? without_inserted(o, current) : jvalue_duplicate(current);
+        if (mode == HC_KEY_PATCH && jarray_size(stock) == jarray_size(normalized)) {
             for (ssize_t i = 0; i < jarray_size(normalized); i++) {
                 jvalue_ref item = jarray_get(normalized, i);
                 char *file = str(item, "file"), *original = str(jarray_get(stock, i), "file");
@@ -207,6 +239,11 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         gboolean same = jvalue_equal(normalized, stock); j_release(&normalized);
         if (!same) { reason = g_strdup("keyFilters changed externally; retaining loaded files"); goto done; }
     }
+    /* 4.0: the entry goes before the stock handleSystemKeys; a list without one cannot be changed. */
+    if (mode == HC_KEY_INSERT && insert_index(stock) < 0 && generated) {
+        g_free(generated); generated = NULL;
+        reason = g_strdup("keyFilters has no stock handleSystemKeys entry; stock Home retained");
+    }
     choice = readfile(home);
     if (choice) g_strstrip(choice);
     gboolean enabled = g_file_test(flag, G_FILE_TEST_EXISTS);
@@ -216,15 +253,19 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         else {
             jvalue_ref p = jobject_create(); jobject_set(p, kb("id"), jstring_create(choice));
             jvalue_ref r = call(o, "luna://com.webos.applicationManager/getAppInfo", jvalue_stringify(p), 5);
-            restore = !success(r); j_release(&p); j_release(&r);
+            restore = !success(r);
+            char *window = str(jobject_get(r, kb("appInfo")), "defaultWindowType");
+            overlay = window && !strcmp(window, "overlay"); g_free(window);
+            j_release(&p); j_release(&r);
         }
     }
     next = jvalue_duplicate(stock);
     if (!restore) {
-        g_free(generated); generated = hc_key_generate(source, choice, &reason);
+        g_free(generated);
+        generated = mode == HC_KEY_INSERT ? hc_key40_generate(choice, overlay, &reason) : hc_key_generate(source, choice, &reason);
         if (!generated) goto done;
-        /* A new immutable pathname for each change avoids Qt.include byte caches. */
-        version = path(o, "systemUi-XXXXXX.js");
+        /* A new immutable pathname for each change avoids loader byte caches. */
+        version = path(o, mode == HC_KEY_INSERT ? "homekey40-XXXXXX.js" : "systemUi-XXXXXX.js");
         int fd = mkstemps(version, 3);
         if (fd < 0) goto done;
         close(fd);
@@ -239,7 +280,38 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         if (boot) toast(o, "Your new home will start shortly");
         /* An unchanged choice and stock bytes need no loader churn. */
         gboolean unchanged = has_ours(o, current);
-        for (ssize_t i = 0; i < jarray_size(next); i++) {
+        if (mode == HC_KEY_INSERT) {
+            jvalue_ref inserted = jobject_create();
+            jobject_set(inserted, kb("file"), jstring_create(version));
+            jobject_set(inserted, kb("handler"), jstring_create(INSERT_HANDLER));
+            ssize_t at = insert_index(stock);
+            jvalue_ref grown = jarray_create(NULL);
+            for (ssize_t i = 0; i < jarray_size(stock); i++) {
+                if (i == at) jarray_append(grown, jvalue_duplicate(inserted));
+                jarray_append(grown, jvalue_duplicate(jarray_get(stock, i)));
+            }
+            j_release(&inserted); j_release(&next); next = grown;
+            /* unchanged: the live entry already is this file's bytes, and nothing else differs */
+            gboolean same = FALSE;
+            for (ssize_t i = 0; unchanged && i < jarray_size(current); i++) {
+                char *file = str(jarray_get(current, i), "file");
+                if (owned_insert(o, file)) {
+                    char *old = readfile(file); same = old && !strcmp(old, generated); g_free(old);
+                    jobject_set(jarray_get(next, i), kb("file"), jstring_create(file));
+                }
+                g_free(file);
+            }
+            unchanged = unchanged && same && jvalue_equal(next, current);
+            if (!unchanged) {
+                /* the new version's path is what gets written */
+                for (ssize_t i = 0; i < jarray_size(next); i++) {
+                    char *file = str(jarray_get(next, i), "file");
+                    if (owned_insert(o, file)) jobject_set(jarray_get(next, i), kb("file"), jstring_create(version));
+                    g_free(file);
+                }
+            }
+        }
+        for (ssize_t i = 0; mode == HC_KEY_PATCH && i < jarray_size(next); i++) {
             jvalue_ref item = jarray_get(next, i);
             char *file = str(item, "file");
             if (stock_path(file)) {
