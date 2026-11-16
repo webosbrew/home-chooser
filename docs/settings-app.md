@@ -74,6 +74,38 @@ older than 0.8.0), the service still not root after elevation (`notRoot`), anyth
 content never meets a shell. Boot and Home-key entry scripts invoke `homechooser-daemon`. The
 watcher policy runs in C and uses luna-send child transport; access-file edits retain the shell helper.
 
+### The panel closes by itself, and what that does to setup
+
+Home Chooser's panel is an overlay, and the webOS compositor closes the current overlay on a
+repeating 120 s timer: `userActivityTimeout` 120000 in
+`/etc/configd/layers/base/com.webos.surfacemanager.json`, the `userActivityTimer` in
+`/usr/lib/qml/WebOSCompositor/views/StarfishScreenSaverView.qml`, and
+`starfishOverlay.close({'reason':'userTimeout'})` in
+`/usr/lib/qml/WebOSCompositor/controllers/StarfishViewStateController.qml` (lines 528-531). On each
+tick the overlay closes unless a key was pressed, or the cursor was visible, since the previous
+tick; launching the app does not reset it. So the panel closes 0 to 120 s after it opens when no
+key is pressed, whatever the app does (first frame within about 1 s). This is platform behaviour and
+is accepted; Home Chooser does not inject input or change `defaultWindowType`. Seen on 6.5.2: a
+panel left alone for about two minutes was gone, and opening it again showed it normally.
+
+Closing the app only ends the web page; the service, Homebrew Channel and the scripts the service
+runs carry on. Every step of the startup is safe to interrupt, and the next open finishes it:
+
+| Step | State a close leaves | Next open |
+| --- | --- | --- |
+| `status` | none | repeats |
+| `elevateService` (Homebrew Channel) | none yet, or the service's launch line rewritten, with the old instance still running unelevated | `status` says not root, `elevateService` is repeated, `quit`, root |
+| after elevation, before `quit` | launch line elevated, instance unelevated (checked on 6.5.2) | same as above; root afterwards |
+| `accessApply` | files are written through a temporary file and `mv`, so whole or absent; the script runs to the end | repeats, changes nothing if the files match |
+| 11+ restart after `accessApply` | files match but the running service still has the old groups | the script notes the instance it told in `/tmp/homechooser-runtime/access-restart-pending` and asks for the restart again |
+| `watch` | the watcher running, or not started | starts it if not running |
+| `osRelease` | none | repeats |
+
+On 6.5.2 the page was closed twice on a fresh install, once about a second after launch and once
+right after Homebrew Channel rewrote the launch line, before the `quit`. Each time the next open
+showed the list, `status` answered `root: true` with uid 0, and `homechooser-access` and the boot
+apply had run. The 11+ row is covered by the shell test only.
+
 The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
 
 ## What is written
