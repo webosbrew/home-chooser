@@ -32,18 +32,28 @@ export const isChoosableStock = (id) => id === STOCK_HOME || id === STOCK_FULLHO
 
 // The names of the stock rows. fullhome installed (4.5, 5.x): home is the ribbon, fullhome the full-screen
 // Home; else com.webos.app.home is the full-screen LG Home.
-export const stockName = (id, hasFullhome) => (id === STOCK_FULLHOME || (id === STOCK_HOME && !hasFullhome) ? 'LG Home (Fullscreen)' : 'LG Home (Ribbon)');
+// On webOS 4.0 there is no Home app at all: LG Home is the compositor's ribbon (`ribbon`).
+export const stockName = (id, hasFullhome, ribbon) => (!ribbon && (id === STOCK_FULLHOME || (id === STOCK_HOME && !hasFullhome)) ? 'LG Home (Fullscreen)' : 'LG Home (Ribbon)');
 
 export const majorOf = (version) => (Array.isArray(version) ? version[0] : Number(version));
+
+// webOS 4.0 (starfish 4.4.x; 4.5 is 4.10.x): the Home key is handled by the compositor's own ribbon, with no Home app
+// and no default-app record, so it is redirected by a key filter alone (docs/home-key-hook.md, "webOS 4.0"). The
+// service decides from the stock files whether it really is a 4.0; this only says which kind of setup to show.
+export const isWebos40 = (version) => Array.isArray(version) && version[0] === 4 && version[1] < 10;
 
 // What the platform needs beyond the settings record, by release.
 export const releaseInfo = (version) => {
 	const major = majorOf(version);
+	const filterOnly = isWebos40(version);
 	return {
 		major,
+		filterOnly,
+		// 4.0 has no settings record to write: the stored choice and the key filter are all there is.
+		usesRecord: !filterOnly,
 		// 6.x to 9.x: the stock compositor names com.webos.app.home, so the Home key ignores the choice
-		// until the Home key hook is installed.
-		needsHomeKeyHook: major >= 6 && major <= 9,
+		// until the Home key hook is installed. 4.0 needs its filter for the same reason.
+		needsHomeKeyHook: (major >= 6 && major <= 9) || filterOnly,
 		// 10.x and later: the compositor's home id is the system profile's, so write an override too.
 		usesProfile: major >= 10,
 		// 9.x and later have applicationManager/setDefaultApp.
@@ -227,7 +237,21 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 		return windowOf(reply);
 	};
 
+	// 4.0 has no record: the stored choice stands for it (what the watcher and the filter enforce).
+	const readStoredHome = async (run) => {
+		try {
+			const text = String((await run.read(HOME_FILE)) || '').trim();
+			return text && APP_ID_RE.test(text) ? text : null;
+		} catch (e) {
+			return null;
+		}
+	};
+
 	const readStateWith = async (run) => {
+		if (info.filterOnly) {
+			const home = await readStoredHome(run);
+			return {record: null, recordHome: home, profile: null, idleApp: null, profileHome: null, profileError: null};
+		}
 		const record = await readRecord(run);
 		const {profile, idleApp, error} = await readProfile(run);
 		return {
@@ -355,8 +379,10 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 				}
 				await recordPrevious(run, res, [state.recordHome, state.profileHome], appId);
 
-				// 1. the settings record
-				if (info.hasSetDefaultApp) {
+				// 1. the settings record (4.0 has none)
+				if (!info.usesRecord) {
+					// the stored choice above and the key filter below are the whole setting
+				} else if (info.hasSetDefaultApp) {
 					try {
 						await run.luna(`${SAM}/setDefaultApp`, {category: 'home', appId});
 					} catch (e) {
@@ -414,7 +440,10 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					res.warnings.push(`Could not stop the watcher: ${errorMessage(e)}`);
 				}
 				await run.remove(HOME_FILE);
-				if (info.major <= 9) {
+				if (!info.usesRecord) {
+					// 4.0: no record and no Home app; LG Home is the ribbon, which the restored key list brings back
+					res.stockId = STOCK_HOME;
+				} else if (info.major <= 9) {
 					// 5.x: the stock Home handler launches the record's home directly, so name a stock home.
 					// 6 to 9: keep a stock record for the watcher; the volatile JS filter is restored below.
 					const list = await run.luna(`${SAM}/listApps`, {properties: ['id']});

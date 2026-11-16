@@ -9,13 +9,14 @@ import {parseLaunchParams} from '../launch';
 
 const ok = (extra) => Object.assign({ok: true, steps: [], warnings: [], errors: []}, extra);
 
-const makeEnv = ({version = [11, 0, 0], candidates, currentHome = null, stored = '', homeKeyHook = null, apply, restore} = {}) => {
+const makeEnv = ({version = [11, 0, 0], candidates, currentHome = null, stored = '', homeKeyHook = null, apply, restore, filterOnly = false} = {}) => {
 	const list = candidates || [
 		{id: 'com.webos.app.home', title: 'Home', icon: null, stock: true},
 		{id: 'org.fancy.launcher', title: 'Fancy Launcher', icon: '/apps/fancy/icon.png'},
 		{id: 'org.plain.launcher', title: 'Plain Launcher', icon: '/apps/plain/icon.png'}
 	];
 	const chooser = {
+		info: {filterOnly},
 		listCandidates: jest.fn(async () => ok({candidates: list})),
 		readState: jest.fn(async () => ok({state: {record: null, recordHome: currentHome, profile: null, profileHome: null}})),
 		readPersistence: jest.fn(async () => ok({persistence: {stored, entry: 'ok', active: '', log: []}})),
@@ -222,6 +223,19 @@ describe('Home Chooser screen', () => {
 			fireEvent.click(await screen.findByText('LG Home (Ribbon)'));
 			expect(await screen.findByText('LG Home (Ribbon) is already your Home.')).toBeTruthy();
 		});
+	});
+
+	test('4.0: one stock row, LG Home (Ribbon): the ribbon of the compositor, no Home app', async () => {
+		const launcher = [{id: 'org.fancy.launcher', title: 'Fancy Launcher', icon: null}];
+		const env = makeEnv({version: [4, 4, 3], filterOnly: true, candidates: launcher, currentHome: 'org.fancy.launcher'});
+		mountApp(env);
+		await screen.findByText('LG Home (Ribbon)');
+		expect(screen.queryByText('LG Home (Fullscreen)')).toBeNull();
+		expect(document.querySelectorAll('[data-app-id^="com.webos.app."]')).toHaveLength(1);
+		fireEvent.click(screen.getByText('LG Home (Ribbon)'));
+		fireEvent.click(await screen.findByText('Use LG Home'));
+		await screen.findByText('Done. Press Home to try it.');
+		expect(env.chooser.restoreStock).toHaveBeenCalledWith('com.webos.app.home');
 	});
 
 	test('6 and later: one stock row, LG Home (Fullscreen)', async () => {

@@ -281,6 +281,8 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
+		// webOS 4.0: LG Home is the compositor's ribbon, there is no Home app
+		ribbonOnly: Boolean(env && env.chooser && env.chooser.info && env.chooser.info.filterOnly),
 		patchActive: Boolean(patchStatus && patchStatus.active),
 		candidates, currentId, storedId, loadFailed, readFailed, icons,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)

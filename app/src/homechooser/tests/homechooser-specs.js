@@ -267,6 +267,57 @@ describe('extractDefaultAppsProfile / buildOverride', () => {
 	});
 });
 
+describe('webOS 4.0: the key filter is the whole setting', () => {
+	const V40 = [4, 4, 3];
+	// the stored choice file, as the service reads it
+	const withStored = (tv, text) => Object.assign({}, tv, {readFile: async (p) => (p === HOME_FILE ? text : tv.readFile(p))});
+
+	test('releaseInfo: 4.4.x needs the filter and has no record; 4.5 (4.10.x) and 5.x keep the record', () => {
+		expect(releaseInfo(V40)).toMatchObject({needsHomeKeyHook: true, usesRecord: false, filterOnly: true, usesProfile: false, hasSetDefaultApp: false});
+		expect(releaseInfo([4, 10, 2])).toMatchObject({needsHomeKeyHook: false, usesRecord: true, filterOnly: false});
+		expect(releaseInfo([5, 6, 1])).toMatchObject({usesRecord: true, filterOnly: false});
+		expect(releaseInfo([6, 6, 0])).toMatchObject({usesRecord: true, filterOnly: false, needsHomeKeyHook: true});
+	});
+
+	test('readState: the stored choice stands for the record, nothing is asked of the settings service', async () => {
+		const tv = fakeTV();
+		const res = await chooser(withStored(tv, MINE + '\n'), V40).readState();
+		expect(res.ok).toBe(true);
+		expect(res.state).toMatchObject({record: null, recordHome: MINE, profile: null, profileHome: null});
+		expect(tv.luna).toEqual([]);
+		const none = await chooser(tv, V40).readState();
+		expect(none.state.recordHome).toBeNull();
+	});
+
+	test('apply: stored choice, previous launcher, boot entry, watcher and the filter refresh; no record and no setDefaultApp', async () => {
+		const tv = fakeTV();
+		const res = await chooser(withStored(tv, OTHER), V40).apply(MINE);
+		expect(res.ok).toBe(true);
+		expect(res.needsHomeKeyHook).toBe(true);
+		expect(tv.luna).toEqual([]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE], [PREVIOUS_FILE, OTHER + '\n']]);
+		expect(tv.commands).toEqual([ENSURE, WATCH, REFRESH]);
+	});
+
+	test('choosing LG Home (Ribbon): the choice is dropped, the filter is restored, the record is never touched', async () => {
+		const tv = fakeTV({homekey: true});
+		const res = await chooser(withStored(tv, MINE), V40).restoreStock(STOCK);
+		expect(res.ok).toBe(true);
+		expect(res.stockId).toBe(STOCK);
+		expect(tv.luna).toEqual([]);
+		expect(tv.commands).toEqual([STOP, REFRESH, WATCH]);
+		expect(tv.files).toContainEqual(['rm', HOME_FILE]);
+		expect(tv.files).toContainEqual([PREVIOUS_FILE, MINE + '\n']);
+	});
+
+	test('apply and restore on 4.5 still use the record', async () => {
+		const tv = fakeTV({record: {home: STOCK}});
+		await chooser(tv, [4, 10, 2]).apply(MINE);
+		expect(tv.luna).toEqual([GET, SET({home: MINE})]);
+		expect(tv.commands).toEqual([ENSURE, WATCH]);
+	});
+});
+
 describe('apply', () => {
 	test('5.x: the stock variant in the record is remembered; a launcher in the record leaves the memory alone', async () => {
 		const tv = fakeTV({record: {home: STOCK}, stock: 'com.webos.app.fullhome'});

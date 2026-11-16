@@ -21,7 +21,7 @@ const FATAL_TEXT = {
 export const rootReason = (kind) => FATAL_TEXT[kind] || FATAL_TEXT.failed;
 
 // A line at the bottom only when the Home button is not working or cannot be set up; nothing when
-// all is fine. `patch` is null outside webOS 6 to 9, where the stock Home button follows the choice
+// all is fine. `patch` is null outside webOS 4.0 and 6 to 9, where the stock Home button follows the choice
 // and nothing can be missing. `chosen` is true when an app other than LG Home is the current Home.
 export const patchFooter = (patch, chosen) => {
 	if (patch === null) return null;
@@ -32,7 +32,7 @@ export const patchFooter = (patch, chosen) => {
 };
 
 const MainPanel = ({model, launchParams, ...rest}) => {
-	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle} = model;
+	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle, ribbonOnly} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
 	// The stock homes are fixed rows ahead of the launchers, never listed twice. com.webos.app.home is always
@@ -40,7 +40,7 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 	const hasFullhome = candidates.some((c) => c.id === STOCK_FULLHOME);
 	const stocks = hasFullhome ? [STOCK_HOME, STOCK_FULLHOME] : [STOCK_HOME];
 	const launchers = candidates.filter((c) => !isChoosableStock(c.id));
-	const nameOf = (id) => (isChoosableStock(id) ? stockName(id, hasFullhome) : (launchers.find((c) => c.id === id) || {}).title || id);
+	const nameOf = (id) => (isChoosableStock(id) ? stockName(id, hasFullhome, ribbonOnly) : (launchers.find((c) => c.id === id) || {}).title || id);
 
 	// With two stock homes and no known current one (no home in the record), nothing is current.
 	const known = launchers.some((c) => c.id === currentId);
@@ -119,7 +119,7 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
 					{stocks.map((id) => (
 						<HomeItem
-							key={id} name={stockName(id, hasFullhome)} appId={id} stock current={!rootError && current === id}
+							key={id} name={stockName(id, hasFullhome, ribbonOnly)} appId={id} stock current={!rootError && current === id}
 							disabled={Boolean(rootError)} spotlightId={rowId(id)} onChoose={choose}
 						/>
 					))}

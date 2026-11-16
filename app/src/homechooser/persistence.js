@@ -22,7 +22,7 @@ export const PREVIOUS_FILE = `${STATE_DIR}/previous`;
 // The stock Home the owner last used on 4.5 and 5.x (com.webos.app.home or com.webos.app.fullhome): the id alone.
 // Written when Home changes away from a stock Home, read when a removed launcher or Home Chooser puts LG Home back.
 export const STOCK_FILE = `${STATE_DIR}/stock`;
-// Exists while the Home key hook is enabled (webOS 6 to 9).
+// Exists while the Home key hook is enabled (webOS 4.0 and 6 to 9).
 export const HOMEKEY_FLAG = `${STATE_DIR}/homekey`;
 
 export const WATCH_UNIT = 'homechooser-home';
