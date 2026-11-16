@@ -5,6 +5,10 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A launcher installed (or removed) while Home Chooser's panel was open did not show in the list, even after Home Chooser was opened again. The list is now read again when the panel comes back to the front (opened again, or the page turns visible). An open confirmation, the focus and a choice in progress are left alone.
+
 ## [0.1.2] - 2026-11-16
 
 ### Fixed
