@@ -401,6 +401,14 @@ class AlertFocus(unittest.TestCase):
         self.assertEqual(hc_e2e.alerts.alert_focus(self.frame('uninstall-alert'),
                          'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
 
+    def test_recorded_4_5_uninstall_focus_move(self):
+        # w19p-goldilocks2: capitals, and the unfocused button of the pair is read as text
+        before, after = self.frame('uninstall-alert-4x-before'), self.frame('uninstall-alert-4x-after')
+        msg = 'Uninstall HC Fixture disposable?'
+        self.assertEqual(hc_e2e.alerts.alert_focus(before, msg, 'Uninstall', 'Cancel'), ('Cancel', 'LEFT'))
+        self.assertEqual(hc_e2e.alerts.alert_focus(after, msg, 'Uninstall', 'Cancel'), ('Uninstall', 'LEFT'))
+        self.assertEqual(hc_e2e.alerts.alert_style_swap(before, after, 'Uninstall', 'Cancel'), 'highlighted')
+
     def test_capital_button_labels_of_4_5(self):
         import copy
         frame = copy.deepcopy(self.frame('uninstall-alert'))
