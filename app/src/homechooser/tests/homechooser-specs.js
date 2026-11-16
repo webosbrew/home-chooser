@@ -7,7 +7,7 @@ import {
 import {diagnoseExecFailure} from '../diagnose';
 import {describeMissingChoice} from '../format';
 import {
-	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
+	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, STOCK_FILE, ensureEntryCommand, parsePersistenceStatus, persistenceStatusCommand, startWatcherCommand,
 	stopWatcherCommand, BOOT_SCRIPT
 } from '../persistence';
 
@@ -42,7 +42,7 @@ const RESCAN = ['luna://com.webos.service.systemprofile/debug/rescan', {}];
 // A fake TV: `record` is general/defaultApps (undefined = never written); `profile` the getProfiles reply.
 // `windows` gives an app's defaultWindowType; getAppInfo knows every id except those in `unknown`.
 // `ignoreIdle`: the rescan takes the override's defaultApps but not its idleApp.
-const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false, previous = null, homekey = false} = {}) => {
+const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows = {}, unknown = [], ignoreIdle = false, previous = null, homekey = false, stock = null} = {}) => {
 	const luna = [];
 	const files = [];
 	const commands = [];
@@ -93,6 +93,7 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 		calls.push(['read', path]);
 		if (failures.readFile) throw new ServiceError(failures.readFile);
 		if (path === HOMEKEY_FLAG) return homekey ? '' : null;
+		if (path === STOCK_FILE) return stock;
 		return path === PREVIOUS_FILE ? previous : null;
 	};
 	const writeFile = async (path, text) => {
@@ -100,7 +101,8 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 		files.push([path, text]);
 		if (path === PREVIOUS_FILE && failures.writePrevious) throw new ServiceError(failures.writePrevious);
 		if (path === PREVIOUS_FILE) previous = text;
-		if (path === HOME_FILE || path === PREVIOUS_FILE) return;
+		if (path === STOCK_FILE) stock = text;
+		if (path === HOME_FILE || path === PREVIOUS_FILE || path === STOCK_FILE) return;
 		// the real service reads the override on rescan; 10.3.1 merges idleApp key by key onto the stock one
 		const o = JSON.parse(text);
 		profile = {returnValue: true, profiles: {defaultApps: Object.assign({}, o.defaultApps), idleApp: Object.assign({}, STOCK_IDLE, ignoreIdle ? {} : o.idleApp)}};
@@ -121,7 +123,7 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 		commands.push(command);
 		return {stdout: '', stderr: ''};
 	};
-	return {rootLuna, readFile, writeFile, removeFile, exec, luna, files, commands, calls, record: () => record, previous: () => previous};
+	return {rootLuna, readFile, writeFile, removeFile, exec, luna, files, commands, calls, record: () => record, previous: () => previous, stock: () => stock};
 };
 
 const chooser = (tv, version) => createHomeChooser({
@@ -261,12 +263,21 @@ describe('extractDefaultAppsProfile / buildOverride', () => {
 });
 
 describe('apply', () => {
+	test('5.x: the stock variant in the record is remembered; a launcher in the record leaves the memory alone', async () => {
+		const tv = fakeTV({record: {home: STOCK}, stock: 'com.webos.app.fullhome'});
+		await chooser(tv, [5, 6, 1]).apply(MINE);
+		expect(tv.stock()).toBe(STOCK);
+		const tv2 = fakeTV({record: {home: 'other.launcher'}, stock: 'com.webos.app.fullhome'});
+		await chooser(tv2, [5, 6, 1]).apply(MINE);
+		expect(tv2.stock()).toBe('com.webos.app.fullhome');
+	});
+
 	test('5.6.1: carries other entries, leaves the previous stock home running, no sam restart', async () => {
 		const tv = fakeTV({record: {home: 'com.webos.app.fullhome', other: 'x'}});
 		const res = await chooser(tv, [5, 6, 1]).apply(MINE);
 		expect(res.ok).toBe(true);
 		expect(tv.luna).toEqual([GET, SET({home: MINE, other: 'x'})]);
-		expect(tv.files).toEqual([[HOME_FILE, MINE], [PREVIOUS_FILE, '']]);
+		expect(tv.files).toEqual([[HOME_FILE, MINE], [STOCK_FILE, 'com.webos.app.fullhome'], [PREVIOUS_FILE, '']]);
 		expect(tv.commands).toEqual([ENSURE, WATCH]);
 		expect(res.needsHomeKeyHook).toBe(false);
 		expect(res.restartedSam).toBe(false);
@@ -543,6 +554,42 @@ const withApps = (tv, ids) => {
 
 describe('restoreStock', () => {
 
+	const FULL = 'com.webos.app.fullhome';
+	test('4.5/5.x: restores the variant the owner used last, not fullhome by default', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}, stock: STOCK}), [STOCK, FULL]);
+		const res = await chooser(tv, [5, 6, 1]).restoreStock();
+		expect(res.ok).toBe(true);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK})]);
+	});
+
+	test('4.5/5.x: a remembered fullhome that is not installed falls back to home; garbage in the file is ignored', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}, stock: FULL}), [STOCK]);
+		await chooser(tv, [5, 6, 1]).restoreStock();
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK})]);
+		const tv2 = withApps(fakeTV({record: {home: MINE}, stock: 'bogus.app'}), [STOCK, FULL]);
+		await chooser(tv2, [5, 6, 1]).restoreStock();
+		expect(tv2.luna).toEqual([GET, LIST, SET({home: FULL})]);
+	});
+
+	test('4.5/5.x: a record already naming a stock variant is kept when no variant is asked for', async () => {
+		const tv = withApps(fakeTV({record: {home: STOCK}, stock: FULL}), [STOCK, FULL]);
+		await chooser(tv, [5, 6, 1]).restoreStock();
+		expect(tv.luna).toEqual([GET, LIST]);
+	});
+
+	test('4.5/5.x: an asked-for variant wins over the remembered one and is remembered', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}, stock: STOCK}), [STOCK, FULL]);
+		await chooser(tv, [5, 6, 1]).restoreStock(FULL);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: FULL})]);
+		expect(tv.stock()).toBe(FULL);
+	});
+
+	test('6 to 9: only home installed, asking for fullhome gives home', async () => {
+		const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK]);
+		await chooser(tv, [8, 3, 0]).restoreStock(FULL);
+		expect(tv.luna).toEqual([GET, LIST, SET({home: STOCK})]);
+	});
+
 	test('5.6.1: writes fullhome when installed, keeps other entries, closes the custom home', async () => {
 		const tv = withApps(fakeTV({record: {home: MINE, kidsApp: 'k'}}), [STOCK, 'com.webos.app.fullhome']);
 		const res = await chooser(tv, [5, 6, 1]).restoreStock();
@@ -633,11 +680,21 @@ describe('restoreStock', () => {
 		expect(JSON.stringify(tv.luna)).not.toContain('setDefaultApp');
 		expect(tv.commands).toContain(STOP);
 		// LG Home: no override at all, so no idleApp of Home Chooser's
-		expect(tv.files.filter((f) => f[0] !== 'rm' && f[0] !== PREVIOUS_FILE)).toEqual([]);
+		expect(tv.files.filter((f) => f[0] !== 'rm' && f[0] !== PREVIOUS_FILE && f[0] !== STOCK_FILE)).toEqual([]);
 		// the launcher it replaces is closed later by the watcher, never here
 		NO_CLOSE(tv);
 		expect(tv.previous()).toBe(MINE + '\n');
 		expect(tv.files.some((f) => f[1] === OVERRIDE_PATH)).toBe(version[0] >= 10);
+	});
+
+	test.each([[[5, 6, 1]], [[4, 10, 2]]])('%j: choosing fullhome writes that id; choosing home writes home; the choice is remembered', async (version) => {
+		for (const id of ['com.webos.app.fullhome', STOCK]) {
+			const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK, 'com.webos.app.fullhome']);
+			const res = await chooser(tv, version).apply(id);
+			expect(res.ok).toBe(true);
+			expect(tv.luna).toEqual([GET, LIST, SET({home: id})]);
+			expect(tv.stock()).toBe(id);
+		}
 	});
 
 	test('other stock homes stay ordinary choices', async () => {
@@ -731,8 +788,8 @@ describe('persistence', () => {
 		const tv = fakeTV({record: {home: MINE, kidsApp: 'k'}});
 		tv.rootLuna = ((inner) => async (uri, payload) => (uri.endsWith('/listApps') ? (tv.calls.push(['luna', uri]), {returnValue: true, apps: [{id: STOCK}]}) : inner(uri, payload)))(tv.rootLuna);
 		await chooser(tv, [8, 3, 0]).restoreStock();
-		expect(tv.calls.slice(0, 5).map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
-			'luna:getSystemSettings', 'exec:' + STOP.split('/').pop(), 'remove:home', 'luna:listApps', 'luna:setSystemSettings'
+		expect(tv.calls.slice(0, 6).map((c) => c[0] + ':' + (c[1].split('/').pop()))).toEqual([
+			'luna:getSystemSettings', 'exec:' + STOP.split('/').pop(), 'remove:home', 'luna:listApps', 'read:stock', 'luna:setSystemSettings'
 		]);
 	});
 

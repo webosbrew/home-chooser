@@ -150,7 +150,7 @@ describe('Home Chooser screen', () => {
 		expect(await screen.findByText("Couldn't read the installed apps.")).toBeTruthy();
 		expect(screen.queryByText(/No Home apps are installed/)).toBeNull();
 		expect(log).toHaveBeenCalledWith(expect.stringContaining('[HomeChooser] refresh: boom'));
-		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
+		const row = screen.getByText('LG Home (Fullscreen)').closest('[data-spotlight-id]');
 		expect(row.getAttribute('aria-disabled')).not.toBe('true');
 	});
 
@@ -164,29 +164,83 @@ describe('Home Chooser screen', () => {
 		render(<App load={() => Promise.reject(new FatalError(kind, 'x'))} onExit={onExit} />);
 		expect(await screen.findByText(text)).toBeTruthy();
 		expect(screen.getByText('Choose which app opens when you press Home.')).toBeTruthy();
-		const row = screen.getByText('LG Home (stock)').closest('[data-spotlight-id]');
+		const row = screen.getByText('LG Home (Fullscreen)').closest('[data-spotlight-id]');
 		expect(row.getAttribute('aria-disabled')).toBe('true');
 		expect(row.querySelectorAll('[data-testid="icon-box"]')).toHaveLength(1);
 		expect(screen.queryByLabelText('Current')).toBeNull();
 		expect(screen.queryByTestId('footer')).toBeNull();
-		fireEvent.click(screen.getByText('LG Home (stock)'));
+		fireEvent.click(screen.getByText('LG Home (Fullscreen)'));
 		await flush();
-		expect(screen.queryByText('Use LG Home?')).toBeNull();
+		expect(screen.queryByText('Use LG Home (Fullscreen)?')).toBeNull();
 		expect(document.activeElement.closest('[data-spotlight-id^="home-"]')).toBeNull();
-		fireEvent.keyUp(screen.getByText('LG Home (stock)'), {keyCode: 27});
+		fireEvent.keyUp(screen.getByText('LG Home (Fullscreen)'), {keyCode: 27});
 		expect(onExit).toHaveBeenCalledTimes(1);
+	});
+
+	describe('4.5 and 5.x: two stock homes', () => {
+		const both = [
+			{id: 'com.webos.app.home', title: 'Home', icon: null, stock: true},
+			{id: 'com.webos.app.fullhome', title: 'Home', icon: null, stock: true},
+			{id: 'org.fancy.launcher', title: 'Fancy Launcher', icon: '/apps/fancy/icon.png'}
+		];
+		const rowIds = () => Array.from(document.querySelectorAll('[data-spotlight-id^="home-"]')).map((r) => r.getAttribute('data-app-id'));
+
+		test('a ribbon row and a fullscreen row, each stock id once, no generic "Home" row', async () => {
+			mountApp(makeEnv({version: [5, 6, 1], candidates: both, currentHome: 'com.webos.app.fullhome'}));
+			expect(await screen.findByText('LG Home (Ribbon)')).toBeTruthy();
+			expect(screen.getByText('LG Home (Fullscreen)')).toBeTruthy();
+			expect(screen.queryByText('Home')).toBeNull();
+			expect(rowIds()).toEqual(['com.webos.app.home', 'com.webos.app.fullhome', 'org.fancy.launcher']);
+			expect(screen.getByLabelText('Current').closest('[data-spotlight-id]').textContent).toContain('LG Home (Fullscreen)');
+		});
+
+		test('current is the exact id in the record', async () => {
+			mountApp(makeEnv({version: [5, 6, 1], candidates: both, currentHome: 'com.webos.app.home'}));
+			expect((await screen.findByLabelText('Current')).closest('[data-spotlight-id]').textContent).toContain('LG Home (Ribbon)');
+			expect(screen.getAllByLabelText('Current')).toHaveLength(1);
+		});
+
+		test('no home in the record: nothing is shown as current', async () => {
+			mountApp(makeEnv({version: [5, 6, 1], candidates: both}));
+			await screen.findByText('LG Home (Ribbon)');
+			expect(screen.queryByLabelText('Current')).toBeNull();
+		});
+
+		test.each([['LG Home (Ribbon)', 'com.webos.app.home'], ['LG Home (Fullscreen)', 'com.webos.app.fullhome']])('choosing %s names it and applies its id', async (name, id) => {
+			const env = makeEnv({version: [5, 6, 1], candidates: both, currentHome: 'org.fancy.launcher'});
+			mountApp(env);
+			fireEvent.click(await screen.findByText(name));
+			expect(await screen.findByText(`Use ${name}?`)).toBeTruthy();
+			expect(screen.getByText(`The Home button will open ${name}.`)).toBeTruthy();
+			fireEvent.click(screen.getByText('Use LG Home'));
+			await screen.findByText('Done. Press Home to try it.');
+			expect(env.chooser.restoreStock).toHaveBeenCalledWith(id);
+		});
+
+		test('choosing the current variant says so', async () => {
+			mountApp(makeEnv({version: [5, 6, 1], candidates: both, currentHome: 'com.webos.app.home'}));
+			fireEvent.click(await screen.findByText('LG Home (Ribbon)'));
+			expect(await screen.findByText('LG Home (Ribbon) is already your Home.')).toBeTruthy();
+		});
+	});
+
+	test('6 and later: one stock row, LG Home (Fullscreen)', async () => {
+		mountApp(makeEnv({version: [11, 0, 0], currentHome: 'org.fancy.launcher'}));
+		await screen.findByText('LG Home (Fullscreen)');
+		expect(screen.queryByText('LG Home (Ribbon)')).toBeNull();
+		expect(document.querySelectorAll('[data-app-id^="com.webos.app."]')).toHaveLength(1);
 	});
 
 	test('lists the stock home first, then launchers with names only; check mark on current', async () => {
 		mountApp(makeEnv({currentHome: 'org.fancy.launcher'}));
-		expect(await screen.findByText('LG Home (stock)')).toBeTruthy();
+		expect(await screen.findByText('LG Home (Fullscreen)')).toBeTruthy();
 		expect(screen.getByText('Fancy Launcher')).toBeTruthy();
 		expect(screen.getByText('Plain Launcher')).toBeTruthy();
 		expect(screen.queryByText('org.plain.launcher')).toBeNull();
 		expect(screen.queryByText('com.webos.app.home')).toBeNull();
 		expect(screen.getAllByLabelText('Current')).toHaveLength(1);
 		const names = screen.getAllByText(/Launcher|LG Home/).map((n) => n.textContent);
-		expect(names[0]).toBe('LG Home (stock)');
+		expect(names[0]).toBe('LG Home (Fullscreen)');
 		// the check sits in the current home's row
 		expect(screen.getByLabelText('Current').closest('[data-spotlight-id]').textContent).toContain('Fancy Launcher');
 	});
@@ -229,7 +283,7 @@ describe('Home Chooser screen', () => {
 	test('empty list explains launchers', async () => {
 		mountApp(makeEnv({candidates: []}));
 		expect(await screen.findByText(/declares appCategory "home"/)).toBeTruthy();
-		expect(screen.getByText('LG Home (stock)')).toBeTruthy();
+		expect(screen.getByText('LG Home (Fullscreen)')).toBeTruthy();
 	});
 
 	test('a removed launcher gets one line', async () => {
@@ -285,7 +339,7 @@ describe('Home Chooser screen', () => {
 	test('choosing the stock home restores stock', async () => {
 		const env = makeEnv({currentHome: 'org.fancy.launcher'});
 		mountApp(env);
-		fireEvent.click(await screen.findByText('LG Home (stock)'));
+		fireEvent.click(await screen.findByText('LG Home (Fullscreen)'));
 		fireEvent.click(await screen.findByText('Use LG Home'));
 		expect(await screen.findByText('Done. Press Home to try it.')).toBeTruthy();
 		expect(env.chooser.restoreStock).toHaveBeenCalled();
@@ -428,7 +482,7 @@ describe('Home Chooser screen', () => {
 			const homeKeyHook = homeKeyHookOf({active: true, enabled: true, release: '8.3.0'});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook, currentHome: 'org.fancy.launcher'});
 			mountApp(env);
-			fireEvent.click(await screen.findByText('LG Home (stock)'));
+			fireEvent.click(await screen.findByText('LG Home (Fullscreen)'));
 			fireEvent.click(await screen.findByText('Use LG Home'));
 			expect(await screen.findByText('Done. Press Home to try it.', {selector: '[role="status"]'})).toBeTruthy();
 			expect(homeKeyHook.remove).toHaveBeenCalled();
@@ -440,7 +494,7 @@ describe('Home Chooser screen', () => {
 			const homeKeyHook = homeKeyHookOf({active: false, enabled: true, patch: 'possible'}, {remove: {rebootNeeded: false}});
 			const env = makeEnv({version: [8, 3, 0], homeKeyHook, currentHome: 'org.fancy.launcher'});
 			mountApp(env);
-			fireEvent.click(await screen.findByText('LG Home (stock)'));
+			fireEvent.click(await screen.findByText('LG Home (Fullscreen)'));
 			fireEvent.click(await screen.findByText('Use LG Home'));
 			await screen.findByText('Done. Press Home to try it.');
 			expect(env.rebootPrompt).not.toHaveBeenCalled();
@@ -523,8 +577,8 @@ describe('Home Chooser screen', () => {
 		const env = makeEnv();
 		mountApp(env);
 		await screen.findByText('Plain Launcher');
-		fireEvent.click(rowOf('LG Home (stock)'));
-		expect(await screen.findByText('LG Home is already your Home.')).toBeTruthy();
+		fireEvent.click(rowOf('LG Home (Fullscreen)'));
+		expect(await screen.findByText('LG Home (Fullscreen) is already your Home.')).toBeTruthy();
 		expect(env.chooser.restoreStock).not.toHaveBeenCalled();
 	});
 
