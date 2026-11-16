@@ -7,9 +7,9 @@ from .constants import HERE
 
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
-#   verified  = booted and os-release read by a run of this runner
+#   verified  = booted and /etc/starfish-release read by a run of this runner
 #   docs      = the firmware is named for that release in docs/research/home-key-and-home-app.md
-#   listing   = only `beanjar list` (platform column, firmware string); os-release not read
+#   listing   = only `beanjar list` (platform column, firmware string); the release file not read
 # elevation: luna = Homebrew Channel's luna elevateService (the app does it), on every release:
 # from Homebrew Channel 0.8.0 it serves apps on 11.x/12.x too (full tier, 2026-11-13).
 # root-shell = the runner runs Homebrew Channel's elevate-service helper as root, kept as an

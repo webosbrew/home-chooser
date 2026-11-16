@@ -31,12 +31,41 @@ bool hc_file_allowed(const char *path)
 
 bool hc_file_readable(const char *path)
 {
-	return hc_file_allowed(path) || (path && strcmp(path, HC_OSRELEASE) == 0);
+	return hc_file_allowed(path) || (path && strcmp(path, HC_STARFISH_RELEASE) == 0);
 }
 
-bool hc_osrelease_target_ok(const char *resolved)
+bool hc_release_parse(const char *text, int out[3])
 {
-	return resolved && (strcmp(resolved, HC_OSRELEASE) == 0 || strcmp(resolved, HC_OSRELEASE_REAL) == 0);
+	if (!text) return false;
+	for (const char *p = text; (p = strstr(p, "release ")) != NULL; p += 8) {
+		const char *q = p + 8;
+		int v[3];
+		bool ok = true;
+		for (int i = 0; i < 3 && ok; i++) {
+			if (*q < '0' || *q > '9') { ok = false; break; }
+			long n = 0;
+			while (*q >= '0' && *q <= '9') {
+				n = n * 10 + (*q++ - '0');
+				if (n > 100000) n = 100000;
+			}
+			v[i] = (int)n;
+			if (i < 2) {
+				if (*q != '.') ok = false;
+				else q++;
+			}
+		}
+		if (ok) {
+			for (int i = 0; i < 3; i++) out[i] = v[i];
+			return true;
+		}
+	}
+	return false;
+}
+
+int hc_release_major(const char *text)
+{
+	int v[3];
+	return hc_release_parse(text, v) ? v[0] : 0;
 }
 
 static const struct {

@@ -7,7 +7,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT HUP INT TERM
 export HOMECHOOSER_LUNA_ROOTS="$T/dev $T/system $T/absent"
-export HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_LS_CONTROL="$T/control"
+export HOMECHOOSER_RELEASE_FILE="$T/starfish-release" HOMECHOOSER_LS_CONTROL="$T/control"
 # As if the service's accessApply ran it; the boot/watcher case is below.
 export HOMECHOOSER_PARENT_EXE=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/homechooser-service
 printf '#!/bin/sh\n[ "$1" = homechooser-service ] && cat "%s/pids" 2>/dev/null\n' "$T" > "$T/pidof"
@@ -68,7 +68,23 @@ for name in ['dev','system']:
 assert not (root/'absent').exists()
 PY2
 }
-echo 'VERSION_ID="10.0.0"' > "$T/os-release"
+# major_version reads /etc/starfish-release: the real lines of 4.5, 11 and 12, and an unknown file
+(
+    . "$HERE/lib/common.sh"
+    check() {
+        printf '%s\n' "$1" > "$T/starfish-release"
+        RELEASE_FILE="$T/starfish-release"
+        [ "$(major_version)" = "$2" ] || { echo "major_version of '$1': $(major_version), want $2" >&2; exit 1; }
+    }
+    check 'Rockhopper release 4.10.2-29 (goldilocks2-grampians)' 4
+    check 'Rockhopper release 11.2.0-3709 (queue-qilian)' 11
+    check 'Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)' 12
+    check 'VERSION_ID="7.6.0"' 0
+    check '' 0
+    RELEASE_FILE="$T/absent"
+    [ "$(major_version)" = 0 ]
+)
+echo 'Rockhopper release 10.3.1-1 (ponytail-ponytail)' > "$T/starfish-release"
 run apply > "$T/out"
 verify 10
 # The service restart request is for 11+ only.
@@ -79,7 +95,7 @@ run apply
 run status > "$T/status"
 grep -q 'manifest=yes api=yes' "$T/status"
 [ "$(wc -l < "$T/scans")" -eq 1 ]
-echo 'PRETTY_NAME="webOS 11.2.0"' > "$T/os-release"
+echo 'Rockhopper release 11.2.0-3709 (queue-qilian)' > "$T/starfish-release"
 run apply > "$T/out"
 verify 11
 grep -qx restart-service "$T/out"

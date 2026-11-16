@@ -309,8 +309,8 @@ class Device:
             return '<unreadable>', out
 
     def release(self):
-        rc, out = self.sh('. /usr/lib/os-release; echo "$VERSION_ID|$VERSION|$PRETTY_NAME"')
-        m = re.search(r'(\d+)\.(\d+)', out)
+        rc, out = self.sh('cat /etc/starfish-release')
+        m = re.search(r'release (\d+)\.(\d+)\.(\d+)', out)
         return (int(m.group(1)) if m else 0), out.strip()
 
     def mounts(self):

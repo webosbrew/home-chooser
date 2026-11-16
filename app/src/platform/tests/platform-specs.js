@@ -2,7 +2,7 @@
 import {createBridgeCall} from '../bridge';
 import {ServiceError} from '../errors';
 import {SERVICE_URI, createServiceClient, withTimeout} from '../service';
-import {createExec, createOsRelease, createPersistenceStatus, createPlatform, createReadIcon, parseOsRelease} from '..';
+import {createExec, createPersistenceStatus, createPlatform, createReadIcon, createRelease, parseStarfishRelease} from '..';
 import {parsePersistenceStatus} from '../../homechooser/persistence';
 
 const reply = (extra) => Object.assign({returnValue: true}, extra);
@@ -168,24 +168,24 @@ describe('persistence status', () => {
 	});
 });
 
-describe('os-release', () => {
-	test('parses VERSION_ID', () => {
-		expect(parseOsRelease('NAME="webOS"\nVERSION_ID="6.6.0"\n').version).toEqual([6, 6, 0]);
+describe('starfish-release', () => {
+	test('parses the real lines', () => {
+		expect(parseStarfishRelease('Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n').version).toEqual([4, 10, 2]);
+		expect(parseStarfishRelease('Rockhopper release 11.2.0-3709 (queue-qilian)\n').version).toEqual([11, 2, 0]);
+		expect(parseStarfishRelease('Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)\n').version).toEqual([12, 0, 0]);
 	});
-	test('falls back to VERSION and PRETTY_NAME', () => {
-		expect(parseOsRelease('VERSION="9.2.1 (x)"\n').source).toBe('VERSION');
-		expect(parseOsRelease('PRETTY_NAME="webOS TV 11.2.0"\n').version).toEqual([11, 2, 0]);
+	test('has no version when the text is not that line', () => {
+		expect(parseStarfishRelease('').version).toBeNull();
+		expect(parseStarfishRelease('NAME="webOS"\nVERSION_ID="6.6.0"\n').version).toBeNull();
+		expect(parseStarfishRelease('Rockhopper release 6.5 (x)').version).toBeNull();
 	});
-	test('pads short versions', () => {
-		expect(parseOsRelease('VERSION_ID=6.5\n').version).toEqual([6, 5, 0]);
-	});
-	test('osRelease reads the file through the service, and rejects without a version', async () => {
-		const readFile = jest.fn().mockResolvedValueOnce('VERSION_ID="8.3.0"\n').mockResolvedValueOnce('NAME=x\n').mockResolvedValueOnce(null);
-		const osRelease = createOsRelease({readFile});
-		await expect(osRelease()).resolves.toMatchObject({version: [8, 3, 0]});
-		expect(readFile).toHaveBeenCalledWith('/etc/os-release');
-		await expect(osRelease()).rejects.toThrow(/No version/);
-		await expect(osRelease()).rejects.toThrow(/No version/);
+	test('release reads the file through the service, and rejects without a version', async () => {
+		const readFile = jest.fn().mockResolvedValueOnce('Rockhopper release 8.3.0-1 (x)\n').mockResolvedValueOnce('NAME=x\n').mockResolvedValueOnce(null);
+		const release = createRelease({readFile});
+		await expect(release()).resolves.toMatchObject({version: [8, 3, 0]});
+		expect(readFile).toHaveBeenCalledWith('/etc/starfish-release');
+		await expect(release()).rejects.toThrow(/No version/);
+		await expect(release()).rejects.toThrow(/No version/);
 	});
 });
 

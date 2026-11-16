@@ -100,14 +100,14 @@ runs carry on. Every step of the startup is safe to interrupt, and the next open
 | `accessApply` | files are written through a temporary file and `mv`, so whole or absent; the script runs to the end | repeats, changes nothing if the files match |
 | 11+ restart after `accessApply` | files match but the running service still has the old groups | the script notes the instance it told in `/tmp/homechooser-runtime/access-restart-pending` and asks for the restart again |
 | `watch` | the watcher running, or not started | starts it if not running |
-| `osRelease` | none | repeats |
+| `release` | none | repeats |
 
 On 6.5.2 the page was closed twice on a fresh install, once about a second after launch and once
 right after Homebrew Channel rewrote the launch line, before the `quit`. Each time the next open
 showed the list, `status` answered `root: true` with uid 0, and `homechooser-access` and the boot
 apply had run. The 11+ row is covered by the shell test only.
 
-The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
+The release comes from `/etc/starfish-release`, read through the service: the first `release MAJOR.MINOR.PATCH` in it. A file without one is an unknown release.
 
 ## What is written
 

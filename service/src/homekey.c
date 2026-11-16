@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #define _GNU_SOURCE
 #include "homekey.h"
+#include "policy.h"
 #include <pbnjson.h>
 #include <sys/file.h>
 #include <fcntl.h>
@@ -135,17 +136,12 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     int rc = 1, lock = -1;
     char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL, *lockpath = NULL;
     char *stock_file = path(o, "keyfilters-stock.json");
-    char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->osrelease);
+    char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->release_file);
     jvalue_ref current = jinvalid(), stock = jinvalid(), next = jinvalid();
     gboolean boot = !strcmp(action, "boot"), status = !strcmp(action, "status"), prepare = !strcmp(action, "prepare");
     /* The existing 5/10-12 policy is owned by the watcher, never this hook. */
-    GRegex *release = g_regex_new("(?m)^VERSION(?:_ID)?=[\"']?([0-9]+)", 0, 0, NULL);
-    GMatchInfo *match = NULL;
-    int major = 0;
-    if (os && g_regex_match(release, os, 0, &match)) {
-        char *v = g_match_info_fetch(match, 1); major = atoi(v); g_free(v);
-    }
-    g_match_info_free(match); g_regex_unref(release); g_free(os);
+    int major = hc_release_major(os);
+    g_free(os);
     if (major >= 10 && !status && !prepare) {
         /* An update from 6-9 leaves the generated filters and the snapshot behind; 10+ has no use for them. */
         GDir *d = g_dir_open(o->state_dir, 0, NULL); const char *name;

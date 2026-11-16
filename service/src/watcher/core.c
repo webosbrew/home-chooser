@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "internal.h"
 #include "proc.h"
+#include "policy.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +10,7 @@
 HCWatchConfig hc_watch_config(void)
 {
     HCWatchConfig c = {
-        .luna_send = "/usr/bin/luna-send", .state_dir = HC_STATE_DIR, .osrelease = HC_OSRELEASE, .app_dir = HC_APP_DIR,
+        .luna_send = "/usr/bin/luna-send", .state_dir = HC_STATE_DIR, .release_file = HC_STARFISH_RELEASE, .app_dir = HC_APP_DIR,
         .override = HC_OVERRIDE_FILE, .init_link = HC_INIT_LINK,
         .runtime = "/tmp/homechooser-runtime", .access_script = "/tmp/homechooser-runtime/homechooser-access",
         .scripts_dir = HC_SERVICE_DIR "/scripts",
@@ -67,21 +68,9 @@ void watch_log(HCWatch *w, const char *format, ...)
 
 static int major_version(const char *file)
 {
-    /* os-release is normally a symlink. Read the trusted platform path here. */
     char *text = NULL;
     g_file_get_contents(file, &text, NULL, NULL);
-    if (!text) return 0;
-    const char *keys[] = {"VERSION_ID", "VERSION", "PRETTY_NAME", NULL};
-    int major = 0;
-    for (int i = 0; keys[i] && !major; i++) {
-        char *pattern = g_strdup_printf("(?m)^%s=[^0-9\\n]*([0-9]+)", keys[i]);
-        GRegex *rx = g_regex_new(pattern, 0, 0, NULL);
-        GMatchInfo *match = NULL;
-        if (g_regex_match(rx, text, 0, &match)) {
-            char *v = g_match_info_fetch(match, 1); major = atoi(v); g_free(v);
-        }
-        g_match_info_free(match); g_regex_unref(rx); g_free(pattern);
-    }
+    int major = hc_release_major(text);
     g_free(text); return major;
 }
 
@@ -89,7 +78,7 @@ HCWatch *hc_watch_new(const HCWatchConfig *c, const HCWatchOps *ops)
 {
     HCWatch *w = g_new0(HCWatch, 1);
     w->c = *c; w->ops = *ops; w->status = -1;
-    w->major = major_version(c->osrelease);
+    w->major = major_version(c->release_file);
     w->choice_file = g_build_filename(c->state_dir, "home", NULL);
     w->prev_mtime = G_MININT64; /* nothing read yet */
     return w;

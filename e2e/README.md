@@ -299,17 +299,17 @@ TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
 
 | Release | VM | Elevation | How sure |
 | --- | --- | --- | --- |
-| 5.x | `w20l-jhericurl` | luna | verified: 5.6.1 (os-release) |
-| 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (os-release). `w21p-kisscurl` (6.6.0) belongs to another project and is not in the matrix |
+| 5.x | `w20l-jhericurl` | luna | verified: 5.6.1 (read from the release file) |
+| 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (read from the release file). `w21p-kisscurl` (6.6.0) belongs to another project and is not in the matrix |
 | 7.x | `w22p-mullet` | luna | verified: 7.6.0 |
 | 8.x | `w22o-number1` | luna | verified: 8.3.0 (beanjar's "webOS 23" is a platform label) |
 | 9.x | `w22h-ombre` | luna | verified: 9.2.1 |
 | 9.x | `w24g-ombre` | luna | verified: 9.2.4 (`w24p-ombre` runs the same firmware) |
 | 10.x | `w22o-ponytail-us` | luna | verified: 10.3.1 |
 | 11.x | `w22o-queue-us` | luna | verified: 11.2.0 (`w22o-queue`, `w22o-queue-jp` run the same firmware) |
-| 12.x | `w24g-spacebuns` | luna | verified: 12.0.0 (os-release) |
+| 12.x | `w24g-spacebuns` | luna | verified: 12.0.0 (read from the release file) |
 
-The runner checks the release it finds (`/usr/lib/os-release`) against the row and records the
+The runner checks the release it finds (`/etc/starfish-release`) against the row and records the
 result.
 
 ## Which runs a change needs

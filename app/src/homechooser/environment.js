@@ -32,7 +32,7 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 	}
 	let release;
 	try {
-		release = await platform.osRelease();
+		release = await platform.release();
 	} catch (e) {
 		throw new FatalError(classifyExecFailure(errorMessage(e)), errorMessage(e));
 	}

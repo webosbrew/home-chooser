@@ -38,19 +38,41 @@ static void test_files(void)
 	CHECK(!hc_file_allowed("/var/lib/webosbrew/homechooser/../init.d/x"));
 	CHECK(!hc_file_allowed("/var/webos-profile/override/other.json"));
 	CHECK(!hc_file_allowed("/var/lib/webosbrew/init.d/homechooser"));
-	CHECK(!hc_file_allowed("/etc/os-release"));
-	CHECK(hc_file_readable("/etc/os-release"));
+	CHECK(!hc_file_allowed("/etc/starfish-release"));
+	CHECK(hc_file_readable("/etc/starfish-release"));
+	CHECK(!hc_file_readable("/etc/os-release"));
+	CHECK(!hc_file_readable("/usr/lib/os-release"));
 	CHECK(hc_file_readable("/var/lib/webosbrew/homechooser/home"));
 	CHECK(!hc_file_readable("/etc/shadow"));
-	CHECK(!hc_file_readable("/etc/os-release2"));
+	CHECK(!hc_file_readable("/etc/starfish-release2"));
 	CHECK(!hc_file_readable(NULL));
-	CHECK(hc_osrelease_target_ok("/usr/lib/os-release"));
-	CHECK(hc_osrelease_target_ok("/etc/os-release"));
-	CHECK(!hc_osrelease_target_ok("/etc/shadow"));
-	CHECK(!hc_osrelease_target_ok("/usr/lib/os-release2"));
-	CHECK(!hc_osrelease_target_ok("/tmp/os-release"));
-	CHECK(!hc_osrelease_target_ok("../usr/lib/os-release"));
-	CHECK(!hc_osrelease_target_ok(NULL));
+}
+
+static void test_release(void)
+{
+	/* the real /etc/starfish-release lines, 3.x to 12 */
+	struct { const char *text; int v[3]; } known[] = {
+		{"Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n", {4, 10, 2}},
+		{"Rockhopper release 11.2.0-3709 (queue-qilian)\n", {11, 2, 0}},
+		{"Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)\n", {12, 0, 0}},
+		{"Rockhopper release 7.6.0-19 (mullet-mullet)", {7, 6, 0}},
+		{"release 5.6.1", {5, 6, 1}},
+	};
+	for (unsigned i = 0; i < sizeof known / sizeof known[0]; i++) {
+		int v[3] = {-1, -1, -1};
+		CHECK(hc_release_parse(known[i].text, v));
+		CHECK(v[0] == known[i].v[0] && v[1] == known[i].v[1] && v[2] == known[i].v[2]);
+		CHECK(hc_release_major(known[i].text) == known[i].v[0]);
+	}
+	const char *unknown[] = {"", "\n", "junk", "Rockhopper release (x)", "release 6.5", "release 6.", "VERSION_ID=\"6.5.2\"\n", "Release 6.5.2"};
+	for (unsigned i = 0; i < sizeof unknown / sizeof unknown[0]; i++) {
+		int v[3];
+		CHECK(!hc_release_parse(unknown[i], v));
+		CHECK(hc_release_major(unknown[i]) == 0);
+	}
+	CHECK(!hc_release_parse(NULL, (int[3]){0}));
+	CHECK(hc_release_major(NULL) == 0);
+	CHECK(hc_release_major("a release x\nRockhopper release 4.10.2-29 (g)") == 4);
 }
 
 static void test_calls(void)
@@ -498,6 +520,7 @@ int main(void)
 {
 	test_sender();
 	test_files();
+	test_release();
 	test_calls();
 	test_commands();
 	test_icons();

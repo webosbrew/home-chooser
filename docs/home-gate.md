@@ -114,8 +114,8 @@ and 6.5.2), although the daemon's PmLog lines in the same context do. The file w
 
 [gate-mount.c](../service/src/gate-mount.c) owns the bind; the watcher
 ([watcher/gate.c](../service/src/watcher/gate.c)) and the one-off `--homekey` commands
-([homekey-main.c](../service/src/homekey-main.c)) call it. It is gated on the os-release major
-being 6 to 9, like `homekey.c`.
+([homekey-main.c](../service/src/homekey-main.c)) call it. It is gated on the release major
+(`/etc/starfish-release`) being 6 to 9, like `homekey.c`.
 
 Mount, when a launcher is chosen and enabled and the installed gate binary
 (`<service dir>/homechooser-home-gate`) exists: copy the gate into the private runtime dir

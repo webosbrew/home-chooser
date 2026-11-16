@@ -3,7 +3,7 @@ import {FatalError, loadEnvironment} from '../environment';
 import {classifyExecFailure} from '../diagnose';
 
 const platform = (over) => Object.assign({
-	osRelease: jest.fn().mockResolvedValue({version: [8, 3, 0]}),
+	release: jest.fn().mockResolvedValue({version: [8, 3, 0]}),
 	ensureRoot: jest.fn().mockResolvedValue({root: true}),
 	rootLuna: jest.fn(), exec: jest.fn(), writeFile: jest.fn(), removeFile: jest.fn(), readIcon: jest.fn()
 }, over);
@@ -23,7 +23,7 @@ describe('loadEnvironment', () => {
 		expect(a.version).toEqual([8, 3, 0]);
 		expect(a.homeKeyHook).not.toBeNull();
 		expect(typeof a.chooser.apply).toBe('function');
-		const b = await loadEnvironment(platform({osRelease: jest.fn().mockResolvedValue({version: [11, 0, 0]})}));
+		const b = await loadEnvironment(platform({release: jest.fn().mockResolvedValue({version: [11, 0, 0]})}));
 		expect(b.homeKeyHook).toBeNull();
 	});
 	test('the restart prompt passes through from the platform; the app has no way to confirm it', async () => {
@@ -74,11 +74,11 @@ describe('loadEnvironment', () => {
 		}
 		const p = platform({ensureRoot: jest.fn().mockRejectedValue(new FatalError('notRoot', 'x'))});
 		await expect(loadEnvironment(p)).rejects.toBeInstanceOf(FatalError);
-		expect(p.osRelease).not.toHaveBeenCalled();
+		expect(p.release).not.toHaveBeenCalled();
 	});
 	test('an unreadable release is a fatal kind', async () => {
-		await expect(loadEnvironment(platform({osRelease: jest.fn().mockRejectedValue(new Error('Service does not exist'))}))).rejects.toMatchObject({kind: 'unreachable'});
-		await expect(loadEnvironment(platform({osRelease: jest.fn().mockRejectedValue(new Error('No version'))}))).rejects.toMatchObject({kind: 'failed'});
+		await expect(loadEnvironment(platform({release: jest.fn().mockRejectedValue(new Error('Service does not exist'))}))).rejects.toMatchObject({kind: 'unreachable'});
+		await expect(loadEnvironment(platform({release: jest.fn().mockRejectedValue(new Error('No version'))}))).rejects.toMatchObject({kind: 'failed'});
 	});
 });
 
@@ -102,7 +102,7 @@ describe('an interrupted first run', () => {
 		};
 		const platformFor = (hook) => ({
 			ensureRoot: () => ensureRoot({service, call, sleep: async () => {}, log: () => {}}),
-			osRelease: async () => ({version: [8, 3, 0]}),
+			release: async () => ({version: [8, 3, 0]}),
 			exec: async (name) => {
 				await hook(name);
 				if (name === 'accessApply') dev.accessFiles = 2;

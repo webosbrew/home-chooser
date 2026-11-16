@@ -9,7 +9,7 @@ CONTROL=${HOMECHOOSER_LS_CONTROL:-ls-control}
 PIDOF=${HOMECHOOSER_PIDOF:-pidof}
 # Who runs this: Home Chooser's service (the settings app's accessApply) or the boot entry/watcher.
 PARENT_EXE=${HOMECHOOSER_PARENT_EXE:-$(readlink "/proc/$PPID/exe" 2>/dev/null || :)}
-OSRELEASE=${HOMECHOOSER_OSRELEASE:-/etc/os-release}
+RELEASE_FILE=${HOMECHOOSER_RELEASE_FILE:-/etc/starfish-release}
 changed=0
 major=$(major_version)
 # The launcher API methods, each with the LG access group that admits apps to it on 11+ (query: the

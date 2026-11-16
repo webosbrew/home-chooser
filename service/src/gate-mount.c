@@ -302,15 +302,10 @@ char *hc_gate_wanted(const char *state_dir, char *(*call)(const char *, const ch
     return choice;
 }
 
-int hc_gate_major(const char *osrelease)
+int hc_gate_major(const char *release_file)
 {
     char *text = NULL;
-    if (!g_file_get_contents(osrelease, &text, NULL, NULL)) return 0;
-    GRegex *rx = g_regex_new("(?m)^VERSION(?:_ID)?=[\"']?([0-9]+)", 0, 0, NULL);
-    GMatchInfo *match = NULL;
-    int major = 0;
-    if (g_regex_match(rx, text, 0, &match)) {
-        char *v = g_match_info_fetch(match, 1); major = atoi(v); g_free(v);
-    }
-    g_match_info_free(match); g_regex_unref(rx); g_free(text); return major;
+    if (!g_file_get_contents(release_file, &text, NULL, NULL)) return 0;
+    int major = hc_release_major(text);
+    g_free(text); return major;
 }

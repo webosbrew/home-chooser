@@ -11,8 +11,8 @@ printf '#!/bin/sh\necho "$*" >> "$HC_TEST_COMMANDS"\nexit 0\n' > "$T/bin/systemd
 printf '#!/bin/sh\necho "$*" >> "$HC_TEST_COMMANDS"\n[ "$1" != is-active ]\n' > "$T/bin/systemctl"
 printf '#!/bin/sh\nexit 99\n' > "$T/service"
 chmod +x "$T/bin/"* "$T/service"
-printf 'VERSION_ID="7.6.0"\n' > "$T/os-release"
-export HOMECHOOSER_OSRELEASE="$T/os-release"
+printf 'Rockhopper release 7.6.0-19 (mullet-mullet)\n' > "$T/starfish-release"
+export HOMECHOOSER_RELEASE_FILE="$T/starfish-release"
 export HOMECHOOSER_BINARY="$T/service" HOMECHOOSER_SYSTEMCTL="$T/bin/systemctl" HOMECHOOSER_SYSTEMD_RUN="$T/bin/systemd-run" HC_TEST_COMMANDS="$T/commands"
 $SH "$HERE/homechooser"
 [ "$(grep -c -- --no-block "$T/commands")" = 1 ]
@@ -33,8 +33,8 @@ cp "$HERE/homechooser" "$T/service-scripts/homechooser"
 printf '#!/bin/sh\nexit 0\n' > "$T/service-scripts/homechooser-access"
 printf 'HC_TEST=yes\n' > "$T/service-scripts/lib/common.sh"
 export HOMECHOOSER_SERVICE_SCRIPTS="$T/service-scripts" HOMECHOOSER_BOOT_DIR="$T/boot" HOMECHOOSER_CHOICE="$T/home"
-for major in 5 6 7 8 9 10 11 12; do
-    printf 'VERSION_ID="%s.0"\n' "$major" > "$T/os-release"
+for major in 4 5 6 7 8 9 10 11 12; do
+    printf 'Rockhopper release %s.0.0-1 (test)\n' "$major" > "$T/starfish-release"
     rm -rf "$T/boot"
     $SH "$HERE/homechooser" stage
     if [ "$major" -ge 6 ] && [ "$major" -le 9 ]; then

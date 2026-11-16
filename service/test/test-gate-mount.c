@@ -331,14 +331,14 @@ static void test_wanted(const char *base)
         id = hc_gate_wanted(state, fake_call, NULL); CHECK("M21 stock or invalid choice", !id);
     }
     CHECK("M21 no lookup for stock", !fx->calls->len);
-    char *os = g_build_filename(fx->root, "os-release", NULL);
-    const char *releases[] = {"VERSION_ID=\"7.6.0\"\n", "NAME=webOS\nVERSION=9.2.1\n", "VERSION_ID=11\n", "junk\n"};
+    char *os = g_build_filename(fx->root, "starfish-release", NULL);
+    const char *releases[] = {"Rockhopper release 7.6.0-19 (mullet-mullet)\n", "Rockhopper release 9.2.1-4603 (ombre-ombre)\n", "Rockhopper release 11.2.0-3709 (queue-qilian)\n", "junk\n"};
     int majors[] = {7, 9, 11, 0};
     for (int i = 0; i < 4; i++) {
         g_file_set_contents(os, releases[i], -1, NULL);
         CHECK("M22 release major", hc_gate_major(os) == majors[i]);
     }
-    CHECK("M22 missing release", hc_gate_major("/nonexistent/os-release") == 0);
+    CHECK("M22 missing release", hc_gate_major("/nonexistent/starfish-release") == 0);
     g_free(os); g_free(state); g_free(home); g_free(flag); teardown();
 }
 static void test_constants(void)

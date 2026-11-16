@@ -4,7 +4,7 @@
 #include <glib.h>
 /* Returned strings are owned by the caller. No service registration in this module. */
 typedef struct {
-    const char *state_dir, *stock_js, *osrelease;
+    const char *state_dir, *stock_js, *release_file;
     char *(*call)(const char *uri, const char *payload, int timeout, void *context);
     void *context;
     unsigned readiness_attempts;

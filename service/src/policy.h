@@ -27,8 +27,7 @@
 #define HC_BOOT_SCRIPT HC_BOOT_DIR "/homechooser"
 #define HC_HOMEKEY_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-homekey"
 #define HC_ACCESS_SCRIPT HC_SERVICE_DIR "/scripts/homechooser-access"
-#define HC_OSRELEASE "/etc/os-release"
-#define HC_OSRELEASE_REAL "/usr/lib/os-release"
+#define HC_STARFISH_RELEASE "/etc/starfish-release"
 #define HC_WATCH_LOG "/tmp/homechooser-home.log"
 /* Home gate, webOS 6-9 (docs/home-gate.md). /tmp is tmpfs on every 6-9 rootfs, so the gate copy
  * and its release marker are gone after a reboot. */
@@ -56,11 +55,16 @@ bool hc_sender_ok(const char *app_id);
 
 /* Exact-match allow-list for readFile / writeFile / removeFile. */
 bool hc_file_allowed(const char *path);
-/* readFile also reads /etc/os-release (the app needs the release; a web app cannot read it). */
+/* readFile also reads /etc/starfish-release (the app needs the release; a web app cannot read it).
+ * It is a regular file on every webOS firmware from 1.4 to 12 (a line such as
+ * "Rockhopper release 4.10.2-29 (goldilocks2-grampians)"), so no symlink handling is needed. */
 bool hc_file_readable(const char *path);
-/* /etc/os-release is a symlink to ../usr/lib/os-release on webOS 6 and later. The service resolves
- * it with realpath() and reads it only when the result (a path with no symlinks) is one of the two. */
-bool hc_osrelease_target_ok(const char *resolved);
+/* "release MAJOR.MINOR.PATCH" in the text of /etc/starfish-release: true and out[3] set, or false
+ * (unknown) when the text has no such three-number version. Anything after the patch number
+ * ("-29", "-GoogleHomePlatform688001") is ignored. */
+bool hc_release_parse(const char *text, int out[3]);
+/* The major of hc_release_parse; 0 when unknown (or the text is NULL). */
+int hc_release_major(const char *text);
 
 /* How a forwarded call is checked beyond its URI. */
 typedef enum {

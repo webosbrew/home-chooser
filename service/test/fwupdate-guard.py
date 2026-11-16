@@ -56,7 +56,7 @@ REAL = [
                                                   ('8.4.0', 'R', '8.4.0-W23A'), ('9.2.1', 'R', '9.2.1-40-W22H'), ('9.2.4', 'R', '9.2.4-W24P')]),
     # Real files this guard has never seen under a 6-9 release: it must fall back to stock.
     ('9.2.4 -> 10.3.1 file (major 10: guard off)',   [('9.2.4', 'R', '9.2.4-W24P'), ('10.3.1', 'N', '10.3.1-W22H')]),
-    ('7.6.0 -> 10.3.1 shape under a 7.x os-release', [('7.6.0', 'R', '7.6.0-19-W22P'), ('7.6.1', 'S', '10.3.1-W22H')]),
+    ('7.6.0 -> 10.3.1 shape under a 7.x release file', [('7.6.0', 'R', '7.6.0-19-W22P'), ('7.6.1', 'S', '10.3.1-W22H')]),
     ('7.6.0 -> 5.6.1 file (no launchHomeApp)',       [('7.6.0', 'R', '7.6.0-19-W22P'), ('7.6.1', 'S', '5.6.1-W20L')]),
     ('unknown build, then a known one again',        [('9.2.4', 'R', '9.2.4-W24P'), ('9.3.0', 'S', '10.3.1-W22H'), ('9.3.1', 'R', '9.2.4-W24P')]),
 ]

@@ -25,7 +25,7 @@ int key_refresh(HCWatch *w, gboolean stock)
 {
     if (w->major < 6 || w->major > 9) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
-    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.osrelease, w->ops.call, w->ops.context, 30, 1000};
+    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000};
     GString *out = g_string_new(NULL);
     int rc = hc_key_run(&ops, "refresh", stock, out);
     watch_log(w, "Home key refresh%s: %s", stock ? " stock" : "", out->str);

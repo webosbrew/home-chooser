@@ -15,7 +15,7 @@ class BaselineSteps:
         r, d = self.rec, self.dev
         r.begin('0 baseline')
         r.check('device release matches the matrix (%s)' % self.release,
-                '%d.' % self.major == self.release[:-1], 'os-release: ' + self.osr)
+                '%d.' % self.major == self.release[:-1], '/etc/starfish-release: ' + self.osr)
         fullhome = d.app_installed(FULLHOME)
         self.stock_id = stock_home_id(self.major, fullhome)
         r.note('stock home id written by restore/removal/uninstall: %s (%s installed: %s)'

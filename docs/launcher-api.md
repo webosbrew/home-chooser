@@ -886,7 +886,7 @@ On 10.3.1, 11.2.0 and 12.0.0, one `getIcons` call for 20 apps took 40 to 160 ms,
 *Not needed to write a launcher.* This section explains how Home Chooser makes the Home button
 follow the choice on each release, for when you want to know why something behaves as it does.
 
-Releases are named by the major version in `/etc/os-release` (`VERSION_ID`), not by LG's marketing
+Releases are named by the major version in `/etc/starfish-release` (`Rockhopper release 11.2.0-3709 (queue-qilian)` is release 11), not by LG's marketing
 year. Your launcher declares the same appinfo on all of them. The API and the selection request
 behave the same everywhere; what differs is how the Home button is made to follow the choice, what
 the owner sees, and how the permission reaches you.

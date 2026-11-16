@@ -328,7 +328,7 @@ files whose package manifest has disappeared. `ls-control scan-services` runs on
 status prints file presence. The app best-effort applies after elevation, the boot entry applies
 without needing a Home choice, and the watcher applies at start. The watcher stages the access
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
-Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`, `HOMECHOOSER_NODE`.
+Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_RELEASE_FILE`, `HOMECHOOSER_NODE`.
 
 The settings-only methods (`status`, `quit`, `call`, file methods, `readIcon`, `link`,
 `unlink`, `linkStatus`, `run`), confirmation and reboot methods, files, `status` output and log ids
@@ -437,11 +437,11 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/homekey`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
-  `/etc/os-release`, because a web app cannot read it and the app needs the release. The
-  writable files are opened with `O_NOFOLLOW`. `/etc/os-release` is a symlink to
-  `../usr/lib/os-release` (webOS 5.6 to 26 roots checked: W20L, W20H, W21P, W22L, W22P, W22H 43.x), so
-  it is resolved with `realpath()` and read only when the result is `/etc/os-release` or
-  `/usr/lib/os-release`; any other target is `notAllowed`.
+  `/etc/starfish-release`, because a web app cannot read it and the app needs the release. The
+  writable files are opened with `O_NOFOLLOW`. `/etc/starfish-release` is a regular file on every webOS
+  firmware from 1.4 to 12 (one line, `Rockhopper release 4.10.2-29 (goldilocks2-grampians)`), so
+  it is read as is; the release is the first `release MAJOR.MINOR.PATCH` in it, and a file without one is
+  an unknown release. `/etc/os-release` (absent on 3.x and 4.x) is not read anywhere.
 * **Icons**: `readIcon`, `getAppIcon` and `getIcons` (for app items) ask SAM for the app's `folderPath` and chosen icon field.
   They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
   symlinks and require the result to lie inside the real `folderPath`, then return a regular

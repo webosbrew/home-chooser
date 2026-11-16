@@ -50,6 +50,6 @@ char *hc_gate_decided(const char *dir);
 /* The one-off --homekey path: flag present, a valid non-stock choice that getAppInfo knows.
  * Returns that choice (g_free) or NULL. */
 char *hc_gate_wanted(const char *state_dir, char *(*call)(const char *, const char *, int, void *), void *context);
-/* Release major from os-release text (VERSION_ID, else VERSION); 0 when unknown. */
-int hc_gate_major(const char *osrelease);
+/* Release major from the file /etc/starfish-release ("... release 7.6.0-19 (...)"); 0 when unknown. */
+int hc_gate_major(const char *release_file);
 #endif

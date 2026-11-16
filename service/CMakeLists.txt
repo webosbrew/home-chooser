@@ -86,9 +86,9 @@ function(hc_test_program name)
 	target_link_libraries(${name} PRIVATE ${arg_LIBS})
 endfunction()
 # The same native JSON/transaction code with a fake Luna transport.
-hc_test_program(test-homekey SOURCES test/test-homekey.c src/homekey.c src/homekey-generator.c LIBS pbnjson_c glib-2.0)
+hc_test_program(test-homekey SOURCES test/test-homekey.c src/homekey.c src/homekey-generator.c src/policy.c LIBS pbnjson_c glib-2.0)
 # Firmware update scenarios for the Home key guard, driven by test/fwupdate-guard.py.
-hc_test_program(test-fwupdate SOURCES test/test-fwupdate.c src/homekey.c src/homekey-generator.c LIBS pbnjson_c glib-2.0)
+hc_test_program(test-fwupdate SOURCES test/test-fwupdate.c src/homekey.c src/homekey-generator.c src/policy.c LIBS pbnjson_c glib-2.0)
 hc_test_program(test-watcher
 	SOURCES test/test-watcher.c ${WATCHER_SOURCES} src/json.c src/fs.c src/proc.c src/policy.c src/homekey.c src/homekey-generator.c src/gate-mount.c src/last-input.c
 	LIBS pbnjson_c glib-2.0)

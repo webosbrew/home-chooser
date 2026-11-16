@@ -202,7 +202,7 @@ static Fixture *setup(int major, const char *id) {
         "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
     f->c = hc_watch_config();
     char *name = g_strdup_printf("case-%u", serial++), *root = path(f, base, name); g_free(name);
-    f->c.state_dir = path(f, root, "state"); f->c.osrelease = path(f, root, "os-release");
+    f->c.state_dir = path(f, root, "state"); f->c.release_file = path(f, root, "starfish-release");
     f->c.app_dir = path(f, root, "hc"); f->c.override = path(f, root, "override/o.json");
     f->c.init_link = path(f, root, "init.d/homechooser"); f->c.log = path(f, root, "watch.log");
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
@@ -210,7 +210,7 @@ static Fixture *setup(int major, const char *id) {
     f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
     f->gate_last = -1; f->c.proc = path(f, root, "proc");
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
-    char *os = g_strdup_printf("VERSION_ID=\"%d.0.0\"\n", major); file(f->c.osrelease, os); g_free(os);
+    char *os = g_strdup_printf("Rockhopper release %d.0.0-1 (test)\n", major); file(f->c.release_file, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
     CHECK("fixture init link", !symlink("/missing-package/homechooser", f->c.init_link));
     const char *names[] = {"homekey", "hook/generated", "hook-stale", "boot/homechooser", "keyfilters-stock.json", "keyfilter.lock", NULL};
@@ -260,11 +260,11 @@ static void test_choices(void) {
     }
     Fixture *f = setup(8, "my.home"); start(f); unlink(f->w->choice_file); settings(f, "{}");
     CHECK("W01 choice removed exit", hc_watch_status(f->w) == 0); CHECK("W01 no write after removal", !f->sets); teardown(f);
-    const char *releases[] = {"VERSION=\"8.2\"\nVERSION_ID=\"9.1\"\n", "VERSION=\"webOS 8.2\"\n", "PRETTY_NAME=\"webOS 11\"\n", "broken\n"};
-    int majors[] = {9, 8, 11, 0};
+    const char *releases[] = {"Rockhopper release 9.1.0-5 (a)\n", "Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n", "Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)\n", "broken\n"};
+    int majors[] = {9, 4, 12, 0};
     for (unsigned i = 0; i < G_N_ELEMENTS(releases); i++) {
-        f = setup(8, NULL); file(f->c.osrelease, releases[i]); HCWatch *w = hc_watch_new(&f->c, &f->w->ops);
-        CHECK("W01 release priority", w->major == majors[i]); hc_watch_free(w); teardown(f);
+        f = setup(8, NULL); file(f->c.release_file, releases[i]); HCWatch *w = hc_watch_new(&f->c, &f->w->ops);
+        CHECK("W01 release major", w->major == majors[i]); hc_watch_free(w); teardown(f);
     }
 }
 static void test_record(void) {
@@ -477,7 +477,7 @@ static void test_uninstall(void) {
         if (mode == 0) f->access_fail = 1;
         if (mode == 1) f->set_fail = 1;
         if (mode == 2) f->ignore_write = TRUE;
-        if (mode == 3) { hc_watch_free(f->w); f->major = 8; file(f->c.osrelease, "VERSION_ID=8\n"); HCWatchOps ops={.call=fake_call,.key=fake_key,.access=fake_access,.wait=wait_ms,.now=now,.context=f}; f->w=hc_watch_new(&f->c,&ops); f->key_fail=1; }
+        if (mode == 3) { hc_watch_free(f->w); f->major = 8; file(f->c.release_file, "Rockhopper release 8.0.0-1 (t)\n"); HCWatchOps ops={.call=fake_call,.key=fake_key,.access=fake_access,.wait=wait_ms,.now=now,.context=f}; f->w=hc_watch_new(&f->c,&ops); f->key_fail=1; }
         installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'T', NULL);
         CHECK("W13 failure restart", hc_watch_status(f->w) == 1);
         CHECK("W13 recovery retained", g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
