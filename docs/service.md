@@ -61,6 +61,7 @@ This archive is a build artifact, not part of the package.
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
 | `luna-child.c` | Child streams (daemon watcher, service subscriptions), GIOChannel JSON framing, deadlines, cancellation and reaping |
 | `watcher/{main,core,record,restore,preload,notify,gate,input}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount and the 10+ last-input launch after boot |
+| `revive.c`, `service/revive-glue.c` | Watcher revival: the rate-limited check after a call (plain logic, and the GLib spawn it runs on) |
 | `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
 | `last-input.c` | The last TV input from an eim `getLastInput` reply, Live TV otherwise; used by the gate and the watcher |
 | `gate/{main,decide,run}.c` | `homechooser-home-gate`, run by SAM as `com.webos.app.home` on 6–9: decision table and self-release to stock Home |
@@ -452,6 +453,18 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
   removes the link and copy.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
+* **Watcher supervision and revival**: on systemd the watcher is the transient unit `homechooser-home`
+  (`Restart=on-failure`), which systemd keeps up. webOS 4.x runs upstart (1.10, jobs only from read-only `/etc/init`, no
+  transient jobs), so there the watcher is a detached shell loop with a pid file that restarts the daemon on failure but
+  stays dead if the loop itself is killed. Both are revived by the service: after every call that does real work (the
+  app's `call`, `run`, file and link methods, and every launcher method; not `status` or `quit`), `hc_revive_touch` runs
+  once the handler has replied. It does nothing unless the service is root, and at most once per 30 s per process. If a
+  home choice is stored (`/var/lib/webosbrew/homechooser/home` is a regular file: the same condition the boot entry starts the
+  watcher on, and the one a restore or uninstall removes) it spawns `homechooser active` without waiting; on a
+  non-zero exit, if the choice is still stored, it spawns `homechooser watch`, the app's own start path (systemd-run or the loop),
+  and logs `WATCHER_REVIVED` when that succeeds (`WATCHER_REVIVE_FAILED` with the exit status otherwise). Only one such command is
+  in flight (killed after 25 s); a running watcher costs one quiet process per 30 s and no log line. A `run` of `stopWatcher`
+  and `unlink` hold revival for 60 s and abandon a check in flight, so a restore that stops the watcher before it removes the choice is not undone.
 * **Commands** (`run`, by name, fixed argv, no shell, minimal environment, stdin from `/dev/null`,
   output capped at 1 MiB per stream, a timeout each):
 
@@ -495,6 +508,7 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
 
 * `test-policy`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
+* `test-revive`: watcher revival with a fake clock, stored choice and commands (rate limit, root only, no stored choice, one start at a time, active and inactive paths, the hold).
 * `test-watcher` and `test-watcher-luna`: native watcher policy and child-stream runtime with an executable
   Luna double under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
   subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle, close guards

@@ -2,6 +2,7 @@
 # Host-side tests of the native code, run with CTest:
 #   cmake -S service/test -B build/service-host && cmake --build build/service-host && ctest --test-dir build/service-host
 #   test-policy        the pure policy, built natively with the address and undefined sanitizers
+#   test-revive        watcher revival: rate limit, stored choice, root only, one start at a time
 #   test-proc          run_argv reports a failed exec on stderr
 #   test-nameowner         which role files allow a service name (a native launcher's identity), same sanitizers
 #   test-homekey       native live-filter transactions with fake Luna             } ARM programs from
@@ -41,6 +42,12 @@ target_compile_options(test-proc PRIVATE -std=gnu11 -Wall -Wextra -Werror -g -fs
 target_link_options(test-proc PRIVATE -fsanitize=address,undefined)
 target_link_libraries(test-proc PRIVATE PkgConfig::GLIB2)
 add_test(NAME test-proc COMMAND test-proc)
+# test-revive: watcher revival, with the clock, the stored choice and the commands faked.
+add_executable(test-revive test-revive.c "${src}/revive.c")
+target_include_directories(test-revive PRIVATE "${src}")
+target_compile_options(test-revive PRIVATE -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined)
+target_link_options(test-revive PRIVATE -fsanitize=address,undefined)
+add_test(NAME test-revive COMMAND test-revive)
 # test-nameowner builds a scratch role tree under /tmp and removes it.
 add_executable(test-nameowner test-nameowner.c "${src}/nameowner.c")
 target_include_directories(test-nameowner PRIVATE "${src}")

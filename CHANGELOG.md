@@ -9,6 +9,7 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 - webOS 4.0 (W18R, starfish 4.4.x): the Home button opens your launcher. 4.0 has no Home app and no default-app record, so Home Chooser inserts a key filter entry of its own before LG's `handleSystemKeys` (through configd, volatile, read back, restored exactly; no restart) that opens the launcher on Home, keeps the long press for recent apps and closes open overlays first. Back on your launcher, when it does not take Back itself, is swallowed (a full-screen launcher) or goes to the last input (an overlay launcher), instead of showing LG's ribbon over it. The only LG Home row on 4.0 is "LG Home (Ribbon)". The support range is not yet widened in the README.
 - webOS 4.x has no systemd: the watcher and the boot entry now run as a detached loop with a pid file there (the commands `stopWatcher` and `watcherActive` go through the entry script, which asks systemd where it exists).
+- The service revives a dead watcher: when it runs as root and a home choice is stored, any call it serves (at most one check per 30 s) starts the watcher again if it is not running, on systemd and on the detached loop of webOS 4.x alike. Restoring LG Home and uninstalling do not trigger it.
 
 ### Changed
 
