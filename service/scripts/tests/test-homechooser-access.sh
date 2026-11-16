@@ -12,7 +12,7 @@ export HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_LS_CONTROL="$T/control"
 export HOMECHOOSER_PARENT_EXE=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/homechooser-service
 printf '#!/bin/sh\n[ "$1" = homechooser-service ] && cat "%s/pids" 2>/dev/null\n' "$T" > "$T/pidof"
 chmod +x "$T/pidof"
-export HOMECHOOSER_PIDOF="$T/pidof"
+export HOMECHOOSER_PIDOF="$T/pidof" HOMECHOOSER_RESTART_MARK="$T/pending"
 printf '#!/bin/sh\necho "$*" >> "%s/scans"\n' "$T" > "$T/control"
 chmod +x "$T/control"
 for root in "$T/dev" "$T/system"; do
@@ -87,6 +87,17 @@ grep -qx restart-service "$T/out"
 run apply > "$T/out"
 if grep -q restart-service "$T/out"; then exit 1; fi
 [ "$(wc -l < "$T/scans")" -eq 2 ]
+# The app was closed before it restarted the service: the next apply asks again while the service
+# instance that was told still runs, and stops asking once a new instance runs.
+echo 4242 > "$T/pids"
+echo 4242 > "$T/pending"
+run apply > "$T/out"
+grep -qx restart-service "$T/out"
+echo 4343 > "$T/pids"
+run apply > "$T/out"
+if grep -q restart-service "$T/out"; then exit 1; fi
+[ ! -f "$T/pending" ]
+rm -f "$T/pids"
 # Run by the boot entry or the watcher: no message, the running service is stopped instead.
 sleep 60 & victim=$!
 echo "$victim" > "$T/pids"

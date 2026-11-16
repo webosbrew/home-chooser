@@ -8,6 +8,7 @@ All notable changes to Home Chooser are recorded here. The format follows
 ### Fixed
 
 - A launcher installed (or removed) while Home Chooser's panel was open did not show in the list, even after Home Chooser was opened again. The list is now read again when the panel comes back to the front (opened again, or the page turns visible). An open confirmation, the focus and a choice in progress are left alone.
+- On webOS 11 and later, if the panel was closed during first-time setup after the launcher access files were written but before the service restarted, the next open did not restart it, so launchers could stay refused. The next open now asks for the restart again.
 
 ## [0.1.2] - 2026-11-16
 

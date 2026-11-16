@@ -299,7 +299,10 @@ service and waits for a new root instance, as after elevation; run by the boot e
 it sends SIGTERM to `homechooser-service` (Home Chooser's own service only) and the hub starts it on
 the next call. On first install the order is: elevation (quit, new root instance), `accessApply`
 writes the file and scans, `restart-service`, quit, the next `status` starts an instance that
-registers with the file in place. That a fresh registration is enough, without a reboot, is not yet
+registers with the file in place. The settings app can be closed between `restart-service` and the
+quit, when the file already matches. So the script notes the pid of the instance it told in
+`/tmp/homechooser-runtime/access-restart-pending` and prints `restart-service` again while that
+instance runs; once another instance runs, it removes the note (a reboot clears it too). That a fresh registration is enough, without a reboot, is not yet
 verified on a device. The group is declared only by that API file, the way the installer declares
 `<service>.group` for every developer service.
 

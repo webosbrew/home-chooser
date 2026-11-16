@@ -81,3 +81,61 @@ describe('loadEnvironment', () => {
 		await expect(loadEnvironment(platform({osRelease: jest.fn().mockRejectedValue(new Error('No version'))}))).rejects.toMatchObject({kind: 'failed'});
 	});
 });
+
+// The page can be closed at any point of the first run (the compositor closes an overlay after 120 s
+// without a key press). A fake device keeps what the first run left; the second run must finish.
+describe('an interrupted first run', () => {
+	// eslint-disable-next-line global-require
+	const {ensureRoot} = require('../../platform/elevate');
+	const makeDevice = () => {
+		const dev = {root: false, elevated: false, accessFiles: 0, watcher: false};
+		const call = jest.fn(async (uri) => {
+			if (uri.endsWith('/elevateService')) {
+				dev.elevated = true; // Homebrew Channel rewrites the launch line; the running instance is unchanged
+				return {returnValue: true};
+			}
+			throw new Error(`unexpected ${uri}`);
+		});
+		const service = {
+			status: jest.fn(async () => ({returnValue: true, root: dev.root, uid: dev.root ? 0 : 1000, version: '0.1.2'})),
+			quit: jest.fn(async () => { dev.root = dev.elevated; })
+		};
+		const platformFor = (hook) => ({
+			ensureRoot: () => ensureRoot({service, call, sleep: async () => {}, log: () => {}}),
+			osRelease: async () => ({version: [8, 3, 0]}),
+			exec: async (name) => {
+				await hook(name);
+				if (name === 'accessApply') dev.accessFiles = 2;
+				if (name === 'watch') dev.watcher = true;
+				return {stdout: '', stderr: ''};
+			},
+			rootLuna: jest.fn(), writeFile: jest.fn(), removeFile: jest.fn(), readIcon: jest.fn()
+		});
+		return {dev, service, platform: platformFor};
+	};
+	const closed = new Error('page closed');
+
+	test.each([
+		['before elevation', 'status'],
+		['after elevation, before the service quit', 'quit'],
+		['after access setup, before the watcher starts', 'watch']
+	])('closed %s: the next open finishes without a manual step', async (_, at) => {
+		const d = makeDevice();
+		let abort = () => {};
+		if (at === 'status') d.service.status.mockRejectedValueOnce(closed);
+		if (at === 'quit') d.service.quit.mockRejectedValueOnce(closed);
+		if (at === 'watch') abort = (name) => { if (name === 'watch') throw closed; };
+		const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+		try {
+			// The first run may fail or stop anywhere: only what it left on the device matters.
+			await loadEnvironment(d.platform(abort)).catch(() => {});
+			const second = await loadEnvironment(d.platform(() => {}));
+			expect(typeof second.chooser.apply).toBe('function');
+		} finally {
+			log.mockRestore();
+		}
+		expect(d.dev.root).toBe(true);
+		expect(d.dev.accessFiles).toBe(2);
+		expect(d.dev.watcher).toBe(true);
+	});
+});

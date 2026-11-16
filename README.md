@@ -59,6 +59,8 @@ uninstall the launcher you chose, the Home button opens LG Home again.
 ## Known limitations
 
 * On webOS 11 and later, Home Chooser needs Homebrew Channel 0.8.0 or later. Earlier releases don't give apps root access there.
+* The panel closes by itself after up to two minutes without a key press, as other panels on the TV
+  do. Open Home Chooser again to continue; if setup was still running, it continues then.
 * On webOS 5, LG Home stays loaded in the background after you choose another launcher, until the
   TV restarts.
 * Only apps that declare themselves Home apps are listed. If your launcher is missing, ask its

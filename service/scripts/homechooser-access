@@ -111,13 +111,26 @@ for root in $ROOTS; do
     if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi
+# A change the settings app was told about but never acted on (it was closed before it restarted the
+# service) must not be forgotten: the file now matches, so the next apply sees no change. The
+# service instance that was told is noted; while that instance still runs, ask again.
+MARK=${HOMECHOOSER_RESTART_MARK:-$HC_RUNTIME_DIR/access-restart-pending}
+if [ "$action" = apply ] && [ "$major" -ge 11 ] && [ -f "$MARK" ]; then
+    told=$(cat "$MARK" 2>/dev/null || :)
+    for pid in $("$PIDOF" homechooser-service 2>/dev/null); do
+        [ "$pid" != "$told" ] || restart=1
+    done
+    [ "${restart:-0}" = 1 ] || rm -f "$MARK"
+fi
 # 11+: Home Chooser's service takes its access groups when it registers. After a change, a running
 # instance must register again. Run by that service (accessApply), tell the settings app, which
 # quits it and waits for the new instance; run by the boot entry or the watcher, stop it here (only
 # Home Chooser's own service); the hub starts it again on the next call.
 if [ "${restart:-0}" = 1 ]; then
     case "$PARENT_EXE" in
-        */homechooser-service) echo restart-service ;;
+        */homechooser-service)
+            mkdir -p "$(dirname "$MARK")" 2>/dev/null && printf '%s\n' "$PPID" > "$MARK" || :
+            echo restart-service ;;
         *) for pid in $("$PIDOF" homechooser-service 2>/dev/null); do kill "$pid" 2>/dev/null || :; done ;;
     esac
 fi
