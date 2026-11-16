@@ -1,0 +1,308 @@
+{
+ "width": 1280,
+ "height": 720,
+ "elements": [
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 0,
+   "key": "text:No",
+   "kind": "text",
+   "group": 2,
+   "x0": 443,
+   "y0": 441,
+   "x1": 478,
+   "y1": 471,
+   "score": 0.73573756,
+   "text": "No",
+   "style": {
+    "background": "#3c5765",
+    "foreground": "#fdfdfd",
+    "contrast": 7.53,
+    "disabled": false,
+    "highlighted": true,
+    "focused": false
+   },
+   "box": [
+    443,
+    441,
+    478,
+    471
+   ],
+   "centre": [
+    460.5,
+    456.0
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 1,
+   "key": "text:HOME CHOOSER",
+   "kind": "text",
+   "group": 1,
+   "x0": 492,
+   "y0": 439,
+   "x1": 618,
+   "y1": 458,
+   "score": 0.99420637,
+   "text": "HOME CHOOSER",
+   "style": {
+    "background": "#e4e5e6",
+    "foreground": "#4d4d4d",
+    "contrast": 6.7,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    492,
+    439,
+    618,
+    458
+   ],
+   "centre": [
+    555.0,
+    448.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 2,
+   "key": "text:Currently scanning for sig",
+   "kind": "text",
+   "group": 1,
+   "x0": 260,
+   "y0": 476,
+   "x1": 478,
+   "y1": 501,
+   "score": 0.9826864,
+   "text": "Currently scanning for sig",
+   "style": {
+    "background": "#25362b",
+    "foreground": "#fafafa",
+    "contrast": 12.26,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    260,
+    476,
+    478,
+    501
+   ],
+   "centre": [
+    369.0,
+    488.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 3,
+   "key": "text:Please check if the antenna",
+   "kind": "text",
+   "group": 3,
+   "x0": 246,
+   "y0": 500,
+   "x1": 478,
+   "y1": 521,
+   "score": 0.99957275,
+   "text": "Please check if the antenna",
+   "style": {
+    "background": "#182726",
+    "foreground": "#f9f9f9",
+    "contrast": 14.7,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    246,
+    500,
+    478,
+    521
+   ],
+   "centre": [
+    362.0,
+    510.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 4,
+   "key": "icon@477,424",
+   "kind": "icon",
+   "group": 0,
+   "x0": 477,
+   "y0": 424,
+   "x1": 804,
+   "y1": 584,
+   "score": 0.23650315,
+   "style": {
+    "background": "#e4e6e6",
+    "foreground": "#c30850",
+    "contrast": 4.83,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    477,
+    424,
+    804,
+    584
+   ],
+   "centre": [
+    640.5,
+    504.0
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 5,
+   "key": "text:Uninstall HC Fixture disposable?",
+   "kind": "text",
+   "group": 1,
+   "x0": 493,
+   "y0": 495,
+   "x1": 787,
+   "y1": 514,
+   "score": 0.9984121,
+   "text": "Uninstall HC Fixture disposable?",
+   "style": {
+    "background": "#e5e6e5",
+    "foreground": "#4d4d4d",
+    "contrast": 6.76,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    493,
+    495,
+    787,
+    514
+   ],
+   "centre": [
+    640.0,
+    504.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 6,
+   "key": "text:(2) Press the [] on your re",
+   "kind": "text",
+   "group": 4,
+   "x0": 252,
+   "y0": 522,
+   "x1": 478,
+   "y1": 546,
+   "score": 0.9983394,
+   "text": "(2) Press the [] on your re",
+   "style": {
+    "background": "#466062",
+    "foreground": "#fafafa",
+    "contrast": 6.47,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    252,
+    522,
+    478,
+    546
+   ],
+   "centre": [
+    365.0,
+    534.0
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 7,
+   "key": "button:UNINSTALL",
+   "kind": "button",
+   "group": 1,
+   "x0": 517,
+   "y0": 532,
+   "x1": 637,
+   "y1": 573,
+   "score": 0.17082453,
+   "text": "UNINSTALL",
+   "style": {
+    "background": "#686868",
+    "foreground": "#fcfcfc",
+    "contrast": 5.43,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    517,
+    532,
+    637,
+    573
+   ],
+   "centre": [
+    577.0,
+    552.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "file": "/home/mariotaku/Projects/webosbrew/OpenHouse/e2e/results/matrix-20261117-003332/w19p-goldilocks2/07-fixture-web.normal-3a-uninstall-alert-focus-proof.png",
+   "id": 8,
+   "key": "button:CANCEL",
+   "kind": "button",
+   "group": 1,
+   "x0": 643,
+   "y0": 533,
+   "x1": 763,
+   "y1": 573,
+   "score": 0.11526644,
+   "text": "CANCEL",
+   "style": {
+    "background": "#cf0652",
+    "foreground": "#fefcfd",
+    "contrast": 5.41,
+    "disabled": false,
+    "highlighted": true,
+    "focused": false
+   },
+   "box": [
+    643,
+    533,
+    763,
+    573
+   ],
+   "centre": [
+    703.0,
+    553.0
+   ],
+   "value": null,
+   "unit": ""
+  }
+ ],
+ "source_width": 1920,
+ "source_height": 1080,
+ "scale": 0.666667,
+ "offset_x": 0,
+ "offset_y": 0
+}

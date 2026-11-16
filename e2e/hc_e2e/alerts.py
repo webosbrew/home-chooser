@@ -101,7 +101,13 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # the matching service request/reply; the app title behind the alert is not proof.
     if texts.count(message) != 1:
         raise ValueError('expected message not uniquely visible')
-    buttons = [r for r in rows if r.get('kind') == 'button' and r.get('text') in (target, safe)]
+    # webOS 4.5 draws the alert buttons in capitals ("UNINSTALL", "CANCEL", w19p-goldilocks2 run 2026-11-16):
+    # match the label ignoring case and hand back the label as the service sent it.
+    canon = {str(target).casefold(): target, str(safe).casefold(): safe}
+    # The OCR also calls the unfocused button of the pair plain "text" there (the frame after the focus
+    # moved: UNINSTALL a button, CANCEL a text), so an exact label counts as a button whichever kind it has.
+    buttons = [dict(r, text=canon[r['text'].casefold()]) for r in rows
+               if r.get('kind') in ('button', 'text') and isinstance(r.get('text'), str) and r['text'].casefold() in canon]
     if len(buttons) != 2 or sorted(r.get('text', '') for r in buttons) != sorted((target, safe)):
         raise ValueError('expected exactly the two alert buttons')
     for b in buttons:
@@ -146,7 +152,7 @@ def alert_focus(frame, message, target, safe, require_focus=True):
         # 5.x puts the prompt immediately above a highlighted horizontal pair.
         if (not 0 <= top - msg['box'][3] <= bottom - top
                 or msg.get('group') is None
-                or any(b.get('group') != msg['group'] for b in buttons)):
+                or any(b.get('kind') == 'button' and b.get('group') != msg['group'] for b in buttons)):  # a button read as text has its own group
             raise ValueError('message is outside the alert group')
     elif not top <= sum(msg['box'][1::2]) / 2 <= bottom:
         if not (0 <= top - msg['box'][3] <= bottom - top
@@ -161,20 +167,21 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # the two exact buttons were already required above.
     left = min([b['box'][0] for b in buttons] + [msg['box'][0]])
     right = max([b['box'][2] for b in buttons] + [msg['box'][2]])
-    band = [r for r in rows if r.get('kind') == 'button'
+    band = [r for r in rows if r.get('kind') == 'button' and str(r.get('text')).casefold() not in canon
             and isinstance(r.get('box'), list) and len(r['box']) == 4
             and r['box'][1] < bottom and r['box'][3] > top
             and r['box'][0] < right and r['box'][2] > left]
-    if len(band) != 2:
+    if band:
         raise ValueError('extra controls in the alert band')
     return focused[0]['text'], direction
 
 
 def alert_style_swap(before, after, target, safe):
     """Match reciprocal appearances with a small tolerance for OCR colour jitter."""
-    def pair(frame):
-        return {r['text']: r for r in frame['elements']
-                if r.get('kind') == 'button' and r.get('text') in (target, safe)}
+    def pair(frame):  # same label rules as alert_focus: any case, and a button the OCR read as text
+        canon = {str(target).casefold(): target, str(safe).casefold(): safe}
+        return {canon[r['text'].casefold()]: r for r in frame['elements']
+                if r.get('kind') in ('button', 'text') and isinstance(r.get('text'), str) and r['text'].casefold() in canon}
     a, b = pair(before), pair(after)
     for field in ('highlighted', 'disabled'):
         x, y = a[safe]['style'].get(field), a[target]['style'].get(field)
