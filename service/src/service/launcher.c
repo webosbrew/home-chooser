@@ -499,6 +499,33 @@ static void new_token(char *out)
 
 static int never_stop(const char *text) { (void)text; return 0; }
 
+/* webOS 4.0 and 4.5: Surface Manager has no client-permission file there, so it holds no group and appinstalld refuses its
+ * alert button's call (LS_REQUIRES_SECURITY on appInstallService/dev/remove; 5.x and later ship
+ * client-permissions.d/com.webos.surfacemanager.perm.json granting `all`). The button then calls this
+ * service's own uninstallConfirmed with a one-shot token instead, and the service removes the app as root. */
+static bool alert_needs_token(void)
+{
+	char *path = g_strdup_printf("%s%s", hc_fs_prefix(), HC_STARFISH_RELEASE), *text = NULL;
+	int major = slurp(path, 4096, &text, NULL) >= 0 ? hc_release_major(text) : 0;
+	g_free(path);
+	g_free(text);
+	return major >= 1 && major < 5;
+}
+
+static UninstallToken *token_make(LOp *op)
+{
+	UninstallToken *t = &g_tokens[g_token_next++ % TOKEN_SLOTS];
+	memset(t, 0, sizeof *t);
+	new_token(t->token);
+	if (!hc_token_ok(t->token)) return NULL;
+	g_strlcpy(t->id, op->target, sizeof t->id);
+	g_strlcpy(t->requester, op->caller, sizeof t->requester);
+	g_strlcpy(t->folder, op->target_folder ? op->target_folder : "", sizeof t->folder);
+	t->expires = g_get_monotonic_time() + TOKEN_TTL_US;
+	t->live = true;
+	return t;
+}
+
 static void uninstall_ask(LOp *op)
 {
 	hc_remove_call remove;
@@ -509,7 +536,17 @@ static void uninstall_ask(LOp *op)
 		return;
 	}
 
-	/* The alert action goes to LG's endpoint chosen from the verified install folder. */
+	/* The alert action goes to LG's endpoint chosen from the verified install folder, or (4.x) to our own. */
+	UninstallToken *t = NULL;
+	bool via_us = alert_needs_token();
+	if (via_us) {
+		t = token_make(op);
+		if (!t) {
+			LOGE("REFUSED", "uninstallApp %s: could not make a confirmation token", op->target);
+			send_error_for(op->msg, op->method, "internal", "Could not make a confirmation token");
+			return;
+		}
+	}
 	char *question = g_strdup_printf("Uninstall %s?", op->target_title ? op->target_title : op->target);
 	jvalue_ref a = jobject_create();
 	put_str(a, "sourceId", HC_APP_ID);
@@ -518,8 +555,14 @@ static void uninstall_ask(LOp *op)
 	jvalue_ref buttons = jarray_create(NULL);
 	jvalue_ref yes = jobject_create();
 	put_str(yes, "label", "Uninstall");
-	put_str(yes, "onclick", remove.uri);
-	jvalue_ref yes_params = parse_object(remove.payload);
+	put_str(yes, "onclick", via_us ? "luna://" HC_SERVICE_ID "/uninstallConfirmed" : remove.uri);
+	jvalue_ref yes_params;
+	if (via_us) {
+		yes_params = jobject_create();
+		put_str(yes_params, "token", t->token);
+	} else {
+		yes_params = parse_object(remove.payload);
+	}
 	jobject_set(yes, key_buf("params"), yes_params);
 	jarray_append(buttons, yes);
 	jvalue_ref no = jobject_create();
@@ -531,7 +574,7 @@ static void uninstall_ask(LOp *op)
 	int code = luna_run("luna://com.webos.notification/createAlert", jvalue_stringify(a), 1, 8, never_stop, out);
 	bool alert = code == 0 && hc_remove_reply_class(out->str) == 1;
 	LOGI("UNINSTALL_ASK", "%s by %s: alert %s for %s (exit %d): %s", op->target, op->caller,
-		alert ? "shown" : "refused", remove.uri, code, out->str);
+		alert ? "shown" : "refused", via_us ? "uninstallConfirmed" : remove.uri, code, out->str);
 	g_string_free(out, TRUE);
 	j_release(&a);
 	g_free(question);
@@ -539,19 +582,12 @@ static void uninstall_ask(LOp *op)
 	const char *how = "alert";
 	if (!alert) {
 		/* Alerts are refused to root on some releases: Home Chooser's own screen asks instead. */
-		UninstallToken *t = &g_tokens[g_token_next++ % TOKEN_SLOTS];
-		memset(t, 0, sizeof *t);
-		new_token(t->token);
-		if (!hc_token_ok(t->token)) {
+		if (!t) t = token_make(op);
+		if (!t) {
 			LOGE("REFUSED", "uninstallApp %s: could not make a confirmation token", op->target);
 			send_error_for(op->msg, op->method, "internal", "Could not make a confirmation token");
 			return;
 		}
-		g_strlcpy(t->id, op->target, sizeof t->id);
-		g_strlcpy(t->requester, op->caller, sizeof t->requester);
-		g_strlcpy(t->folder, op->target_folder ? op->target_folder : "", sizeof t->folder);
-		t->expires = g_get_monotonic_time() + TOKEN_TTL_US;
-		t->live = true;
 		jvalue_ref l = jobject_create();
 		put_str(l, "id", HC_APP_ID);
 		jvalue_ref params = jobject_create();
