@@ -43,6 +43,11 @@ class DeviceState:
     def uses_home_key_hook(self):
         return uses_home_key_hook(self.major)
 
+    @property
+    def filter_only(self):
+        """webOS 4.0: no Home app, no settings record; the Home key filter entry alone (docs/home-key-hook.md)."""
+        return bool(getattr(self.dev, 'filter_only', False))
+
     def uses_override(self):
         return self.major >= 10
 

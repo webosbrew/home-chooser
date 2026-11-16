@@ -19,7 +19,7 @@ class HomePress:
         if proof:
             self.popup_mark = self.popup_mark_now()
             self.life_begin()
-        if expect == STOCK and (self.major <= 5 or self.stock_id == FULLHOME):
+        if expect == STOCK and not self.filter_only and (self.major <= 5 or self.stock_id == FULLHOME):
             # webOS 4.5 and 5: Home starts com.webos.app.fullhome as an overlay over the app in front
             # (foreground stays the app; seen in the w20l-jhericurl run), so it is observed like
             # a launcher: closed first, running afterwards.  6.x to 9.x with fullhome installed: the
@@ -144,8 +144,9 @@ class HomePress:
         """Lines in /var/log/messages stamped at or after `mark` that show the Home key reaching the
         stock home: surface-manager's launchDefaultApp {"category":"home",...homeKey}, or sam's
         relaunch of com.webos.app.home."""
-        pattern = pattern or ('launchDefaultApp.*homeKey|homeKey.*launchDefaultApp|'
-                              'RelaunchAsCommon.*com.webos.app.home')
+        # webOS 4.0 has no Home app: stock Home is the compositor's ribbon, which logs NL_HOME_SHOWN (no SAM launch)
+        pattern = pattern or ('NL_HOME_SHOWN' if self.filter_only else
+                              'launchDefaultApp.*homeKey|homeKey.*launchDefaultApp|RelaunchAsCommon.*com.webos.app.home')
         rc, out = self.dev.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep -E '%s' | tail -n 8")
                               % (mark, pattern))
         return [l for l in out.splitlines() if l.strip()]

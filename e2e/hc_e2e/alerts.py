@@ -103,7 +103,10 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     texts = [r.get('text') for r in rows if r.get('kind') == 'text']
     # Some firmware renders no title header. Ownership also requires
     # the matching service request/reply; the app title behind the alert is not proof.
-    if texts.count(message) != 1:
+    # webOS 4.0 draws the alert over Live TV's "No Signal" text, which the OCR joins to the message line ("No SUninstall
+    # HC Fixture disposable?", w18r-goldilocks run 2026-11-17): a short stray prefix is allowed, nothing else.
+    shown = [t for t in texts if isinstance(t, str) and (t == message or (t.endswith(message) and len(t) - len(message) <= 8))]
+    if len(shown) != 1:
         raise ValueError('expected message not uniquely visible')
     # webOS 4.5 draws the alert buttons in capitals ("UNINSTALL", "CANCEL", w19p-goldilocks2 run 2026-11-16):
     # match the label ignoring case and hand back the label as the service sent it.
@@ -150,7 +153,7 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # must contain exactly our pair; controls elsewhere (the app beneath) are irrelevant.
     top = min(b['box'][1] for b in buttons)
     bottom = max(b['box'][3] for b in buttons)
-    messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') == message]
+    messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') in shown]
     msg = messages[0]
     if horizontal:
         # 5.x puts the prompt immediately above a highlighted horizontal pair.

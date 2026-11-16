@@ -298,6 +298,8 @@ class Device:
         return None, out
 
     def record_home(self):
+        if getattr(self, 'filter_only', False):
+            return self.filter_home()
         out = self.luna('luna://com.webos.settingsservice/getSystemSettings',
                         '{"category":"general","keys":["defaultApps"]}')
         try:
@@ -311,7 +313,28 @@ class Device:
     def release(self):
         rc, out = self.sh('cat /etc/starfish-release')
         m = re.search(r'release (\d+)\.(\d+)\.(\d+)', out)
+        # webOS 4.0 (starfish 4.4.x): no Home app and no settings record; the Home key filter alone redirects Home
+        # (docs/home-key-hook.md). 4.5 (4.10.x) keeps the record.
+        self.filter_only = bool(m) and int(m.group(1)) == 4 and int(m.group(2)) < 10
         return (int(m.group(1)) if m else 0), out.strip()
+
+    KEYFILTERS = 'com.webos.surfacemanager.keyFilters'
+
+    def filter_home(self):
+        """webOS 4.0: what the Home key opens, in the record's terms: the launcher our key filter entry
+        (homekey40-*.js, `var HC_TARGET = "<id>"`) names, else the stock id (LG Home is the compositor's ribbon)."""
+        rc, raw, parsed = self.luna_as('com.webos.applicationManager', 'luna://com.webos.service.config/getConfigs',
+                                       json.dumps({'configNames': [self.KEYFILTERS]}))
+        try:
+            files = [f.get('file', '') for f in (parsed if isinstance(parsed, dict) else json.loads(raw))['configs'][self.KEYFILTERS]]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return '<unreadable>', raw
+        ours = [f for f in files if '/homekey40-' in f]
+        if not ours:
+            return STOCK, raw
+        rc, text = self.sh('cat ' + shlex.quote(ours[0]))
+        m = re.search(r'var HC_TARGET = "([^"]+)"', text)
+        return (m.group(1) if m else '<unreadable>'), raw
 
     def mounts(self):
         rc, out = self.sh("awk '$2 ~ /^\\/usr\\/lib\\/qml\\// {print $2}' /proc/mounts")
