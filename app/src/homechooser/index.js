@@ -429,13 +429,6 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					const stock = [wanted, state.recordHome, remembered].find((id) => isChoosableStock(id) && has(id)) ||
 						(has(STOCK_FULLHOME) ? STOCK_FULLHOME : STOCK_HOME);
 					res.stockId = stock;
-					if (wanted) {
-						try {
-							await run.write(STOCK_FILE, stock);
-						} catch (e) {
-							res.warnings.push(`Could not note the stock Home in use: ${errorMessage(e)}`);
-						}
-					}
 					// (a record that was never written on 6 to 9 has no patched compositor reading it, and the
 					// first write of the key is what sam misses, so it is left absent)
 					if (homeOf(state.record) !== stock && !(info.major >= 6 && state.record === null)) {
@@ -443,6 +436,13 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					}
 				} else if (homeOf(state.record)) {
 					await removeHomeFromRecord(run, state.record);
+				}
+				// With a stock Home chosen the record names the variant; the remembered one is only for while a launcher is
+				// chosen (a watcher is then alive to read it, and to remove it with the rest when Home Chooser goes).
+				try {
+					await run.remove(STOCK_FILE);
+				} catch (e) {
+					res.warnings.push(`Could not remove the stock Home note: ${errorMessage(e)}`);
 				}
 				if (info.usesProfile) {
 					await run.remove(OVERRIDE_PATH);

@@ -114,6 +114,11 @@ const fakeTV = ({record, profile, setDefaultApp = true, failures = {}, windows =
 			previous = null;
 			return;
 		}
+		if (path === STOCK_FILE) {
+			stock = null;
+			files.pop(); // not part of the file lists the tests compare
+			return;
+		}
 		profile = profileReply(STOCK);
 	};
 	const exec = async (command) => {
@@ -577,11 +582,11 @@ describe('restoreStock', () => {
 		expect(tv.luna).toEqual([GET, LIST]);
 	});
 
-	test('4.5/5.x: an asked-for variant wins over the remembered one and is remembered', async () => {
+	test('4.5/5.x: an asked-for variant wins over the remembered one; the note is dropped (the record names it now)', async () => {
 		const tv = withApps(fakeTV({record: {home: MINE}, stock: STOCK}), [STOCK, FULL]);
 		await chooser(tv, [5, 6, 1]).restoreStock(FULL);
 		expect(tv.luna).toEqual([GET, LIST, SET({home: FULL})]);
-		expect(tv.stock()).toBe(FULL);
+		expect(tv.stock()).toBeNull();
 	});
 
 	test('6 to 9: only home installed, asking for fullhome gives home', async () => {
@@ -687,13 +692,13 @@ describe('restoreStock', () => {
 		expect(tv.files.some((f) => f[1] === OVERRIDE_PATH)).toBe(version[0] >= 10);
 	});
 
-	test.each([[[5, 6, 1]], [[4, 10, 2]]])('%j: choosing fullhome writes that id; choosing home writes home; the choice is remembered', async (version) => {
+	test.each([[[5, 6, 1]], [[4, 10, 2]]])('%j: choosing fullhome writes that id; choosing home writes home', async (version) => {
 		for (const id of ['com.webos.app.fullhome', STOCK]) {
 			const tv = withApps(fakeTV({record: {home: MINE}}), [STOCK, 'com.webos.app.fullhome']);
 			const res = await chooser(tv, version).apply(id);
 			expect(res.ok).toBe(true);
 			expect(tv.luna).toEqual([GET, LIST, SET({home: id})]);
-			expect(tv.stock()).toBe(id);
+			expect(tv.stock()).toBeNull();
 		}
 	});
 
