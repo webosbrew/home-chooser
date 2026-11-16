@@ -17,6 +17,7 @@ from .constants import HERE
 # ---------------------------------------------------------------------------------------------
 MATRIX = [
     # release, vm, elevation, sure, note
+    ('4.0', 'w18r-goldilocks', 'luna', 'verified', 'W18R 05.50.70.01 = 4.0 (webOS 4.4.3-22; /etc/starfish-release: Rockhopper release 4.4.3-22 (goldilocks-gorongosa)); key-filter mode: no Home app, no defaultApps record (docs/home-key-hook.md, webOS 4.0); 4.5 is the 4.x row below'),
     ('4.x', 'w19p-goldilocks2', 'luna', 'verified', 'W19P 05.40.97.01 = 4.5 (webOS 4.10.2-29); /etc/starfish-release read 2026-11-16: Rockhopper release 4.10.2-29 (goldilocks2-grampians); hbchannel 0.8.0 layer'),
     ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
     ('6.x', 'w21a-kisscurl', 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to another project and is not in the matrix)'),

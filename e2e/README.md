@@ -299,6 +299,7 @@ TMPDIR=/tmp/nw python3 -m unittest discover -s e2e -p 'test_*.py'
 
 | Release | VM | Elevation | How sure |
 | --- | --- | --- | --- |
+| 4.0 | `w18r-goldilocks` | luna | verified: 4.0 (`/etc/starfish-release`: Rockhopper release 4.4.3-22), key-filter mode |
 | 4.x | `w19p-goldilocks2` | luna | verified: 4.5 (`/etc/starfish-release`: Rockhopper release 4.10.2-29) |
 | 5.x | `w20l-jhericurl` | luna | verified: 5.6.1 (read from the release file) |
 | 6.x | `w21a-kisscurl` | luna | verified: 6.5.2 (read from the release file). `w21p-kisscurl` (6.6.0) belongs to another project and is not in the matrix |

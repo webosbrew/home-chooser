@@ -441,7 +441,7 @@ class HostsConfig(unittest.TestCase):
 # Tiers (e2e/README.md "Tiers")
 # ---------------------------------------------------------------------------------------------
 TIER_VMS = {'pi': ['w24g-ombre', 'w24p-ombre', 'w22h-ombre', 'w24g-spacebuns'],
-            'rockpi4a-1': ['w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet'],
+            'rockpi4a-1': ['w18r-goldilocks', 'w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet'],
             'rockpi4a-2': ['w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us']}
 
 
@@ -538,12 +538,12 @@ BEANJAR_LIST = {
            'w20l-jhericurl', 'w21a-kisscurl', 'w21p-kisscurl', 'w21z-kisscurl', 'w22a-mullet', 'w22h-mullet', 'w22h-ombre',
            'w22l-mullet', 'w22o-mullet', 'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-jp', 'w22o-queue-us', 'w22p-mullet',
            'w24g-ombre', 'w24g-spacebuns', 'w24p-ombre', 'wt1h-afro'],
-    'rockpi4a-1': ['w20l-jhericurl', 'w21a-kisscurl', 'w22h-mullet', 'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us',
+    'rockpi4a-1': ['w18r-goldilocks', 'w20l-jhericurl', 'w21a-kisscurl', 'w22h-mullet', 'w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us',
                    'w22p-mullet', 'w24g-ombre', 'w24g-spacebuns', 'wt1h-afro'],
     'rockpi4a-2': ['w22o-number1', 'w22o-ponytail-us', 'w22o-queue-us', 'w24g-spacebuns'],
 }
 # minutes one release-tier run takes on the Pi (matrix-20261102-*/summary.md: the Rock Pi 4A takes about twice as long)
-PI_MINUTES = {'4.x': 6.0, '5.x': 6.0, '6.x': 6.2, '7.x': 5.8, '8.x': 5.2, '9.x': 6.4, '10.x': 8.8, '11.x': 8.9, '12.x': 9.4}
+PI_MINUTES = {'4.0': 6.0, '4.x': 6.0, '5.x': 6.0, '6.x': 6.2, '7.x': 5.8, '8.x': 5.2, '9.x': 6.4, '10.x': 8.8, '11.x': 8.9, '12.x': 9.4}
 
 
 class CommittedPlan(unittest.TestCase):
@@ -562,7 +562,7 @@ class CommittedPlan(unittest.TestCase):
         self.assertEqual(len(runs), len(hc_e2e.matrix.MATRIX))  # every slot exactly once
         self.assertEqual(sorted(r[1] for r in runs), sorted(m[0] for m in hc_e2e.matrix.MATRIX))
         self.assertEqual({r[2] for r in runs if r[0] == 'rockpi4a-1'},
-                         {'w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet', 'w22o-number1'})
+                         {'w18r-goldilocks', 'w20l-jhericurl', 'w21a-kisscurl', 'w22p-mullet', 'w22o-number1'})
 
     def test_default_never_touches_the_reserved_machine_or_the_other_projects_vm(self):
         cfg, queues, problems = self.plan()
@@ -614,7 +614,7 @@ class CommittedPlan(unittest.TestCase):
         self.assertEqual(rc, 0)
         text = out.getvalue()
         self.assertIn('pi (ssh raspberrypi): 7 run(s)', text)
-        self.assertIn('rockpi4a-1 (ssh mariotaku@rockpi4a-1.lan): 4 run(s)', text)
+        self.assertIn('rockpi4a-1 (ssh mariotaku@rockpi4a-1.lan): 5 run(s)', text)
         self.assertNotIn('rockpi4a-2', text)
         self.assertNotIn('w21p-kisscurl', text)
         self.assertNotIn('not run:', text)

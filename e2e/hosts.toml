@@ -25,7 +25,7 @@ vms = ["w24g-ombre", "w22o-ponytail-us", "w22o-queue-us", "w24g-spacebuns"]
 [hosts.rockpi4a-1]
 ssh = "mariotaku@rockpi4a-1.lan"
 slowdown = 2.0 # measured against pi: a run takes about twice as long
-vms = ["w20l-jhericurl", "w21a-kisscurl", "w22p-mullet", "w22o-number1"]
+vms = ["w18r-goldilocks", "w20l-jhericurl", "w21a-kisscurl", "w22p-mullet", "w22o-number1"]
 
 [hosts.rockpi4a-2]
 ssh = "mariotaku@rockpi4a-2.lan"
