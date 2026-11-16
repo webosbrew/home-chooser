@@ -27,7 +27,7 @@ if __name__ == '__main__':
         binary = tmp / 'generator'
         flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'glib-2.0'], text=True).split()
         subprocess.run(['cc', '-Wall', '-Wextra', '-Werror', '-I'+str(REPO/'service/src'),
-                        str(REPO/'service/test/homekey-generator.c'), str(REPO/'service/src/homekey-generator.c'),
+                        str(REPO/'service/test/homekey-generator.c'), str(REPO/'service/src/homekey-generator.c'), str(REPO/'service/src/policy.c'),
                         '-o', str(binary), *flags], check=True)
         for name, version, root in corpus():
             source = root / 'usr/lib/qml/KeyFilters/systemUi.js'
