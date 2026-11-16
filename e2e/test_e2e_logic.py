@@ -409,6 +409,12 @@ class AlertFocus(unittest.TestCase):
         self.assertEqual(hc_e2e.alerts.alert_focus(after, msg, 'Uninstall', 'Cancel'), ('Uninstall', 'LEFT'))
         self.assertEqual(hc_e2e.alerts.alert_style_swap(before, after, 'Uninstall', 'Cancel'), 'highlighted')
 
+    def test_4_5_buttons_both_read_as_text(self):
+        # w19p-goldilocks2 run 2026-11-17: both buttons are plain text with 17 px boxes, 30 px under the message
+        frame = self.frame('uninstall-alert-4x-text-buttons')
+        self.assertEqual(hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+                         ('Uninstall', 'LEFT'))
+
     def test_capital_button_labels_of_4_5(self):
         import copy
         frame = copy.deepcopy(self.frame('uninstall-alert'))

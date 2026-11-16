@@ -1,0 +1,459 @@
+{
+ "width": 1280,
+ "height": 720,
+ "elements": [
+  {
+   "id": 0,
+   "key": "icon@391,374",
+   "kind": "icon",
+   "group": 0,
+   "x0": 391,
+   "y0": 374,
+   "x1": 495,
+   "y1": 393,
+   "score": 0.18781748,
+   "style": {
+    "background": "#665877",
+    "foreground": "#d5cbd5",
+    "contrast": 4.13,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    391,
+    374,
+    495,
+    393
+   ],
+   "centre": [
+    443.0,
+    383.5
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 1,
+   "key": "icon@499,375",
+   "kind": "icon",
+   "group": 1,
+   "x0": 499,
+   "y0": 375,
+   "x1": 589,
+   "y1": 385,
+   "score": 0.35563436,
+   "style": {
+    "background": "#565479",
+    "foreground": "#c5c4d6",
+    "contrast": 4.16,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    499,
+    375,
+    589,
+    385
+   ],
+   "centre": [
+    544.0,
+    380.0
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 2,
+   "key": "icon@601,378",
+   "kind": "icon",
+   "group": 2,
+   "x0": 601,
+   "y0": 378,
+   "x1": 695,
+   "y1": 389,
+   "score": 0.26510626,
+   "style": {
+    "background": "#67648a",
+    "foreground": "#d0cdde",
+    "contrast": 3.58,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    601,
+    378,
+    695,
+    389
+   ],
+   "centre": [
+    648.0,
+    383.5
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 3,
+   "key": "icon@707,382",
+   "kind": "icon",
+   "group": 3,
+   "x0": 707,
+   "y0": 382,
+   "x1": 744,
+   "y1": 393,
+   "score": 0.25227663,
+   "style": {
+    "background": "#5a5576",
+    "foreground": "#dbcfd5",
+    "contrast": 4.64,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    707,
+    382,
+    744,
+    393
+   ],
+   "centre": [
+    725.5,
+    387.5
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 4,
+   "key": "icon@402,406",
+   "kind": "icon",
+   "group": 4,
+   "x0": 402,
+   "y0": 406,
+   "x1": 442,
+   "y1": 414,
+   "score": 0.10190889,
+   "style": {
+    "background": "#261a34",
+    "foreground": "#eedad3",
+    "contrast": 12.19,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    402,
+    406,
+    442,
+    414
+   ],
+   "centre": [
+    422.0,
+    410.0
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 5,
+   "key": "text:No",
+   "kind": "text",
+   "group": 7,
+   "x0": 433,
+   "y0": 442,
+   "x1": 472,
+   "y1": 471,
+   "score": 0.995613,
+   "text": "No",
+   "style": {
+    "background": "#fbfbfb",
+    "foreground": "#382424",
+    "contrast": 14.03,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    433,
+    442,
+    472,
+    471
+   ],
+   "centre": [
+    452.5,
+    456.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 6,
+   "key": "text:HOME CHOOSER",
+   "kind": "text",
+   "group": 6,
+   "x0": 492,
+   "y0": 439,
+   "x1": 618,
+   "y1": 458,
+   "score": 0.99515194,
+   "text": "HOME CHOOSER",
+   "style": {
+    "background": "#e6e6e6",
+    "foreground": "#4d4d4d",
+    "contrast": 6.77,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    492,
+    439,
+    618,
+    458
+   ],
+   "centre": [
+    555.0,
+    448.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 7,
+   "key": "text:Currently scanning for signa",
+   "kind": "text",
+   "group": 8,
+   "x0": 247,
+   "y0": 476,
+   "x1": 478,
+   "y1": 501,
+   "score": 0.9885651,
+   "text": "Currently scanning for signa",
+   "style": {
+    "background": "#28232a",
+    "foreground": "#f9f9f9",
+    "contrast": 14.62,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    247,
+    476,
+    478,
+    501
+   ],
+   "centre": [
+    362.5,
+    488.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 8,
+   "key": "text:(1) Please check if the antenna",
+   "kind": "text",
+   "group": 9,
+   "x0": 215,
+   "y0": 500,
+   "x1": 478,
+   "y1": 521,
+   "score": 0.9918638,
+   "text": "(1) Please check if the antenna",
+   "style": {
+    "background": "#28232a",
+    "foreground": "#f9f9f9",
+    "contrast": 14.62,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    215,
+    500,
+    478,
+    521
+   ],
+   "centre": [
+    346.5,
+    510.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 9,
+   "key": "icon@478,425",
+   "kind": "icon",
+   "group": 5,
+   "x0": 478,
+   "y0": 425,
+   "x1": 803,
+   "y1": 584,
+   "score": 0.43320012,
+   "style": {
+    "background": "#e5e5e6",
+    "foreground": "#c70750",
+    "contrast": 4.67,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    478,
+    425,
+    803,
+    584
+   ],
+   "centre": [
+    640.5,
+    504.5
+   ],
+   "text": "",
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 10,
+   "key": "text:Uninstall HC Fixture disposable?",
+   "kind": "text",
+   "group": 6,
+   "x0": 493,
+   "y0": 495,
+   "x1": 787,
+   "y1": 514,
+   "score": 0.9998328,
+   "text": "Uninstall HC Fixture disposable?",
+   "style": {
+    "background": "#e6e6e6",
+    "foreground": "#4d4d4d",
+    "contrast": 6.77,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    493,
+    495,
+    787,
+    514
+   ],
+   "centre": [
+    640.0,
+    504.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 11,
+   "key": "text:(2) Press the [] on your rem",
+   "kind": "text",
+   "group": 9,
+   "x0": 239,
+   "y0": 522,
+   "x1": 478,
+   "y1": 546,
+   "score": 0.97853094,
+   "text": "(2) Press the [] on your rem",
+   "style": {
+    "background": "#26232a",
+    "foreground": "#fafafa",
+    "contrast": 14.83,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    239,
+    522,
+    478,
+    546
+   ],
+   "centre": [
+    358.5,
+    534.0
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 12,
+   "key": "text:UNINSTALL",
+   "kind": "text",
+   "group": 10,
+   "x0": 535,
+   "y0": 544,
+   "x1": 619,
+   "y1": 561,
+   "score": 0.99942344,
+   "text": "UNINSTALL",
+   "style": {
+    "background": "#cf0652",
+    "foreground": "#fefcfd",
+    "contrast": 5.41,
+    "disabled": false,
+    "highlighted": true,
+    "focused": false
+   },
+   "box": [
+    535,
+    544,
+    619,
+    561
+   ],
+   "centre": [
+    577.0,
+    552.5
+   ],
+   "value": null,
+   "unit": ""
+  },
+  {
+   "id": 13,
+   "key": "text:CANCEL",
+   "kind": "text",
+   "group": 11,
+   "x0": 674,
+   "y0": 544,
+   "x1": 732,
+   "y1": 561,
+   "score": 0.999593,
+   "text": "CANCEL",
+   "style": {
+    "background": "#686868",
+    "foreground": "#fcfcfc",
+    "contrast": 5.43,
+    "disabled": false,
+    "highlighted": false,
+    "focused": false
+   },
+   "box": [
+    674,
+    544,
+    732,
+    561
+   ],
+   "centre": [
+    703.0,
+    552.5
+   ],
+   "value": null,
+   "unit": ""
+  }
+ ],
+ "source_width": 1920,
+ "source_height": 1080,
+ "scale": 0.666667,
+ "offset_x": 0,
+ "offset_y": 0
+}

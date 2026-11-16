@@ -150,7 +150,9 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     msg = messages[0]
     if horizontal:
         # 5.x puts the prompt immediately above a highlighted horizontal pair.
-        if (not 0 <= top - msg['box'][3] <= bottom - top
+        # A button the OCR read as plain text has only its label's box (17 px high on 4.5 against 40 for a
+        # drawn button), so the allowed gap is never less than a drawn button's height.
+        if (not 0 <= top - msg['box'][3] <= max(bottom - top, 40)
                 or msg.get('group') is None
                 or any(b.get('kind') == 'button' and b.get('group') != msg['group'] for b in buttons)):  # a button read as text has its own group
             raise ValueError('message is outside the alert group')
