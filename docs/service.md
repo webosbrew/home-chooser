@@ -464,8 +464,8 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 | `homekeyApply` | same with `apply` (native, checksum-verified volatile reload) | 90 s |
 | `homekeyStop` | same with `stop` (restore exact stock list volatile before deleting unused copies) | 90 s |
 | `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
-| `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
-| `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
+| `stopWatcher` | `/bin/sh <service>/scripts/homechooser stop`: `systemctl stop homechooser-home`, or on 4.x (no systemd) the watcher loop's process group from `/tmp/homechooser-runtime/watcher.pid` (a non-zero exit is not an error) | 20 s |
+| `watcherActive` | same with `active`: prints `active` or `inactive` (`systemctl is-active homechooser-home`, or the pid file on 4.x; a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps","idleApp"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
 | `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
 | `accessApply` | `/bin/sh <service>/scripts/homechooser-access apply` | 30 s |

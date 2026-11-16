@@ -17,7 +17,7 @@ Home Chooser is in English only.
   the rest of the screen stays clear and shows what is underneath.
 
 * **The list.** Title "Home Chooser", subtitle "Choose which app opens when you press Home". The first row is "LG Home
-  (Fullscreen)" (`com.webos.app.home`); where `com.webos.app.fullhome` is installed too (webOS 4.5 and 5.x, the only
+  (Fullscreen)" (`com.webos.app.home`); on webOS 4.0, which has no Home app (LG Home is the compositor's ribbon), the one stock row is "LG Home (Ribbon)" and choosing it only removes our key filter entry; where `com.webos.app.fullhome` is installed too (webOS 4.5 and 5.x, the only
   releases that ship it) that row is "LG Home (Ribbon)" and a second row, "LG Home (Fullscreen)", stands for
   `com.webos.app.fullhome`. See [Which stock Home](#which-stock-home). The installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
   A check mark sits on the current home and the focus starts on it. Every row has the same height,
@@ -38,7 +38,7 @@ Home Chooser is in English only.
   prompt or “Restart now” row. Unknown firmware shapes are refused. The old pending-result marker
   is only read/cleared for compatibility. See [Live Home key filter](home-key-hook.md).
 
-* **Footer.** On webOS 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
+* **Footer.** On webOS 4.0 and 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later),
   or the service not coming up as root. One line per case: "Homebrew Channel isn't installed or isn't running.",
   "Homebrew Channel doesn't give Home Chooser root access on this TV.", "Home Chooser's service isn't running as root.",
@@ -395,6 +395,17 @@ Each stock row is a separate choice that writes its own id, and the check mark i
 
 Every path that puts a stock Home back on 4.5 to 9.x picks the same one: the stock home the record already names; else the one the owner used last; else `com.webos.app.fullhome` if installed; else `com.webos.app.home`. "Used last" is `/var/lib/webosbrew/homechooser/stock` (the id alone): the app writes the stock id that is in the record when it switches to a launcher, and removes the file when a stock Home is chosen (the record names the variant then, and nothing would remove the file when Home Chooser is uninstalled). A remembered id that is not installed is skipped. The paths are the app's own restore (`restoreStock`), a chosen launcher being uninstalled, Home Chooser being uninstalled (the watcher removes the file with the rest of its state), and the watcher's repair of a leftover name. 10.x and later have only `com.webos.app.home` and write `home` as `null`; 6.x to 9.x with only `com.webos.app.home` installed are unchanged.
 
+### webOS 4.0
+
+Home is redirected by a key filter entry alone ([home-key-hook.md](home-key-hook.md#webos-40-a-filter-entry-of-our-own)); there is no
+settings record and no Home app, so the app writes **none** of the record, the `stock` note or the profile. The
+stored choice (`/var/lib/webosbrew/homechooser/home`) stands for the record: the check mark follows it, the previous
+launcher is closed from it, and the watcher enforces it. Choosing a launcher stores it, links the boot entry, starts the watcher
+and runs `homechooser-homekey refresh`, then the Home key hook install (flag, `apply`); it never creates a `defaultApps` record.
+Choosing "LG Home (Ribbon)" drops the choice, stops the watcher, and `refresh` restores the exact saved stock list (read back); the
+boot entry is removed when nothing else needs it. The footer lines are the 6-9 ones. The app takes a release below 4.10 as a 4.0
+and the service decides from the stock files (4.5 is 4.10.x and keeps the record).
+
 ### The chosen app is uninstalled
 
 The platform goes back to stock, the choice file stays (it is the user's choice), the watcher logs
@@ -406,6 +417,7 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 | 5.x | `home` = the stock Home the record already names, else the one remembered in the `stock` file, else `com.webos.app.fullhome` if installed, else `com.webos.app.home` ([Which stock Home](#which-stock-home)); written only if `home` is not that already | stock launcher |
 | 6.x to 9.x | Set a stock launcher in the record, keeping other entries, then `homechooser-homekey refresh stock` restores the exact stock keyFilters array with `volatile:true` and the home gate is unmounted | LG Home opens immediately; verified readback precedes deletion of unused generated JS |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
+| 4.0 | no record: `homechooser-homekey refresh stock` restores the exact stock keyFilters array (volatile, read back) | LG's ribbon |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from

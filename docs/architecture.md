@@ -76,7 +76,7 @@ flowchart LR
   on 5 and 10+ to a persistent copy under `/var/lib/webosbrew/homechooser/boot`, so an uninstall
   made while the watcher was stopped is still undone at the next boot. It only queues
   `systemd-run --unit=homechooser-home … homechooser-daemon --boot` and returns; all waiting
-  happens inside the unit.
+  happens inside the unit. (webOS 4.x runs upstart and has no systemd: the same daemon runs as a detached loop with a pid file, [home-key-hook.md](home-key-hook.md#webos-40-a-filter-entry-of-our-own).)
 * On **webOS 6–9** the daemon also selects a generated copy of the stock key filter through configd
   (volatile, so a reboot returns the firmware's own list) and bind-mounts the home gate over
   `/usr/bin/com.webos.app.home`. The bind source is a copy in `/tmp/homechooser-runtime/home-gate`,
