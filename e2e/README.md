@@ -948,7 +948,7 @@ an ipk is missing or the sources changed since: `build/fixtures/.inputs-stamp` h
 
   The formats are firmware-derived and verified on Beanjar VMs for supported fixtures: see
   `e2e/fixtures/README.md` "What the runner proves". A missing proof is a `FAIL` for every type; on a release where
-  `fixtures/qml/support.json` says `false` (12.x: no qml-runner or Qt in the firmware) the qml fixture is skipped with an `XFAIL`.
+  `fixtures/qml/support.json` says `false` (12.x: no qml-runner or Qt in the firmware; 4.x: SAM does not register a third-party type:qml app) the qml fixture is skipped with an `XFAIL`.
 * With `--launchers all-fixtures` a failure in a later launcher is recorded and the next one runs on the same boot; a
   failure of the first launcher ends the run (the later ones need its setup), and the cleanup still runs.
 
