@@ -676,4 +676,71 @@ describe('Home Chooser screen', () => {
 			expect(screen.queryByRole('status')).toBeNull();
 		});
 	});
+
+	describe('coming back to the front', () => {
+		const withNew = (env) => {
+			const added = {id: 'org.new.launcher', title: 'New Launcher'};
+			env.chooser.listCandidates.mockImplementation(async () => ok({candidates: [
+				{id: 'com.webos.app.home', title: 'Home', icon: null, stock: true},
+				{id: 'org.fancy.launcher', title: 'Fancy Launcher'}, added
+			]}));
+		};
+
+		test('a webOSRelaunch reads the list again', async () => {
+			const env = makeEnv();
+			mountApp(env);
+			await screen.findByText('Fancy Launcher');
+			expect(screen.queryByText('New Launcher')).toBeNull();
+			withNew(env);
+			await act(async () => { document.dispatchEvent(new CustomEvent('webOSRelaunch', {detail: {}})); });
+			await screen.findByText('New Launcher');
+			expect(screen.queryByText('Plain Launcher')).toBeNull();
+		});
+
+		test('the page turning visible reads the list again', async () => {
+			const env = makeEnv();
+			mountApp(env);
+			await screen.findByText('Fancy Launcher');
+			withNew(env);
+			await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+			await screen.findByText('New Launcher');
+		});
+
+		test('an event while a choice is in progress reads nothing', async () => {
+			let release;
+			const apply = jest.fn(() => new Promise((resolve) => { release = () => resolve(ok()); }));
+			const env = makeEnv({apply});
+			mountApp(env);
+			fireEvent.click(await screen.findByText('Fancy Launcher'));
+			fireEvent.click(await screen.findByText('Use as Home'));
+			await waitFor(() => expect(apply).toHaveBeenCalled());
+			const reads = env.chooser.listCandidates.mock.calls.length;
+			await act(async () => { document.dispatchEvent(new CustomEvent('webOSRelaunch', {detail: {}})); });
+			expect(env.chooser.listCandidates.mock.calls.length).toBe(reads);
+			await act(async () => { release(); });
+		});
+
+		test('a read that fails keeps the list on screen and shows no error', async () => {
+			const env = makeEnv();
+			mountApp(env);
+			await screen.findByText('Fancy Launcher');
+			env.chooser.listCandidates.mockImplementation(async () => ({ok: false, candidates: [], errors: ['no']}));
+			await act(async () => { document.dispatchEvent(new CustomEvent('webOSRelaunch', {detail: {}})); });
+			await flush();
+			expect(screen.getByText('Fancy Launcher')).toBeTruthy();
+			expect(screen.getByText('Plain Launcher')).toBeTruthy();
+		});
+
+		test('an open confirmation stays open over a refresh', async () => {
+			const env = makeEnv();
+			mountApp(env);
+			fireEvent.click(await screen.findByText('Fancy Launcher'));
+			await screen.findByText('Use Fancy Launcher as Home?');
+			withNew(env);
+			await act(async () => { document.dispatchEvent(new CustomEvent('webOSRelaunch', {detail: {}})); });
+			await flush();
+			expect(screen.getByText('Use Fancy Launcher as Home?')).toBeTruthy();
+			expect(env.chooser.apply).not.toHaveBeenCalled();
+		});
+	});
 });

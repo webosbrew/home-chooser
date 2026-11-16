@@ -46,6 +46,7 @@ Home Chooser is in English only.
   root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs
   root; the public `listLaunchPoints` does not carry `appCategory`), so only the "LG Home (stock)"
   row is shown, with no check mark and no footer.
+* **Refresh.** The list and the current choice are read at start, after each operation, and again when the panel comes back to the front: `webOSRelaunch` (on `document` and `window`) or `visibilitychange` to visible. No `listApps` subscription: it would need a long-lived root call through the service for a case a return to the front already covers. Such a read is skipped while an operation runs, one runs at a time, and when it fails the screen keeps what it shows. A relaunch without a `request` does not close an open confirmation; one with a request replaces it.
 * **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
 * **Icons.** Another app's icon file is not readable by a developer web app, so each launcher's icon

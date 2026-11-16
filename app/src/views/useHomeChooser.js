@@ -73,13 +73,16 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		return () => { mounted.current = false; };
 	}, []);
 
-	const readInto = async (e) => {
+	const readInto = async (e, quiet) => {
 		const [list, st, per, patchRes] = await Promise.all([
 			e.chooser.listCandidates(), e.chooser.readState(), e.chooser.readPersistence(),
 			e.homeKeyHook ? e.homeKeyHook.status() : null
 		]);
 		[['candidates', list], ['state', st], ['persistence', per], ['patch', patchRes]].forEach(([l, r]) => r && logResult(l, r));
 		if (!mounted.current) return;
+		// A refresh in the background (the panel came back to the front) changes nothing when the read
+		// did not work: the screen keeps what it shows.
+		if (quiet && (!list.ok || !st.ok)) return null;
 		setReadFailed(false);
 		setLoadFailed(!list.ok || !st.ok);
 		setCandidates(list.candidates);
@@ -106,6 +109,43 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			return null;
 		}
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// The panel comes back to the front (webOSRelaunch, or the page turns visible): read again, so an
+	// app installed or removed meanwhile shows. Never while an operation runs (it reads again when it
+	// ends), one read at a time, and a failed read leaves the screen as it is.
+	const busyRef = useRef(false);
+	busyRef.current = busy;
+	useEffect(() => {
+		if (!env) return undefined;
+		let reading = false;
+		let again = false;
+		const refresh = async () => {
+			if (busyRef.current) return;
+			if (reading) { again = true; return; }
+			reading = true;
+			try {
+				do {
+					again = false;
+					try {
+						await readInto(env, true);
+					} catch (err) {
+						// eslint-disable-next-line no-console
+						console.log(`${LOG_PREFIX} refresh on return: ${errorMessage(err)}`);
+					}
+				} while (again && mounted.current && !busyRef.current);
+			} finally {
+				reading = false;
+			}
+		};
+		const onVisible = () => { if (document.visibilityState !== 'hidden') refresh(); };
+		const targets = [document, window];
+		targets.forEach((t) => t.addEventListener('webOSRelaunch', refresh));
+		document.addEventListener('visibilitychange', onVisible);
+		return () => {
+			targets.forEach((t) => t.removeEventListener('webOSRelaunch', refresh));
+			document.removeEventListener('visibilitychange', onVisible);
+		};
+	}, [env]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	useEffect(() => {
 		let cancelled = false;

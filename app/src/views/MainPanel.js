@@ -75,7 +75,8 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 	const handled = useRef(null);
 	useEffect(() => () => { handled.current = null; }, []);
 	useEffect(() => {
-		if (!launchParams || phase !== 'ready' || rootError || busy || handled.current === launchParams) return;
+		// A relaunch that carries no request (the panel opened again) leaves an open dialog alone.
+		if (!launchParams || !Object.keys(launchParams).length || phase !== 'ready' || rootError || busy || handled.current === launchParams) return;
 		handled.current = launchParams;
 		setPending(null);
 		if (launchParams.confirmUninstall) {
