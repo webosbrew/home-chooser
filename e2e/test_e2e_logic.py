@@ -795,6 +795,20 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
             self.assertEqual(contract, ok, (overlay, reply_id))
             self.assertEqual(s.life_begin.called, overlay)
 
+    def test_uninstall_alert_through_our_service_on_4x(self):
+        msg, tok = 'Uninstall HC Fixture disposable?', '0123456789abcdef0123456789abcdef'
+        uri = hc_e2e.constants.SERVICE_CONFIRM_URI
+        info = dict(message=msg, buttons=['Uninstall', 'Cancel'], alert='accepted', alert_id='owned', actions=[
+            dict(label='Uninstall', onclick=uri, params={'token': tok}), dict(label='Cancel', focus=True)])
+        proof = lambda i: hc_e2e.alerts.alert_service_proof('', msg, 'Uninstall', 'Cancel', hc_e2e.api_spec.DISPOSABLE_ID, observed=i)
+        self.assertTrue(proof(info))
+        for params in ({'token': 'x'}, {'token': tok, 'id': 'a.b'}, {}):
+            bad = dict(info, actions=[dict(label='Uninstall', onclick=uri, params=params), dict(label='Cancel', focus=True)])
+            self.assertFalse(proof(bad), params)
+        line = ('x UNINSTALL_ASK {} %s by org.l: alert shown for %s (exit 0): {"returnValue":true,"alertId":"a-1"}'
+                % (hc_e2e.api_spec.DISPOSABLE_ID, uri))
+        self.assertTrue(hc_e2e.alerts.alert_service_proof(line, msg, 'Uninstall', 'Cancel', hc_e2e.api_spec.DISPOSABLE_ID, caller='org.l'))
+
     def test_ls2_owned_request_and_rejections(self):
         import copy
         for target, safe, message, app, uri, params in [

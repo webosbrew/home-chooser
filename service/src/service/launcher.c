@@ -574,7 +574,7 @@ static void uninstall_ask(LOp *op)
 	int code = luna_run("luna://com.webos.notification/createAlert", jvalue_stringify(a), 1, 8, never_stop, out);
 	bool alert = code == 0 && hc_remove_reply_class(out->str) == 1;
 	LOGI("UNINSTALL_ASK", "%s by %s: alert %s for %s (exit %d): %s", op->target, op->caller,
-		alert ? "shown" : "refused", via_us ? "uninstallConfirmed" : remove.uri, code, out->str);
+		alert ? "shown" : "refused", via_us ? "luna://" HC_SERVICE_ID "/uninstallConfirmed" : remove.uri, code, out->str);
 	g_string_free(out, TRUE);
 	j_release(&a);
 	g_free(question);

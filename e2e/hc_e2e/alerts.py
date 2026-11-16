@@ -8,7 +8,7 @@ import subprocess
 import threading
 
 from . import timing
-from .constants import APP_ID, TVPOWER_REBOOT_URI
+from .constants import APP_ID, SERVICE_CONFIRM_URI, TVPOWER_REBOOT_URI
 from .releases import parse_reboot_ask
 
 
@@ -25,9 +25,13 @@ def alert_ls2_proof(info, message, target, safe, uninstall_id=None):
         good = (yes.get('onclick') == TVPOWER_REBOOT_URI
                 and yes.get('params') == {'reason': 'remoteKey'})
     else:
-        good = (yes.get('onclick') in ('luna://com.webos.appInstallService/remove',
-                                       'luna://com.webos.appInstallService/dev/remove')
-                and yes.get('params') == {'id': uninstall_id, 'subscribe': True})
+        params = yes.get('params')
+        good = ((yes.get('onclick') in ('luna://com.webos.appInstallService/remove',
+                                        'luna://com.webos.appInstallService/dev/remove')
+                 and params == {'id': uninstall_id, 'subscribe': True})
+                # webOS 4.x: Surface Manager holds no group there, so the button calls our own service with a one-shot token
+                or (yes.get('onclick') == SERVICE_CONFIRM_URI and isinstance(params, dict) and list(params) == ['token']
+                    and re.fullmatch(r'[0-9a-f]{32}', str(params['token'])) is not None))
     return bool(good and yes.get('label') == target and no.get('label') == safe
                 and not no.get('onclick') and not no.get('params') and no.get('focus') is True)
 
@@ -43,12 +47,12 @@ def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=No
                 and any('REBOOT_ASK' in line and 'notification/createAlert accepted (exit 0):' in line
                         and re.search(r'"returnValue"\s*:\s*true', line)
                         and info['alert_id'] in line for line in raw.splitlines()))
-    prefix = '%s by %s: alert shown for luna://com.webos.appInstallService/' % (uninstall_id, caller)
+    prefix = '%s by %s: alert shown for ' % (uninstall_id, caller)
     for line in raw.splitlines():
         if not re.search(r'UNINSTALL_ASK\s+\{\}\s+' + re.escape(prefix), line):
             continue
         reply = line.split(prefix, 1)[1]
-        if not re.match(r'(dev/)?remove \(exit 0\): ', reply):
+        if not re.match(r'(luna://com\.webos\.appInstallService/(dev/)?remove|' + re.escape(SERVICE_CONFIRM_URI) + r') \(exit 0\): ', reply):
             continue
         try:
             data = json.loads(reply.split(': ', 1)[1])

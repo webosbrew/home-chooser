@@ -190,8 +190,9 @@ through LG's `application.query` and `application.launcher` groups in the access
 
 `uninstallApp` checks the target and caller before showing an `Uninstall <title>?` alert. The
 Uninstall button calls LG's `appInstallService/dev/remove` for a developer install or
-`appInstallService/remove` for a store install, using the verified `folderPath`. A stale alert can
-still remove its target after the Home selection changes. Targets cannot be Home Chooser,
+`appInstallService/remove` for a store install, using the verified `folderPath`; on webOS 4.0 and 4.5
+it calls this service's `uninstallConfirmed` with a one-shot token instead (see below). A stale alert
+can still remove its target after the Home selection changes, except on 4.x, where the token recheck applies. Targets cannot be Home Chooser,
 Homebrew Channel, the requester, non-removable apps or apps outside developer/store app directories.
 If alerts are refused, the service launches Home Chooser's confirmation screen. Only that screen
 uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that the requester is
@@ -348,7 +349,7 @@ This is what the service does behind `uninstallApp` and its screen fallback.
 * **Screen token.** The fallback screen receives `{confirmUninstall:"<id>", token:"<token>"}`.
   The service stores at most four random, one-shot tokens, valid for 120 seconds. The screen
   obtains the title from `getAppInfo` and asks the same question as the alert. Alert buttons carry
-  no Home Chooser token.
+  no Home Chooser token, except on 4.x, where the button carries the token of `uninstallConfirmed`.
 * **Screen confirming.** `uninstallConfirmed {token}` rechecks that the requester is still the
   selected Home, then calls `applicationManager/removeLaunchPoint` with `<id>_default`. A platform
   refusal saying the app “is not removable” stops the operation (`notRemovable`). Other failures
@@ -372,6 +373,17 @@ its API permissions list `dev/remove` under `ares.webos.cli` and `remove` under
 reaches both methods as `com.webos.applicationManager`. A developer app's `getAppInfo.folderPath` is
 under `/media/developer/apps/usr/palm/applications/`, which is how the service picks the developer
 endpoint.
+
+On webOS 4.0 and 4.5 (W18R 05.50.70.01, W19P 05.40.97.01) the firmware has no
+`client-permissions.d/com.webos.surfacemanager.perm.json`, which 5.x (W20H 04.74.00.01) and later ship with
+`com.webos.surfacemanager*: [all]`. Surface Manager makes the alert button's call, and there it holds no group:
+appinstalld refuses `/dev/remove` (listed only under `ares.webos.cli` in
+`api-permissions.d/com.webos.appinstalld.api.json`) with `LS_REQUIRES_SECURITY` (`Service security groups
+don't allow method call`, `Denied method call "remove" for category "/dev"`), the alert closes and nothing is removed.
+So on a release below 5 (`/etc/starfish-release`) the service makes the screen-fallback token before the alert and
+the Uninstall button calls `luna://org.webosbrew.homechooser.service/uninstallConfirmed {token}`; the service then
+removes the app as root, exactly as for the screen confirmation. `rebootPrompt`'s button calls `tvpower/power/reboot`
+directly; it is never shown on 4.x (the Home key needs no reboot there), so that button is unchanged and unverified on 4.x.
 
 ## Launcher lists, icons and subscriptions
 
