@@ -81,6 +81,11 @@ case "$action" in apply|remove|status) ;; *) echo "usage: $0 apply|remove|status
 for root in $ROOTS; do
     manifest=$root/manifests.d/org.webosbrew.homechooser.json
     api=$root/api-permissions.d/org.webosbrew.homechooser.launcher.api.json
+    # webOS 4.0 and 4.5 only: the Uninstall alert's button is called by Surface Manager, whose only group there is
+    # `private` (client-permissions.d/compat.perm.json). One method is granted to that group, in a manifest of its own:
+    # the hub skips a manifest it has already loaded, so the installer's one cannot take a new file.
+    confirm_api=$root/api-permissions.d/org.webosbrew.homechooser.confirm.api.json
+    confirm_manifest=$root/manifests.d/org.webosbrew.homechooser.confirm.json
     if [ "$action" = status ]; then
         printf '%s manifest=%s api=%s\n' "$root" \
             "$(test -f "$manifest" && echo yes || echo no)" \
@@ -102,13 +107,24 @@ for root in $ROOTS; do
             # A service registered before the change keeps its old groups: tell the caller to restart it.
             [ "$major" -lt 11 ] || [ "$(cat "$api")" = "$before" ] || restart=1
             add_entry apiPermissionFiles "$api"
+            if [ "$major" -ge 1 ] && [ "$major" -lt 5 ]; then
+                before=$(cat "$confirm_api" 2>/dev/null || :)
+                write_changed "$confirm_api" "{\"private\":[\"$SERVICE_ID/uninstallConfirmed\"]}"
+                write_changed "$confirm_manifest" "{\"id\":\"org.webosbrew.homechooser.confirm\",\"version\":\"1.0.0\",\"apiPermissionFiles\":[\"$confirm_api\"]}"
+                # The running service took its groups when it registered: it must register again.
+                [ "$(cat "$confirm_api")" = "$before" ] || restart=1
+            else
+                for f in "$confirm_api" "$confirm_manifest"; do [ ! -f "$f" ] || { rm -f "$f"; changed=1; }; done
+            fi
         else
             drop_entry apiPermissionFiles "$api"
         fi
         # Compare compact JSON to avoid rewriting an unchanged pretty-printed manifest.
         if [ "$(compact "$manifest")" != "$json" ]; then write_changed "$manifest" "$json"; fi
     fi
-    if [ "$action" = remove ] && [ -f "$api" ]; then rm -f "$api"; changed=1; fi
+    if [ "$action" = remove ]; then
+        for f in "$api" "$confirm_api" "$confirm_manifest"; do [ ! -f "$f" ] || { rm -f "$f"; changed=1; }; done
+    fi
 done
 if [ "$changed" = 1 ]; then "$CONTROL" scan-services; fi
 # A change the settings app was told about but never acted on (it was closed before it restarted the

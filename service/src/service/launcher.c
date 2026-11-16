@@ -671,7 +671,8 @@ bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx)
 {
 	(void)sh; (void)ctx;
 	const char *app = LSMessageGetApplicationID(msg);
-	if (app && app[0] && !hc_sender_ok(app)) {
+	/* The alert button's call (webOS 4.x) comes from Surface Manager acting for the identity that raised the alert. */
+	if (app && app[0] && !hc_sender_ok(app) && strcmp(app, HC_LUNA_IDENTITY) != 0) {
 		LOGE("REFUSED", "uninstallConfirmed from application id '%s'", app);
 		send_error(msg, "forbidden", "Only the confirmation may call this method");
 		return true;

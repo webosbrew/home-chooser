@@ -291,7 +291,8 @@ groups that 11.x and 12.x give every developer app: the reading methods under `a
 list is the one variable `LAUNCHER_METHODS` at the top of the script, each entry `method:group`
 (`query` or `launcher`), which every grant is built from; `test-homechooser-access.sh` checks it
 against the spec's `x-permission` (`grants` plus `getInfo`). None includes `uninstallConfirmed` or
-`rebootPrompt`.
+`rebootPrompt`; on 4.x `uninstallConfirmed` alone is also granted to the `private` group, in its own manifest
+([Launcher API: confirmation and removal](#launcher-api-confirmation-and-removal)).
 
 On 11+ the service takes its provided groups when it registers: on 11.2.0 a changed file followed by
 `ls-control scan-services` alone did not let a launcher in while the same service instance ran, and a
@@ -376,14 +377,24 @@ endpoint.
 
 On webOS 4.0 and 4.5 (W18R 05.50.70.01, W19P 05.40.97.01) the firmware has no
 `client-permissions.d/com.webos.surfacemanager.perm.json`, which 5.x (W20H 04.74.00.01) and later ship with
-`com.webos.surfacemanager*: [all]`. Surface Manager makes the alert button's call, and there it holds no group:
-appinstalld refuses `/dev/remove` (listed only under `ares.webos.cli` in
-`api-permissions.d/com.webos.appinstalld.api.json`) with `LS_REQUIRES_SECURITY` (`Service security groups
-don't allow method call`, `Denied method call "remove" for category "/dev"`), the alert closes and nothing is removed.
-So on a release below 5 (`/etc/starfish-release`) the service makes the screen-fallback token before the alert and
-the Uninstall button calls `luna://org.webosbrew.homechooser.service/uninstallConfirmed {token}`; the service then
-removes the app as root, exactly as for the screen confirmation. `rebootPrompt`'s button calls `tvpower/power/reboot`
-directly; it is never shown on 4.x (the Home key needs no reboot there), so that button is unchanged and unverified on 4.x.
+`com.webos.surfacemanager*: [all]`. There Surface Manager, which makes the alert button's call (the log line is
+`surface-manager LSM callForSource, AlertCallback com.webos.applicationManager luna://... /dev/ remove`), holds only
+`private` (`client-permissions.d/compat.perm.json`: `"com.webos.surfacemanager": ["private"]`). appinstalld lists
+`/dev/remove` only under `ares.webos.cli` and `remove` under `appinstalld.internal`
+(`api-permissions.d/com.webos.appinstalld.api.json`), so the call is refused with `LS_REQUIRES_SECURITY`
+(`Service security groups don't allow method call`, `Denied method call "remove" for category "/dev"`), the alert
+closes and nothing is removed. So on a release below 5 (`/etc/starfish-release`) the service makes the
+screen-fallback token before the alert and the Uninstall button calls
+`luna://org.webosbrew.homechooser.service/uninstallConfirmed {token}`; the service then removes the app as root,
+exactly as for the screen confirmation. The call carries the application id `com.webos.applicationManager` (the
+identity that raised the alert), which `uninstallConfirmed` accepts besides Home Chooser's own and none; the token
+is the capability. For the hub to admit it, `homechooser-access apply` writes, on 4.x only,
+`api-permissions.d/org.webosbrew.homechooser.confirm.api.json` (`{"private": ["<service>/uninstallConfirmed"]}`: that one
+method, no other, in the group Surface Manager holds) and a manifest of its own, `manifests.d/org.webosbrew.homechooser.confirm.json`
+(the hub skips a manifest it has already loaded, so the installer's cannot take a new file; a manifest needs a version).
+The service takes its groups when it registers, so the apply asks for a service restart (`restart-service`) when the file
+changed; `remove` and any release from 5 on delete both files. `rebootPrompt`'s button calls `tvpower/power/reboot` directly; it is never shown
+on 4.x (the Home key needs no reboot there), so that button is unchanged and unverified on 4.x.
 
 ## Launcher lists, icons and subscriptions
 

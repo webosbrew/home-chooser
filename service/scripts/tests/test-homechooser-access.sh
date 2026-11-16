@@ -144,5 +144,37 @@ run remove
 mv "$T/dev-manifest" "$T/dev/manifests.d/org.webosbrew.homechooser.json"
 run remove
 verify removed
+# webOS 4.0 and 4.5: one method for Surface Manager's group (private), in a manifest of its own; later releases never have it.
+echo 'Rockhopper release 4.10.2-29 (goldilocks2-grampians)' > "$T/starfish-release"
+before=$(wc -l < "$T/scans")
+run apply > "$T/out"
+grep -qx restart-service "$T/out"
+[ "$(wc -l < "$T/scans")" -eq $((before + 1)) ]
+python3 - "$T" <<'PY3'
+import json, pathlib, sys
+for name in ('dev', 'system'):
+    r = pathlib.Path(sys.argv[1]) / name
+    api = r / 'api-permissions.d/org.webosbrew.homechooser.confirm.api.json'
+    assert json.loads(api.read_text()) == {'private': ['org.webosbrew.homechooser.service/uninstallConfirmed']}
+    m = json.loads((r / 'manifests.d/org.webosbrew.homechooser.confirm.json').read_text())
+    assert m == {'id': 'org.webosbrew.homechooser.confirm', 'version': '1.0.0', 'apiPermissionFiles': [str(api)]}, m
+    assert 'confirm' not in (r / 'manifests.d/org.webosbrew.homechooser.json').read_text()
+PY3
+run apply > "$T/out"
+if grep -q restart-service "$T/out"; then exit 1; fi
+[ "$(wc -l < "$T/scans")" -eq $((before + 1)) ]
+echo 'Rockhopper release 10.3.1-1 (ponytail-ponytail)' > "$T/starfish-release"
+run apply
+for f in api-permissions.d/org.webosbrew.homechooser.confirm.api.json manifests.d/org.webosbrew.homechooser.confirm.json; do
+    [ ! -f "$T/dev/$f" ] && [ ! -f "$T/system/$f" ]
+done
+echo 'Rockhopper release 4.4.3-22 (goldilocks-gorongosa)' > "$T/starfish-release"
+run apply > /dev/null
+[ -f "$T/system/manifests.d/org.webosbrew.homechooser.confirm.json" ]
+run remove
+for f in api-permissions.d/org.webosbrew.homechooser.confirm.api.json manifests.d/org.webosbrew.homechooser.confirm.json; do
+    [ ! -f "$T/dev/$f" ] && [ ! -f "$T/system/$f" ]
+done
+verify removed
 if run bogus > /dev/null 2>&1; then exit 1; fi
 echo "access: all checks passed ($SH)"
