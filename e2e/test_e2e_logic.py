@@ -401,6 +401,15 @@ class AlertFocus(unittest.TestCase):
         self.assertEqual(hc_e2e.alerts.alert_focus(self.frame('uninstall-alert'),
                          'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
 
+    def test_capital_button_labels_of_4_5(self):
+        import copy
+        frame = copy.deepcopy(self.frame('uninstall-alert'))
+        for r in frame['elements']:
+            if r.get('kind') == 'button' and r.get('text') in ('Uninstall', 'Cancel'):
+                r['text'] = r['text'].upper()
+        self.assertEqual(hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+                         ('Cancel', 'UP'))
+
     def test_bad_ownership_or_focus_fails_closed(self):
         import copy
         base = self.frame()

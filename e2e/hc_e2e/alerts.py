@@ -101,7 +101,11 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # the matching service request/reply; the app title behind the alert is not proof.
     if texts.count(message) != 1:
         raise ValueError('expected message not uniquely visible')
-    buttons = [r for r in rows if r.get('kind') == 'button' and r.get('text') in (target, safe)]
+    # webOS 4.5 draws the alert buttons in capitals ("UNINSTALL", "CANCEL", w19p-goldilocks2 run 2026-11-16):
+    # match the label ignoring case and hand back the label as the service sent it.
+    canon = {str(target).casefold(): target, str(safe).casefold(): safe}
+    buttons = [dict(r, text=canon[r['text'].casefold()]) for r in rows
+               if r.get('kind') == 'button' and isinstance(r.get('text'), str) and r['text'].casefold() in canon]
     if len(buttons) != 2 or sorted(r.get('text', '') for r in buttons) != sorted((target, safe)):
         raise ValueError('expected exactly the two alert buttons')
     for b in buttons:
