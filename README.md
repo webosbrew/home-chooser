@@ -27,10 +27,10 @@ other homebrew app, for example with webOS Dev Manager or `ares-install`.
 ## Choosing a launcher
 
 1. Install the launcher you want to use.
-2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (stock)" and every
+2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (Fullscreen)" and every
    launcher on the TV; a check mark shows the current one.
 
-   ![Home Chooser panel listing LG Home (stock) and a test launcher](docs/images/panel.webp)
+   ![Home Chooser panel listing LG Home and a test launcher](docs/images/panel.webp)
 
 3. Move to your launcher and press OK, then confirm "Use *name* as Home?".
 
@@ -48,7 +48,7 @@ input.
 
 ## Going back to LG Home
 
-Open Home Chooser, choose "LG Home (stock)" and confirm. The Home button opens LG Home again
+Open Home Chooser, choose "LG Home (Fullscreen)" (on webOS 4.5 and 5, "LG Home (Ribbon)" or "LG Home (Fullscreen)", as you had it) and confirm. The Home button opens LG Home again
 straight away.
 
 ## Uninstalling

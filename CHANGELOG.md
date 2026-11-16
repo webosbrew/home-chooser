@@ -5,6 +5,11 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- On webOS 4.5 and 5.x, where LG ships two stock homes, the list has "LG Home (Ribbon)" (`com.webos.app.home`, the Basic Home) and "LG Home (Fullscreen)" (`com.webos.app.fullhome`, the New Home); each is its own choice and the check mark follows the record's exact id. Before, one "LG Home (stock)" row stood for the ribbon only while restores wrote the full-screen home, so after a restore it was unchecked and a second row called "Home" was checked. On webOS 6 and later the one stock row is "LG Home (Fullscreen)". The dialog and toasts name the variant.
+- Putting LG Home back (restore, a removed launcher, Home Chooser's uninstall) restores the stock home you used last on 4.5 and 5.x instead of always the full-screen one.
+
 ### Fixed
 
 - A launcher installed (or removed) while Home Chooser's panel was open did not show in the list, even after Home Chooser was opened again. The list is now read again when the panel comes back to the front (opened again, or the page turns visible). An open confirmation, the focus and a choice in progress are left alone.

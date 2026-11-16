@@ -895,7 +895,7 @@ the owner sees, and how the permission reaches you.
 
 The stock Home key handler launches the `home` entry of the `general/defaultApps` settings record
 directly, so Home Chooser only writes that record. No patch, no restart. The stock launcher is
-`com.webos.app.fullhome` (an overlay window), and LG Home is not running, so Home Chooser does not
+`com.webos.app.fullhome` or `com.webos.app.home` (the New Home or the Basic Home, whichever the owner chose), and the other is not running, so Home Chooser does not
 touch the stock home's memory here. Calls reach the service in the same way as on 6.x to 10.x
 (below).
 
@@ -1071,8 +1071,8 @@ a full partition makes an installation fail for an unrelated-looking reason.
   that launches, lists and closes apps. Its log lines carry `sam`.
 * **Compositor**: the webOS window manager (surface manager). It draws the windows and dispatches
   keys, the Home key among them.
-* **Stock home**: LG's own home app, LG Home (`com.webos.app.home`; on webOS 5 the visible one is
-  `com.webos.app.fullhome`).
+* **Stock home**: LG's own home app, LG Home (`com.webos.app.home`; on webOS 4.5 and 5 there is also
+  `com.webos.app.fullhome`, and the owner chooses between the two).
 * **Preload**: webOS starting an app in the background at boot so it opens fast. LG Home is
   preloaded; on webOS 6 and later Home Chooser turns that off while another launcher is chosen.
 * **Watcher**: Home Chooser's background program. It re-applies the choice at boot, puts LG Home
