@@ -110,8 +110,9 @@ static const hc_command COMMANDS[] = {
 	{"accessApply", {"/bin/sh", HC_ACCESS_SCRIPT, "apply", NULL}, 30, false, false},
 	{"accessRemove", {"/bin/sh", HC_ACCESS_SCRIPT, "remove", NULL}, 30, false, false},
 	{"accessStatus", {"/bin/sh", HC_ACCESS_SCRIPT, "status", NULL}, 10, true, false},
-	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
-	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
+	/* systemctl on systemd releases, a pid file where there is none (webOS 4.0 and 4.5: upstart): the entry script knows */
+	{"stopWatcher", {"/bin/sh", HC_ENTRY_SCRIPT, "stop", NULL}, 20, true, false},
+	{"watcherActive", {"/bin/sh", HC_ENTRY_SCRIPT, "active", NULL}, 10, true, false},
 	/* Exact profile calls use the same identity as every other privileged luna call. */
 	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\",\"idleApp\"]}", NULL}, 20, false, false},
 	{"profileRescan", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},

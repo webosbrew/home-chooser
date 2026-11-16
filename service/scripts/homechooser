@@ -9,6 +9,7 @@ SYSTEMCTL=${HOMECHOOSER_SYSTEMCTL:-systemctl}
 SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
+PIDFILE=${HOMECHOOSER_PIDFILE:-$RUNTIME/watcher.pid}
 major=$(sed -n 's/.*release \([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*.*/\1/p' "$RELEASE_FILE" 2>/dev/null | head -1)
 
 # 5/10+ retain a boot restore copy even if the unit was stopped at uninstall.
@@ -23,9 +24,27 @@ stage_boot() {
     cp "$BINARY" "$BOOT_DIR/homechooser-daemon.new" && chmod 755 "$BOOT_DIR/homechooser-daemon.new" &&
         mv "$BOOT_DIR/homechooser-daemon.new" "$BOOT_DIR/homechooser-daemon"
 }
+# webOS 4.0 and 4.5 run upstart, with no systemd: the watcher is then a detached shell loop in its own process
+# group (the unit's Restart=on-failure as a loop), found again through a pid file on tmpfs.
+have_systemd() { command -v "$SYSTEMD_RUN" > /dev/null 2>&1 && command -v "$SYSTEMCTL" > /dev/null 2>&1; }
+loop_pid() {
+    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$pid" 2>/dev/null && grep -q homechooser "/proc/$pid/cmdline" 2>/dev/null
+}
+watcher_active() {
+    if have_systemd; then "$SYSTEMCTL" is-active --quiet homechooser-home; else loop_pid; fi
+}
 case "$1" in
     stage) stage_boot; exit $? ;;
     unstage) rm -rf "$BOOT_DIR"; exit 0 ;;
+    stop)
+        if have_systemd; then exec "$SYSTEMCTL" stop homechooser-home; fi
+        loop_pid && kill -s TERM -- "-$pid" 2>/dev/null
+        rm -f "$PIDFILE"; exit 0 ;;
+    active)
+        if watcher_active; then echo active; exit 0; fi
+        echo inactive; exit 3 ;;
     ""|watch) ;;
     *) exit 2 ;;
 esac
@@ -42,7 +61,15 @@ else
     BINARY=$BOOT_DIR/homechooser-daemon
 fi
 [ -x "$BINARY" ] || [ -x "$RUNTIME/homechooser-daemon" ] || exit 0
-"$SYSTEMCTL" is-active --quiet homechooser-home && exit 0
+watcher_active && exit 0
+if ! have_systemd; then
+    mkdir -p "$RUNTIME" || exit 1
+    setsid /bin/sh -c 'for b in "$1" "$2"; do [ -x "$b" ] && break; b=; done; [ -n "$b" ] || exit 0
+        while :; do "$b" --boot && exit 0; sleep 5; done' homechooser-boot "$BINARY" "$RUNTIME/homechooser-daemon" \
+        < /dev/null > /dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    exit 0
+fi
 "$SYSTEMCTL" reset-failed homechooser-home 2>/dev/null
 exec "$SYSTEMD_RUN" --no-block --unit=homechooser-home --property=Restart=on-failure --property=RestartSec=5 \
     /bin/sh -c '[ -x "$1" ] && exec "$1" --boot; [ -x "$2" ] && exec "$2" --boot; exit 0' \

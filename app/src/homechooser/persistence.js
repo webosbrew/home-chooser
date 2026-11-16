@@ -36,7 +36,7 @@ export const ensureEntryCommand = () => 'linkEntry';
 
 export const removeEntryCommand = () => 'unlinkEntry';
 
-// Start the watcher unless it is running (the entry script runs systemctl is-active, else systemd-run).
+// Start the watcher unless it is running (the entry script asks systemctl is-active and starts a unit with systemd-run; on webOS 4.x, which has no systemd, a pid file and a detached loop).
 export const startWatcherCommand = () => 'watch';
 
 export const stopWatcherCommand = () => 'stopWatcher';

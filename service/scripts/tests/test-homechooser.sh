@@ -70,4 +70,30 @@ grep -qF -- '--homekey refresh stock' "$T/commands"
 : > "$T/commands"
 (unset HOMECHOOSER_BINARY; $SH "$HERE/homechooser" watch)
 grep -qF -- "homechooser-boot $T/service-scripts/../homechooser-daemon /tmp/homechooser-runtime/homechooser-daemon" "$T/commands"
-printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback (%s)\n' "$SH"
+# No systemd (webOS 4.x runs upstart): a detached loop in its own process group, a pid file, one instance.
+printf '#!/bin/sh\necho "$$ $*" >> "$HC_TEST_RAN"\nexec sleep 30\n' > "$T/watcher-daemon"
+chmod +x "$T/watcher-daemon"
+(
+    export HOMECHOOSER_SYSTEMD_RUN="$T/missing-systemd-run" HOMECHOOSER_SYSTEMCTL="$T/missing-systemctl"
+    export HOMECHOOSER_BINARY="$T/watcher-daemon" HOMECHOOSER_RUNTIME="$T/rt" HC_TEST_RAN="$T/ran" HOMECHOOSER_CHOICE="$T/home"
+    printf 'Rockhopper release 4.4.3-22 (goldilocks-gorongosa)\n' > "$T/starfish-release"
+    : > "$T/ran"
+    [ "$($SH "$HERE/homechooser" active)" = inactive ] || exit 1
+    $SH "$HERE/homechooser" watch
+    n=0; while [ ! -s "$T/ran" ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    grep -q -- '--boot' "$T/ran"
+    [ "$($SH "$HERE/homechooser" active)" = active ]
+    pid=$(cat "$T/rt/watcher.pid")
+    kill -0 "$pid"
+    $SH "$HERE/homechooser" watch # already running: no second loop
+    [ "$(cat "$T/rt/watcher.pid")" = "$pid" ]
+    [ "$(wc -l < "$T/ran")" = 1 ]
+    $SH "$HERE/homechooser" stop
+    n=0; while kill -0 "$pid" 2>/dev/null && [ $n -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then echo 'watcher loop still alive after stop'; exit 1; fi
+    [ "$($SH "$HERE/homechooser" active)" = inactive ]
+    [ ! -e "$T/rt/watcher.pid" ] || exit 1
+    [ -z "$(ps -o pid= -g "$pid")" ] || { echo 'process group left behind'; exit 1; }
+    $SH "$HERE/homechooser" stop # nothing to stop is fine
+) || { echo "FAIL watcher without systemd"; exit 1; }
+printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback, watcher loop without systemd (%s)\n' "$SH"

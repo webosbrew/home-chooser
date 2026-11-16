@@ -119,9 +119,9 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("homekeyApplySam"));
 	CHECK(hc_command_lookup("homekeyStatus") && hc_command_lookup("homekeyRefresh"));
 	c = hc_command_lookup("stopWatcher");
-	CHECK(c && c->tolerant && strcmp(c->argv[2], "homechooser-home") == 0);
+	CHECK(c && c->tolerant && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "stop") == 0 && !c->argv[3]);
 	c = hc_command_lookup("watcherActive");
-	CHECK(c && c->tolerant && strcmp(c->argv[1], "is-active") == 0);
+	CHECK(c && c->tolerant && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "active") == 0 && !c->argv[3]);
 	c = hc_command_lookup("profileGet");
 	CHECK(c && !c->tolerant && strcmp(c->argv[0], "/usr/bin/luna-send") == 0 && strcmp(c->argv[1], "-a") == 0 && strcmp(c->argv[2], HC_LUNA_IDENTITY) == 0 && strcmp(c->argv[3], "-n") == 0 && strcmp(c->argv[4], "1") == 0
 		&& strcmp(c->argv[5], "luna://com.webos.service.systemprofile/getProfiles") == 0
