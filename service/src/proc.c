@@ -6,6 +6,8 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
+#include <string.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 #include "proc.h"
@@ -20,7 +22,22 @@ void child_setup(void *context)
     action.sa_handler = SIG_DFL; sigemptyset(&action.sa_mask);
     for (unsigned i = 0; i < G_N_ELEMENTS(signals); i++) sigaction(signals[i], &action, NULL);
     /* Also cover a watcher killed alone, before systemd kills the unit cgroup. */
-    if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent) _exit(127);
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != parent) {
+        /* Exit 127 alone cannot tell this from a failed exec: say which on stderr (the err buffer of run_argv). */
+        static const char message[] = "child setup failed: prctl(PR_SET_PDEATHSIG) or the parent changed\n";
+        if (write(2, message, sizeof message - 1) < 0) _exit(127);
+        _exit(127);
+    }
+}
+
+/* The child's last words when execve fails: "exec PATH: reason" on stderr, so 127 is not a bare number. */
+static void exec_failed(const char *path, int error)
+{
+    const char *reason = strerror(error);
+    struct iovec parts[] = {
+        {(void *)"exec ", 5}, {(void *)path, strlen(path)}, {(void *)": ", 2}, {(void *)reason, strlen(reason)}, {(void *)"\n", 1}};
+    if (writev(2, parts, 5) < 0) _exit(127);
+    _exit(127);
 }
 
 static void drain(int fd, GString *dst)
@@ -52,7 +69,6 @@ int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err,
 		return -1;
 	}
 	if (pid == 0) {
-		child_setup(&parent);
 		static char *const envp[] = {"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "HOME=/root", NULL};
 		int nul = open("/dev/null", O_RDONLY);
 		dup2(nul, 0);
@@ -61,9 +77,10 @@ int run_argv(const char *const *argv, int timeout_s, GString *out, GString *err,
 		/* Readers poll without blocking; the writer must wait rather than lose a large reply. */
 		fcntl(1, F_SETFL, fcntl(1, F_GETFL) & ~O_NONBLOCK);
 		fcntl(2, F_SETFL, fcntl(2, F_GETFL) & ~O_NONBLOCK);
+		child_setup(&parent);
 		for (int fd = 3; fd < 1024; fd++) close(fd);
 		execve(argv[0], (char *const *)argv, envp);
-		_exit(127);
+		exec_failed(argv[0], errno);
 	}
 	close(po[1]);
 	close(pe[1]);
