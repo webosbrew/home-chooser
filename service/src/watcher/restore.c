@@ -97,7 +97,7 @@ static gboolean remove_home(HCWatch *w)
     else watch_log(w, "home cleared (null) in the record");
     g_free(id); return ok;
 }
-/* The stock Home to put back on 5.x to 9.x: the one the record already names, else the one the owner last used
+/* The stock Home to put back on 4.5 and 5.x to 9.x (4.0 has no record, see revert_platform): the one the record already names, else the one the owner last used
  * (the `stock` file, written by the app when it switched away from it), each only when installed; else
  * fullhome when installed, else com.webos.app.home. */
 static char *stock_to_restore(HCWatch *w, const char *found)
@@ -116,7 +116,7 @@ static gboolean revert_platform(HCWatch *w)
 {
     if (filter_only(w)) { watch_log(w, "webOS 4.0: no settings record to put back, the Home key filter is restored on its own"); return TRUE; }
     watch_log(w, "putting the platform back to stock");
-    if (w->major >= 5 && w->major <= 9) {
+    if (w->major <= 9) { /* 4.5 (not filter-only) shares the 5.x record mechanism; null would leave Home dead */
         char *found = current_home(w), *stock = stock_to_restore(w, found);
         gboolean matches = eq(found, stock);
         if (matches) watch_log(w, "home is already %s", stock);

@@ -1113,6 +1113,26 @@ static void test_webos40(void) {
     start(f); stock = key_text(f, FALSE); calls = f->key_calls;
     event(f, 'K', stock); CHECK("F21 4.5: no filter calls", f->key_calls == calls);
     g_free(stock); teardown(f);
+    /* 4.5 restores the stock Home exactly as 5.x does (the record would read null otherwise and Home would do nothing) */
+    for (int full = 0; full <= 1; full++) {
+        f = setup40("my.home", FALSE); installed(f, FULLHOME, full ? 1 : -1); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        CHECK("F22 4.5 missing launcher: stock id in the record, not null", home_is(f, full ? FULLHOME : STOCK) && f->sets >= 1 && f->defaults == 0);
+        teardown(f);
+        f = setup40("my.home", FALSE); installed(f, FULLHOME, full ? 1 : -1); start(f);
+        installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+        CHECK("F23 4.5 uninstall: stock id in the record, clean exit", hc_watch_status(f->w) == 0 && home_is(f, full ? FULLHOME : STOCK));
+        teardown(f);
+    }
+    f = setup40("my.home", FALSE); file(path(f, f->c.state_dir, "stock"), STOCK); installed(f, FULLHOME, 1); start(f);
+    installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+    CHECK("F24 4.5 uninstall: the remembered stock Home", home_is(f, STOCK)); teardown(f);
+    /* no choice and a leftover record naming a removed app (repair_leftover) */
+    f = setup40(NULL, FALSE); record(f, "{\"home\":\"gone.app\"}"); start(f);
+    CHECK("F25 4.5 leftover: stock id, not null", home_is(f, FULLHOME) || home_is(f, STOCK)); teardown(f);
+    /* 4.0: the record is never touched on any restore path */
+    f = setup40(NULL, TRUE); record(f, "{\"home\":\"gone.app\"}"); start(f);
+    CHECK("F26 4.0 leftover: record untouched", home_is(f, "gone.app") && f->sets == 0 && f->defaults == 0); teardown(f);
 }
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
