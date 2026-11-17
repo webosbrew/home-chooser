@@ -41,6 +41,9 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
 
+      - name: Host packages for the service tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev
+
       - name: Service and launcher API tests
         run: |
           cmake -S service/test -B build/service-host -DQEMU_TESTS=OFF

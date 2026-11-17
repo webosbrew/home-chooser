@@ -34,7 +34,8 @@ particular unpacked root filesystem. Normal packaging does not read `FIRMWARES`.
 
 For offline checks, use the native tests (`cmake -S service/test -B build/service-host`,
 `cmake --build build/service-host`, `ctest --test-dir build/service-host`; `-DQEMU_TESTS=OFF` on the
-first for the policy test and the launcher API checks alone, without the SDK or firmware; the
+first for the policy test and the launcher API checks alone, without the SDK or firmware; the host
+needs pkg-config and the GLib development files, `libglib2.0-dev` on Debian and Ubuntu; the
 launcher contract test runs every example in `api/launcher-v1.openrpc.json` through the real handlers), `cd app && npm run lint && CI=true npm test`,
 the shell suites in `service/scripts/tests/`, and
 `python3 -I -m unittest discover -s e2e -p 'test_*.py'`.
