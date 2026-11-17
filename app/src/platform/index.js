@@ -4,7 +4,7 @@
 //   readFile / writeFile / removeFile  the files the service allows
 //   exec(name)              a named command (see COMMANDS in service/src/policy.c, plus the
 //                           composite names handled here); resolves {stdout, stderr}
-//   osRelease()             {version: [major, minor, patch], ...} from /etc/os-release
+//   release()               {version: [major, minor, patch]} from /etc/starfish-release
 //   readIcon(appId, icon)   a data: URL or null
 //   ensureRoot()            elevation (startup)
 //   restartService()        quit and restart the root service (an access change on 11+)
@@ -14,29 +14,19 @@ import {createServiceClient} from './service';
 import {ensureRoot, restartService, FatalError} from './elevate';
 import {HOME_FILE, HOMEKEY_FLAG} from '../homechooser/persistence';
 
-// Parse /etc/os-release. VERSION_ID, then VERSION, then PRETTY_NAME, whichever has dotted digits.
-export const parseOsRelease = (text) => {
-	const fields = {};
-	text.split('\n').forEach((line) => {
-		const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-		if (!m) return;
-		let v = m[2].trim();
-		if ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'")) v = v.slice(1, -1);
-		fields[m[1]] = v;
-	});
-	for (const key of ['VERSION_ID', 'VERSION', 'PRETTY_NAME']) {
-		const m = fields[key] && /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(fields[key]);
-		if (m) return {version: [Number(m[1]), Number(m[2] || 0), Number(m[3] || 0)], source: key, fields};
-	}
-	return {version: null, source: null, fields};
+// Parse /etc/starfish-release, e.g. "Rockhopper release 4.10.2-29 (goldilocks2-grampians)": the
+// first "release MAJOR.MINOR.PATCH". Anything after the patch number is ignored; no match: version null.
+export const parseStarfishRelease = (text) => {
+	const m = /release (\d+)\.(\d+)\.(\d+)/.exec(text);
+	return m ? {version: [Number(m[1]), Number(m[2]), Number(m[3])]} : {version: null};
 };
 
 const ICON_TYPES = /\.(png|jpe?g|gif|svg|webp)$/i;
 
-export const createOsRelease = (service) => () =>
-	service.readFile('/etc/os-release').then((text) => {
-		const parsed = parseOsRelease(text || '');
-		if (!parsed.version) throw new Error('No version in /etc/os-release');
+export const createRelease = (service) => () =>
+	service.readFile('/etc/starfish-release').then((text) => {
+		const parsed = parseStarfishRelease(text || '');
+		if (!parsed.version) throw new Error('No version in /etc/starfish-release');
 		return parsed;
 	});
 
@@ -96,7 +86,7 @@ export const createPlatform = (call = createBridgeCall()) => {
 		writeFile: service.writeFile,
 		removeFile: service.removeFile,
 		exec: createExec(service),
-		osRelease: createOsRelease(service),
+		release: createRelease(service),
 		readIcon: createReadIcon(service),
 		ensureRoot: () => ensureRoot({service, call}),
 		restartService: () => restartService({service})

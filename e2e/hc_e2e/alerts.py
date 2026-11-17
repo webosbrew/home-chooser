@@ -8,7 +8,7 @@ import subprocess
 import threading
 
 from . import timing
-from .constants import APP_ID, TVPOWER_REBOOT_URI
+from .constants import APP_ID, SERVICE_CONFIRM_URI, TVPOWER_REBOOT_URI
 from .releases import parse_reboot_ask
 
 
@@ -25,9 +25,13 @@ def alert_ls2_proof(info, message, target, safe, uninstall_id=None):
         good = (yes.get('onclick') == TVPOWER_REBOOT_URI
                 and yes.get('params') == {'reason': 'remoteKey'})
     else:
-        good = (yes.get('onclick') in ('luna://com.webos.appInstallService/remove',
-                                       'luna://com.webos.appInstallService/dev/remove')
-                and yes.get('params') == {'id': uninstall_id, 'subscribe': True})
+        params = yes.get('params')
+        good = ((yes.get('onclick') in ('luna://com.webos.appInstallService/remove',
+                                        'luna://com.webos.appInstallService/dev/remove')
+                 and params == {'id': uninstall_id, 'subscribe': True})
+                # webOS 4.x: Surface Manager holds no group there, so the button calls our own service with a one-shot token
+                or (yes.get('onclick') == SERVICE_CONFIRM_URI and isinstance(params, dict) and list(params) == ['token']
+                    and re.fullmatch(r'[0-9a-f]{32}', str(params['token'])) is not None))
     return bool(good and yes.get('label') == target and no.get('label') == safe
                 and not no.get('onclick') and not no.get('params') and no.get('focus') is True)
 
@@ -43,12 +47,12 @@ def alert_service_proof(raw, message, target, safe, uninstall_id=None, caller=No
                 and any('REBOOT_ASK' in line and 'notification/createAlert accepted (exit 0):' in line
                         and re.search(r'"returnValue"\s*:\s*true', line)
                         and info['alert_id'] in line for line in raw.splitlines()))
-    prefix = '%s by %s: alert shown for luna://com.webos.appInstallService/' % (uninstall_id, caller)
+    prefix = '%s by %s: alert shown for ' % (uninstall_id, caller)
     for line in raw.splitlines():
         if not re.search(r'UNINSTALL_ASK\s+\{\}\s+' + re.escape(prefix), line):
             continue
         reply = line.split(prefix, 1)[1]
-        if not re.match(r'(dev/)?remove \(exit 0\): ', reply):
+        if not re.match(r'(luna://com\.webos\.appInstallService/(dev/)?remove|' + re.escape(SERVICE_CONFIRM_URI) + r') \(exit 0\): ', reply):
             continue
         try:
             data = json.loads(reply.split(': ', 1)[1])
@@ -99,9 +103,18 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     texts = [r.get('text') for r in rows if r.get('kind') == 'text']
     # Some firmware renders no title header. Ownership also requires
     # the matching service request/reply; the app title behind the alert is not proof.
-    if texts.count(message) != 1:
+    # webOS 4.0 draws the alert over Live TV's "No Signal" text, which the OCR joins to the message line ("No SUninstall
+    # HC Fixture disposable?", w18r-goldilocks run 2026-11-17): a short stray prefix is allowed, nothing else.
+    shown = [t for t in texts if isinstance(t, str) and (t == message or (t.endswith(message) and len(t) - len(message) <= 8))]
+    if len(shown) != 1:
         raise ValueError('expected message not uniquely visible')
-    buttons = [r for r in rows if r.get('kind') == 'button' and r.get('text') in (target, safe)]
+    # webOS 4.5 draws the alert buttons in capitals ("UNINSTALL", "CANCEL", w19p-goldilocks2 run 2026-11-16):
+    # match the label ignoring case and hand back the label as the service sent it.
+    canon = {str(target).casefold(): target, str(safe).casefold(): safe}
+    # The OCR also calls the unfocused button of the pair plain "text" there (the frame after the focus
+    # moved: UNINSTALL a button, CANCEL a text), so an exact label counts as a button whichever kind it has.
+    buttons = [dict(r, text=canon[r['text'].casefold()]) for r in rows
+               if r.get('kind') in ('button', 'text') and isinstance(r.get('text'), str) and r['text'].casefold() in canon]
     if len(buttons) != 2 or sorted(r.get('text', '') for r in buttons) != sorted((target, safe)):
         raise ValueError('expected exactly the two alert buttons')
     for b in buttons:
@@ -140,13 +153,15 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # must contain exactly our pair; controls elsewhere (the app beneath) are irrelevant.
     top = min(b['box'][1] for b in buttons)
     bottom = max(b['box'][3] for b in buttons)
-    messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') == message]
+    messages = [r for r in rows if r.get('kind') == 'text' and r.get('text') in shown]
     msg = messages[0]
     if horizontal:
         # 5.x puts the prompt immediately above a highlighted horizontal pair.
-        if (not 0 <= top - msg['box'][3] <= bottom - top
+        # A button the OCR read as plain text has only its label's box (17 px high on 4.5 against 40 for a
+        # drawn button), so the allowed gap is never less than a drawn button's height.
+        if (not 0 <= top - msg['box'][3] <= max(bottom - top, 40)
                 or msg.get('group') is None
-                or any(b.get('group') != msg['group'] for b in buttons)):
+                or any(b.get('kind') == 'button' and b.get('group') != msg['group'] for b in buttons)):  # a button read as text has its own group
             raise ValueError('message is outside the alert group')
     elif not top <= sum(msg['box'][1::2]) / 2 <= bottom:
         if not (0 <= top - msg['box'][3] <= bottom - top
@@ -161,20 +176,21 @@ def alert_focus(frame, message, target, safe, require_focus=True):
     # the two exact buttons were already required above.
     left = min([b['box'][0] for b in buttons] + [msg['box'][0]])
     right = max([b['box'][2] for b in buttons] + [msg['box'][2]])
-    band = [r for r in rows if r.get('kind') == 'button'
+    band = [r for r in rows if r.get('kind') == 'button' and str(r.get('text')).casefold() not in canon
             and isinstance(r.get('box'), list) and len(r['box']) == 4
             and r['box'][1] < bottom and r['box'][3] > top
             and r['box'][0] < right and r['box'][2] > left]
-    if len(band) != 2:
+    if band:
         raise ValueError('extra controls in the alert band')
     return focused[0]['text'], direction
 
 
 def alert_style_swap(before, after, target, safe):
     """Match reciprocal appearances with a small tolerance for OCR colour jitter."""
-    def pair(frame):
-        return {r['text']: r for r in frame['elements']
-                if r.get('kind') == 'button' and r.get('text') in (target, safe)}
+    def pair(frame):  # same label rules as alert_focus: any case, and a button the OCR read as text
+        canon = {str(target).casefold(): target, str(safe).casefold(): safe}
+        return {canon[r['text'].casefold()]: r for r in frame['elements']
+                if r.get('kind') in ('button', 'text') and isinstance(r.get('text'), str) and r['text'].casefold() in canon}
     a, b = pair(before), pair(after)
     for field in ('highlighted', 'disabled'):
         x, y = a[safe]['style'].get(field), a[target]['style'].get(field)

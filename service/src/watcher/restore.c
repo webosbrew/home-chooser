@@ -23,9 +23,9 @@ static gboolean on_disk(HCWatch *w, const char *id)
 }
 int key_refresh(HCWatch *w, gboolean stock)
 {
-    if (w->major < 6 || w->major > 9) return 0;
+    if (w->key_mode == HC_KEY_NONE) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
-    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.osrelease, w->ops.call, w->ops.context, 30, 1000};
+    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000};
     GString *out = g_string_new(NULL);
     int rc = hc_key_run(&ops, "refresh", stock, out);
     watch_log(w, "Home key refresh%s: %s", stock ? " stock" : "", out->str);
@@ -50,19 +50,19 @@ static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
 {
     jvalue_ref list = member(member(reply, "configs"), KEY_CONFIG);
     if (!jis_array(list)) return FALSE;
-    char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL);
+    char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL), *ours40 = g_build_filename(w->c.state_dir, "homekey40-", NULL);
     gboolean stock = FALSE, mine = FALSE;
     for (ssize_t i = 0; i < jarray_size(list); i++) {
         char *file = get_string(jarray_get(list, i), "file");
-        if (g_str_has_prefix(file ? file : "", ours)) mine = TRUE;
+        if (g_str_has_prefix(file ? file : "", ours) || g_str_has_prefix(file ? file : "", ours40)) mine = TRUE;
         if (eq(file, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || eq(file, "/usr/lib/qml/KeyFilters/systemUi.js")) stock = TRUE;
         g_free(file);
     }
-    g_free(ours); return stock && !mine;
+    g_free(ours); g_free(ours40); return stock && !mine;
 }
 void key_follow(HCWatch *w, const char *text)
 {
-    if (w->major < 6 || w->major > 9 || !w->baked || w->status >= 0) return;
+    if (w->key_mode == HC_KEY_NONE || !w->baked || w->status >= 0) return;
     jvalue_ref reply;
     if (text) reply = parse_object(text);
     else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
@@ -97,15 +97,33 @@ static gboolean remove_home(HCWatch *w)
     else watch_log(w, "home cleared (null) in the record");
     g_free(id); return ok;
 }
+/* The stock Home to put back on 4.5 and 5.x to 9.x (4.0 has no record, see revert_platform): the one the record already names, else the one the owner last used
+ * (the `stock` file, written by the app when it switched away from it), each only when installed; else
+ * fullhome when installed, else com.webos.app.home. */
+static char *stock_to_restore(HCWatch *w, const char *found)
+{
+    char *saved = NULL;
+    if (stock_id(found) && (eq(found, STOCK) || app_state(w, found) == 1)) return g_strdup(found);
+    char *path = g_build_filename(w->c.state_dir, "stock", NULL), *text = watch_read(path);
+    g_free(path);
+    if (text) saved = g_strdup(g_strstrip(text));
+    g_free(text);
+    if (stock_id(saved) && (eq(saved, STOCK) || app_state(w, saved) == 1)) return saved;
+    g_free(saved);
+    return g_strdup(app_state(w, FULLHOME) == 1 ? FULLHOME : STOCK);
+}
 static gboolean revert_platform(HCWatch *w)
 {
+    if (filter_only(w)) { watch_log(w, "webOS 4.0: no settings record to put back, the Home key filter is restored on its own"); return TRUE; }
     watch_log(w, "putting the platform back to stock");
-    if (w->major >= 5 && w->major <= 9) {
-        const char *stock = app_state(w, FULLHOME) == 1 ? FULLHOME : STOCK;
-        char *found = current_home(w);
-        gboolean matches = eq(found, stock); g_free(found);
+    if (w->major <= 9) { /* 4.5 (not filter-only) shares the 5.x record mechanism; null would leave Home dead */
+        char *found = current_home(w), *stock = stock_to_restore(w, found);
+        gboolean matches = eq(found, stock);
         if (matches) watch_log(w, "home is already %s", stock);
-        return matches || merged_write(w, stock);
+        else watch_log(w, "restoring %s", stock);
+        gboolean ok = matches || merged_write(w, stock);
+        g_free(found); g_free(stock);
+        return ok;
     }
     drop_override(w); return remove_home(w);
 }
@@ -123,7 +141,7 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "previous", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);

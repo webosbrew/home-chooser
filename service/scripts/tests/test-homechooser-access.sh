@@ -7,7 +7,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT HUP INT TERM
 export HOMECHOOSER_LUNA_ROOTS="$T/dev $T/system $T/absent"
-export HOMECHOOSER_OSRELEASE="$T/os-release" HOMECHOOSER_LS_CONTROL="$T/control"
+export HOMECHOOSER_RELEASE_FILE="$T/starfish-release" HOMECHOOSER_LS_CONTROL="$T/control"
 # As if the service's accessApply ran it; the boot/watcher case is below.
 export HOMECHOOSER_PARENT_EXE=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/homechooser-service
 printf '#!/bin/sh\n[ "$1" = homechooser-service ] && cat "%s/pids" 2>/dev/null\n' "$T" > "$T/pidof"
@@ -68,7 +68,23 @@ for name in ['dev','system']:
 assert not (root/'absent').exists()
 PY2
 }
-echo 'VERSION_ID="10.0.0"' > "$T/os-release"
+# major_version reads /etc/starfish-release: the real lines of 4.5, 11 and 12, and an unknown file
+(
+    . "$HERE/lib/common.sh"
+    check() {
+        printf '%s\n' "$1" > "$T/starfish-release"
+        RELEASE_FILE="$T/starfish-release"
+        [ "$(major_version)" = "$2" ] || { echo "major_version of '$1': $(major_version), want $2" >&2; exit 1; }
+    }
+    check 'Rockhopper release 4.10.2-29 (goldilocks2-grampians)' 4
+    check 'Rockhopper release 11.2.0-3709 (queue-qilian)' 11
+    check 'Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)' 12
+    check 'VERSION_ID="7.6.0"' 0
+    check '' 0
+    RELEASE_FILE="$T/absent"
+    [ "$(major_version)" = 0 ]
+)
+echo 'Rockhopper release 10.3.1-1 (ponytail-ponytail)' > "$T/starfish-release"
 run apply > "$T/out"
 verify 10
 # The service restart request is for 11+ only.
@@ -79,7 +95,7 @@ run apply
 run status > "$T/status"
 grep -q 'manifest=yes api=yes' "$T/status"
 [ "$(wc -l < "$T/scans")" -eq 1 ]
-echo 'PRETTY_NAME="webOS 11.2.0"' > "$T/os-release"
+echo 'Rockhopper release 11.2.0-3709 (queue-qilian)' > "$T/starfish-release"
 run apply > "$T/out"
 verify 11
 grep -qx restart-service "$T/out"
@@ -127,6 +143,38 @@ run remove
 [ -f "$T/dev/api-permissions.d/org.webosbrew.homechooser.service.api.json" ]
 mv "$T/dev-manifest" "$T/dev/manifests.d/org.webosbrew.homechooser.json"
 run remove
+verify removed
+# webOS 4.0 and 4.5: one method for Surface Manager's group (private), in a manifest of its own; later releases never have it.
+echo 'Rockhopper release 4.10.2-29 (goldilocks2-grampians)' > "$T/starfish-release"
+before=$(wc -l < "$T/scans")
+run apply > "$T/out"
+grep -qx restart-service "$T/out"
+[ "$(wc -l < "$T/scans")" -eq $((before + 1)) ]
+python3 - "$T" <<'PY3'
+import json, pathlib, sys
+for name in ('dev', 'system'):
+    r = pathlib.Path(sys.argv[1]) / name
+    api = r / 'api-permissions.d/org.webosbrew.homechooser.confirm.api.json'
+    assert json.loads(api.read_text()) == {'private': ['org.webosbrew.homechooser.service/uninstallConfirmed']}
+    m = json.loads((r / 'manifests.d/org.webosbrew.homechooser.confirm.json').read_text())
+    assert m == {'id': 'org.webosbrew.homechooser.confirm', 'version': '1.0.0', 'apiPermissionFiles': [str(api)]}, m
+    assert 'confirm' not in (r / 'manifests.d/org.webosbrew.homechooser.json').read_text()
+PY3
+run apply > "$T/out"
+if grep -q restart-service "$T/out"; then exit 1; fi
+[ "$(wc -l < "$T/scans")" -eq $((before + 1)) ]
+echo 'Rockhopper release 10.3.1-1 (ponytail-ponytail)' > "$T/starfish-release"
+run apply
+for f in api-permissions.d/org.webosbrew.homechooser.confirm.api.json manifests.d/org.webosbrew.homechooser.confirm.json; do
+    [ ! -f "$T/dev/$f" ] && [ ! -f "$T/system/$f" ]
+done
+echo 'Rockhopper release 4.4.3-22 (goldilocks-gorongosa)' > "$T/starfish-release"
+run apply > /dev/null
+[ -f "$T/system/manifests.d/org.webosbrew.homechooser.confirm.json" ]
+run remove
+for f in api-permissions.d/org.webosbrew.homechooser.confirm.api.json manifests.d/org.webosbrew.homechooser.confirm.json; do
+    [ ! -f "$T/dev/$f" ] && [ ! -f "$T/system/$f" ]
+done
 verify removed
 if run bogus > /dev/null 2>&1; then exit 1; fi
 echo "access: all checks passed ($SH)"

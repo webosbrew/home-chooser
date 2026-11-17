@@ -30,15 +30,9 @@ bool on_link(LSHandle *sh, LSMessage *msg, void *ctx)
     /* Only legacy releases retain a persistent watcher restore copy. 6-9 volatile
      * filters revert at reboot without an installed recovery binary. */
     char *release_text = NULL;
-    slurp(HC_OSRELEASE_REAL, 65536, &release_text, NULL);
-    if (!release_text) slurp(HC_OSRELEASE, 65536, &release_text, NULL);
-    GRegex *rx = g_regex_new("(?m)^VERSION_ID=[\"']?([0-9]+)", 0, 0, NULL);
-    GMatchInfo *mi = NULL;
-    int major = 0;
-    if (release_text && g_regex_match(rx, release_text, 0, &mi)) {
-        char *v = g_match_info_fetch(mi, 1); major = atoi(v); g_free(v);
-    }
-    g_match_info_free(mi); g_regex_unref(rx); g_free(release_text);
+    slurp(HC_STARFISH_RELEASE, 65536, &release_text, NULL);
+    int major = hc_release_major(release_text);
+    g_free(release_text);
     bool live = major >= 6 && major <= 9;
     const char *target = live ? HC_ENTRY_SCRIPT : HC_BOOT_SCRIPT;
     if (!live) {

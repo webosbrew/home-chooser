@@ -9,7 +9,7 @@ itself if the launcher or Home Chooser is removed.
 
 ## Requirements
 
-* An LG TV running webOS 5 to 12.
+* An LG TV running webOS 4 to 12. webOS 3 and older are not supported.
 * The TV must be **rooted**, with [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)
   installed and running with root access.
 * At least one launcher app. Home Chooser lists every installed app that declares itself a Home
@@ -27,10 +27,10 @@ other homebrew app, for example with webOS Dev Manager or `ares-install`.
 ## Choosing a launcher
 
 1. Install the launcher you want to use.
-2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (stock)" and every
+2. Open Home Chooser. A panel opens on the right of the screen with "LG Home (Fullscreen)" and every
    launcher on the TV; a check mark shows the current one.
 
-   ![Home Chooser panel listing LG Home (stock) and a test launcher](docs/images/panel.webp)
+   ![Home Chooser panel listing LG Home and a test launcher](docs/images/panel.webp)
 
 3. Move to your launcher and press OK, then confirm "Use *name* as Home?".
 
@@ -42,13 +42,15 @@ other homebrew app, for example with webOS Dev Manager or `ares-install`.
 
 The change takes effect at once; no restart is needed. Nothing changes unless you confirm.
 
+On webOS 4.0, LG's Home is not an app, so the one LG Home row is "LG Home (Ribbon)". On webOS 4.5 and 5 there are two, "LG Home (Ribbon)" and "LG Home (Fullscreen)".
+
 On webOS 6 to 9, with a launcher that draws over the screen (a dock or a bar), the first Home press
 after choosing it can show LG Home's own screen underneath. It goes once you open an app or a TV
 input.
 
 ## Going back to LG Home
 
-Open Home Chooser, choose "LG Home (stock)" and confirm. The Home button opens LG Home again
+Open Home Chooser, choose "LG Home (Fullscreen)" (on webOS 4.5 and 5, "LG Home (Ribbon)" or "LG Home (Fullscreen)", as you had it; on webOS 4.0, "LG Home (Ribbon)") and confirm. The Home button opens LG Home again
 straight away.
 
 ## Uninstalling

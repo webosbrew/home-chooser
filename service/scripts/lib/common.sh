@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
-# Shared webOS service-script helpers. Callers set LOG, OSRELEASE, LUNA and TIMEOUT.
+# Shared webOS service-script helpers. Callers set LOG, RELEASE_FILE, LUNA and TIMEOUT.
 HC_SERVICE_SCRIPTS=/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service/scripts
 HC_STATE_DIR=/var/lib/webosbrew/homechooser
 HC_RUNTIME_DIR=/tmp/homechooser-runtime
@@ -22,12 +22,10 @@ log() {
     return 0
 }
 
+# The release major from /etc/starfish-release ("Rockhopper release 4.10.2-29 (goldilocks2-grampians)"); 0 when unknown.
 major_version() {
-    for key in VERSION_ID VERSION PRETTY_NAME; do
-        v=$(sed -n "s/^$key=//p" "$OSRELEASE" 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
-        if [ -n "$v" ]; then echo "$v"; return 0; fi
-    done
-    echo 0
+    v=$(sed -n 's/.*release \([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*.*/\1/p' "$RELEASE_FILE" 2>/dev/null | head -n 1)
+    echo "${v:-0}"
 }
 
 detect_timeout() {

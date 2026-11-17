@@ -17,7 +17,9 @@ Home Chooser is in English only.
   the rest of the screen stays clear and shows what is underneath.
 
 * **The list.** Title "Home Chooser", subtitle "Choose which app opens when you press Home". The first row is "LG Home
-  (stock)"; the installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
+  (Fullscreen)" (`com.webos.app.home`); on webOS 4.0, which has no Home app (LG Home is the compositor's ribbon), the one stock row is "LG Home (Ribbon)" and choosing it only removes our key filter entry; where `com.webos.app.fullhome` is installed too (webOS 4.5 and 5.x, the only
+  releases that ship it) that row is "LG Home (Ribbon)" and a second row, "LG Home (Fullscreen)", stands for
+  `com.webos.app.fullhome`. See [Which stock Home](#which-stock-home). The installed launchers (`appCategory: ["home"]`) follow, each with its icon and name.
   A check mark sits on the current home and the focus starts on it. Every row has the same height,
   icon box (one fixed size, before and after the icon loads) and reserved check slot; focus only
   changes colour and long names are truncated. App ids are never shown. If no launcher is installed, a line explains
@@ -25,10 +27,10 @@ Home Chooser is in English only.
   under the list says "The Home app you chose was removed; using LG Home."
 * **No launch animation.** `appinfo.json` sets `noSplashOnLaunch: true` and `spinnerOnLaunch: false`, as the stock Settings app and many stock apps do. The 6.6.0 web app manager knows no other appinfo key for launch animation (only `noSplash` and `disableBackHistoryAPI` appear in its strings).
 * **No close button.** The panel header has no close button; Back is the way to close (a dialog first, then the panel). Focus never leaves the list: it returns to the row that opened a dialog when the dialog closes, and moves to the new current row when a change finishes.
-* **Choosing.** OK on the row that is already the current home changes nothing and opens no dialog; focus stays on it and a toast says "<name> is already your Home." ("LG Home is already your Home." for the stock row). OK on any other row asks "Use <name> as Home?". Confirming blocks input behind a spinner
+* **Choosing.** OK on the row that is already the current home changes nothing and opens no dialog; focus stays on it and a toast says "<name> is already your Home." ("LG Home (Fullscreen) is already your Home." for a stock row, with that row's own label). OK on any other row asks "Use <name> as Home?"; on a stock row the dialog says "Use LG Home (Ribbon)?" or "Use LG Home (Fullscreen)?". Confirming blocks input behind a spinner
   while the change is made, then a toast says "Done. Press Home to try it." On failure the toast is
   one plain sentence ("Couldn't set the Home app. The Home Chooser service didn't respond."); the details
-  are in the console log. Choosing "LG Home (stock)" runs the restore. The panel stays open after
+  are in the console log. Choosing a stock row runs the restore for that Home. The panel stays open after
   a success; Back closes it.
 * **webOS 6 to 9.** Choosing a launcher validates and reloads a JS-only Home filter immediately.
   Changing launchers and restoring LG Home use the same configd volatile transaction. Nothing
@@ -36,7 +38,7 @@ Home Chooser is in English only.
   prompt or “Restart now” row. Unknown firmware shapes are refused. The old pending-result marker
   is only read/cleared for compatibility. See [Live Home key filter](home-key-hook.md).
 
-* **Footer.** On webOS 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
+* **Footer.** On webOS 4.0 and 6 to 9 only, and only when something is wrong, one fixed line at the bottom of the panel (not focusable); nothing when all is fine. "The Home button can't be changed on this TV's software." when the structural hook refuses the firmware. "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again." when an app is chosen but the live filter is not ours. "Couldn't check whether the Home button opens your chosen app." when an app is chosen and the status could not be read. Nothing when the filter is ours, nothing while LG Home is chosen and the filter can still be installed, nothing on 5.x and 10.x or later, and nothing when root is unavailable. The e2e harness checks the filter with `homechooser-homekey status`, not this line.
 * **Problems (no root).** Homebrew Channel missing or not running, refusing `elevateService` (webOS 26 and later),
   or the service not coming up as root. One line per case: "Homebrew Channel isn't installed or isn't running.",
   "Homebrew Channel doesn't give Home Chooser root access on this TV.", "Home Chooser's service isn't running as root.",
@@ -44,8 +46,8 @@ Home Chooser is in English only.
   top of the list area and the list is disabled (Moonstone `disabled`: rows are dimmed, cannot be
   focused or clicked, no confirmation opens), with nothing focused; Back still closes the panel. Without
   root the app cannot tell which installed apps declare `appCategory: ["home"]` (`listApps` needs
-  root; the public `listLaunchPoints` does not carry `appCategory`), so only the "LG Home (stock)"
-  row is shown, with no check mark and no footer.
+  root; the public `listLaunchPoints` does not carry `appCategory`), so only the stock row
+  ("LG Home (Fullscreen)") is shown, with no check mark and no footer.
 * **Refresh.** The list and the current choice are read at start, after each operation, and again when the panel comes back to the front: `webOSRelaunch` (on `document` and `window`) or `visibilitychange` to visible. No `listApps` subscription: it would need a long-lived root call through the service for a case a return to the front already covers. Such a read is skipped while an operation runs, one runs at a time, and when it fails the screen keeps what it shows. A relaunch without a `request` does not close an open confirmation; one with a request replaces it.
 * **Back** (Escape, or keyCode 461: `appinfo.json` sets `disableBackHistoryAPI`, as Settings does, so the remote's Back arrives as a key event instead of history navigation) closes a dialog; with none open it closes the panel with `window.close()` (never
   `webOSSystem.hide()`, which would keep the key focus on a hidden window), returning focus to the app underneath.
@@ -100,14 +102,14 @@ runs carry on. Every step of the startup is safe to interrupt, and the next open
 | `accessApply` | files are written through a temporary file and `mv`, so whole or absent; the script runs to the end | repeats, changes nothing if the files match |
 | 11+ restart after `accessApply` | files match but the running service still has the old groups | the script notes the instance it told in `/tmp/homechooser-runtime/access-restart-pending` and asks for the restart again |
 | `watch` | the watcher running, or not started | starts it if not running |
-| `osRelease` | none | repeats |
+| `release` | none | repeats |
 
 On 6.5.2 the page was closed twice on a fresh install, once about a second after launch and once
 right after Homebrew Channel rewrote the launch line, before the `quit`. Each time the next open
 showed the list, `status` answered `root: true` with uid 0, and `homechooser-access` and the boot
 apply had run. The 11+ row is covered by the shell test only.
 
-The release comes from `/etc/os-release`, read through the service (`VERSION_ID`, then `VERSION`, then `PRETTY_NAME`).
+The release comes from `/etc/starfish-release`, read through the service: the first `release MAJOR.MINOR.PATCH` in it. A file without one is an unknown release.
 
 ## What is written
 
@@ -383,6 +385,27 @@ says; after the start a removal is judged by `getAppInfo` alone, as before. The 
 Chooser is repeated after the chosen app's confirmation delay, so a Home Chooser removed while that
 wait lasts is found without depending on a `listApps` message of its own.
 
+### Which stock Home
+
+On webOS 4.5 and 5.x two stock homes are installed, and LG Settings (General > Home Settings > Home Style) chooses between them by writing `home` in `general/defaultApps`: `com.webos.app.home` is the "Basic Home" (a ribbon over the current screen) and `com.webos.app.fullhome` the "New Home" (full screen). On webOS 6 and later only `com.webos.app.home` is installed, and it is the full-screen LG Home. Home Chooser shows what is installed, not a list by release: `com.webos.app.fullhome` among the Home apps (`appCategory` `home`) makes two stock rows, "LG Home (Ribbon)" and "LG Home (Fullscreen)"; without it one row, "LG Home (Fullscreen)" for `com.webos.app.home`. Neither stock id gets a second, generic row. Other stock homes (`seniorhome`, `kidshome`, `hotelhome`, ...) stay ordinary rows.
+
+Checked on the emulated W19P (4.5) and W20L (5.6.1): with `home` = `com.webos.app.home` the Home key makes SAM launch `com.webos.app.home` (a ribbon over the screen underneath); with `com.webos.app.fullhome` it launches `com.webos.app.fullhome` (full screen). Both are selectable on both releases.
+
+Each stock row is a separate choice that writes its own id, and the check mark is on the exact id in the record. With two stock rows and no `home` in the record nothing is checked: which of the two is in use cannot be read from the record, so none is guessed.
+
+Every path that puts a stock Home back on 4.5 to 9.x picks the same one: the stock home the record already names; else the one the owner used last; else `com.webos.app.fullhome` if installed; else `com.webos.app.home`. "Used last" is `/var/lib/webosbrew/homechooser/stock` (the id alone): the app writes the stock id that is in the record when it switches to a launcher, and removes the file when a stock Home is chosen (the record names the variant then, and nothing would remove the file when Home Chooser is uninstalled). A remembered id that is not installed is skipped. The paths are the app's own restore (`restoreStock`), a chosen launcher being uninstalled, Home Chooser being uninstalled (the watcher removes the file with the rest of its state), and the watcher's repair of a leftover name. 10.x and later have only `com.webos.app.home` and write `home` as `null`; 6.x to 9.x with only `com.webos.app.home` installed are unchanged.
+
+### webOS 4.0
+
+Home is redirected by a key filter entry alone ([home-key-hook.md](home-key-hook.md#webos-40-a-filter-entry-of-our-own)); there is no
+settings record and no Home app, so the app writes **none** of the record, the `stock` note or the profile. The
+stored choice (`/var/lib/webosbrew/homechooser/home`) stands for the record: the check mark follows it, the previous
+launcher is closed from it, and the watcher enforces it. Choosing a launcher stores it, links the boot entry, starts the watcher
+and runs `homechooser-homekey refresh`, then the Home key hook install (flag, `apply`); it never creates a `defaultApps` record.
+Choosing "LG Home (Ribbon)" drops the choice, stops the watcher, and `refresh` restores the exact saved stock list (read back); the
+boot entry is removed when nothing else needs it. The footer lines are the 6-9 ones. The app takes a release below 4.10 as a 4.0
+and the service decides from the stock files (4.5 is 4.10.x and keeps the record).
+
 ### The chosen app is uninstalled
 
 The platform goes back to stock, the choice file stays (it is the user's choice), the watcher logs
@@ -391,9 +414,10 @@ writes as a new choice. A new choice made while the old app is missing replaces 
 
 | Release | Put back to stock | Home key while the app is missing |
 | --- | --- | --- |
-| 5.x | `home` = `com.webos.app.fullhome` if `getAppInfo` finds it, else `com.webos.app.home` (as `restoreStock`); written only if `home` is not that already | stock launcher |
+| 5.x | `home` = the stock Home the record already names, else the one remembered in the `stock` file, else `com.webos.app.fullhome` if installed, else `com.webos.app.home` ([Which stock Home](#which-stock-home)); written only if `home` is not that already | stock launcher |
 | 6.x to 9.x | Set a stock launcher in the record, keeping other entries, then `homechooser-homekey refresh stock` restores the exact stock keyFilters array with `volatile:true` and the home gate is unmounted | LG Home opens immediately; verified readback precedes deletion of unused generated JS |
 | 10.x and later | override file removed, `debug/rescan`, then `home` written as `null` in the record | the profile's `home`, which is the stock launcher |
+| 4.0 | no record: `homechooser-homekey refresh stock` restores the exact stock keyFilters array (volatile, read back) | LG's ribbon |
 
 On return: 5.x and 6.x to 8.x write the merged record with `home`; 9.x and later `setDefaultApp`
 (the merged write on `Unknown method`); 10.x and later also rebuild the override from
@@ -408,7 +432,7 @@ this notification, so HOME opens LG Home immediately.
 The title of an app that is gone cannot be looked up, so the watcher reads it from `getAppInfo`
 (failing that `appinfo.json`) while the app is installed and keeps it per choice, like the window
 type; a title it does not have, or one with a quote or backslash in it, is replaced by the app id.
-The wording is the same on 5.x (the stock home there is `fullhome`). It is sent once per removal
+The wording is the same on 5.x. It is sent once per removal
 event: the later checks find the app already marked missing and say nothing, and a return followed
 by a new removal is a new event. It is not sent for a temporary absence (the confirmation delay
 comes first), when the user restores stock from the app (the choice file is removed and the watcher
@@ -499,7 +523,7 @@ opened after a reinstall, through `homechooser watch`):
   by other means, and Home Chooser only repairs a name that cannot work.
 * A gone id is reverted the way the removal of a chosen app is, without the notification (it is not
   a removal the user just made): 5.x to 9.x write `home` as the stock launcher by the merged write
-  (`com.webos.app.fullhome` if installed, else `com.webos.app.home`); 6.x to 9.x also run
+  (chosen as in [Which stock Home](#which-stock-home)); 6.x to 9.x also run
   `homechooser-homekey refresh stock`; 10.x and later remove the override and rescan when the
   override names the gone id (as `home` or as `idleApp`), and write `home` as `null` when the record does. On 10.x the two are
   separate: a stale override with a record naming an installed app removes only the override, and
@@ -535,7 +559,7 @@ What happens to a stock home that is already running depends on the release:
 
 | Release | Stock home while a launcher is chosen |
 | --- | --- |
-| 5.x | Left alone: no preload call, no close. The visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
+| 5.x | Left alone: no preload call, no close. The stock home that was in use stays loaded until the next restart |
 | 6.x to 9.x | Replaced by the [home gate](home-gate.md); the watcher closes the real stock Home once the gate is mounted, after Home Chooser left the screen when the change was made there ([The previous launcher](#the-previous-launcher)); under an overlay launcher it waits for a full-screen app other than LG Home to be in front ([below](#close-later-under-an-overlay-launcher-webos-6-to-9)) |
 | 10.x, 11.x, 12.x | Preload off, closed once per boot and per choice after the chosen launcher is safely in front; the override's `idleApp` keeps SAM from starting it again. 10.x starts it at boot, so it is closed again after each boot. Under an overlay launcher the watcher opens the last input once after boot ([above](#the-last-input-after-a-boot-webos-10-and-later)), which is the full-screen app the close waits for |
 
@@ -556,8 +580,8 @@ What happens to a stock home that is already running depends on the release:
   refusal (`Cannot find com.webos.app.home` when the manager does not list the app, or a denied
   call) or a hang changes nothing else: the home switch, the restore and the uninstall cleanup go
   on. The defaults are in `hc_watch_config()` ([watcher/core.c](../service/src/watcher/core.c)).
-* **webOS 5 is left alone.** There the Home key starts `com.webos.app.fullhome` as an overlay and
-  `com.webos.app.home` is not the visible home; the preload lists of 5.6.1 name both homes, and the
+* **webOS 5 is left alone.** There the Home key starts the home named by the record, either of
+  the two stock homes ([Which stock Home](#which-stock-home)); the preload lists of 5.6.1 name both homes, and the
   5.x restore path hands the Home key either of them, so a policy change would carry risk. A
   `fullhome` that was running when another launcher is chosen stays loaded (about 45 MB) until the
   next restart; when the last app closes, webOS 5 goes back to Live TV, not to the home, so nothing

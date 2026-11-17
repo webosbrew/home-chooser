@@ -61,6 +61,7 @@ This archive is a build artifact, not part of the package.
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
 | `luna-child.c` | Child streams (daemon watcher, service subscriptions), GIOChannel JSON framing, deadlines, cancellation and reaping |
 | `watcher/{main,core,record,restore,preload,notify,gate,input}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount and the 10+ last-input launch after boot |
+| `revive.c`, `service/revive-glue.c` | Watcher revival: the rate-limited check after a call (plain logic, and the GLib spawn it runs on) |
 | `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
 | `last-input.c` | The last TV input from an eim `getLastInput` reply, Live TV otherwise; used by the gate and the watcher |
 | `gate/{main,decide,run}.c` | `homechooser-home-gate`, run by SAM as `com.webos.app.home` on 6–9: decision table and self-release to stock Home |
@@ -189,8 +190,9 @@ through LG's `application.query` and `application.launcher` groups in the access
 
 `uninstallApp` checks the target and caller before showing an `Uninstall <title>?` alert. The
 Uninstall button calls LG's `appInstallService/dev/remove` for a developer install or
-`appInstallService/remove` for a store install, using the verified `folderPath`. A stale alert can
-still remove its target after the Home selection changes. Targets cannot be Home Chooser,
+`appInstallService/remove` for a store install, using the verified `folderPath`; on webOS 4.0 and 4.5
+it calls this service's `uninstallConfirmed` with a one-shot token instead (see below). A stale alert
+can still remove its target after the Home selection changes, except on 4.x, where the token recheck applies. Targets cannot be Home Chooser,
 Homebrew Channel, the requester, non-removable apps or apps outside developer/store app directories.
 If alerts are refused, the service launches Home Chooser's confirmation screen. Only that screen
 uses `uninstallConfirmed`: it needs a live random one-shot token, rechecks that the requester is
@@ -289,7 +291,8 @@ groups that 11.x and 12.x give every developer app: the reading methods under `a
 list is the one variable `LAUNCHER_METHODS` at the top of the script, each entry `method:group`
 (`query` or `launcher`), which every grant is built from; `test-homechooser-access.sh` checks it
 against the spec's `x-permission` (`grants` plus `getInfo`). None includes `uninstallConfirmed` or
-`rebootPrompt`.
+`rebootPrompt`; on 4.x `uninstallConfirmed` alone is also granted to the `private` group, in its own manifest
+([Launcher API: confirmation and removal](#launcher-api-confirmation-and-removal)).
 
 On 11+ the service takes its provided groups when it registers: on 11.2.0 a changed file followed by
 `ls-control scan-services` alone did not let a launcher in while the same service instance ran, and a
@@ -328,7 +331,7 @@ files whose package manifest has disappeared. `ls-control scan-services` runs on
 status prints file presence. The app best-effort applies after elevation, the boot entry applies
 without needing a Home choice, and the watcher applies at start. The watcher stages the access
 worker into its runtime directory so uninstall cleanup works after the app directory disappears.
-Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_OSRELEASE`, `HOMECHOOSER_NODE`.
+Host overrides: `HOMECHOOSER_LUNA_ROOTS`, `HOMECHOOSER_LS_CONTROL`, `HOMECHOOSER_RELEASE_FILE`, `HOMECHOOSER_NODE`.
 
 The settings-only methods (`status`, `quit`, `call`, file methods, `readIcon`, `link`,
 `unlink`, `linkStatus`, `run`), confirmation and reboot methods, files, `status` output and log ids
@@ -347,7 +350,7 @@ This is what the service does behind `uninstallApp` and its screen fallback.
 * **Screen token.** The fallback screen receives `{confirmUninstall:"<id>", token:"<token>"}`.
   The service stores at most four random, one-shot tokens, valid for 120 seconds. The screen
   obtains the title from `getAppInfo` and asks the same question as the alert. Alert buttons carry
-  no Home Chooser token.
+  no Home Chooser token, except on 4.x, where the button carries the token of `uninstallConfirmed`.
 * **Screen confirming.** `uninstallConfirmed {token}` rechecks that the requester is still the
   selected Home, then calls `applicationManager/removeLaunchPoint` with `<id>_default`. A platform
   refusal saying the app “is not removable” stops the operation (`notRemovable`). Other failures
@@ -371,6 +374,27 @@ its API permissions list `dev/remove` under `ares.webos.cli` and `remove` under
 reaches both methods as `com.webos.applicationManager`. A developer app's `getAppInfo.folderPath` is
 under `/media/developer/apps/usr/palm/applications/`, which is how the service picks the developer
 endpoint.
+
+On webOS 4.0 and 4.5 (W18R 05.50.70.01, W19P 05.40.97.01) the firmware has no
+`client-permissions.d/com.webos.surfacemanager.perm.json`, which 5.x (W20H 04.74.00.01) and later ship with
+`com.webos.surfacemanager*: [all]`. There Surface Manager, which makes the alert button's call (the log line is
+`surface-manager LSM callForSource, AlertCallback com.webos.applicationManager luna://... /dev/ remove`), holds only
+`private` (`client-permissions.d/compat.perm.json`: `"com.webos.surfacemanager": ["private"]`). appinstalld lists
+`/dev/remove` only under `ares.webos.cli` and `remove` under `appinstalld.internal`
+(`api-permissions.d/com.webos.appinstalld.api.json`), so the call is refused with `LS_REQUIRES_SECURITY`
+(`Service security groups don't allow method call`, `Denied method call "remove" for category "/dev"`), the alert
+closes and nothing is removed. So on a release below 5 (`/etc/starfish-release`) the service makes the
+screen-fallback token before the alert and the Uninstall button calls
+`luna://org.webosbrew.homechooser.service/uninstallConfirmed {token}`; the service then removes the app as root,
+exactly as for the screen confirmation. The call carries the application id `com.webos.applicationManager` (the
+identity that raised the alert), which `uninstallConfirmed` accepts besides Home Chooser's own and none; the token
+is the capability. For the hub to admit it, `homechooser-access apply` writes, on 4.x only,
+`api-permissions.d/org.webosbrew.homechooser.confirm.api.json` (`{"private": ["<service>/uninstallConfirmed"]}`: that one
+method, no other, in the group Surface Manager holds) and a manifest of its own, `manifests.d/org.webosbrew.homechooser.confirm.json`
+(the hub skips a manifest it has already loaded, so the installer's cannot take a new file; a manifest needs a version).
+The service takes its groups when it registers, so the apply asks for a service restart (`restart-service`) when the file
+changed; `remove` and any release from 5 on delete both files. `rebootPrompt`'s button calls `tvpower/power/reboot` directly; it is never shown
+on 4.x (the Home key needs no reboot there), so that button is unchanged and unverified on 4.x.
 
 ## Launcher lists, icons and subscriptions
 
@@ -437,11 +461,11 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 * **Files** (`readFile`, `writeFile`, `removeFile`, exact paths):
   `/var/lib/webosbrew/homechooser/home`, `/var/lib/webosbrew/homechooser/homekey`,
   `/var/webos-profile/override/org.webosbrew.homechooser.json`. `readFile` also reads
-  `/etc/os-release`, because a web app cannot read it and the app needs the release. The
-  writable files are opened with `O_NOFOLLOW`. `/etc/os-release` is a symlink to
-  `../usr/lib/os-release` (webOS 5.6 to 26 roots checked: W20L, W20H, W21P, W22L, W22P, W22H 43.x), so
-  it is resolved with `realpath()` and read only when the result is `/etc/os-release` or
-  `/usr/lib/os-release`; any other target is `notAllowed`.
+  `/etc/starfish-release`, because a web app cannot read it and the app needs the release. The
+  writable files are opened with `O_NOFOLLOW`. `/etc/starfish-release` is a regular file on every webOS
+  firmware from 1.4 to 12 (one line, `Rockhopper release 4.10.2-29 (goldilocks2-grampians)`), so
+  it is read as is; the release is the first `release MAJOR.MINOR.PATCH` in it, and a file without one is
+  an unknown release. `/etc/os-release` (absent on 3.x and 4.x) is not read anywhere.
 * **Icons**: `readIcon`, `getAppIcon` and `getIcons` (for app items) ask SAM for the app's `folderPath` and chosen icon field.
   They join the path (no `..`), require an image extension (png, jpg, jpeg, gif, svg, webp), resolve
   symlinks and require the result to lie inside the real `folderPath`, then return a regular
@@ -452,6 +476,18 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
   removes the link and copy.
   `linkStatus` returns `entry` (`none`, `file`, `link`, `dangling`) and `target`. The service directory
   is the fixed `/media/developer/apps/usr/palm/services/org.webosbrew.homechooser.service`.
+* **Watcher supervision and revival**: on systemd the watcher is the transient unit `homechooser-home`
+  (`Restart=on-failure`), which systemd keeps up. webOS 4.x runs upstart (1.10, jobs only from read-only `/etc/init`, no
+  transient jobs), so there the watcher is a detached shell loop with a pid file that restarts the daemon on failure but
+  stays dead if the loop itself is killed. Both are revived by the service: after every call that does real work (the
+  app's `call`, `run`, file and link methods, and every launcher method; not `status` or `quit`), `hc_revive_touch` runs
+  once the handler has replied. It does nothing unless the service is root, and at most once per 30 s per process. If a
+  home choice is stored (`/var/lib/webosbrew/homechooser/home` is a regular file: the same condition the boot entry starts the
+  watcher on, and the one a restore or uninstall removes) it spawns `homechooser active` without waiting; on a
+  non-zero exit, if the choice is still stored, it spawns `homechooser watch`, the app's own start path (systemd-run or the loop),
+  and logs `WATCHER_REVIVED` when that succeeds (`WATCHER_REVIVE_FAILED` with the exit status otherwise). Only one such command is
+  in flight (killed after 25 s); a running watcher costs one quiet process per 30 s and no log line. A `run` of `stopWatcher`
+  and `unlink` hold revival for 60 s and abandon a check in flight, so a restore that stops the watcher before it removes the choice is not undone.
 * **Commands** (`run`, by name, fixed argv, no shell, minimal environment, stdin from `/dev/null`,
   output capped at 1 MiB per stream, a timeout each):
 
@@ -464,8 +500,8 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 | `homekeyApply` | same with `apply` (native, checksum-verified volatile reload) | 90 s |
 | `homekeyStop` | same with `stop` (restore exact stock list volatile before deleting unused copies) | 90 s |
 | `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
-| `stopWatcher` | `/bin/systemctl stop homechooser-home` (a non-zero exit is not an error) | 20 s |
-| `watcherActive` | `/bin/systemctl is-active homechooser-home` (a non-zero exit is not an error) | 10 s |
+| `stopWatcher` | `/bin/sh <service>/scripts/homechooser stop`: `systemctl stop homechooser-home`, or on 4.x (no systemd) the watcher loop's process group from `/tmp/homechooser-runtime/watcher.pid` (a non-zero exit is not an error) | 20 s |
+| `watcherActive` | same with `active`: prints `active` or `inactive` (`systemctl is-active homechooser-home`, or the pid file on 4.x; a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps","idleApp"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
 | `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
 | `accessApply` | `/bin/sh <service>/scripts/homechooser-access apply` | 30 s |
@@ -495,6 +531,7 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
 
 * `test-policy`: the pure policy (sender, file and call allow-lists, argv table, icon
   path rules, base64, log tail) compiled natively with address and undefined-behaviour sanitizers.
+* `test-revive`: watcher revival with a fake clock, stored choice and commands (rate limit, root only, no stored choice, one start at a time, active and inactive paths, the hold).
 * `test-watcher` and `test-watcher-luna`: native watcher policy and child-stream runtime with an executable
   Luna double under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
   subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle, close guards

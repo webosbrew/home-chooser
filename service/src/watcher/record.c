@@ -57,6 +57,7 @@ gboolean merged_write(HCWatch *w, const char *id)
 }
 gboolean apply_record(HCWatch *w, const char *id)
 {
+    if (filter_only(w)) return TRUE; /* 4.0: no record */
     if (w->major >= 9) {
         jvalue_ref p = jobject_create(); put_str(p, "category", "home"); put_str(p, "appId", id);
         jvalue_ref r = watch_call(w, SAM "setDefaultApp", jvalue_stringify(p), 10);
@@ -187,6 +188,7 @@ static unsigned interval(HCWatch *w)
 }
 void reconcile(HCWatch *w, const char *id)
 {
+    if (filter_only(w)) return; /* 4.0: nothing to keep in the settings record */
     char *want = g_strdup(id);
     gint64 t = watch_now(w);
     unsigned required = interval(w);

@@ -5,7 +5,7 @@ firmware roots below and runtime checks on emulator VMs. Home Chooser's per-rele
 ([settings-app.md](../settings-app.md)) and its webOS 6–9 key filter
 ([home-key-hook.md](../home-key-hook.md)) rest on these facts. Firmware roots inspected:
 
-| Name | Firmware | `os-release` |
+| Name | Firmware | Release |
 | --- | --- | --- |
 | W20L | `04.63.25.01-HE_DTV_W20L_AFAAJAAA` | webOS TV 5.6.1 |
 | W21P | `03.70.25.01-HE_DTV_W21P_AFADATAA` | webOS TV 6.6.0 |

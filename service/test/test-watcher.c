@@ -202,7 +202,7 @@ static Fixture *setup(int major, const char *id) {
         "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
     f->c = hc_watch_config();
     char *name = g_strdup_printf("case-%u", serial++), *root = path(f, base, name); g_free(name);
-    f->c.state_dir = path(f, root, "state"); f->c.osrelease = path(f, root, "os-release");
+    f->c.state_dir = path(f, root, "state"); f->c.release_file = path(f, root, "starfish-release");
     f->c.app_dir = path(f, root, "hc"); f->c.override = path(f, root, "override/o.json");
     f->c.init_link = path(f, root, "init.d/homechooser"); f->c.log = path(f, root, "watch.log");
     f->c.runtime = path(f, root, "rt"); f->c.app_dirs = f->c.install_dirs = path(f, root, "apps");
@@ -210,7 +210,7 @@ static Fixture *setup(int major, const char *id) {
     f->c.gate_binary = path(f, root, "service/homechooser-home-gate"); f->c.gate_dir = path(f, root, "rt/home-gate");
     f->gate_last = -1; f->c.proc = path(f, root, "proc");
     mkdir_p(root); mkdir_p(f->c.state_dir); mkdir_p(f->c.app_dir);
-    char *os = g_strdup_printf("VERSION_ID=\"%d.0.0\"\n", major); file(f->c.osrelease, os); g_free(os);
+    char *os = g_strdup_printf("Rockhopper release %d.0.0-1 (test)\n", major); file(f->c.release_file, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
     CHECK("fixture init link", !symlink("/missing-package/homechooser", f->c.init_link));
     const char *names[] = {"homekey", "hook/generated", "hook-stale", "boot/homechooser", "keyfilters-stock.json", "keyfilter.lock", NULL};
@@ -260,11 +260,11 @@ static void test_choices(void) {
     }
     Fixture *f = setup(8, "my.home"); start(f); unlink(f->w->choice_file); settings(f, "{}");
     CHECK("W01 choice removed exit", hc_watch_status(f->w) == 0); CHECK("W01 no write after removal", !f->sets); teardown(f);
-    const char *releases[] = {"VERSION=\"8.2\"\nVERSION_ID=\"9.1\"\n", "VERSION=\"webOS 8.2\"\n", "PRETTY_NAME=\"webOS 11\"\n", "broken\n"};
-    int majors[] = {9, 8, 11, 0};
+    const char *releases[] = {"Rockhopper release 9.1.0-5 (a)\n", "Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n", "Rockhopper release 12.0.0-GoogleHomePlatform688001 (spacebuns-sable)\n", "broken\n"};
+    int majors[] = {9, 4, 12, 0};
     for (unsigned i = 0; i < G_N_ELEMENTS(releases); i++) {
-        f = setup(8, NULL); file(f->c.osrelease, releases[i]); HCWatch *w = hc_watch_new(&f->c, &f->w->ops);
-        CHECK("W01 release priority", w->major == majors[i]); hc_watch_free(w); teardown(f);
+        f = setup(8, NULL); file(f->c.release_file, releases[i]); HCWatch *w = hc_watch_new(&f->c, &f->w->ops);
+        CHECK("W01 release major", w->major == majors[i]); hc_watch_free(w); teardown(f);
     }
 }
 static void test_record(void) {
@@ -385,6 +385,24 @@ static void test_idle_app(void) {
         CHECK("I07 confirmed once", f->wait_count == (gone ? 1 : 0)); teardown(f);
     }
 }
+/* S: 5.x to 9.x put back the stock Home the owner last used (the `stock` file), only when installed; a record already naming
+ * a stock Home stays; no file: fullhome when installed. */
+static void test_stock_variant(void) {
+    const char *saved[] = {"com.webos.app.home", "com.webos.app.fullhome", "bogus.id", NULL};
+    for (int major = 5; major <= 9; major += 4) for (int full = 0; full <= 1; full++) for (int i = 0; i < 3; i++) {
+        Fixture *f = setup(major, "my.home"); installed(f, FULLHOME, full ? 1 : -1);
+        file(path(f, f->c.state_dir, "stock"), saved[i]); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        const char *want = (i == 0 || (i == 1 && full)) ? saved[i] : (full ? FULLHOME : STOCK);
+        CHECK("S01 remembered stock variant restored", home_is(f, want)); teardown(f);
+    }
+    for (int full = 0; full <= 1; full++) {
+        Fixture *f = setup(5, "my.home"); installed(f, FULLHOME, full ? 1 : -1);
+        file(path(f, f->c.state_dir, "stock"), FULLHOME); record(f, "{\"home\":\"com.webos.app.home\"}"); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        CHECK("S02 record already stock stays", home_is(f, STOCK) && !f->sets); teardown(f);
+    }
+}
 static void test_remove_return(void) {
     for (int major = 5; major <= 12; major++) for (int full = 0; full <= 1; full++) {
         Fixture *f = setup(major, "my.home"); installed(f, FULLHOME, full ? 1 : -1); start(f);
@@ -477,7 +495,7 @@ static void test_uninstall(void) {
         if (mode == 0) f->access_fail = 1;
         if (mode == 1) f->set_fail = 1;
         if (mode == 2) f->ignore_write = TRUE;
-        if (mode == 3) { hc_watch_free(f->w); f->major = 8; file(f->c.osrelease, "VERSION_ID=8\n"); HCWatchOps ops={.call=fake_call,.key=fake_key,.access=fake_access,.wait=wait_ms,.now=now,.context=f}; f->w=hc_watch_new(&f->c,&ops); f->key_fail=1; }
+        if (mode == 3) { hc_watch_free(f->w); f->major = 8; file(f->c.release_file, "Rockhopper release 8.0.0-1 (t)\n"); HCWatchOps ops={.call=fake_call,.key=fake_key,.access=fake_access,.wait=wait_ms,.now=now,.context=f}; f->w=hc_watch_new(&f->c,&ops); f->key_fail=1; }
         installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'T', NULL);
         CHECK("W13 failure restart", hc_watch_status(f->w) == 1);
         CHECK("W13 recovery retained", g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
@@ -1051,6 +1069,71 @@ static void test_key_follow(void) {
     event(f, 'K', stock); CHECK("K18 failed re-apply tried once", f->key_calls == calls + 1 && eq(f->w->baked, "my.home"));
     g_free(stock); teardown(f);
 }
+/* webOS 4.0: the Home key filter is the whole redirect (an entry of ours, homekey40-*.js): the watcher applies it, applies it
+ * again when configd puts the stock list back, never touches the settings record or the profile, and restores the stock keyFilters
+ * when Home Chooser goes. 4.5 (launchHomeApp in the stock file) takes none of these paths. */
+static Fixture *setup40(const char *id, gboolean really40) {
+    Fixture *f = setup(4, NULL);
+    f->c.stock_js = path(f, f->c.runtime, "stock-systemUi.js");
+    file(f->c.stock_js, really40 ? "function handleSystemKeys(key, pressed, autoRepeat) {\n global.prepareToGoHome(); global.gotoRecents;\n}\n"
+        : "function launchHomeApp(key) {}\nfunction handleSystemKeys(k) { global.prepareToGoHome(); global.gotoRecents; launchHomeApp(k); }\n");
+    file(f->c.release_file, really40 ? "Rockhopper release 4.4.3-22 (goldilocks-gorongosa)\n" : "Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n");
+    HCWatchOps ops = {.call = fake_call, .key = fake_key, .access = fake_access, .gate = fake_gate, .now = now, .wait = wait_ms, .context = f};
+    hc_watch_free(f->w); f->w = hc_watch_new(&f->c, &ops);
+    if (id) choice(f, id);
+    return f;
+}
+static void test_webos40(void) {
+    Fixture *f = setup40("my.home", TRUE);
+    CHECK("F01 4.0 watches the keyFilters", hc_watch_keys(f->w) && f->w->key_mode == HC_KEY_INSERT);
+    record(f, "{\"home\":\"other.home\"}");
+    start(f);
+    CHECK("F02 4.0 applies the filter and is baked", f->key_calls >= 1 && eq(f->w->baked, "my.home"));
+    event(f, 'S', "{\"settings\":{\"defaultApps\":{\"home\":\"other.home\"}}}");
+    event(f, 'A', "{}");
+    CHECK("F03 4.0 writes no record and no profile", f->sets == 0 && f->defaults == 0 && f->scans == 0);
+    char *own = g_strdup_printf("{\"returnValue\":true,\"subscribed\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":["
+        "{\"file\":\"%s/homekey40-abc123.js\",\"handler\":\"handleHomeChooserKeys\"},{\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"handleSystemKeys\"}]}}", f->c.state_dir);
+    char *stock = key_text(f, FALSE);
+    int calls = f->key_calls;
+    event(f, 'K', own); CHECK("F04 our own entry present: nothing", f->key_calls == calls);
+    event(f, 'K', stock); CHECK("F05 configd put the stock list back: applied again", f->key_calls == calls + 1);
+    event(f, 'K', stock); CHECK("F06 inside the gap: not again", f->key_calls == calls + 1);
+    installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+    CHECK("F07 uninstall: clean exit, stock keyFilters restored, record never written", hc_watch_status(f->w) == 0 && f->stock_calls >= 1 && f->sets == 0 && f->defaults == 0);
+    CHECK("F08 uninstall: choice, state and boot entry gone", !g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
+    g_free(own); g_free(stock); teardown(f);
+    /* a missing launcher: stock list back, no record */
+    f = setup40("gone.app", TRUE); start(f);
+    CHECK("F10 missing launcher: filter restored to stock, nothing baked", f->stock_calls >= 1 && !f->w->baked && f->sets == 0 && f->defaults == 0);
+    teardown(f);
+    /* 4.5: the stock file has launchHomeApp, so none of this */
+    f = setup40("my.home", FALSE);
+    CHECK("F20 4.5 is not 4.0", f->w->key_mode == HC_KEY_NONE && !hc_watch_keys(f->w));
+    start(f); stock = key_text(f, FALSE); calls = f->key_calls;
+    event(f, 'K', stock); CHECK("F21 4.5: no filter calls", f->key_calls == calls);
+    g_free(stock); teardown(f);
+    /* 4.5 restores the stock Home exactly as 5.x does (the record would read null otherwise and Home would do nothing) */
+    for (int full = 0; full <= 1; full++) {
+        f = setup40("my.home", FALSE); installed(f, FULLHOME, full ? 1 : -1); start(f);
+        installed(f, "my.home", -1); event(f, 'A', "{\"apps\":[]}");
+        CHECK("F22 4.5 missing launcher: stock id in the record, not null", home_is(f, full ? FULLHOME : STOCK) && f->sets >= 1 && f->defaults == 0);
+        teardown(f);
+        f = setup40("my.home", FALSE); installed(f, FULLHOME, full ? 1 : -1); start(f);
+        installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+        CHECK("F23 4.5 uninstall: stock id in the record, clean exit", hc_watch_status(f->w) == 0 && home_is(f, full ? FULLHOME : STOCK));
+        teardown(f);
+    }
+    f = setup40("my.home", FALSE); file(path(f, f->c.state_dir, "stock"), STOCK); installed(f, FULLHOME, 1); start(f);
+    installed(f, HC_APP_ID, -1); watch_remove_tree(f->c.app_dir); event(f, 'A', "{}");
+    CHECK("F24 4.5 uninstall: the remembered stock Home", home_is(f, STOCK)); teardown(f);
+    /* no choice and a leftover record naming a removed app (repair_leftover) */
+    f = setup40(NULL, FALSE); record(f, "{\"home\":\"gone.app\"}"); start(f);
+    CHECK("F25 4.5 leftover: stock id, not null", home_is(f, FULLHOME) || home_is(f, STOCK)); teardown(f);
+    /* 4.0: the record is never touched on any restore path */
+    f = setup40(NULL, TRUE); record(f, "{\"home\":\"gone.app\"}"); start(f);
+    CHECK("F26 4.0 leftover: record untouched", home_is(f, "gone.app") && f->sets == 0 && f->defaults == 0); teardown(f);
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -1063,6 +1146,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_webos40(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

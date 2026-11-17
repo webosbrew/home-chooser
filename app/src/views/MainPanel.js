@@ -6,7 +6,7 @@ import Spinner from '@enact/moonstone/Spinner';
 import {Header, Panel} from '@enact/moonstone/Panels';
 import Spotlight from '@enact/spotlight';
 
-import {STOCK_HOME} from '../homechooser';
+import {STOCK_FULLHOME, STOCK_HOME, isChoosableStock, stockName} from '../homechooser';
 import {ConfirmDialog, HomeItem, Toast} from './parts';
 import css from './Home.module.less';
 
@@ -21,7 +21,7 @@ const FATAL_TEXT = {
 export const rootReason = (kind) => FATAL_TEXT[kind] || FATAL_TEXT.failed;
 
 // A line at the bottom only when the Home button is not working or cannot be set up; nothing when
-// all is fine. `patch` is null outside webOS 6 to 9, where the stock Home button follows the choice
+// all is fine. `patch` is null outside webOS 4.0 and 6 to 9, where the stock Home button follows the choice
 // and nothing can be missing. `chosen` is true when an app other than LG Home is the current Home.
 export const patchFooter = (patch, chosen) => {
 	if (patch === null) return null;
@@ -32,19 +32,27 @@ export const patchFooter = (patch, chosen) => {
 };
 
 const MainPanel = ({model, launchParams, ...rest}) => {
-	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle} = model;
+	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle, ribbonOnly} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
-	const known = candidates.some((c) => c.id === currentId);
-	const current = currentId === STOCK_HOME || known ? currentId : STOCK_HOME;
-	const removed = Boolean(storedId) && storedId !== STOCK_HOME && !candidates.some((c) => c.id === storedId);
+	// The stock homes are fixed rows ahead of the launchers, never listed twice. com.webos.app.home is always
+	// there; com.webos.app.fullhome only where it is installed (4.5, 5.x), which makes two of them.
+	const hasFullhome = candidates.some((c) => c.id === STOCK_FULLHOME);
+	const stocks = hasFullhome ? [STOCK_HOME, STOCK_FULLHOME] : [STOCK_HOME];
+	const launchers = candidates.filter((c) => !isChoosableStock(c.id));
+	const nameOf = (id) => (isChoosableStock(id) ? stockName(id, hasFullhome, ribbonOnly) : (launchers.find((c) => c.id === id) || {}).title || id);
 
-	const rowId = (id) => (id === STOCK_HOME ? 'home-stock' : 'home-' + candidates.findIndex((c) => c.id === id));
+	// With two stock homes and no known current one (no home in the record), nothing is current.
+	const known = launchers.some((c) => c.id === currentId);
+	const current = stocks.includes(currentId) || known ? currentId : hasFullhome ? null : STOCK_HOME;
+	const removed = Boolean(storedId) && !isChoosableStock(storedId) && !launchers.some((c) => c.id === storedId);
+
+	const rowId = (id) => (isChoosableStock(id) ? 'home-' + (id === STOCK_FULLHOME ? 'fullhome' : 'stock') : 'home-' + launchers.findIndex((c) => c.id === id));
 
 	// initial focus: the current home
 	useEffect(() => {
 		if (phase !== 'ready' || rootError) return;
-		Spotlight.focus(rowId(current));
+		Spotlight.focus(rowId(current || STOCK_HOME));
 	}, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Focus never falls off the list: back on the row that opened a dialog when it closes, and on
@@ -59,19 +67,19 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		}
 	}, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
 	useEffect(() => {
-		if (wasBusy.current && !busy && !rootError) Spotlight.focus(rowId(current));
+		if (wasBusy.current && !busy && !rootError) Spotlight.focus(rowId(current || STOCK_HOME));
 		wasBusy.current = busy;
 	}, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const choose = useCallback((id) => {
 		if (busy) return;
 		if (id === current) {
-			notify((id === STOCK_HOME ? 'LG Home' : (candidates.find((c) => c.id === id) || {}).title || id) + ' is already your Home.');
+			notify(nameOf(id) + ' is already your Home.');
 			return;
 		}
 		opener.current = id;
-		setPending(id === STOCK_HOME ? {id, title: 'LG Home'} : {id, title: (candidates.find((c) => c.id === id) || {}).title || id});
-	}, [busy, candidates, current, notify]);
+		setPending({id, title: nameOf(id)});
+	}, [busy, candidates, current, notify]); // eslint-disable-line react-hooks/exhaustive-deps
 	const handled = useRef(null);
 	useEffect(() => () => { handled.current = null; }, []);
 	useEffect(() => {
@@ -85,7 +93,7 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			}, () => {
 				if (handled.current === launchParams) notify("Couldn't read the app to uninstall. Try again from your Home app.");
 			});
-		} else if (launchParams.request && launchParams.request !== STOCK_HOME && candidates.some((c) => c.id === launchParams.request)) {
+		} else if (launchParams.request && !isChoosableStock(launchParams.request) && candidates.some((c) => c.id === launchParams.request)) {
 			choose(launchParams.request);
 		}
 	}, [launchParams, phase, rootError, busy, candidates, choose, getUninstallTitle, notify]);
@@ -98,9 +106,9 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		else model.choose(item);
 	}, [pending, model]);
 
-	const footer = patchFooter(patch, current !== STOCK_HOME);
+	const footer = patchFooter(patch, current !== null && !isChoosableStock(current));
 	const uninstall = pending && pending.uninstall;
-	const stock = pending && pending.id === STOCK_HOME;
+	const stock = pending && isChoosableStock(pending.id);
 	const blocked = !uninstall && !stock && model.hasPatch && patch !== 'active' && patch !== 'ready';
 
 	return (
@@ -109,11 +117,13 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
-					<HomeItem
-						name="LG Home (stock)" appId={STOCK_HOME} stock current={!rootError && current === STOCK_HOME}
-						disabled={Boolean(rootError)} spotlightId="home-stock" onChoose={choose}
-					/>
-					{candidates.map((c, i) => (
+					{stocks.map((id) => (
+						<HomeItem
+							key={id} name={stockName(id, hasFullhome, ribbonOnly)} appId={id} stock current={!rootError && current === id}
+							disabled={Boolean(rootError)} spotlightId={rowId(id)} onChoose={choose}
+						/>
+					))}
+					{launchers.map((c, i) => (
 						<HomeItem
 							key={c.id} name={c.title} appId={c.id} icon={icons[c.id]} current={c.id === current}
 							disabled={Boolean(rootError)} spotlightId={'home-' + i} onChoose={choose}
@@ -134,13 +144,13 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			<Toast toast={toast} onDone={model.dismissToast} />
 			<ConfirmDialog
 				open={Boolean(pending)}
-				title={uninstall ? `Uninstall ${pending.title}?` : blocked ? "Can't change Home here" : stock ? 'Use LG Home?' : `Use ${pending ? pending.title : ''} as Home?`}
+				title={uninstall ? `Uninstall ${pending.title}?` : blocked ? "Can't change Home here" : stock ? `Use ${pending.title}?` : `Use ${pending ? pending.title : ''} as Home?`}
 				confirmLabel={uninstall ? 'Uninstall' : stock ? 'Use LG Home' : 'Use as Home'}
 				onConfirm={blocked ? null : confirm}
 				onCancel={cancel}
 			>
 				{uninstall ? 'This app will be removed from the TV.' : blocked ? "The Home button can't be changed on this TV's software."
-					: stock ? 'The Home button will open the LG Home again.'
+					: stock ? `The Home button will open ${pending.title}.`
 						: 'The Home button will open this app.'}
 			</ConfirmDialog>
 		</Panel>

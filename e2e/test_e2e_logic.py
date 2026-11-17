@@ -401,6 +401,29 @@ class AlertFocus(unittest.TestCase):
         self.assertEqual(hc_e2e.alerts.alert_focus(self.frame('uninstall-alert'),
                          'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'), ('Cancel', 'UP'))
 
+    def test_recorded_4_5_uninstall_focus_move(self):
+        # w19p-goldilocks2: capitals, and the unfocused button of the pair is read as text
+        before, after = self.frame('uninstall-alert-4x-before'), self.frame('uninstall-alert-4x-after')
+        msg = 'Uninstall HC Fixture disposable?'
+        self.assertEqual(hc_e2e.alerts.alert_focus(before, msg, 'Uninstall', 'Cancel'), ('Cancel', 'LEFT'))
+        self.assertEqual(hc_e2e.alerts.alert_focus(after, msg, 'Uninstall', 'Cancel'), ('Uninstall', 'LEFT'))
+        self.assertEqual(hc_e2e.alerts.alert_style_swap(before, after, 'Uninstall', 'Cancel'), 'highlighted')
+
+    def test_4_5_buttons_both_read_as_text(self):
+        # w19p-goldilocks2 run 2026-11-17: both buttons are plain text with 17 px boxes, 30 px under the message
+        frame = self.frame('uninstall-alert-4x-text-buttons')
+        self.assertEqual(hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+                         ('Uninstall', 'LEFT'))
+
+    def test_capital_button_labels_of_4_5(self):
+        import copy
+        frame = copy.deepcopy(self.frame('uninstall-alert'))
+        for r in frame['elements']:
+            if r.get('kind') == 'button' and r.get('text') in ('Uninstall', 'Cancel'):
+                r['text'] = r['text'].upper()
+        self.assertEqual(hc_e2e.alerts.alert_focus(frame, 'Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel'),
+                         ('Cancel', 'UP'))
+
     def test_bad_ownership_or_focus_fails_closed(self):
         import copy
         base = self.frame()
@@ -772,6 +795,20 @@ class AlertEvidenceAcrossReleases(unittest.TestCase):
             self.assertEqual(contract, ok, (overlay, reply_id))
             self.assertEqual(s.life_begin.called, overlay)
 
+    def test_uninstall_alert_through_our_service_on_4x(self):
+        msg, tok = 'Uninstall HC Fixture disposable?', '0123456789abcdef0123456789abcdef'
+        uri = hc_e2e.constants.SERVICE_CONFIRM_URI
+        info = dict(message=msg, buttons=['Uninstall', 'Cancel'], alert='accepted', alert_id='owned', actions=[
+            dict(label='Uninstall', onclick=uri, params={'token': tok}), dict(label='Cancel', focus=True)])
+        proof = lambda i: hc_e2e.alerts.alert_service_proof('', msg, 'Uninstall', 'Cancel', hc_e2e.api_spec.DISPOSABLE_ID, observed=i)
+        self.assertTrue(proof(info))
+        for params in ({'token': 'x'}, {'token': tok, 'id': 'a.b'}, {}):
+            bad = dict(info, actions=[dict(label='Uninstall', onclick=uri, params=params), dict(label='Cancel', focus=True)])
+            self.assertFalse(proof(bad), params)
+        line = ('x UNINSTALL_ASK {} %s by org.l: alert shown for %s (exit 0): {"returnValue":true,"alertId":"a-1"}'
+                % (hc_e2e.api_spec.DISPOSABLE_ID, uri))
+        self.assertTrue(hc_e2e.alerts.alert_service_proof(line, msg, 'Uninstall', 'Cancel', hc_e2e.api_spec.DISPOSABLE_ID, caller='org.l'))
+
     def test_ls2_owned_request_and_rejections(self):
         import copy
         for target, safe, message, app, uri, params in [
@@ -1011,12 +1048,15 @@ class StockRecord(unittest.TestCase):
             '/var/luna-service2/api-permissions.d/org.webosbrew.homechooser.launcher.api.json',
         })
 
-    def test_5x_is_unchanged_a_stock_launcher(self):
-        for home in (FULL, HOME):
-            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home))
-            self.assertTrue(hc_e2e.releases.stock_record_ok(5, home, FULL))  # the id is not pinned on 5.x
-        for home in (None, '', 'null', 'org.example.launcher'):
-            self.assertFalse(hc_e2e.releases.stock_record_ok(5, home))
+    def test_4_and_5x_are_unchanged_a_stock_launcher(self):
+        for major in (4, 5):
+            for home in (FULL, HOME):
+                self.assertTrue(hc_e2e.releases.stock_record_ok(major, home))
+                self.assertTrue(hc_e2e.releases.stock_record_ok(major, home, FULL))  # the id is not pinned on 4.5/5.x
+            for home in (None, '', 'null', 'org.example.launcher'):
+                self.assertFalse(hc_e2e.releases.stock_record_ok(major, home))
+            self.assertEqual(hc_e2e.releases.stock_home_id(major, True), FULL)
+            self.assertEqual(hc_e2e.releases.stock_home_id(major, False), HOME)
 
     def test_6_to_9_require_the_stock_id_not_null(self):
         for major in (6, 7, 8, 9):

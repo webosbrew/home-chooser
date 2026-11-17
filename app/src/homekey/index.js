@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-// The Home key hook for webOS 6 to 9: status, install and remove. Pure over injected
+// The Home key hook for webOS 4.0 and 6 to 9: status, install and remove. Pure over injected
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/home-key-hook.md.
 import {errorMessage} from '../platform/errors';
 import {
 	HOMEKEY_FLAG, HOMEKEY_SCRIPT, ensureEntryCommand, homekeyCommand, parsePersistenceStatus,
 	persistenceStatusCommand
 } from '../homechooser/persistence';
-import {createRunner, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
+import {createRunner, isWebos40, majorOf, readDefaultApps, writeDefaultApps} from '../homechooser';
 
 export {APP_DIR, INIT_PATH} from '../homechooser/persistence';
 export const SCRIPT_PATH = HOMEKEY_SCRIPT;
 export const LOG_PATH = '/tmp/homechooser-homekey.log';
 
-// The worker checks unique structural anchors on webOS 6-9.
+// The worker checks unique structural anchors on webOS 6-9 and the filter list on 4.0 (4.5 and 5.x use the record).
 export const homeKeyHookApplies = (version) => {
 	const major = majorOf(version);
-	return major >= 6 && major <= 9;
+	return (major >= 6 && major <= 9) || isWebos40(version);
 };
 
 // Parse the `key=value` lines of `homechooser-homekey status`.
@@ -87,10 +87,13 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 					throw new Error('The Home key hook refused this firmware: ' + (before.reason || 'unknown reason'));
 				}
 
-				const record = await readDefaultApps(run);
-				if (record === null) {
-					await writeDefaultApps(run, {});
-					res.createdKey = true;
+				// 4.0 has no settings record to create
+				if (!isWebos40(version)) {
+					const record = await readDefaultApps(run);
+					if (record === null) {
+						await writeDefaultApps(run, {});
+						res.createdKey = true;
+					}
 				}
 
 				await run.write(HOMEKEY_FLAG, '');

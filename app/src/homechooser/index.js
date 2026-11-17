@@ -4,7 +4,7 @@
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
 import {errorMessage, errorReply} from '../platform/errors';
 import {
-	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
+	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, STOCK_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
 	removeEntryCommand, startWatcherCommand, stopWatcherCommand
 } from './persistence';
 
@@ -27,16 +27,33 @@ export const STOCK_LABELS = {
 	'com.webos.app.appliancehome': 'Stock Appliance Home'
 };
 
+// The two stock homes that can be chosen: where both are installed (4.5, 5.x) the ribbon and the full-screen one.
+export const isChoosableStock = (id) => id === STOCK_HOME || id === STOCK_FULLHOME;
+
+// The names of the stock rows. fullhome installed (4.5, 5.x): home is the ribbon, fullhome the full-screen
+// Home; else com.webos.app.home is the full-screen LG Home.
+// On webOS 4.0 there is no Home app at all: LG Home is the compositor's ribbon (`ribbon`).
+export const stockName = (id, hasFullhome, ribbon) => (!ribbon && (id === STOCK_FULLHOME || (id === STOCK_HOME && !hasFullhome)) ? 'LG Home (Fullscreen)' : 'LG Home (Ribbon)');
+
 export const majorOf = (version) => (Array.isArray(version) ? version[0] : Number(version));
+
+// webOS 4.0 (starfish 4.4.x; 4.5 is 4.10.x): the Home key is handled by the compositor's own ribbon, with no Home app
+// and no default-app record, so it is redirected by a key filter alone (docs/home-key-hook.md, "webOS 4.0"). The
+// service decides from the stock files whether it really is a 4.0; this only says which kind of setup to show.
+export const isWebos40 = (version) => Array.isArray(version) && version[0] === 4 && version[1] < 10;
 
 // What the platform needs beyond the settings record, by release.
 export const releaseInfo = (version) => {
 	const major = majorOf(version);
+	const filterOnly = isWebos40(version);
 	return {
 		major,
+		filterOnly,
+		// 4.0 has no settings record to write: the stored choice and the key filter are all there is.
+		usesRecord: !filterOnly,
 		// 6.x to 9.x: the stock compositor names com.webos.app.home, so the Home key ignores the choice
-		// until the Home key hook is installed.
-		needsHomeKeyHook: major >= 6 && major <= 9,
+		// until the Home key hook is installed. 4.0 needs its filter for the same reason.
+		needsHomeKeyHook: (major >= 6 && major <= 9) || filterOnly,
 		// 10.x and later: the compositor's home id is the system profile's, so write an override too.
 		usesProfile: major >= 10,
 		// 9.x and later have applicationManager/setDefaultApp.
@@ -220,7 +237,21 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 		return windowOf(reply);
 	};
 
+	// 4.0 has no record: the stored choice stands for it (what the watcher and the filter enforce).
+	const readStoredHome = async (run) => {
+		try {
+			const text = String((await run.read(HOME_FILE)) || '').trim();
+			return text && APP_ID_RE.test(text) ? text : null;
+		} catch (e) {
+			return null;
+		}
+	};
+
 	const readStateWith = async (run) => {
+		if (info.filterOnly) {
+			const home = await readStoredHome(run);
+			return {record: null, recordHome: home, profile: null, idleApp: null, profileHome: null, profileError: null};
+		}
 		const record = await readRecord(run);
 		const {profile, idleApp, error} = await readProfile(run);
 		return {
@@ -320,7 +351,7 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 
 		async apply(appId) {
 			// the stock home is "no choice", not a choice (on 6.x to 9.x sam refuses it for lack of appCategory)
-			if (appId === STOCK_HOME) return this.restoreStock();
+			if (isChoosableStock(appId)) return this.restoreStock(appId);
 			const log = [];
 			const run = runner(log);
 			const res = Object.assign(result(log), {
@@ -338,10 +369,20 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 				// 0. the stored choice, which the boot entry and the watcher enforce from here on, and the
 				// previous launcher, which the watcher closes later (nothing is closed here)
 				await run.write(HOME_FILE, appId);
+				// the stock Home in the record is the one to put back when this choice goes away
+				if (isChoosableStock(state.recordHome)) {
+					try {
+						await run.write(STOCK_FILE, state.recordHome);
+					} catch (e) {
+						res.warnings.push(`Could not note the stock Home in use: ${errorMessage(e)}`);
+					}
+				}
 				await recordPrevious(run, res, [state.recordHome, state.profileHome], appId);
 
-				// 1. the settings record
-				if (info.hasSetDefaultApp) {
+				// 1. the settings record (4.0 has none)
+				if (!info.usesRecord) {
+					// the stored choice above and the key filter below are the whole setting
+				} else if (info.hasSetDefaultApp) {
 					try {
 						await run.luna(`${SAM}/setDefaultApp`, {category: 'home', appId});
 					} catch (e) {
@@ -384,7 +425,9 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 			return res;
 		},
 
-		async restoreStock() {
+		// `wanted`: the stock Home the owner picked (4.5 and 5.x have two). Without it, the one the
+		// record already names, else the one the owner used last (the `stock` file), else fullhome when installed, else com.webos.app.home.
+		async restoreStock(wanted) {
 			const log = [];
 			const run = runner(log);
 			const res = Object.assign(result(log), {needsHomeKeyHook: info.needsHomeKeyHook});
@@ -397,12 +440,24 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					res.warnings.push(`Could not stop the watcher: ${errorMessage(e)}`);
 				}
 				await run.remove(HOME_FILE);
-				if (info.major <= 9) {
+				if (!info.usesRecord) {
+					// 4.0: no record and no Home app; LG Home is the ribbon, which the restored key list brings back
+					res.stockId = STOCK_HOME;
+				} else if (info.major <= 9) {
 					// 5.x: the stock Home handler launches the record's home directly, so name a stock home.
 					// 6 to 9: keep a stock record for the watcher; the volatile JS filter is restored below.
 					const list = await run.luna(`${SAM}/listApps`, {properties: ['id']});
 					const ids = ((list && list.apps) || []).map((a) => a.id);
-					const stock = ids.indexOf(STOCK_FULLHOME) >= 0 ? STOCK_FULLHOME : STOCK_HOME;
+					const has = (id) => id === STOCK_HOME || ids.indexOf(id) >= 0;
+					let remembered = null;
+					try {
+						remembered = String((await run.read(STOCK_FILE)) || '').trim();
+					} catch (e) {
+						res.warnings.push(`Could not read the stock Home in use: ${errorMessage(e)}`);
+					}
+					const stock = [wanted, state.recordHome, remembered].find((id) => isChoosableStock(id) && has(id)) ||
+						(has(STOCK_FULLHOME) ? STOCK_FULLHOME : STOCK_HOME);
+					res.stockId = stock;
 					// (a record that was never written on 6 to 9 has no patched compositor reading it, and the
 					// first write of the key is what sam misses, so it is left absent)
 					if (homeOf(state.record) !== stock && !(info.major >= 6 && state.record === null)) {
@@ -410,6 +465,13 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					}
 				} else if (homeOf(state.record)) {
 					await removeHomeFromRecord(run, state.record);
+				}
+				// With a stock Home chosen the record names the variant; the remembered one is only for while a launcher is
+				// chosen (a watcher is then alive to read it, and to remove it with the rest when Home Chooser goes).
+				try {
+					await run.remove(STOCK_FILE);
+				} catch (e) {
+					res.warnings.push(`Could not remove the stock Home note: ${errorMessage(e)}`);
 				}
 				if (info.usesProfile) {
 					await run.remove(OVERRIDE_PATH);

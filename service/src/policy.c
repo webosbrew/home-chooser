@@ -19,7 +19,7 @@ bool hc_sender_ok(const char *app_id)
 	return app_id[n] == '\0' || app_id[n] == ' ';
 }
 
-static const char *const FILES[] = {HC_HOME_FILE, HC_HOMEKEY_FLAG, HC_PREVIOUS_FILE, HC_OVERRIDE_FILE, NULL};
+static const char *const FILES[] = {HC_HOME_FILE, HC_HOMEKEY_FLAG, HC_PREVIOUS_FILE, HC_STOCK_FILE, HC_OVERRIDE_FILE, NULL};
 
 bool hc_file_allowed(const char *path)
 {
@@ -31,12 +31,41 @@ bool hc_file_allowed(const char *path)
 
 bool hc_file_readable(const char *path)
 {
-	return hc_file_allowed(path) || (path && strcmp(path, HC_OSRELEASE) == 0);
+	return hc_file_allowed(path) || (path && strcmp(path, HC_STARFISH_RELEASE) == 0);
 }
 
-bool hc_osrelease_target_ok(const char *resolved)
+bool hc_release_parse(const char *text, int out[3])
 {
-	return resolved && (strcmp(resolved, HC_OSRELEASE) == 0 || strcmp(resolved, HC_OSRELEASE_REAL) == 0);
+	if (!text) return false;
+	for (const char *p = text; (p = strstr(p, "release ")) != NULL; p += 8) {
+		const char *q = p + 8;
+		int v[3];
+		bool ok = true;
+		for (int i = 0; i < 3 && ok; i++) {
+			if (*q < '0' || *q > '9') { ok = false; break; }
+			long n = 0;
+			while (*q >= '0' && *q <= '9') {
+				n = n * 10 + (*q++ - '0');
+				if (n > 100000) n = 100000;
+			}
+			v[i] = (int)n;
+			if (i < 2) {
+				if (*q != '.') ok = false;
+				else q++;
+			}
+		}
+		if (ok) {
+			for (int i = 0; i < 3; i++) out[i] = v[i];
+			return true;
+		}
+	}
+	return false;
+}
+
+int hc_release_major(const char *text)
+{
+	int v[3];
+	return hc_release_parse(text, v) ? v[0] : 0;
 }
 
 static const struct {
@@ -81,8 +110,9 @@ static const hc_command COMMANDS[] = {
 	{"accessApply", {"/bin/sh", HC_ACCESS_SCRIPT, "apply", NULL}, 30, false, false},
 	{"accessRemove", {"/bin/sh", HC_ACCESS_SCRIPT, "remove", NULL}, 30, false, false},
 	{"accessStatus", {"/bin/sh", HC_ACCESS_SCRIPT, "status", NULL}, 10, true, false},
-	{"stopWatcher", {"/bin/systemctl", "stop", "homechooser-home", NULL}, 20, true, false},
-	{"watcherActive", {"/bin/systemctl", "is-active", "homechooser-home", NULL}, 10, true, false},
+	/* systemctl on systemd releases, a pid file where there is none (webOS 4.0 and 4.5: upstart): the entry script knows */
+	{"stopWatcher", {"/bin/sh", HC_ENTRY_SCRIPT, "stop", NULL}, 20, true, false},
+	{"watcherActive", {"/bin/sh", HC_ENTRY_SCRIPT, "active", NULL}, 10, true, false},
 	/* Exact profile calls use the same identity as every other privileged luna call. */
 	{"profileGet", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/getProfiles", "{\"names\":[\"defaultApps\",\"idleApp\"]}", NULL}, 20, false, false},
 	{"profileRescan", {"/usr/bin/luna-send", "-a", HC_LUNA_IDENTITY, "-n", "1", "luna://com.webos.service.systemprofile/debug/rescan", "{}", NULL}, 30, false, false},

@@ -197,6 +197,12 @@ class ChooseSteps:
                     self.hook_mounts_match(s['mounts']), 'mounts: %s' % s['mounts'])
             r.check('Home key hook flag file exists', s['flag'] == 'yes', s['flag'])
             self.check_hook_status('after selection' + (' and the boot' if not mounted_before else ''))
+        elif self.filter_only:
+            # webOS 4.0: the key filter entry of our own (homekey40-*.js) is the whole redirect; no QML mounts, no record
+            st, raw = self.kf_status()
+            r.check('webOS 4.0: our key filter entry is selected, no QML mounts, hook flag set',
+                    st.get('active') == 'yes' and not s['mounts'] and s['flag'] == 'yes',
+                    'mounts: %s flag: %s status: %s' % (s['mounts'], s['flag'], raw))
         else:
             r.check('no Home key hook on this release', not s['mounts'] and s['flag'] == 'no',
                     'mounts: %s flag: %s' % (s['mounts'], s['flag']))

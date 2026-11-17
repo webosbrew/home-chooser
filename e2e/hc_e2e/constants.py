@@ -9,6 +9,7 @@ SVC_ID = APP_ID + '.service'
 TVPOWER = 'luna://com.webos.service.tvpower/'
 SCREENSAVERS = ('com.webos.app.screensaver', 'com.webos.app.videoads')
 TVPOWER_REBOOT_URI = 'luna://com.webos.service.tvpower/power/reboot'
+SERVICE_CONFIRM_URI = 'luna://org.webosbrew.homechooser.service/uninstallConfirmed'
 STOCK = 'com.webos.app.home'
 CHOICE = '/var/lib/webosbrew/homechooser/home'
 FLAG = '/var/lib/webosbrew/homechooser/homekey'

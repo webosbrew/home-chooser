@@ -24,7 +24,7 @@ static void gate_follow(const char *action, gboolean stock, int rc, gboolean act
 {
     gboolean redirect = !strcmp(action, "apply") || !strcmp(action, "refresh");
     if (!redirect && strcmp(action, "stop") && strcmp(action, "clear")) return;
-    int major = hc_gate_major(HC_OSRELEASE);
+    int major = hc_gate_major(HC_STARFISH_RELEASE);
     if (major < 6 || major > 9) return;
     char *choice = redirect && !stock && rc == 0 && active ? hc_gate_wanted(HC_STATE_DIR, homekey_call, NULL) : NULL;
     HCGateOps ops = hc_gate_ops(homekey_call, NULL);
@@ -48,7 +48,7 @@ int hc_homekey_main(int argc, char **argv)
     const char *action = boot ? "boot" : argc > 2 ? argv[2] : "status";
     if (strcmp(action, "boot") && strcmp(action, "status") && strcmp(action, "prepare") &&
         strcmp(action, "apply") && strcmp(action, "refresh") && strcmp(action, "stop") && strcmp(action, "clear")) return 2;
-    HCKeyOps ops = {HC_STATE_DIR, "/usr/lib/qt5/qml/KeyFilters/systemUi.js", HC_OSRELEASE,
+    HCKeyOps ops = {HC_STATE_DIR, "/usr/lib/qt5/qml/KeyFilters/systemUi.js", HC_STARFISH_RELEASE,
         homekey_call, NULL, 30, 1000};
     GString *out = g_string_new(NULL);
     gboolean stock = argc > 3 && !strcmp(argv[3], "stock");

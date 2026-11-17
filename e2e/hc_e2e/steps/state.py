@@ -15,7 +15,12 @@ class DeviceState:
     """Device state the steps read: watcher, hook status, compositor and crash windows, reboots, residency."""
 
     def watcher_active(self):
-        rc, out = self.dev.sh('systemctl is-active homechooser-home')
+        # webOS 4.0/4.5 run upstart, no systemd: the watcher is a setsid shell loop whose pid is in a file on tmpfs
+        rc, out = self.dev.sh(
+            'if command -v systemctl >/dev/null 2>&1; then systemctl is-active homechooser-home; '
+            'else p=$(cat /tmp/homechooser-runtime/watcher.pid 2>/dev/null); '
+            'if [ -n "$p" ] && grep -q homechooser-boot /proc/$p/cmdline 2>/dev/null; then echo active; '
+            'else echo inactive; fi; fi')
         return out.strip()
 
     def state(self):
@@ -37,6 +42,11 @@ class DeviceState:
 
     def uses_home_key_hook(self):
         return uses_home_key_hook(self.major)
+
+    @property
+    def filter_only(self):
+        """webOS 4.0: no Home app, no settings record; the Home key filter entry alone (docs/home-key-hook.md)."""
+        return bool(getattr(self.dev, 'filter_only', False))
 
     def uses_override(self):
         return self.major >= 10
@@ -170,7 +180,7 @@ class DeviceState:
         if running is None:
             lines.append('running: unreadable: ' + out[:200])
         else:
-            homes = [('previous home', STOCK)] + ([('5.x fullhome', 'com.webos.app.fullhome')] if self.major == 5 else [])
+            homes = [('previous home', STOCK)] + ([('4.5/5.x fullhome', 'com.webos.app.fullhome')] if self.major <= 5 else [])
             for label, aid in homes + [('chosen launcher', self.launcher)]:
                 a = running.get(aid)
                 if not a:
@@ -202,7 +212,7 @@ class DeviceState:
         baked_emptied: the watcher ran `refresh stock` (a launcher removal; not after an uninstall,
         where the worker went with the app directory).  10+: null/unset, no override, idleApp stock."""
         r = self.rec
-        want = {5: 'a stock launcher (%s or %s)' % (FULLHOME, STOCK)}.get(self.major) or (
+        want = ('a stock launcher (%s or %s)' % (FULLHOME, STOCK) if self.major <= 5 else None) or (
             'the stock id %s, not null' % self.stock_id if self.uses_home_key_hook() else 'null or unset')
         r.check(label + ': record home is %s' % want, self.stock_record_ok(s['record_home']), s['record_raw'])
         if self.uses_override():

@@ -51,9 +51,9 @@ int main(int argc, char **argv) {
     setbuf(stdout,NULL);
     assert(argc == 3);
     HCKeyOps o = {argv[1], argv[2], NULL, fake, NULL, 3, 0};
-    char *os = g_build_filename(o.state_dir, "os-release", NULL); o.osrelease = os;
+    char *os = g_build_filename(o.state_dir, "starfish-release", NULL); o.release_file = os;
     char *flag = g_build_filename(o.state_dir, "homekey", NULL), *home = g_build_filename(o.state_dir, "home", NULL);
-    g_file_set_contents(os, "VERSION_ID=\"7.6.0\"\n", -1, NULL);
+    g_file_set_contents(os, "Rockhopper release 7.6.0-19 (mullet-mullet)\n", -1, NULL);
     g_file_set_contents(flag, "", -1, NULL); g_file_set_contents(home, "test.home\n", -1, NULL);
     current = parse("[{\"file\":\"/other.js\",\"handler\":\"first\",\"extra\":[1,true]}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"second\",\"extra\":{\"a\":2}}, {\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"third\"}]");
     jvalue_ref original = jvalue_duplicate(current);
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
     starts=0; assert(run(&o,"boot",FALSE)==0);assert(jvalue_equal(current,original)); assert(starts==0);
     o.stock_js=argv[2];unlink(unknown);g_free(unknown);
     /* A restore with no state dir (after the uninstall) must not bring the dir and lock back. */
-    char *gone=g_build_filename(argv[1],"absent-state",NULL); HCKeyOps late=o; late.state_dir=gone; late.osrelease=os;
+    char *gone=g_build_filename(argv[1],"absent-state",NULL); HCKeyOps late=o; late.state_dir=gone; late.release_file=os;
     const char *restores[]={"stop","clear","refresh"}; int writes=sets;
     for(int i=0;i<3;i++){ assert(run(&late,restores[i],i==2)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); }
     assert(run(&late,"refresh",FALSE)==0); assert(!g_file_test(gone,G_FILE_TEST_EXISTS)); assert(sets==writes);

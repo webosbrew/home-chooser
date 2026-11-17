@@ -41,7 +41,7 @@ Terms such as SAM, the watcher or the home gate are explained in the [glossary](
 | A dock or bar drawn over the running app | overlay | `"defaultWindowType": "overlay"`, usually with `"transparent": true` | the last TV input (Live TV or HDMI) comes back; your launcher opens on Home only |
 
 Home Chooser reads `defaultWindowType` from the installed appinfo to decide what an empty screen
-shows on webOS 6 and later. On webOS 5 the screen goes back to Live TV in both cases. A
+shows on webOS 6 and later. On webOS 4 and 5 the screen goes back to Live TV in both cases. A
 full-screen launcher is the root of navigation, so it must not close itself on Back.
 
 **Only one overlay.** On webOS 11 and later only one overlay stays on screen. While your overlay
@@ -56,7 +56,7 @@ stays under an overlay window.
 
 ## What Home Chooser does for a launcher
 
-* **It makes your app the Home app on webOS 5 to 12.** The owner picks your app in Home Chooser;
+* **It makes your app the Home app on webOS 4 to 12.** The owner picks your app in Home Chooser;
   from then on the Home button opens it. The choice survives reboots: a small watcher re-applies it
   at boot, and puts LG Home back if your app is uninstalled (and re-applies the choice if it comes
   back). No restart is needed on any release. See [Per-release notes](#per-release-notes).
@@ -70,7 +70,7 @@ stays under an overlay window.
   Closing and uninstalling work only while your app is the selected Home, and an uninstall always
   asks the owner first.
 
-What it needs: a TV with Homebrew Channel and a Home Chooser service running as root. On 5.x to
+What it needs: a TV with Homebrew Channel and a Home Chooser service running as root. On 4.x to
 10.x, opening Home Chooser asks Homebrew Channel to elevate the service. On 11.x and 12.x that
 needs Homebrew Channel 0.8.0 or later; see [Per-release notes](#per-release-notes).
 Until elevation, only `getInfo` works, and it tells you so.
@@ -886,16 +886,38 @@ On 10.3.1, 11.2.0 and 12.0.0, one `getIcons` call for 20 apps took 40 to 160 ms,
 *Not needed to write a launcher.* This section explains how Home Chooser makes the Home button
 follow the choice on each release, for when you want to know why something behaves as it does.
 
-Releases are named by the major version in `/etc/os-release` (`VERSION_ID`), not by LG's marketing
+Releases are named by the major version in `/etc/starfish-release` (`Rockhopper release 11.2.0-3709 (queue-qilian)` is release 11), not by LG's marketing
 year. Your launcher declares the same appinfo on all of them. The API and the selection request
 behave the same everywhere; what differs is how the Home button is made to follow the choice, what
 the owner sees, and how the permission reaches you.
+
+### 4.x
+
+The only 4.x-specific facts a launcher author needs; the rest of this guide applies unchanged.
+
+* **No QML launchers.** SAM refuses a third-party `type: "qml"` app on 4.0 and 4.5 (`Unsupported
+  Application Type`), so a QML launcher cannot be installed there. Use `web` or `native`.
+* **Web engine.** A web launcher runs on Chromium 53 (the browser of webOS 4.x), which has no native
+  ES2017 (`async`/`await`). Build for that target (ES2016, with a transpiler) if the same package
+  must run on 4.x. `api/client/homechooser.js` is ES5.
+* **Permissions.** `requiredACG` does not exist before webOS 11; leave it out. The service's own
+  `requiredPermissions` check is the gate.
+* **Background launchers are closed.** As on 5.x, the memory manager can close a launcher that is in
+  the background when another app is launched; keep no state you cannot rebuild on launch.
+* **webOS 4.0 (starfish 4.4.x).** There is no Home app and no `defaultApps` record: Home Chooser
+  puts a key filter entry of its own before LG's, and the Home button opens your launcher
+  ([the Home key filter](home-key-hook.md#webos-40-a-filter-entry-of-our-own)). LG's ribbon is the
+  compositor's, and a Back that the foreground app does not take opens it. For the chosen launcher
+  Home Chooser handles Back: a full-screen launcher's Back is swallowed (it stays in front), an overlay
+  launcher's goes to the last TV input. A launcher that takes Back itself (`disableBackHistoryAPI`,
+  [above](#1-declare-the-app)) is not affected. A long press of Home still opens LG's recent apps.
+* **webOS 4.5 (starfish 4.10.x)** takes the 5.x path below.
 
 ### 5.x
 
 The stock Home key handler launches the `home` entry of the `general/defaultApps` settings record
 directly, so Home Chooser only writes that record. No patch, no restart. The stock launcher is
-`com.webos.app.fullhome` (an overlay window), and LG Home is not running, so Home Chooser does not
+`com.webos.app.fullhome` or `com.webos.app.home` (the New Home or the Basic Home, whichever the owner chose), and the other is not running, so Home Chooser does not
 touch the stock home's memory here. Calls reach the service in the same way as on 6.x to 10.x
 (below).
 
@@ -1071,8 +1093,8 @@ a full partition makes an installation fail for an unrelated-looking reason.
   that launches, lists and closes apps. Its log lines carry `sam`.
 * **Compositor**: the webOS window manager (surface manager). It draws the windows and dispatches
   keys, the Home key among them.
-* **Stock home**: LG's own home app, LG Home (`com.webos.app.home`; on webOS 5 the visible one is
-  `com.webos.app.fullhome`).
+* **Stock home**: LG's own home app, LG Home (`com.webos.app.home`; on webOS 4.5 and 5 there is also
+  `com.webos.app.fullhome`, and the owner chooses between the two).
 * **Preload**: webOS starting an app in the background at boot so it opens fast. LG Home is
   preloaded; on webOS 6 and later Home Chooser turns that off while another launcher is chosen.
 * **Watcher**: Home Chooser's background program. It re-applies the choice at boot, puts LG Home

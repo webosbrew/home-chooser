@@ -51,7 +51,10 @@ class DeviceApiScenario(Scenario):
         self.dev.say = rec.say
         self.major, os_release = self.dev.release()
         self.rec.note('device release', os_release)
-        self.stock_id = stock_home_id(self.major, self.dev.app_installed(FULLHOME))
+        fullhome = self.dev.app_installed(FULLHOME)
+        self.stock_id = stock_home_id(self.major, fullhome)
+        # the row for com.webos.app.home: the ribbon where fullhome is installed too (4.5, 5.x), else the full-screen LG Home
+        self.stock_row = 'LG Home (Ribbon)' if fullhome else 'LG Home (Fullscreen)'
 
     def shot(self, label):
         self.rec.note('screenshot %s skipped in --device mode' % label)
@@ -80,7 +83,7 @@ class DeviceApiScenario(Scenario):
         if ui.get('row') != target or not self.ensure_page('device selection confirm'):
             raise RuntimeError('target row is not focused; no OK sent')
         self.press('OK')
-        want = 'Use LG Home?' if target == STOCK else 'Use %s as Home?' % self.L.title
+        want = 'Use %s?' % self.stock_row if target == STOCK else 'Use %s as Home?' % self.L.title
         ui = self.wait(lambda: (lambda u: u if u and u.get('dialog') == want else None)(self.ui()), 20, 1) or {}
         ok, why = self.ours_in_front(want)
         r.check('selection dialog is ours and focused', ok, why)

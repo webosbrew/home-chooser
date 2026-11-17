@@ -178,18 +178,18 @@ static void test_parent_death(void) {
 static void test_runtime(int mode) {
     char *case_name=g_strdup_printf("runtime-%d",mode),*root=g_build_filename(test_root,case_name,NULL);g_free(case_name);
     config=hc_watch_config();
-    char *state=g_build_filename(root,"state",NULL),*os=g_build_filename(root,"os-release",NULL),*app=g_build_filename(root,"app",NULL);
+    char *state=g_build_filename(root,"state",NULL),*os=g_build_filename(root,"starfish-release",NULL),*app=g_build_filename(root,"app",NULL);
     char *override=g_build_filename(root,"override/o.json",NULL),*link=g_build_filename(root,"init/homechooser",NULL),*log=g_build_filename(root,"watch.log",NULL);
     char *rt=g_build_filename(root,"rt",NULL),*scripts=g_build_filename(root,"service/scripts",NULL),*access=g_build_filename(rt,"homechooser-access",NULL);
     char *binary=g_build_filename(root,"service/homechooser-daemon",NULL),*home=g_build_filename(state,"home",NULL);
     char *access_source=g_build_filename(scripts,"homechooser-access",NULL),*common=g_build_filename(scripts,"lib/common.sh",NULL);
     char *gate_dir=g_build_filename(rt,"home-gate",NULL),*gate_binary=g_build_filename(root,"service/homechooser-home-gate",NULL);
     config.gate_dir=gate_dir;config.gate_binary=gate_binary;
-    config.state_dir=state;config.osrelease=os;config.app_dir=app;config.override=override;config.init_link=link;
+    config.state_dir=state;config.release_file=os;config.app_dir=app;config.override=override;config.init_link=link;
     config.log=log;config.runtime=rt;config.scripts_dir=scripts;config.access_script=access;
     config.confirm_ms=config.preload_retry_ms=config.preload_settle_ms=config.notify_retry_ms=0;
     config.recheck_s=mode==6?1:300;config.preload=TRUE;config.stock_js=stock_js;
-    write_file(home,"my.home");write_file(os,mode==5?"VERSION_ID=\"8.0\"\n":"VERSION_ID=\"11.0\"\n");mkdir_p(app);
+    write_file(home,"my.home");write_file(os,mode==5?"Rockhopper release 8.0.0-1 (t)\n":"Rockhopper release 11.0.0-1 (t)\n");mkdir_p(app);
     char *flag=g_build_filename(state,"homekey",NULL);write_file(flag,"");g_free(flag);
     filters=jdom_create(key_buf("[{\"file\":\"/usr/lib/qt5/qml/KeyFilters/systemUi.js\",\"handler\":\"handleKeyEvent\",\"metadata\":true}]"),jschema_all(),NULL);
     write_file(access_source,"#!/bin/sh\n. \"$(dirname \"$0\")/lib/common.sh\"\n[ \"$HC_TEST_COMMON\" = yes ]\n");write_file(common,"HC_TEST_COMMON=yes\n");

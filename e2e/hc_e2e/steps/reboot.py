@@ -4,6 +4,7 @@ import json
 
 from .. import timing
 from ..alerts import alert_service_proof
+from .screen import AlertActionLost
 from ..constants import (APP_ID, BOOT_INPUT_WAIT, BOOT_SCRIPT, REBOOT_ASKED_TEXT, REBOOT_BUTTONS, REBOOT_PROMPT,
     RESTART_NOW, SCRIPTS_DIR, STOCK)
 from ..evidence import messages_command, service_log_command
@@ -126,11 +127,23 @@ class RebootSteps:
                 nonlocal outcome
                 outcome = self.wait_reboot(boot0, timeout=40 if self.use_click() else 240)
                 return outcome if outcome in ('rebooted', 'off') else False
-            automatic = self.alert_action(REBOOT_PROMPT['apply'], 'Reboot', 'Later',
-                                          '2-reboot-alert', service_proof, verify_reboot,
-                                          lambda: not any(e.get('text') == REBOOT_PROMPT['apply']
-                                              for e in self.elements('reboot-result')['elements']), request_again,
-                                          before_action=lambda: self.prepare_tvpower_reboot('2 reboot alert'))
+            lost = False
+            try:
+                automatic = self.alert_action(REBOOT_PROMPT['apply'], 'Reboot', 'Later',
+                                              '2-reboot-alert', service_proof, verify_reboot,
+                                              lambda: not any(e.get('text') == REBOOT_PROMPT['apply']
+                                                  for e in self.elements('reboot-result')['elements']), request_again,
+                                              before_action=lambda: self.prepare_tvpower_reboot('2 reboot alert'))
+            except AlertActionLost:
+                # recorded as a failed check; the alert is gone, so restart the VM the way the fallback does
+                lost, automatic = True, None
+            if lost:
+                self.prepare_tvpower_reboot('2 reboot alert lost')
+                up = self.beanjar_reboot('2 reboot (the alert action did not run, beanjar stop/start)')
+                if not up:
+                    raise RuntimeError('the VM did not come back after the reboot')
+                self.after_boot_checks('after the reboot')
+                return
             if not automatic:
                 r.manual('press Reboot on the restart alert', ('automatic press declined: ' + self.alert_decline_reason + '. Press Reboot by hand within ') +
                      '240 s; otherwise the alert is closed and the VM is restarted with beanjar stop/start.')

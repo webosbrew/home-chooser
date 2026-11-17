@@ -1,11 +1,12 @@
-# Live Home key filter, webOS 6–9
+# Live Home key filter, webOS 6–9 and 4.0
 
 On webOS 6 to 9 the stock Home key handler launches `com.webos.app.home` by its fixed id and ignores
 the default-app record ([study](research/home-key-and-home-app.md#660-to-921)). Home Chooser copies
 **this device's** stock `KeyFilters/systemUi.js`, changes the Home launch target, and selects the
 copy through configd. No compositor, SAM, WAM or input-method restart is required, including at
-boot. No QML source is changed or bind mounted. webOS 5 and 10–12 use the settings record and
-system profile instead ([What is written](settings-app.md#what-is-written)).
+boot. No QML source is changed or bind mounted. webOS 4.0 has no `launchHomeApp` to change and uses a
+filter entry of its own instead ([webOS 4.0](#webos-40-a-filter-entry-of-our-own)). webOS 4.5, 5 and 10–12 use the settings record and
+system profile ([What is written](settings-app.md#what-is-written)).
 
 The native implementation is [homekey.c](../service/src/homekey.c), with the guarded generator in
 [homekey-generator.c](../service/src/homekey-generator.c). Both are compiled into the shared static archive and linked into
@@ -132,6 +133,74 @@ touched: a failed or refused refresh, a disabled hook, an unknown stock shape, a
 leave `baked` unset (or the choice different), so the stock list stays and the gate stays unmounted. No service
 is restarted, nothing is written to configd's factory database, and webOS 5 and 10+ do not subscribe.
 
+## webOS 4.0: a filter entry of our own
+
+webOS 4.0 (starfish 4.4.x, W18R verified) has no Home app and no `defaultApps` record. The Home key is
+handled in the compositor: the stock `KeyFilters/systemUi.js` calls `global.prepareToGoHome()` on press,
+arms a 1000 ms `longPressTimer` for `global.gotoRecents`, and calls `global.goHome()` (LG's ribbon) on
+release. There is no `launchHomeApp` to retarget, so none of the 6-9 shape fingerprints match and the stock
+file stays untouched. Home Chooser inserts **its own entry** instead.
+
+Evidence ([research notes](research/home-key-and-home-app.md) hold the 6-9 side): the compositor's
+`WebOSKeyFilter` loads each file of `com.webos.surfacemanager.keyFilters` into its own `QQmlEngine` with
+`QJSEngine::evaluate` (not `Qt.include`), calls the named handler for press and release, and reads the
+result as 0 NotAccepted, 1 Accepted (consumed), anything else the next entry. A volatile `setConfigs`
+reloads the list in about 0.4 s. Verified live on the emulated W18R (05.50.70.01, 4.4.3): the entry
+consumed Home, the ribbon never appeared, the launcher opened, long press still opened the recents ribbon,
+and a volatile restore of the saved list read back exactly equal.
+
+**Gating.** The mode is not decided by a version number alone ([homekey.c](../service/src/homekey.c),
+`hc_key_mode`): the release major is 4 **and** the stock `systemUi.js` has `handleSystemKeys`,
+`prepareToGoHome` and `gotoRecents` but no `launchHomeApp`. webOS 4.5 (starfish 4.10.x) has
+`launchHomeApp` and keeps the 5.x mechanism (the settings record), so it never takes this path: its
+status is `patch=not-needed`, and a generated 4.0 file left by a 4.0 to 4.5 update is deleted at the
+next apply. The app only shows the 4.0 setup on 4.x releases below 4.10; the service has the last word.
+The release is read from `/etc/starfish-release` only.
+
+**The generated file** (`homekey40-XXXXXX.js` in the state directory, a new name for each change, mode 0644,
+SHA256 read back before selection) holds one handler, `handleHomeChooserKeys`, with the launcher id and
+whether it is an overlay launcher (`defaultWindowType` from `getAppInfo`, the same classification as the
+[home gate](home-gate.md)) baked in. The template is in [homekey-generator.c](../service/src/homekey-generator.c);
+its behaviour is tested against a mock of the filter scope (`service/test/homekey40-filter.js`).
+
+- **Home** (press and release are both consumed, as the stock handler does when the app does not take
+  Home): press runs `prepareToGoHome()` and arms the same `longPressTimer`, so a long press still opens
+  recents; a release with the timer still running hides the ribbon if it is showing, and, unless the launcher is already in
+  front, closes overlays (`global.closeOverlaidItems`, as stock Home does) and launches the launcher with
+  `applicationManager.launch(id, {"launchType":"homeKey","activateType":"home"})`. Under a modal alert, and during the
+  first-use setup, the key goes on to the stock handler.
+- **Back** (only while the launcher is the front surface and no alert, keyboard, pincode prompt, spinner, quick
+  settings, voice agent or ribbon is up): when the launcher accepts Back itself (`surfaceAcceptsBackKey` is
+  `"true"`) the platform handles it as usual. When it does not, stock Back would call `goHome()` and
+  draw LG's ribbon over it, so the entry consumes it: a **full-screen** launcher swallows it (nothing
+  happens); an **overlay** launcher goes to the last input (`settingsService.lastInputApp`, else Live TV), the
+  same rule as for overlay launchers on 6-9. Back anywhere else is left alone.
+- **Insert rule.** The entry goes immediately before the stock `handleSystemKeys` entry, found by **handler name**
+  among the entries of the stock `systemUi.js`, never by index (device layers differ: one has no
+  `handleMagicNumber`, another lists other handlers). Everything before it (screen saver, accessibility,
+  magnifier, ...) still runs first. A list without that entry, or in the legacy `{ "<path>": "<handler>" }` form of
+  the `commercial` layer, is refused without a write (stock stays); a refusal at boot posts the usual notice.
+
+**Transaction, restore and watcher** are the 6-9 ones: the exact stock array is saved in
+`keyfilters-stock.json`; every write is a volatile `setConfigs` followed by an exactly equal `getConfigs`; a
+failed or ambiguous write restores the saved list; an external edit of the live list is not overwritten; a
+choice change, disable, missing launcher and uninstall restore the exact saved list before any file is
+deleted. The watcher subscribes to the list and applies it again after boot and whenever configd puts the
+stock list back (rate limited, as on 6-9). Nothing on 4.0 touches the settings record or the profile, restarts
+a process or writes configd's factory database, and there is no home gate (there is no Home binary to bind).
+
+**No systemd on 4.0.** webOS 4.0 and 4.5 run upstart, so `systemd-run` and `systemctl` do not exist. With
+neither present, `scripts/homechooser watch` starts the watcher as a detached shell loop in its own session
+(the unit's `Restart=on-failure` as a loop with a five second pause) and records its pid in
+`/tmp/homechooser-runtime/watcher.pid`; the same script answers `stop` and `active`, which the service's
+`stopWatcher` and `watcherActive` commands now call (they ran `systemctl` before). The HBC init.d entry starts the
+same loop at boot.
+
+**Measured on the emulated W18R** (rockpi4a-1): after a restart the boot entry applied the filter 29.5 s
+after the boot began (guest uptime) and configd showed the entry about 5 s later at the first poll; Home opened the
+launcher afterwards. Choosing "LG Home (Ribbon)" and uninstalling Home Chooser each restored the 12-entry stock list,
+read back exactly equal.
+
 ## Status and tests
 
 `active=yes` means that configd selects a Home Chooser JS version; `active=no` means it does not.
@@ -152,7 +221,7 @@ The generator checks exact-byte edits, syntax, executed launch branches/gates an
 refusal against `service/scripts/tests/corpus.tsv`. Missing firmware paths are explicitly reported.
 `test-fwupdate` ([fwupdate-guard.py](../service/test/fwupdate-guard.py), [test-fwupdate.c](../service/test/test-fwupdate.c))
 simulates a firmware update: two or more boots on one persistent state directory, with the stock
-`systemUi.js` and os-release swapped and configd back at the firmware's own list in between. It uses real
+`systemUi.js` and `/etc/starfish-release` swapped and configd back at the firmware's own list in between. It uses real
 adjacent releases from the corpus (6.3.1 to 9.2.4, plus files of other majors that must fall back to stock)
 and synthetic updates (unknown shape, file removed, version string only, live swap). The guard keeps no
 version, hash or mtime of the stock file: every run re-reads it, so the check is the shape fingerprint alone.

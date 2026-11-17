@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -155,6 +156,13 @@ class Turn(unittest.TestCase):
     def setUp(self):
         FakeInspector.log, FakeInspector.early, FakeInspector.keep = [], [], True
         self.said = []
+        # a real run keeps the TV's country in e2e/results/country; these tests must not read it
+        import tempfile
+        self._country = tempfile.TemporaryDirectory()
+        self.addCleanup(self._country.cleanup)
+        patch = unittest.mock.patch.object(mitm, 'COUNTRY_DIR', self._country.name)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def run_it(self, host=None):
         return mitm.turn_off_update_offer(host or FakeHost(), 'w22o-ponytail-us', self.said.append, FakeInspector)

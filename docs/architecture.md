@@ -1,6 +1,6 @@
 # Architecture
 
-Home Chooser makes the remote's Home button open a launcher the owner picks, on webOS 5 to 12. One
+Home Chooser makes the remote's Home button open a launcher the owner picks, on webOS 4 to 12. One
 package holds four programs:
 
 | Program | What it is | Runs |
@@ -76,7 +76,7 @@ flowchart LR
   on 5 and 10+ to a persistent copy under `/var/lib/webosbrew/homechooser/boot`, so an uninstall
   made while the watcher was stopped is still undone at the next boot. It only queues
   `systemd-run --unit=homechooser-home … homechooser-daemon --boot` and returns; all waiting
-  happens inside the unit.
+  happens inside the unit. (webOS 4.x runs upstart and has no systemd: the same daemon runs as a detached loop with a pid file, [home-key-hook.md](home-key-hook.md#webos-40-a-filter-entry-of-our-own).)
 * On **webOS 6–9** the daemon also selects a generated copy of the stock key filter through configd
   (volatile, so a reboot returns the firmware's own list) and bind-mounts the home gate over
   `/usr/bin/com.webos.app.home`. The bind source is a copy in `/tmp/homechooser-runtime/home-gate`,
@@ -88,7 +88,11 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph w5["webOS 5.x"]
+    subgraph w40["webOS 4.0"]
+        k40["HOME"] --> f40["our own key filter entry,<br/>before LG's handleSystemKeys"] --> l40["chosen launcher"]
+        i40["foreground empty"] --> s40["Live TV"]
+    end
+    subgraph w5["webOS 4.5 and 5.x"]
         k5["HOME"] --> f5["stock key filter launches<br/>the record's home"] --> l5["chosen launcher"]
         i5["foreground empty"] --> s5["Live TV"]
     end
@@ -126,7 +130,8 @@ the last input itself once after each boot, by the gate's rule
 
 | Family | HOME follows the choice through | Stock LG Home while a launcher is chosen |
 | --- | --- | --- |
-| 5.x | `general/defaultApps.home`, which the stock key filter launches directly | Not touched: the visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
+| 4.0 | A key filter entry of Home Chooser's own, inserted before LG's `handleSystemKeys` through configd (volatile); there is no Home app and no record ([home-key-hook.md](home-key-hook.md#webos-40-a-filter-entry-of-our-own)) | LG's Home is the compositor's ribbon, which stays; Back on the launcher is swallowed or goes to the last input |
+| 4.5 and 5.x | `general/defaultApps.home`, which the stock key filter launches directly | Not touched: the visible home, `com.webos.app.fullhome`, stays loaded until the next restart |
 | 6–9 | A generated key filter that launches the chosen id ([home-key-hook.md](home-key-hook.md)) | Replaced by the home gate; the running instance is closed once |
 | 10.x | The settings record and a system profile override with `home` and `idleApp` ([settings-app.md](settings-app.md#what-is-written)) | Preload off; closed once per boot and per choice after the launcher is safely in front; `idleApp` keeps SAM from starting it again |
 | 11+ | Same as 10.x | Same as 10.x |
@@ -241,7 +246,7 @@ flowchart TD
 These hold across the code and are the reasons behind several choices above.
 
 * **The platform's own default-app mechanism decides the home app** where the firmware has one: the
-  `general/defaultApps` record, which SAM reads on every release from webOS 5, plus the system
+  `general/defaultApps` record, which SAM reads on every release from webOS 4.5, plus the system
   profile override that the compositor uses on 10 and later. The 6–9 key filter edit only changes
   the launch target; it adds no logic.
 * **One launcher contract on every release.** A launcher declares `appCategory: ["home"]` and needs

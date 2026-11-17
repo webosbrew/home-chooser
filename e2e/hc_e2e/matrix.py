@@ -7,9 +7,9 @@ from .constants import HERE
 
 # ---------------------------------------------------------------------------------------------
 # The matrix: one table.  "sure" says how far the VM/release pairing was checked.
-#   verified  = booted and os-release read by a run of this runner
+#   verified  = booted and /etc/starfish-release read by a run of this runner
 #   docs      = the firmware is named for that release in docs/research/home-key-and-home-app.md
-#   listing   = only `beanjar list` (platform column, firmware string); os-release not read
+#   listing   = only `beanjar list` (platform column, firmware string); the release file not read
 # elevation: luna = Homebrew Channel's luna elevateService (the app does it), on every release:
 # from Homebrew Channel 0.8.0 it serves apps on 11.x/12.x too (full tier, 2026-11-13).
 # root-shell = the runner runs Homebrew Channel's elevate-service helper as root, kept as an
@@ -17,6 +17,8 @@ from .constants import HERE
 # ---------------------------------------------------------------------------------------------
 MATRIX = [
     # release, vm, elevation, sure, note
+    ('4.0', 'w18r-goldilocks', 'luna', 'verified', 'W18R 05.50.70.01 = 4.0 (webOS 4.4.3-22; /etc/starfish-release: Rockhopper release 4.4.3-22 (goldilocks-gorongosa)); key-filter mode: no Home app, no defaultApps record (docs/home-key-hook.md, webOS 4.0); 4.5 is the 4.x row below'),
+    ('4.x', 'w19p-goldilocks2', 'luna', 'verified', 'W19P 05.40.97.01 = 4.5 (webOS 4.10.2-29); /etc/starfish-release read 2026-11-16: Rockhopper release 4.10.2-29 (goldilocks2-grampians); hbchannel 0.8.0 layer'),
     ('5.x', 'w20l-jhericurl', 'luna', 'verified', 'W20L 04.63.25.01 = 5.6.1; os-release read 2026-10-22; w20h-jhericurl is also webOS 5'),
     ('6.x', 'w21a-kisscurl', 'luna', 'verified', 'W21A 03.53.25.01 = 6.5.2; os-release read 2026-10-23 (w21p-kisscurl, 6.6.0, belongs to another project and is not in the matrix)'),
     ('9.x', 'w24g-ombre', 'luna', 'verified', 'W24G 33.20.23.01 = 9.2.4; os-release read 2026-10-23'),

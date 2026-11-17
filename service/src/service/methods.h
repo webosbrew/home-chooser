@@ -26,4 +26,8 @@ bool on_launcher_get_app_info(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_launcher_get_app_icon(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_uninstall_confirmed(LSHandle *sh, LSMessage *msg, void *ctx);
 bool on_reboot_prompt(LSHandle *sh, LSMessage *msg, void *ctx);
+/* watcher revival (revive-glue.c): called after calls that do real work */
+void revive_init(void);
+void revive_touch(void);
+void revive_hold(void);
 #endif

@@ -6,6 +6,7 @@ import json
 
 from .. import page_probe
 from ..api_spec import DISPOSABLE_ID
+from ..evidence import messages_command
 from ..inspector import Inspector
 
 
@@ -32,6 +33,7 @@ class PageProbeSteps:
                     json.dumps(ready or read() or insp.last_error)[:900])
             if not ready:
                 return
+            mark = self.messages_mark()
             d.launch(DISPOSABLE_ID)
             self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
             # give the foreground time to follow before the close (a launch closed at once is not 'in front')
@@ -41,9 +43,18 @@ class PageProbeSteps:
             data = self.wait(lambda: (lambda x: x if x and not page_probe.probe_problems(x, DISPOSABLE_ID) else None)(read()), 25, 2)
             data = data or read()
             problems = page_probe.probe_problems(data, DISPOSABLE_ID)
+            expected = None
+            if problems:
+                # webOS 4.x memchute (policy lite) closes the previous card app, here the launcher page, when another
+                # app launches, whatever the free memory: the page that held the subscriptions is gone by design.
+                rc, ev = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep 'MEMMGR_MEMMGR.*\"close\":\"%s\".*request close by launch' | tail -n 2")
+                              % (mark, self.launcher))
+                if ev.strip():
+                    expected = ('the platform memory manager closes the launcher page when another app launches '
+                                '(memchute, policy lite): %s' % ev.strip()[:300])
             r.check('%s: the page received the launch and the close of %s on all three subscriptions' % (label, DISPOSABLE_ID),
                     not problems, '%s; %s\n%s' % ('; '.join(problems) or 'ok', page_probe.probe_summary(data, DISPOSABLE_ID),
-                                                   json.dumps(data)[:1500]))
+                                                   json.dumps(data)[:1500]), expected=expected)
         finally:
             d.close(DISPOSABLE_ID)
             if own:

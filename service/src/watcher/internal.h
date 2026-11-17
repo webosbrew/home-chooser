@@ -22,6 +22,7 @@ struct HCWatch {
     HCWatchConfig c;
     HCWatchOps ops;
     int major, status, depth;
+    HCKeyMode key_mode; /* how the Home key is redirected on this firmware (6-9 patched copy, 4.0 inserted entry, else none) */
     gboolean early_exit;
     char *choice_file, *missing, *baked, *title_id, *title;
     char *close_choice;
@@ -73,6 +74,8 @@ int window_type(HCWatch *w, const char *id);
 void check_override(HCWatch *w, const char *id);
 void drop_override(HCWatch *w);
 void reconcile(HCWatch *w, const char *id);
+/* 4.0 has no settings record to keep: the Home key filter is the whole redirect. */
+static inline gboolean filter_only(const HCWatch *w) { return w->key_mode == HC_KEY_INSERT; }
 int app_state(HCWatch *w, const char *id); /* 1 yes, 0 unknown, -1 no */
 int key_refresh(HCWatch *w, gboolean stock);
 void sync_baked(HCWatch *w, const char *id);

@@ -78,6 +78,31 @@ const homeKeyHook = (tv, version = [6, 6, 0]) => createHomeKeyHook({
 
 const kinds = (tv) => tv.calls.map((c) => c[0] === 'luna' ? c[1].split('/').pop() : c[0] === 'exec' ? c[1] : (c[0] === 'write' ? 'write ' : 'rm ') + c[1]);
 
+describe('webOS 4.0', () => {
+	test('the hook applies to 4.4.x and not to 4.5 (4.10.x)', () => {
+		expect(homeKeyHookApplies([4, 4, 3])).toBe(true);
+		expect(homeKeyHookApplies([4, 10, 2])).toBe(false);
+		expect(homeKeyHookApplies([3, 9, 3])).toBe(false);
+	});
+
+	test('install: no settings record is read or created; flag, entry and apply as on 6-9', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(tv, [4, 4, 3]).install();
+		expect(res.ok).toBe(true);
+		expect(res.createdKey).toBe(false);
+		expect(tv.calls.filter((c) => c[0] === 'luna')).toEqual([]);
+		expect(kinds(tv)).toEqual(expect.arrayContaining(['write ' + HOMEKEY_FLAG, ENSURE, RUN_WORKER]));
+		expect(res.status).toMatchObject({enabled: true, active: true});
+	});
+
+	test('install: the service refusing the filter list is reported with its reason', async () => {
+		const tv = fakeTV({patch: 'refused'});
+		const res = await homeKeyHook(tv, [4, 4, 3]).install();
+		expect(res.ok).toBe(false);
+		expect(tv.calls.filter((c) => c[0] === 'luna')).toEqual([]);
+	});
+});
+
 describe('homeKeyHookApplies', () => {
 	test.each([[5, false], [6, true], [7, true], [9, true], [10, false], [11, false]])('webOS TV %i', (major, applies) => {
 		expect(homeKeyHookApplies([major, 0, 0])).toBe(applies);

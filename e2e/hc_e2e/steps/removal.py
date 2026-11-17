@@ -187,7 +187,11 @@ class RemovalSteps:
                 r.check('cleanup can list installed apps', False, str(e))
                 return
             for app in apps:
-                if app in installed:
+                # an app the platform refused to register (a third-party type:qml on 4.x) is not in the list but its
+                # files are on the disk: check the install directory too
+                on_disk = app not in installed and d.sh('test -d /media/developer/apps/usr/palm/applications/%s && echo y'
+                                                          % app)[1].strip() == 'y'
+                if app in installed or on_disk:
                     rc, out = d.remove(app)
                     r.say('removed %s: %s' % (app, out.strip()))
                     removed_hc = removed_hc or app == APP_ID

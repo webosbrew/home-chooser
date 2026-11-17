@@ -128,7 +128,11 @@ class UpdateSteps:
                 'before %s, after %s' % (json.dumps(before['watcher_procs']), json.dumps(wp)))
         r.check('after the update: no \"watching, home=\" line (no watcher restart logged)',
                 not any('watching, home=' in l for l in new_log), '\n'.join(l for l in new_log if 'watching' in l) or 'none')
-        bad = [l for l in new_log if re.search(r'stock Home restored|is not installed, stock Home|isEnabled=true|createAlert|createToast|revert', l)]
+        # the gate remount after the update replaced the gate binary ("gate binary changed, remounting it; home gate
+        # unmounted, stock Home restored; home gate mounted over ...") is one line that ends mounted: not a restore
+        remount = re.compile(r'gate binary changed, remounting it; home gate unmounted, stock Home restored; home gate mounted over ')
+        bad = [l for l in new_log if not remount.search(l)
+               and re.search(r'stock Home restored|is not installed, stock Home|isEnabled=true|createAlert|createToast|revert', l)]
         r.check('after the update: the watcher log shows no restore, no revert, no notification', not bad, '\n'.join(bad) or 'none')
         r.note('after the update: "Home Chooser is back" (only logged if the watcher looked during the gap)',
                '\n'.join(l for l in new_log if 'is back' in l) or 'not logged')

@@ -4,7 +4,7 @@
  *   test-fwupdate WORKDIR STEP...      STEP = [live:]VERSION:EXPECT:STOCK_JS   (STOCK_JS "-" is a missing file)
  *
  * Each step is one "boot" of Home Chooser on a firmware whose stock systemUi.js is STOCK_JS and whose
- * /etc/os-release says VERSION. Between two steps the TV "updates": configd forgets every volatile
+ * /etc/starfish-release says "release VERSION". Between two steps the TV "updates": configd forgets every volatile
  * write and returns the new firmware's own list, the stock file is swapped for the next one, the
  * persistent state directory (choice, flag, snapshot, old generated files) is kept. A "live:" step
  * swaps the file without a reboot and runs `refresh` (the watcher path) against the active filter.
@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
     assert(argc >= 3);
     char *work = argv[1];
     char *state = g_build_filename(work, "state", NULL), *stock_js = g_build_filename(work, "systemUi.js", NULL);
-    char *os = g_build_filename(work, "os-release", NULL), *flag = g_build_filename(state, "homekey", NULL);
+    char *os = g_build_filename(work, "starfish-release", NULL), *flag = g_build_filename(state, "homekey", NULL);
     char *home = g_build_filename(state, "home", NULL), *snap = g_build_filename(state, "keyfilters-stock.json", NULL);
     assert(!g_mkdir_with_parents(state, 0755));
     g_file_set_contents(flag, "", -1, NULL); g_file_set_contents(home, "test.home\n", -1, NULL);
@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
         char *p = spec + (live ? 5 : 0), *version = p, *expect = strchr(p, ':'); assert(expect); *expect++ = 0;
         char *js = strchr(expect, ':'); assert(js); *js++ = 0;
         char label[200]; snprintf(label, sizeof label, "step %d (%s %s %s)", s - 1, live ? "live" : "boot", version, expect);
-        char *osdata = g_strdup_printf("NAME=\"webOS\"\nVERSION=\"%s\"\nVERSION_ID=\"%s\"\n", version, version);
+        char *osdata = g_strdup_printf("Rockhopper release %s-1 (test-fwupdate)\n", version);
         g_file_set_contents(os, osdata, -1, NULL); g_free(osdata);
         copy_to(js, stock_js);
         if (!live) { /* the reboot: configd's volatile state is gone, the firmware's own list is back */

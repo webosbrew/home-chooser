@@ -13,8 +13,11 @@ goes back to it; an overlay launcher draws over something, so an empty foregroun
 input (Live TV or an HDMI source), as the overlay homes of earlier webOS releases did.
 
 Scope: webOS 6.x to 9.x only, where stock Home is native at `file:///usr/bin/com.webos.app.home`.
-On 5.x the visible home is `com.webos.app.fullhome` (`com.webos.app.home` never shows), and on
-10.x and later Home is a Flutter app folder, so neither has a binary to replace. 5.x is
+On 4.5 and 5.x the Home key opens whichever of `com.webos.app.fullhome` (the "New Home", full screen)
+and `com.webos.app.home` (the "Basic Home", a ribbon) the `general/defaultApps` record names; both are
+installed there and either can be the visible home ([settings-app.md](settings-app.md#which-stock-home)).
+On 6.x to 9.x only `com.webos.app.home` ships, and it is the full-screen Home; on
+10.x and later Home is a Flutter app folder, so those have no binary to replace the same way. 4.5 and 5.x are
 unchanged; 10.x and later close LG Home once the launcher is in front instead
 ([settings-app.md](settings-app.md#the-stock-home-is-not-preloaded)), and under an overlay launcher the
 watcher opens the last input once after each boot by the same rule as the gate
@@ -114,8 +117,8 @@ and 6.5.2), although the daemon's PmLog lines in the same context do. The file w
 
 [gate-mount.c](../service/src/gate-mount.c) owns the bind; the watcher
 ([watcher/gate.c](../service/src/watcher/gate.c)) and the one-off `--homekey` commands
-([homekey-main.c](../service/src/homekey-main.c)) call it. It is gated on the os-release major
-being 6 to 9, like `homekey.c`.
+([homekey-main.c](../service/src/homekey-main.c)) call it. It is gated on the release major
+(`/etc/starfish-release`) being 6 to 9, like `homekey.c`.
 
 Mount, when a launcher is chosen and enabled and the installed gate binary
 (`<service dir>/homechooser-home-gate`) exists: copy the gate into the private runtime dir

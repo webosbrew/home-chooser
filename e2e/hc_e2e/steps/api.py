@@ -16,6 +16,7 @@ from ..constants import APP_ID, SCRIPTS_DIR, STOCK, SVC_ID
 from ..evidence import messages_command, parse_luna, service_log_command
 from ..inspector import Inspector
 from ..launchers import FIXTURE_DIR, FIXTURE_ID
+from .screen import AlertActionLost
 
 
 def page_vanished(source):
@@ -728,12 +729,17 @@ class ApiSteps:
                     if self.uninstall_ask('retry confirmation') != 'alert':
                         raise RuntimeError('uninstall retry did not raise an alert')
                     timing.sleep(3)
-                automatic = self.alert_action('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
-                                             '3a-uninstall-alert', service_proof,
-                                             lambda: self.wait(lambda: not d.app_installed(DISPOSABLE_ID),
-                                                               30 if self.use_click() else 240, 2),
-                                             lambda: not any(e.get('text') == 'Uninstall HC Fixture disposable?'
-                                                 for e in self.elements('uninstall-result')['elements']), request_again)
+                try:
+                    automatic = self.alert_action('Uninstall HC Fixture disposable?', 'Uninstall', 'Cancel',
+                                                 '3a-uninstall-alert', service_proof,
+                                                 lambda: self.wait(lambda: not d.app_installed(DISPOSABLE_ID),
+                                                                   30 if self.use_click() else 240, 2),
+                                                 lambda: not any(e.get('text') == 'Uninstall HC Fixture disposable?'
+                                                     for e in self.elements('uninstall-result')['elements']), request_again)
+                except AlertActionLost:
+                    d.close(APP_ID)
+                    self.close_insp()
+                    return
                 if not automatic:
                     r.manual('press Uninstall on our alert', 'automatic press declined: ' + self.alert_decline_reason + '; waiting up to 240 seconds')
                 gone = self.wait(lambda: not d.app_installed(DISPOSABLE_ID), 240, 2)

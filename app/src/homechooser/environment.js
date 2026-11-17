@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Connects the pieces for one session: makes sure Home Chooser's service runs as root (elevating
 // it through Homebrew Channel when it does not), reads the release, and builds the chooser and
-// (webOS 6 to 9) the Home key hook.
+// (webOS 4.0 and 6 to 9) the Home key hook.
 import {createPlatform, errorMessage, FatalError} from '../platform';
 import {createHomeChooser} from '.';
 import {createHomeKeyHook} from '../homekey';
@@ -32,7 +32,7 @@ export const loadEnvironment = async (platform = createPlatform()) => {
 	}
 	let release;
 	try {
-		release = await platform.osRelease();
+		release = await platform.release();
 	} catch (e) {
 		throw new FatalError(classifyExecFailure(errorMessage(e)), errorMessage(e));
 	}

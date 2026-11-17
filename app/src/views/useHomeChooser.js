@@ -5,7 +5,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {errorMessage} from '../platform/errors';
-import {STOCK_HOME} from '../homechooser';
+import {STOCK_FULLHOME, STOCK_HOME, isChoosableStock} from '../homechooser';
 import {formatStep} from '../homechooser/format';
 import {loadEnvironment} from '../homechooser/environment';
 import {clearPending, readPending} from './pending';
@@ -38,7 +38,7 @@ export const patchStateOf = (homeKeyHook, status) => {
 // this launch, so it is dropped without a toast. 'done', 'failed' or 'stale'.
 export const judgePending = (left, state) => {
 	if (state && state.stored !== null && state.stored !== undefined) {
-		const mine = left.id === STOCK_HOME ? state.stored === '' : state.stored === left.id;
+		const mine = isChoosableStock(left.id) ? state.stored === '' : state.stored === left.id;
 		if (!mine) return 'stale';
 	}
 	return state && state.home === left.id ? 'done' : 'failed';
@@ -87,7 +87,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		setLoadFailed(!list.ok || !st.ok);
 		setCandidates(list.candidates);
 		const state = st.state;
-		setCurrentId((state && (state.profileHome || state.recordHome)) || STOCK_HOME);
+		// Where fullhome is installed (4.5, 5.x) there are two stock homes, and no home in the record says which
+		// one is in use: nothing is shown as current then, rather than a guess.
+		const twoStock = list.candidates.some((c) => c.id === STOCK_FULLHOME);
+		setCurrentId((state && (state.profileHome || state.recordHome)) || (twoStock ? null : STOCK_HOME));
 		setStoredId(per.persistence ? per.persistence.stored : '');
 		setPatchStatus(patchRes ? patchRes.status : null);
 		return {
@@ -223,9 +226,9 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		setBusy(false);
 	}, [env, busy, refreshWith]);
 
-	const restoreWork = async (e) => {
-		setNotice('Restoring LG Home...');
-		const res = await e.chooser.restoreStock();
+	const restoreWork = async (e, stock, title) => {
+		setNotice(`Restoring ${title || 'LG Home'}...`);
+		const res = await e.chooser.restoreStock(stock);
 		logResult('restore', res);
 		if (!res.ok) return {ok: false, text: plainFailure('restore LG Home', res.errors)};
 		// restoring stock takes the Home key hook patch out as well
@@ -239,7 +242,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	};
 
 	const choose = useCallback((candidate) => run('set the Home app', async (e) => {
-		if (!candidate || candidate.id === STOCK_HOME) return restoreWork(e);
+		if (!candidate || isChoosableStock(candidate.id)) return restoreWork(e, candidate && candidate.id, candidate && candidate.title);
 		// Enable the boot flag and select the live filter when either is missing.
 		const activeNow = Boolean(patchStatus && patchStatus.active);
 		const needPatch = Boolean(e.homeKeyHook) && !(activeNow && patchStatus.enabled);
@@ -278,8 +281,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	return {
 		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
+		// webOS 4.0: LG Home is the compositor's ribbon, there is no Home app
+		ribbonOnly: Boolean(env && env.chooser && env.chooser.info && env.chooser.info.filterOnly),
 		patchActive: Boolean(patchStatus && patchStatus.active),
-		candidates: candidates.filter((c) => c.id !== STOCK_HOME), currentId, storedId, loadFailed, readFailed, icons,
+		candidates, currentId, storedId, loadFailed, readFailed, icons,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };
