@@ -5,19 +5,27 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-17
+
 ### Added
 
-- webOS 4.0 (W18R, starfish 4.4.x): the Home button opens your launcher. 4.0 has no Home app and no default-app record, so Home Chooser inserts a key filter entry of its own before LG's `handleSystemKeys` (through configd, volatile, read back, restored exactly; no restart) that opens the launcher on Home, keeps the long press for recent apps and closes open overlays first. Back on your launcher, when it does not take Back itself, is swallowed (a full-screen launcher) or goes to the last input (an overlay launcher), instead of showing LG's ribbon over it. The only LG Home row on 4.0 is "LG Home (Ribbon)". The support range is not yet widened in the README.
+- webOS 4.5 (W19P, starfish 4.10.x): the Home button opens your launcher through the `general/defaultApps` record, as on webOS 5. LG ships two stock homes there, as on 5.x (see Changed).
+- webOS 4.0 (W18R, starfish 4.4.x): the Home button opens your launcher. 4.0 has no Home app and no default-app record, so Home Chooser inserts a key filter entry of its own before LG's `handleSystemKeys` (through configd, volatile, read back, restored exactly; no restart) that opens the launcher on Home, keeps the long press for recent apps and closes open overlays first. Back on your launcher, when it does not take Back itself, is swallowed (a full-screen launcher) or goes to the last input (an overlay launcher), instead of showing LG's ribbon over it. The only LG Home row on 4.0 is "LG Home (Ribbon)".
 - webOS 4.x has no systemd: the watcher and the boot entry now run as a detached loop with a pid file there (the commands `stopWatcher` and `watcherActive` go through the entry script, which asks systemd where it exists).
 - The service revives a dead watcher: when it runs as root and a home choice is stored, any call it serves (at most one check per 30 s) starts the watcher again if it is not running, on systemd and on the detached loop of webOS 4.x alike. Restoring LG Home and uninstalling do not trigger it.
 
 ### Changed
 
+- Home Chooser now supports webOS 4.0 to 12 (it was 5 to 12). webOS 3.x and older are not supported.
+- The app is built for Chromium 53, the browser of webOS 4.x (`npm run check-es` checks the bundle against ES2016), so the panel runs on webOS 4.
+- The release is read from `/etc/starfish-release` only; `/etc/os-release` is absent on webOS 3.x and 4.x and is not read.
 - On webOS 4.5 and 5.x, where LG ships two stock homes, the list has "LG Home (Ribbon)" (`com.webos.app.home`, the Basic Home) and "LG Home (Fullscreen)" (`com.webos.app.fullhome`, the New Home); each is its own choice and the check mark follows the record's exact id. Before, one "LG Home (stock)" row stood for the ribbon only while restores wrote the full-screen home, so after a restore it was unchecked and a second row called "Home" was checked. On webOS 6 and later the one stock row is "LG Home (Fullscreen)". The dialog and toasts name the variant.
 - Putting LG Home back (restore, a removed launcher, Home Chooser's uninstall) restores the stock home you used last on 4.5 and 5.x instead of always the full-screen one.
 
 ### Fixed
 
+- On webOS 4.x the Uninstall button of the watcher's alert (a launcher or Home Chooser removed) failed: the 4.x firmware has no client permissions file for `com.webos.surfacemanager`, so the installer refused its remove call. The button now goes through Home Chooser's service (`uninstallConfirmed`, with a one-time token), which is allowed to the private group in its own API file on 4.x.
+- Putting LG Home back on webOS 4.x no longer writes `defaultApps.home` as `null`: webOS 4.5 restores a stock home id, and webOS 4.0 never touches the record.
 - A launcher installed (or removed) while Home Chooser's panel was open did not show in the list, even after Home Chooser was opened again. The list is now read again when the panel comes back to the front (opened again, or the page turns visible). An open confirmation, the focus and a choice in progress are left alone.
 - On webOS 11 and later, if the panel was closed during first-time setup after the launcher access files were written but before the service restarted, the next open did not restart it, so launchers could stay refused. The next open now asks for the restart again.
 
@@ -56,7 +64,8 @@ The first release.
 - Never close an app while Home Chooser's panel is on screen. A change of Home, LG Home included, leaves the launcher it replaces to the watcher, which closes it once the panel is gone and another full-screen app is in front, at most once per change; the stock Home closes on 6–9 and 10+ wait for the panel too. Before, closing the old launcher under the panel let SAM bring up its idle app (the last input under an overlay launcher) and the panel closed before its "Done" toast.
 - On webOS 6 through 9, when a firmware update leaves the stock `systemUi.js` with a `launchHomeApp` Home Chooser does not recognise (or unreadable), Home opens LG Home: the home gate is no longer mounted while the Home key filter is stock, and returns with the redirect once the shape is known. After an update to webOS 10 or later, the generated key filters and the stock snapshot of the old install are removed.
 
-[Unreleased]: https://github.com/webosbrew/home-chooser/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/webosbrew/home-chooser/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/webosbrew/home-chooser/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/webosbrew/home-chooser/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/webosbrew/home-chooser/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/webosbrew/home-chooser/releases/tag/v0.1.0

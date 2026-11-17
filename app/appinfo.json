@@ -1,6 +1,6 @@
 {
   "id": "org.webosbrew.homechooser",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "vendor": "webosbrew",
   "type": "web",
   "defaultWindowType": "overlay",

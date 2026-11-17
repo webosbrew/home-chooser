@@ -97,7 +97,7 @@ describe('an interrupted first run', () => {
 			throw new Error(`unexpected ${uri}`);
 		});
 		const service = {
-			status: jest.fn(async () => ({returnValue: true, root: dev.root, uid: dev.root ? 0 : 1000, version: '0.1.2'})),
+			status: jest.fn(async () => ({returnValue: true, root: dev.root, uid: dev.root ? 0 : 1000, version: '0.2.0'})),
 			quit: jest.fn(async () => { dev.root = dev.elevated; })
 		};
 		const platformFor = (hook) => ({
