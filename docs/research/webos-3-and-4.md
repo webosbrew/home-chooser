@@ -25,10 +25,14 @@ an emulator VM of that release; `[I]` an interpretation. Paths are relative to e
 
 * `usr/lib/qt5/qml/KeyFilters/systemUi.js` has `launchHomeApp(key, isNotLongPressed)`: a short press
   launches `settingsService.getLaunchDefaultApp` through `applicationManager.launch` with
-  `{"launchType": "homeKey"}`; `com.webos.app.fullhome` and `com.webos.app.home` are the two ids it
-  knows when the record is empty. A press of 1000 ms arms the long-press timer instead. [V]
-* The record is `general/defaultApps`; `etc/palm` carries both `"home": "com.webos.app.fullhome"` and
-  `"home": "com.webos.app.home"` as its values. [V]
+  `{"launchType": "homeKey"}`; with no record it calls
+  `applicationManager.launchDefaultApp("com.webos.app.home", {"category": "home"})`. A long press
+  opens the most recent app (record `fullhome`) or `com.webos.app.home` with
+  `{"activateType": "recent"}` (record `home`). [V]
+* The record is `general/defaultApps`, described in `etc/palm/description.json`; the factory value in
+  `etc/palm/defaultSettings.json` is `{"home": "com.webos.app.fullhome"}`. LG's Settings app
+  (`usr/palm/applications/com.palm.app.settings/main.js`, "Home Style") writes `com.webos.app.fullhome`
+  ("New Home") or `com.webos.app.home` ("Basic Home"). [V]
 * Both apps are installed (`usr/palm/applications/com.webos.app.home` and `.fullhome`). [V]
 * On the emulated 4.5, with `home` = `com.webos.app.home` the Home key makes SAM launch it (a ribbon
   over the screen underneath), and with `com.webos.app.fullhome` it launches that (full screen). [V, VM]
