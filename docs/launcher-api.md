@@ -54,6 +54,14 @@ when it launches something works on every release. For a native launcher also se
 `"noSplashOnLaunch": true` in `appinfo.json`: without it, on webOS 11 and later SAM's splash screen
 stays under an overlay window.
 
+**Last app closed on 11 and later.** On webOS 11 and later, when the last app closes with your overlay
+launcher on screen, Live TV (the last input) comes back and your overlay stays over it; on 6.x to 10.x
+the compositor closes the overlay in that case (windowPolicy), so expect to stay up over Live TV.
+
+**Display mode.** A full-screen window of the size SDL reports can be invisible: seen on emulated 11.2.0
+and 12.0.0 sets, where the display mode is 1920x2160; retail not checked
+([Calling from a native launcher](#calling-from-a-native-launcher)).
+
 ## What Home Chooser does for a launcher
 
 * **It makes your app the Home app on webOS 4 to 12.** The owner picks your app in Home Chooser;
@@ -298,6 +306,10 @@ of your package is a different caller and is refused), through a name with a suf
 A native launcher may call `luna://com.webos.applicationManager/launch` from its own handle, the same
 one it calls Home Chooser on, to launch other apps; no helper service is needed (verified on 5.6.1 to
 12.0.0, [Verification status](#verification-status)).
+
+A native overlay launcher on the emulated 11.2.0 and 12.0.0 sets saw SDL report a 1920x2160 display mode,
+so a full-screen window of that size was invisible while a plain 1920x1080 window drew correctly: seen on
+emulated 11.2.0 and 12.0.0 sets; retail not checked.
 
 
 Successful replies have `returnValue: true`. Every reply produced by a launcher method includes
