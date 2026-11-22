@@ -831,6 +831,15 @@ if (HomeChooser.supports(2)) {   // after getInfo
 The subscription sees changes only while your launcher runs. [`examples/web-launcher`](../examples/web-launcher/README.md)
 does this and shows the result as a Recent row.
 
+### The system may close a backgrounded launcher
+
+On any release, and most often on sets with little memory, the system may close a launcher that is in
+the background when another app opens (`memoryReclaim` in the `close` and `stop` events of
+[`getAppLifeEvents`](#getapplifeevents-subscribe)). Home launches it again cold, so keep nothing you
+cannot rebuild: restore your state (the recency list above, the focus) from storage on launch and
+subscribe again to everything you subscribed to, because the old subscriptions ended with the page or
+process.
+
 ### OK opens a given app
 
 What OK opens on a fresh start is the tile that has the focus first. To make OK open a given app at
@@ -924,7 +933,8 @@ The only 4.x-specific facts a launcher author needs; the rest of this guide appl
 * **Permissions.** `requiredACG` does not exist before webOS 11; leave it out. The service's own
   `requiredPermissions` check is the gate.
 * **Background launchers are closed.** As on 5.x, the memory manager can close a launcher that is in
-  the background when another app is launched; keep no state you cannot rebuild on launch.
+  the background when another app is launched; keep no state you cannot rebuild on launch
+  ([Patterns](#the-system-may-close-a-backgrounded-launcher)).
 * **webOS 4.0 (starfish 4.4.x).** There is no Home app and no `defaultApps` record: Home Chooser
   puts a key filter entry of its own before LG's, and the Home button opens your launcher
   ([the Home key filter](home-key-hook.md#webos-40-a-filter-entry-of-our-own)). LG's ribbon is the
