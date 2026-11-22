@@ -295,6 +295,10 @@ id yourself. What it must not do: call from a companion service or any other nam
 of your package is a different caller and is refused), through a name with a suffix, or through
 `luna-send -a`; and it should not declare a service whose name is another app's id.
 
+A native launcher may call `luna://com.webos.applicationManager/launch` from its own handle, the same
+one it calls Home Chooser on, to launch other apps; no helper service is needed (verified on 5.6.1 to
+12.0.0, [Verification status](#verification-status)).
+
 
 Successful replies have `returnValue: true`. Every reply produced by a launcher method includes
 `apiVersion`. Failures from Home Chooser look like this:
@@ -853,7 +857,7 @@ means not checked on that release, not that it fails there.
 
 | Call | 5.x | 6.x | 7.x | 8.x | 9.x | 10.x | 11.x | 12.x |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `applicationManager/launch` of another app | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | verified (9.2.1) | untested | untested | untested |
+| `applicationManager/launch` of another app | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | verified (8.3.0) | verified (9.2.1) | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `applicationManager/launch` of an input's app with `listInputs`' `params` | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | untested | untested | untested | untested |
 | `getInfo`, `listApps`, `listLaunchPoints`, `listInputs`, `closeApp`, `uninstallApp` from a launcher page, no reboot | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
@@ -862,6 +866,11 @@ means not checked on that release, not that it fails there.
 | Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | `getIcons` for a bookmark launch point (a website pinned to Home from LG's browser), as the app | untested | untested | untested | untested | untested | untested | verified (11.x) | untested |
+
+A native launcher's own process (no helper service) called `applicationManager/launch` for another app
+on 5.6.1, 6.5.2, 7.6.0, 8.3.0, 9.2.4, 10.3.1, 11.2.0 and 12.0.0 (Beanjar VMs, Home Chooser 0.1.1): the
+reply was `{"returnValue":true}` 63 to 206 ms after the call and the launched app stayed up. webOS 4.x
+has not been checked for this.
 
 On other releases the browser may keep favicons elsewhere; a bookmark whose icon is outside the folder above
 is `noIcon` there.
