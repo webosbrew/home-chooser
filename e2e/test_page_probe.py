@@ -95,6 +95,36 @@ class PageProbeTest(unittest.TestCase):
         self.assertTrue(any('no launch event' in p for p in page_probe.probe_problems(d, APP)))
 
 
+class MemoryReclaimEvidenceTest(unittest.TestCase):
+    """The XFAIL expectation comes from the device's own getAppLifeEvents stream, never from the release."""
+    LAUNCHER = 'org.webosbrew.hcfixture.web.normal'
+
+    def sample(self):
+        from hc_e2e import level3
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'samples', 'life-events-memoryreclaim-5x.log')
+        with open(path) as f:
+            return level3.split_stream(level3.parse_stream(f.read()))[1]
+
+    def test_recorded_5x_stream_names_the_launcher(self):
+        ev = page_probe.memory_reclaim_evidence(self.sample(), self.LAUNCHER)
+        self.assertIn('"reason": "memoryReclaim"', ev)
+        self.assertIn(self.LAUNCHER, ev)
+
+    def test_other_app_or_other_reason_is_no_evidence(self):
+        self.assertIsNone(page_probe.memory_reclaim_evidence(self.sample(), 'org.webosbrew.hcfixture.web.overlay'))
+        self.assertIsNone(page_probe.memory_reclaim_evidence(self.sample(), APP))
+        self.assertIsNone(page_probe.memory_reclaim_evidence(
+            [{'event': 'close', 'reason': 'undefined', 'appId': self.LAUNCHER}, {'event': 'launch', 'reason': 'memoryReclaim',
+                                                                                 'appId': self.LAUNCHER}], self.LAUNCHER))
+        self.assertIsNone(page_probe.memory_reclaim_evidence(None, self.LAUNCHER))
+
+    def test_the_page_record_can_carry_it_too(self):
+        d = good()
+        d['subs']['getAppLifeEvents']['replies'].append(
+            {'event': 'stop', 'reason': 'memoryReclaim', 'appId': self.LAUNCHER})
+        self.assertTrue(page_probe.memory_reclaim_evidence(page_probe.replies_of(d, 'getAppLifeEvents'), self.LAUNCHER))
+
+
 def fake_ipk(path, files):
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as t:

@@ -35,3 +35,7 @@ Offline extraction on 2026-10-29 from the read-only sibling worktree's
 
 Swap test variants of these two default frames are synthetic: styles are exchanged
 between buttons. Actual post-direction appearance stability needs VM verification.
+
+`life-events-memoryreclaim-5x.log`: the run's own getAppLifeEvents stream (`luna-send -a <launcher> -i`) as recorded in
+`e2e/results/matrix-20261117-013046/w19p-goldilocks2/run.log` (the acknowledgement line is reconstructed): the system
+closed the backgrounded launcher when the disposable app launched.

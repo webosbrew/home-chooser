@@ -1,0 +1,6 @@
+{"returnValue":true,"subscribed":true,"apiVersion":3}
+{"event":"splash","subscribed":true,"appId":"org.webosbrew.hcfixture.disposable","showSpinner":true,"apiVersion":3,"showSplash":true,"returnValue":true}
+{"event":"close","reason":"memoryReclaim","subscribed":true,"apiVersion":3,"appId":"org.webosbrew.hcfixture.web.normal","returnValue":true}
+{"event":"stop","reason":"memoryReclaim","subscribed":true,"apiVersion":3,"appId":"org.webosbrew.hcfixture.web.normal","returnValue":true}
+{"event":"launch","reason":"undefined","subscribed":true,"apiVersion":3,"appId":"org.webosbrew.hcfixture.disposable","returnValue":true}
+{"event":"close","reason":"undefined","subscribed":true,"apiVersion":3,"appId":"org.webosbrew.hcfixture.disposable","returnValue":true}
