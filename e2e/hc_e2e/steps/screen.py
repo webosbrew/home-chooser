@@ -14,6 +14,12 @@ from ..inspector import FOCUS_JS
 from ..recorder import screenshot_reason
 
 
+class NeedsBeanjarHost(RuntimeError):
+    """A step needs the Beanjar host (screen reading, its remote keys) and the run has none: --device mode.  A
+    RuntimeError, so the steps that already fall back to MANUAL on a declined screen proof do so; the others
+    skip the step (see_toast leaves out the screen OCR)."""
+
+
 class AlertActionLost(RuntimeError):
     """The alert closed after the button press but its action never ran (a platform refusal, not a missed press)."""
 
@@ -69,7 +75,13 @@ class ScreenInput:
     NO_PICTURE_WAIT = 20
     NO_PICTURE_STEP = 2
 
+    def need_host(self, what):
+        """The one guard for host-only work: --device mode has no Beanjar host (self.host is None)."""
+        if self.host is None:
+            raise NeedsBeanjarHost('%s needs a Beanjar host; there is none in --device mode' % what)
+
     def elements(self, label):
+        self.need_host('reading the screen (beanjar elements)')
         waited, retries = 0, 0
         while True:
             rc, raw = self.host.display_beanjar('elements', self.host.remote_target(self.vm), '--json')
@@ -224,6 +236,8 @@ class ScreenInput:
             self.rec.say('input keys: ' + str(k))
             key = str(k).upper()
             key = 'ENTER' if key == 'OK' else key
+            if self.a.input in ('beanjar', 'qmp'):
+                self.need_host('the %s remote key %s' % (self.a.input, key))
             if self.a.input == 'beanjar':
                 sent = key
                 location = self.host.remote_target(self.vm)
