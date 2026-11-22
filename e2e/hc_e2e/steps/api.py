@@ -427,6 +427,8 @@ class ApiSteps:
         start = time.time()
         end = start + timing.seconds(timeout)
         timeline, rnd = [], 0
+        if self.host is None:
+            self.rec.say('toast check: no Beanjar host (--device mode), the screen OCR is left out; the DOM only')
 
         def note(source, t0, error=None, extra=''):
             entry = '#%d %s %.1fs%s%s' % (rnd, source, time.time() - t0, ' err=%s' % str(error)[:160] if error else '',
@@ -455,7 +457,7 @@ class ApiSteps:
                 self.insp = Inspector(self.dev)
                 note('inspector-recreate', t0, err)
             remaining = end - time.time()
-            if remaining > 1 and (rnd - 1) % self.TOAST_OCR_EVERY == 0:
+            if remaining > 1 and self.host is not None and (rnd - 1) % self.TOAST_OCR_EVERY == 0:
                 t0 = time.time()
                 cap = min(self.TOAST_OCR_TIMEOUT, remaining / timing.SLOWDOWN)
                 error, rows = None, []

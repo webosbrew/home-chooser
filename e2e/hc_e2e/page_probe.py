@@ -76,6 +76,17 @@ def probe_problems(data, appid):
     return p
 
 
+def memory_reclaim_evidence(events, launcher):
+    """The device's own evidence that the system closed `launcher` for memory: a getAppLifeEvents `close` or
+    `stop` event with reason memoryReclaim and appId == launcher, from the run's life-event stream or the page's
+    own record.  Returns the first such event as a JSON string, or None.  Never keyed on the release."""
+    for e in events or []:
+        if (isinstance(e, dict) and e.get('appId') == launcher and e.get('reason') == 'memoryReclaim'
+                and e.get('event') in ('close', 'stop')):
+            return json.dumps(e, sort_keys=True)
+    return None
+
+
 def probe_summary(data, appid):
     out = []
     for m in METHODS:

@@ -4,7 +4,7 @@ fixture's probe.js, the page's own bus permissions) while the runner launches an
 runner reads what the page recorded through the web inspector.  The verdict is hc_e2e.page_probe."""
 import json
 
-from .. import page_probe
+from .. import level3, page_probe
 from ..api_spec import DISPOSABLE_ID
 from ..evidence import messages_command
 from ..inspector import Inspector
@@ -34,6 +34,7 @@ class PageProbeSteps:
             if not ready:
                 return
             mark = self.messages_mark()
+            self.stream_begin()  # Home Chooser's own life-event stream: the evidence if the page is closed for memory
             d.launch(DISPOSABLE_ID)
             self.wait(lambda: DISPOSABLE_ID in self.running_ids(), 30, 2)
             # give the foreground time to follow before the close (a launch closed at once is not 'in front')
@@ -49,13 +50,20 @@ class PageProbeSteps:
                 # app launches, whatever the free memory: the page that held the subscriptions is gone by design.
                 rc, ev = d.sh((messages_command() + " | awk '$1 >= \"%s\"' | grep 'MEMMGR_MEMMGR.*\"close\":\"%s\".*request close by launch' | tail -n 2")
                               % (mark, self.launcher))
-                if ev.strip():
+                reclaim = page_probe.memory_reclaim_evidence(
+                    page_probe.replies_of(data, 'getAppLifeEvents') + level3.split_stream(self.stream_read()[0])[1],
+                    self.launcher)
+                if reclaim:
+                    expected = ('the system closed the launcher for memory (getAppLifeEvents reason memoryReclaim) '
+                                'when another app launched, so its page and subscriptions ended: %s' % reclaim[:300])
+                elif ev.strip():
                     expected = ('the platform memory manager closes the launcher page when another app launches '
                                 '(memchute, policy lite): %s' % ev.strip()[:300])
             r.check('%s: the page received the launch and the close of %s on all three subscriptions' % (label, DISPOSABLE_ID),
                     not problems, '%s; %s\n%s' % ('; '.join(problems) or 'ok', page_probe.probe_summary(data, DISPOSABLE_ID),
                                                    json.dumps(data)[:1500]), expected=expected)
         finally:
+            self.stream_end()
             d.close(DISPOSABLE_ID)
             if own:
                 insp.close()

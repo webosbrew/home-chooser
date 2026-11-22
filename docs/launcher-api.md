@@ -54,6 +54,14 @@ when it launches something works on every release. For a native launcher also se
 `"noSplashOnLaunch": true` in `appinfo.json`: without it, on webOS 11 and later SAM's splash screen
 stays under an overlay window.
 
+**Last app closed on 11 and later.** On webOS 11 and later, when the last app closes with your overlay
+launcher on screen, Live TV (the last input) comes back and your overlay stays over it; on 6.x to 10.x
+the compositor closes the overlay in that case (windowPolicy), so expect to stay up over Live TV.
+
+**Display mode.** A full-screen window of the size SDL reports can be invisible: seen on emulated 11.2.0
+and 12.0.0 sets, where the display mode is 1920x2160; retail not checked
+([Calling from a native launcher](#calling-from-a-native-launcher)).
+
 ## What Home Chooser does for a launcher
 
 * **It makes your app the Home app on webOS 4 to 12.** The owner picks your app in Home Chooser;
@@ -294,6 +302,14 @@ native app library (libhelpers, which SDL uses) registers under the app id, or r
 id yourself. What it must not do: call from a companion service or any other name (the `<id>.service`
 of your package is a different caller and is refused), through a name with a suffix, or through
 `luna-send -a`; and it should not declare a service whose name is another app's id.
+
+A native launcher may call `luna://com.webos.applicationManager/launch` from its own handle, the same
+one it calls Home Chooser on, to launch other apps; no helper service is needed (verified on 5.6.1 to
+12.0.0, [Verification status](#verification-status)).
+
+A native overlay launcher on the emulated 11.2.0 and 12.0.0 sets saw SDL report a 1920x2160 display mode,
+so a full-screen window of that size was invisible while a plain 1920x1080 window drew correctly: seen on
+emulated 11.2.0 and 12.0.0 sets; retail not checked.
 
 
 Successful replies have `returnValue: true`. Every reply produced by a launcher method includes
@@ -815,6 +831,15 @@ if (HomeChooser.supports(2)) {   // after getInfo
 The subscription sees changes only while your launcher runs. [`examples/web-launcher`](../examples/web-launcher/README.md)
 does this and shows the result as a Recent row.
 
+### The system may close a backgrounded launcher
+
+On any release, and most often on sets with little memory, the system may close a launcher that is in
+the background when another app opens (`memoryReclaim` in the `close` and `stop` events of
+[`getAppLifeEvents`](#getapplifeevents-subscribe)). Home launches it again cold, so keep nothing you
+cannot rebuild: restore your state (the recency list above, the focus) from storage on launch and
+subscribe again to everything you subscribed to, because the old subscriptions ended with the page or
+process.
+
 ### OK opens a given app
 
 What OK opens on a fresh start is the tile that has the focus first. To make OK open a given app at
@@ -853,7 +878,7 @@ means not checked on that release, not that it fails there.
 
 | Call | 5.x | 6.x | 7.x | 8.x | 9.x | 10.x | 11.x | 12.x |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `applicationManager/launch` of another app | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | verified (9.2.1) | untested | untested | untested |
+| `applicationManager/launch` of another app | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | verified (8.3.0) | verified (9.2.1) | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `applicationManager/launch` of an input's app with `listInputs`' `params` | verified (5.6.1) | verified (6.5.2) | verified (7.6.0) | untested | untested | untested | untested | untested |
 | `getInfo`, `listApps`, `listLaunchPoints`, `listInputs`, `closeApp`, `uninstallApp` from a launcher page, no reboot | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
 | `getIcons` from a launcher page | untested | untested | untested | untested | untested | verified (10.3.1) | verified (11.2.0) | verified (12.0.0) |
@@ -862,6 +887,11 @@ means not checked on that release, not that it fails there.
 | Level 3: `getAppLifeEvents {subscribe}` (acknowledgement, then events, through the service) | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | Level 3: `systemApp`, `mediumLargeIcon` and `extraLargeIcon` in `listApps` and `listLaunchPoints`; the two sizes in `getIcons` | untested | untested | untested | untested | verified (9.x, as the app) | untested | verified (11.2.0, as the app) | untested |
 | `getIcons` for a bookmark launch point (a website pinned to Home from LG's browser), as the app | untested | untested | untested | untested | untested | untested | verified (11.x) | untested |
+
+A native launcher's own process (no helper service) called `applicationManager/launch` for another app
+on 5.6.1, 6.5.2, 7.6.0, 8.3.0, 9.2.4, 10.3.1, 11.2.0 and 12.0.0 (Beanjar VMs, Home Chooser 0.1.1): the
+reply was `{"returnValue":true}` 63 to 206 ms after the call and the launched app stayed up. webOS 4.x
+has not been checked for this.
 
 On other releases the browser may keep favicons elsewhere; a bookmark whose icon is outside the folder above
 is `noIcon` there.
@@ -903,7 +933,8 @@ The only 4.x-specific facts a launcher author needs; the rest of this guide appl
 * **Permissions.** `requiredACG` does not exist before webOS 11; leave it out. The service's own
   `requiredPermissions` check is the gate.
 * **Background launchers are closed.** As on 5.x, the memory manager can close a launcher that is in
-  the background when another app is launched; keep no state you cannot rebuild on launch.
+  the background when another app is launched; keep no state you cannot rebuild on launch
+  ([Patterns](#the-system-may-close-a-backgrounded-launcher)).
 * **webOS 4.0 (starfish 4.4.x).** There is no Home app and no `defaultApps` record: Home Chooser
   puts a key filter entry of its own before LG's, and the Home button opens your launcher
   ([the Home key filter](home-key-hook.md#webos-40-a-filter-entry-of-our-own)). LG's ribbon is the

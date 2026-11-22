@@ -13,9 +13,11 @@
 			out.ids = (reply.running || []).map(function (x) { return x.id; });
 		} else if (method === 'getForegroundApp') {
 			out.appId = reply.appId;
+			out.reason = reply.reason;
 		} else {
 			out.event = reply.event;
 			out.appId = reply.appId;
+			out.reason = reply.reason;
 		}
 		return out;
 	}
