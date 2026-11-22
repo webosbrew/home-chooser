@@ -66,5 +66,49 @@ class DeviceModeWithoutHost(unittest.TestCase):
         self.assertIn('MANUAL fallback', json.dumps([c.args for c in s.rec.note.call_args_list]))
 
 
+class FakeDevice:
+    """applicationManager registers each app after `late` further getAppInfo calls (None: never)."""
+
+    def __init__(self, late):
+        self.late, self.calls = late, {}
+
+    def app_installed(self, appid):
+        self.calls[appid] = self.calls.get(appid, 0) + 1
+        return self.late is not None and self.calls[appid] > self.late.get(appid, 0)
+
+
+class WaitRegistered(unittest.TestCase):
+    def scenario(self, late):
+        from hc_e2e.device_api import DeviceApiScenario
+        s = DeviceApiScenario.__new__(DeviceApiScenario)
+        s.dev, s.rec = FakeDevice(late), Mock()
+        return s
+
+    def test_waits_until_the_launcher_is_known_then_passes(self):
+        s = self.scenario({'org.x.launcher': 3})
+        with patch.object(hc_e2e.timing, 'sleep'):
+            self.assertTrue(s.wait_registered(['org.x.hc', 'org.x.launcher'], timeout=30))
+        self.assertGreater(s.dev.calls['org.x.launcher'], 3)
+        name, ok = s.rec.check.call_args.args[:2]
+        self.assertTrue(ok)
+        self.assertNotIn('not registered', name)
+
+    def test_timeout_is_its_own_failure(self):
+        s = self.scenario(None)
+        with patch.object(hc_e2e.timing, 'sleep'):
+            self.assertFalse(s.wait_registered(['org.x.launcher'], timeout=0))
+        name, ok, evidence = s.rec.check.call_args.args[:3]
+        self.assertFalse(ok)
+        self.assertEqual(name, 'not registered after install: org.x.launcher')
+        self.assertIn('does not know org.x.launcher', evidence)
+
+    def test_the_wait_is_scaled_by_the_slowdown(self):
+        s = self.scenario(None)
+        seen = []
+        s.wait = lambda cond, timeout, every=3: seen.append(timeout) or None
+        self.assertFalse(s.wait_registered(['org.x.launcher']))
+        self.assertEqual(seen, [s.REGISTER_WAIT])  # self.wait applies timing.seconds() to it
+
+
 if __name__ == '__main__':
     unittest.main()

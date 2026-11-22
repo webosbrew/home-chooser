@@ -116,6 +116,25 @@ class DeviceApiScenario(Scenario):
         self.close_insp()
         return bool(selected)
 
+    REGISTER_WAIT = 60  # seconds, scaled by timing.SLOWDOWN (issue #15: a boot-time install is registered late)
+
+    def wait_registered(self, appids, timeout=None):
+        """After an install returned success, wait until applicationManager getAppInfo knows every id (a set
+        that was installed early after boot answers `not exist (-101)` for a while).  A timeout is its own
+        FAIL, "not registered after install", and is not an API failure.  True when all are known."""
+        r, d = self.rec, self.dev
+        appids = list(appids)
+        t0 = time.time()
+        known = self.wait(lambda: all(d.app_installed(i) for i in appids),
+                          self.REGISTER_WAIT if timeout is None else timeout, 2)
+        missing = [i for i in appids if not d.app_installed(i)] if not known else []
+        r.check('not registered after install: %s' % ', '.join(appids) if missing else
+                'installed apps are registered with applicationManager (getAppInfo knows %s)' % ', '.join(appids),
+                not missing,
+                ('getAppInfo does not know %s %.0f s after the install returned' % (', '.join(missing), time.time() - t0))
+                if missing else 'known after %.0f s' % (time.time() - t0))
+        return not missing
+
     def run_contract(self):
         r, d = self.rec, self.dev
         r.begin('device preflight')
@@ -156,6 +175,8 @@ class DeviceApiScenario(Scenario):
             rc, out = d.install(self.a.disposable_ipk)
             installed_disposable = rc == 0
             if not r.check('install disposable API control', installed_disposable, out.strip()[-400:]):
+                return
+            if not self.wait_registered([APP_ID, self.launcher, DISPOSABLE_ID]):
                 return
             strategy = ELEVATIONS[self.a.elevation or 'luna']()
             strategy.prepare(d, r)
