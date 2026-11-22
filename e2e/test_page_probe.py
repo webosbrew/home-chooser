@@ -101,11 +101,11 @@ class MemoryReclaimEvidenceTest(unittest.TestCase):
 
     def sample(self):
         from hc_e2e import level3
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'samples', 'life-events-memoryreclaim-5x.log')
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'samples', 'life-events-memoryreclaim-4x.log')
         with open(path) as f:
             return level3.split_stream(level3.parse_stream(f.read()))[1]
 
-    def test_recorded_5x_stream_names_the_launcher(self):
+    def test_recorded_4x_stream_names_the_launcher(self):
         ev = page_probe.memory_reclaim_evidence(self.sample(), self.LAUNCHER)
         self.assertIn('"reason": "memoryReclaim"', ev)
         self.assertIn(self.LAUNCHER, ev)
