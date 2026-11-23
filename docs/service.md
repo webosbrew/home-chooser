@@ -111,9 +111,11 @@ callable by apps), adds both to the manifest, and runs `ls-control scan-services
 public permission the service checks its callers itself (below).
 
 The running instance was started from the old launch line and is still jailed and not root. The
-app therefore calls `status`; when `root` is false it calls `elevateService`, then `quit`, then
-`status` until the new instance (started on demand by the hub from the rewritten line) reports
-`root: true`. The sequence follows the AltHome port's auto-elevator.
+app therefore calls `status`; when `root` is false it first calls `quit` and `status` (the launch line may
+be rewritten by an earlier elevation that outlived its caller), and if the service is still not root it
+calls `elevateService` (120 s budget: 40 to 60 s on a slow TV), then `quit`, then `status` until the new instance (started on demand by the hub from the rewritten line) reports
+`root: true`. A timeout or error of `elevateService` does not end the sequence: `quit` and `status` run
+anyway. The sequence follows the AltHome port's auto-elevator.
 
 ## Methods
 
