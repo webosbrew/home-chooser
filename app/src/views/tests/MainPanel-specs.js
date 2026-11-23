@@ -389,6 +389,70 @@ describe('Home Chooser screen', () => {
 			expect(window.localStorage.getItem(PENDING_KEY)).toBeNull();
 		});
 
+		describe('another app holds the Home button list', () => {
+			const TEXT = "Another app has saved its own Home button setting, so Home Chooser can't change Home.";
+			const DETAIL = "Clearing it returns the Home button list to LG's own, removing the other app's change.";
+			const hookWith = (status, installs) => {
+				const install = jest.fn();
+				installs.forEach((r) => install.mockResolvedValueOnce(ok(r)));
+				return {status: jest.fn(async () => ok({status})), install, remove: jest.fn(async () => ok({}))};
+			};
+			test('a refused apply asks; Cancel leaves everything and never clears', async () => {
+				const homeKeyHook = hookWith({active: false, enabled: false, patch: 'possible'}, [{persistentOverride: true}]);
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook});
+				mountApp(env);
+				await chooseOn('Plain Launcher');
+				fireEvent.click(await screen.findByText('Use as Home'));
+				expect(await screen.findByText(TEXT)).toBeTruthy();
+				expect(screen.getByText(DETAIL)).toBeTruthy();
+				expect(screen.queryByText('Done. Press Home to try it.')).toBeNull();
+				fireEvent.click(screen.getByText('Cancel'));
+				await flush();
+				expect(screen.queryByText(TEXT)).toBeNull();
+				expect(homeKeyHook.install).toHaveBeenCalledTimes(1);
+				expect(homeKeyHook.install).toHaveBeenCalledWith();
+			});
+			test('Clear it and continue repeats the apply with clearOverride', async () => {
+				const homeKeyHook = hookWith({active: false, enabled: false, patch: 'possible'}, [{persistentOverride: true}, {}]);
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook});
+				mountApp(env);
+				await chooseOn('Plain Launcher');
+				fireEvent.click(await screen.findByText('Use as Home'));
+				await screen.findByText(TEXT);
+				fireEvent.click(screen.getByText('Clear it and continue'));
+				expect(await screen.findByText('Done. Press Home to try it.', {selector: '[role="status"]'})).toBeTruthy();
+				expect(homeKeyHook.install).toHaveBeenCalledTimes(2);
+				expect(homeKeyHook.install).toHaveBeenLastCalledWith({clearOverride: true});
+				expect(env.chooser.apply).toHaveBeenCalledTimes(1);
+			});
+			test('a clear that did not take is reported, without asking again', async () => {
+				const homeKeyHook = hookWith({active: false, enabled: false, patch: 'possible'}, [{persistentOverride: true}, {clearFailed: true}]);
+				mountApp(makeEnv({version: [8, 3, 0], homeKeyHook}));
+				await chooseOn('Plain Launcher');
+				fireEvent.click(await screen.findByText('Use as Home'));
+				await screen.findByText(TEXT);
+				fireEvent.click(screen.getByText('Clear it and continue'));
+				expect(await screen.findByText("Couldn't clear the other app's Home button setting.")).toBeTruthy();
+				expect(screen.queryByText(TEXT)).toBeNull();
+			});
+			test('opening the app after the service met an override (boot, watcher) asks the same way', async () => {
+				const homeKeyHook = hookWith({active: false, enabled: true, patch: 'possible', override: true}, [{}]);
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook, stored: 'org.plain.launcher'});
+				mountApp(env);
+				expect(await screen.findByText(TEXT)).toBeTruthy();
+				expect(homeKeyHook.install).not.toHaveBeenCalled();
+				fireEvent.click(screen.getByText('Clear it and continue'));
+				await screen.findByText('Done. Press Home to try it.');
+				expect(homeKeyHook.install).toHaveBeenCalledWith({clearOverride: true});
+				expect(env.chooser.apply).not.toHaveBeenCalled();
+			});
+			test('no prompt when the filter is active or nothing was stored', async () => {
+				mountApp(makeEnv({version: [8, 3, 0], stored: 'org.plain.launcher', homeKeyHook: hookWith({active: true, enabled: true, patch: 'possible', override: true}, [])}));
+				await screen.findByText('Plain Launcher');
+				expect(screen.queryByText(TEXT)).toBeNull();
+			});
+		});
+
 		test('first choice validates the stock hook', async () => {
 			const homeKeyHook = homeKeyHookOf({active: false, enabled: false, hook: 'stale', patch: 'refused', reason: 'missing'});
 			const env = makeEnv({version: [9, 2, 4], homeKeyHook});

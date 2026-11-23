@@ -31,6 +31,10 @@ export const patchFooter = (patch, chosen) => {
 	return "The Home button isn't set up yet. Restart the TV, or choose LG Home and then your app again.";
 };
 
+// Another app saved its own Home button list in configd, which Home Chooser's changes cannot override.
+export const OVERRIDE_TEXT = "Another app has saved its own Home button setting, so Home Chooser can't change Home.";
+export const OVERRIDE_DETAIL = "Clearing it returns the Home button list to LG's own, removing the other app's change.";
+
 const MainPanel = ({model, launchParams, ...rest}) => {
 	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle, ribbonOnly} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
@@ -106,6 +110,8 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		else model.choose(item);
 	}, [pending, model]);
 
+	const confirmOverride = useCallback(() => model.confirmOverride(model.overridePrompt), [model]);
+
 	const footer = patchFooter(patch, current !== null && !isChoosableStock(current));
 	const uninstall = pending && pending.uninstall;
 	const stock = pending && isChoosableStock(pending.id);
@@ -141,6 +147,16 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 			)}
 			{phase === 'ready' && !rootError && footer ? <div className={css.footer} data-testid="footer">{footer}</div> : null}
 			{busy ? <Spinner blockClickOn="container">{notice}</Spinner> : null}
+			<ConfirmDialog
+				open={Boolean(model.overridePrompt) && !pending}
+				title="Can't change Home"
+				confirmLabel="Clear it and continue"
+				onConfirm={confirmOverride}
+				onCancel={model.dismissOverride}
+			>
+				<div>{OVERRIDE_TEXT}</div>
+				<div>{OVERRIDE_DETAIL}</div>
+			</ConfirmDialog>
 			<Toast toast={toast} onDone={model.dismissToast} />
 			<ConfirmDialog
 				open={Boolean(pending)}

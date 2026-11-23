@@ -15,7 +15,7 @@ const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSetting
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
 // script's `status` prints; `installed` is the enable flag file, `entry` the init.d link. `active`
 // changes when the fake native worker selects or restores the live filter.
-const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails = false, failLuna = null} = {}) => {
+const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails = false, failLuna = null, applyOut = '', clearOut = ''} = {}) => {
 	const calls = [];
 	const tv = {installed: false, entry: 'none', active: false};
 	// Legacy reboot status is ignored by the current parser.
@@ -48,7 +48,8 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};
 		if (command === homekeyCommand('prepare')) return {stdout: '', stderr: ''};
 		if (command === homekeyCommand('clear')) { tv.active = false; return {stdout: '', stderr: ''}; }
-		if (command === RUN_WORKER) { tv.active = true; return {stdout: '', stderr: ''}; }
+		if (command === RUN_WORKER) { tv.active = true; return {stdout: applyOut, stderr: ''}; }
+		if (command === 'homekeyApplyClear') { tv.active = true; return {stdout: clearOut, stderr: ''}; }
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
@@ -257,5 +258,38 @@ describe('parseStatus reboot', () => {
 		expect(parseStatus('active=no\npatch=possible\nreboot=needed\n').rebootNeeded).toBe(false);
 		expect(parseStatus('active=no\npatch=possible\nreboot=no\n').rebootNeeded).toBe(false);
 		expect(parseStatus('active=yes\npatch=possible\n').rebootNeeded).toBe(false);
+	});
+});
+
+describe('a persistent keyFilters override', () => {
+	const seqOf = (tv) => tv.calls.filter((c) => c[0] === 'exec').map((c) => c[1]);
+	test('parseStatus reads override=yes', () => {
+		expect(parseStatus('active=no\npatch=possible\nreboot=no\noverride=yes\n').override).toBe(true);
+		expect(parseStatus('active=no\npatch=possible\nreboot=no\noverride=no\n').override).toBe(false);
+		expect(parseStatus('active=no\n').override).toBe(false);
+	});
+	test('install reports the reason and does not clear on its own', async () => {
+		const tv = fakeTV({applyOut: 'active=no\nreboot=no\nreason=persistent-override\n'});
+		const res = await homeKeyHook(tv).install();
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(true);
+		expect(res.clearFailed).toBe(false);
+		expect(seqOf(tv)).toContain(RUN_WORKER);
+		expect(seqOf(tv)).not.toContain('homekeyApplyClear');
+	});
+	test('install with clearOverride runs the clearing apply instead of the plain one', async () => {
+		const tv = fakeTV({clearOut: 'active=yes\nreboot=no\n'});
+		const res = await homeKeyHook(tv).install({clearOverride: true});
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(false);
+		expect(res.clearFailed).toBe(false);
+		expect(seqOf(tv)).toContain('homekeyApplyClear');
+		expect(seqOf(tv)).not.toContain(RUN_WORKER);
+	});
+	test.each(['override-not-cleared', 'override-clear-failed'])('a clear that did not take (%s) is a failure of its own', async (reason) => {
+		const tv = fakeTV({clearOut: `active=no\nreason=${reason}\n`});
+		const res = await homeKeyHook(tv).install({clearOverride: true});
+		expect(res.clearFailed).toBe(true);
+		expect(res.persistentOverride).toBe(false);
 	});
 });

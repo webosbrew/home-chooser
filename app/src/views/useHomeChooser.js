@@ -65,6 +65,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	const [notice, setNotice] = useState('');
 	const [toast, setToast] = useState(null);
 	const [icons, setIcons] = useState({});
+	const [overridePrompt, setOverridePrompt] = useState(null); // {id, title}: another app holds the Home button list
 	const mounted = useRef(true);
 	const iconsAsked = useRef({});
 
@@ -93,7 +94,10 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		setCurrentId((state && (state.profileHome || state.recordHome)) || (twoStock ? null : STOCK_HOME));
 		setStoredId(per.persistence ? per.persistence.stored : '');
 		setPatchStatus(patchRes ? patchRes.status : null);
+		const status = patchRes ? patchRes.status : null;
 		return {
+			candidates: list.candidates,
+			override: Boolean(status && status.override && !status.active),
 			home: (state && (state.profileHome || state.recordHome)) || STOCK_HOME,
 			stored: per.persistence ? per.persistence.stored : null // null: the stored choice could not be read
 		};
@@ -167,6 +171,12 @@ export const useHomeChooser = (load = loadEnvironment) => {
 				if (verdict === 'done') setToast({ok: true, text: DONE_TEXT});
 				else if (verdict === 'failed') setToast({ok: false, text: "Couldn't set the Home app."});
 			}
+			// the service met another app's persistent keyFilters list (at boot or while running): ask once per start
+			const stored = state && state.stored;
+			if (state && state.override && stored && !isChoosableStock(stored)) {
+				const known = (state.candidates || []).find((c) => c.id === stored);
+				setOverridePrompt({id: stored, title: (known && known.title) || stored});
+			}
 			setPhase('ready');
 		}, (err) => {
 			if (cancelled || !mounted.current) return;
@@ -222,7 +232,8 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		clearPending(); // an old marker is moot: the run finished in this window
 		if (!mounted.current) return;
 		setNotice('');
-		setToast(outcome);
+		if (outcome.prompt) setOverridePrompt(outcome.prompt);
+		else setToast(outcome);
 		setBusy(false);
 	}, [env, busy, refreshWith]);
 
@@ -256,9 +267,25 @@ export const useHomeChooser = (load = loadEnvironment) => {
 			const inst = await e.homeKeyHook.install();
 			logResult('install patch', inst);
 			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
+			// the filter was refused because another app saved its own list: ask before clearing it
+			if (inst.persistentOverride) return {ok: false, prompt: {id: candidate.id, title: candidate.title}};
 		}
 		return {ok: true, text: DONE_TEXT};
 	}), [run, patch, patchStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// The owner agreed: clear the other app's list and apply the stored choice again.
+	const confirmOverride = useCallback((item) => {
+		setOverridePrompt(null);
+		return run('set the Home app', async (e) => {
+			setNotice(`Setting ${item.title} as Home...`);
+			const inst = await e.homeKeyHook.install({clearOverride: true});
+			logResult('install patch (clear override)', inst);
+			if (!inst.ok) return {ok: false, text: plainFailure('set the Home app', inst.errors)};
+			if (inst.persistentOverride || inst.clearFailed) return {ok: false, text: "Couldn't clear the other app's Home button setting."};
+			return {ok: true, text: DONE_TEXT};
+		});
+	}, [run]);
+	const dismissOverride = useCallback(() => setOverridePrompt(null), []);
 
 	const notify = useCallback((text) => setToast({ok: true, text}), []);
 	const getUninstallTitle = useCallback(async (id) => {
@@ -285,6 +312,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		ribbonOnly: Boolean(env && env.chooser && env.chooser.info && env.chooser.info.filterOnly),
 		patchActive: Boolean(patchStatus && patchStatus.active),
 		candidates, currentId, storedId, loadFailed, readFailed, icons,
+		overridePrompt, confirmOverride, dismissOverride,
 		busy, notice, toast, choose, getUninstallTitle, uninstall, notify, dismissToast: () => setToast(null)
 	};
 };
