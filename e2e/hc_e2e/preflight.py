@@ -156,7 +156,7 @@ def prepare_vm(host, vm, rec, debug_mode='release'):
         rc, out = host.set_settings(vm, **want)
         rec.say(out.strip()[-300:])
         if rc:
-            raise SystemExit('beanjar settings %s set failed (rc %s): %s' % (vm, rc, out.strip()[-200:]))
+            raise SystemExit('beanjar config set %s failed (rc %s): %s' % (vm, rc, out.strip()[-200:]))
 
 
 # wait_for_device states

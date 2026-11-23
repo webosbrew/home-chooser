@@ -165,7 +165,7 @@ class BeanjarHost:
         return self._dirs[vm]
 
     def info(self, vm):
-        rc, out = self.beanjar('info', self.ref(vm))
+        rc, out = self.beanjar('show', self.ref(vm))
         d = {}
         for line in out.splitlines():
             if ': ' in line:
@@ -179,11 +179,11 @@ class BeanjarHost:
         return d.get('link', 'lan') == 'lan' and d.get('lan_address') in (None, '', '-')
 
     def settings(self, vm):
-        rc, out = self.beanjar('settings', self.ref(vm), 'show')
+        rc, out = self.beanjar('config', 'show', self.ref(vm))
         return dict(l.split(': ', 1) for l in out.splitlines() if ': ' in l)
 
     def set_settings(self, vm, **kv):
-        return self.beanjar('settings', self.ref(vm), 'set', *['%s=%s' % i for i in kv.items()])
+        return self.beanjar('config', 'set', self.ref(vm), *['%s=%s' % i for i in kv.items()])
 
     def start(self, vm):
         # Check the host immediately before every boot, including scenario reboots.
