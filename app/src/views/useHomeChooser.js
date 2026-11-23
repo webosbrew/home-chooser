@@ -263,6 +263,8 @@ export const useHomeChooser = (load = loadEnvironment) => {
 		const res = await e.chooser.apply(candidate.id);
 		logResult('apply', res);
 		if (!res.ok) return {ok: false, text: plainFailure('set the Home app', res.errors)};
+		// the filter refresh of the apply met another app's persistent list: ask before clearing it
+		if (res.persistentOverride) return {ok: false, prompt: {id: candidate.id, title: candidate.title}};
 		if (needPatch) {
 			const inst = await e.homeKeyHook.install();
 			logResult('install patch', inst);

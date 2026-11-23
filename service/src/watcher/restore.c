@@ -48,10 +48,13 @@ void key_notice_retry(HCWatch *w)
     if (!w->override_pending) return;
     /* the takeover is over (ours back, or stock restored: the marker is gone), or too many tries */
     if (!hc_key_override_state(w->c.state_dir) || ++w->override_tries > OVERRIDE_NOTICE_TRIES) { w->override_pending = FALSE; return; }
+    w->notify_quick = TRUE; /* one short try: this runs on a 10 s timer and must not hold the watcher */
     override_seen(w);
+    w->notify_quick = FALSE;
 }
 int key_refresh(HCWatch *w, gboolean stock)
 {
+    if (stock) { w->saw_mine = FALSE; w->override_pending = FALSE; } /* stock is what is wanted: nothing of ours to lose */
     if (w->key_mode == HC_KEY_NONE) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
     HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000, NULL};
@@ -110,6 +113,7 @@ void key_follow(HCWatch *w, const char *text)
          * ours (baked by a refresh, or seen in a reply) and a choice still wanted; the filter may have been applied by
          * the app, not by this watcher, so `baked` alone is not the test. */
         char *wanted = watch_choice(w);
+        if (!wanted || !*wanted || stock_id(wanted)) { w->saw_mine = FALSE; w->override_pending = FALSE; } /* no filter of ours is wanted */
         gboolean ours = (w->baked && eq(wanted, w->baked)) || (w->saw_mine && wanted && *wanted);
         g_free(wanted);
         if (ours) override_seen(w);
@@ -188,7 +192,7 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);

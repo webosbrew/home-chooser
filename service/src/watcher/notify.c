@@ -38,7 +38,7 @@ void remember_title(HCWatch *w, const char *id)
 static int notify_call(HCWatch *w, const char *uri, jvalue_ref payload)
 {
     for (unsigned n = 0; ; n++) {
-        jvalue_ref r = watch_call(w, uri, jvalue_stringify(payload), 5);
+        jvalue_ref r = watch_call(w, uri, jvalue_stringify(payload), w->notify_quick ? 2 : 5);
         gboolean ok = reply_ok(r);
         bool value;
         gboolean refused = jboolean_get(member(r, "returnValue"), &value) == CONV_OK && !value;
@@ -46,7 +46,7 @@ static int notify_call(HCWatch *w, const char *uri, jvalue_ref payload)
         j_release(&r);
         if (ok) return 1;
         if (!refused) return 0;
-        if (n + 1 >= w->c.notify_tries || w->status >= 0) return -1;
+        if (w->notify_quick || n + 1 >= w->c.notify_tries || w->status >= 0) return -1;
         watch_wait(w, w->c.notify_retry_ms);
         if (w->status >= 0) return 0;
     }

@@ -53,6 +53,7 @@ struct HCWatch {
     gboolean saw_mine; /* a keyFilters reply showed our list: the filter is ours to lose, baked or not */
     gboolean override_pending; /* the takeover notice was not delivered yet: retried on a short timer (key_notice_retry) */
     unsigned override_tries;
+    gboolean notify_quick; /* notify.c: one short try, no retries (the timer-driven notice) */
     gboolean override_toasted; /* the 'another app took over the Home button' toast was shown for this takeover */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }

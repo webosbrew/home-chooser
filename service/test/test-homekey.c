@@ -151,28 +151,39 @@ int main(int argc, char **argv) {
         assert(run(&o,"apply",FALSE)==1); assert(persistent_writes==pw && mask);
         /* cleared on request: null, read, a fresh snapshot, then the normal volatile apply */
         g_string_truncate(logbuf,0);
-        assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !strstr(lastout,"reason="));
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !strstr(lastout,"reason="));
         status(&o,"active=yes\npatch=possible\nreboot=no\noverride=no\n");
         assert(persistent_writes==pw+1 && !mask && strstr(logbuf->str,"clear: setConfigs(persistent null)"));
         assert(g_file_get_contents(snap,&sb,NULL,NULL) && !strstr(sb,"lumaHomeKey")); g_free(sb);
         assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original)); assert(persistent_writes==pw+1);
         /* the clear takes only after a reconfigure: read, reconfigure, read */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; int rc0=reconfigures;
-        assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
         clear_needs_reconfigure=0; assert(run(&o,"stop",FALSE)==0);
         /* a slow TV: the reconfigure call does not answer true, reads give no valid list for a while; configd is
          * asked once and waited for, and the clear still ends well */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; reconf_slow=1; rc0=reconfigures;
-        assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
         assert(strstr(logbuf->str,"no valid list yet"));
         clear_needs_reconfigure=0; reconf_slow=0; gap_reads=0; assert(run(&o,"stop",FALSE)==0);
         /* the null is accepted but does not take: the write is masked again, a distinct reason, stock restored */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_stuck=1; rc0=reconfigures;
-        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-not-cleared\n") && mask && reconfigures==rc0+1);
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-not-cleared\n") && mask && reconfigures==rc0+1);
         clear_stuck=0; j_release(&mask); mask=NULL;
+        /* no override seen (no marker): the flag is just a plain apply, nothing persistent is written */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); hc_key_mark_override(o.state_dir,0); pw=persistent_writes;
+        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=persistent-override\n") && persistent_writes==pw && mask);
+        j_release(&mask); mask=NULL;
+        /* the marker is the last run's word: a state that is not an override takes it away, and 3 is never lowered to 1 */
+        hc_key_mark_override(o.state_dir,1); assert(run(&o,"apply",FALSE)==0); assert(hc_key_override_state(o.state_dir)==0);
+        assert(run(&o,"stop",FALSE)==0);
+        hc_key_mark_override(o.state_dir,1); fails=1; assert(run(&o,"apply",FALSE)==1); assert(strstr(lastout,"activation failed") && hc_key_override_state(o.state_dir)==0); fails=0;
+        hc_key_mark_override(o.state_dir,3); hc_key_mark_override(o.state_dir,1); assert(hc_key_override_state(o.state_dir)==3);
+        hc_key_mark_override(o.state_dir,2); hc_key_mark_override(o.state_dir,1); assert(hc_key_override_state(o.state_dir)==2);
+        hc_key_mark_override(o.state_dir,0); assert(run(&o,"stop",FALSE)==0);
         /* the null is refused: nothing else was written */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_reject=1; w0=sets;
-        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-clear-failed\n") && sets==w0 && mask);
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-clear-failed\n") && sets==w0 && mask);
         clear_reject=0; j_release(&mask); mask=NULL; j_release(&luma); g_free(snap);
         /* a failed write that is not a masked one is not called an override */
         fails=1; assert(run(&o,"apply",FALSE)==1); assert(!strstr(lastout,"persistent-override") && strstr(lastout,"activation failed")); fails=0;

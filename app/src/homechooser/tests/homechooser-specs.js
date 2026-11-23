@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
+import {createServiceClient} from '../../platform/service';
 import {
 	OVERRIDE_PATH, buildIdleApp, buildOverride, createHomeChooser, extractDefaultAppsProfile, extractIdleAppProfile,
 	previousList, releaseInfo, windowOf
@@ -287,6 +288,23 @@ describe('webOS 4.0: the key filter is the whole setting', () => {
 		expect(tv.luna).toEqual([]);
 		const none = await chooser(tv, V40).readState();
 		expect(none.state.recordHome).toBeNull();
+	});
+
+	describe('the filter refresh of an apply that exits 1 (the service answers with a failed reply)', () => {
+		const failing = (tv, stdoutString) => {
+			const service = createServiceClient(async () => ({returnValue: false, exitCode: 1, errorCode: 'exitStatus', errorText: 'homekeyRefresh exited with status 1', stdoutString}));
+			return Object.assign({}, tv, {exec: async (c) => (c === REFRESH ? service.run(c) : tv.exec(c))});
+		};
+		test('persistent-override is a result of the apply, not a failure', async () => {
+			const res = await chooser(failing(withStored(fakeTV(), OTHER), 'reason=persistent-override\n'), V40).apply(MINE);
+			expect(res.ok).toBe(true);
+			expect(res.persistentOverride).toBe(true);
+		});
+		test('any other failed refresh stays a failure', async () => {
+			const res = await chooser(failing(withStored(fakeTV(), OTHER), 'reason=activation failed; restored stock Home\n'), V40).apply(MINE);
+			expect(res.ok).toBe(false);
+			expect(res.persistentOverride).toBeFalsy();
+		});
 	});
 
 	test('apply: stored choice, previous launcher, boot entry, watcher and the filter refresh; no record and no setDefaultApp', async () => {

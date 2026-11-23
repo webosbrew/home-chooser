@@ -165,6 +165,13 @@ valid list is accepted after the retries (a persistent list equal to stock canno
 the volatile write is the proof. Reasons: `override-clear-failed` (the null was refused or no valid list came back;
 nothing else written) and `override-not-cleared` (cleared, and the write is still masked; stock restored).
 Restore, stop, clear, refresh with stock and uninstall never write persistently, and the flag is ignored for them.
+The flag is also ignored unless the `override` marker says an override was met (then it is a plain apply, logged).
+The command has its own 150 s budget (`homekeyApplyClear` in policy.c; the app waits 180 s): the worst case is the lock
+wait, the list read and `getAppInfo` (about 13 s), the null and first read (8 s), the reconfigure (25 s), the polling
+(33 s), then the write and read-back and a possible stock recovery (16 s): about 95 s before the gate sync, which is why
+the 90 s of the other commands is not enough. A run that is killed after the persistent null but before the apply leaves
+the marker, so the app asks again at its next opening, and clearing again is harmless. The marker is the last run's word:
+an apply, refresh or boot that reads the list and ends in anything but an override removes it, as does uninstall.
 The consent is not remembered: each clearing is asked for.
 
 **Boot and runtime.** The boot apply and the watcher never clear. At boot a persistent override recovers as above and
@@ -174,7 +181,7 @@ it on a 10 s timer, at most 30 tries per takeover, as it does for a notice of it
 was delivered is not repeated for the same takeover). While the filter is
 ours (baked by the watcher, or seen in a keyFilters reply: the app's own apply does not bake), the watcher's keyFilters subscription (the `K` events above) shows the same toast once when a list with
 none of ours and no stock `systemUi.js` entry arrives, or when its stock re-apply ends with `persistent-override`;
-it does not re-apply in a loop. The toast is due again only after our own list was back in between. Opening the app
+it does not re-apply in a loop. The notice retries are one short try each (2 s), and "ours" is forgotten when the owner chooses LG Home or clears the choice, so a later foreign list is not reported. The marker `notify` is never lowered by the watcher. The toast is due again only after our own list was back in between. Opening the app
 with `override=yes` and a stored choice asks the same question as a refused apply.
 
 ## webOS 4.0: a filter entry of our own

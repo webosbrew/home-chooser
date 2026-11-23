@@ -447,6 +447,19 @@ describe('Home Chooser screen', () => {
 				expect(homeKeyHook.install).toHaveBeenCalledWith({clearOverride: true});
 				expect(env.chooser.apply).not.toHaveBeenCalled();
 			});
+			test('the filter refresh inside the apply meeting the override asks the same way', async () => {
+				const homeKeyHook = hookWith({active: false, enabled: true, patch: 'possible'}, [{}]);
+				const apply = jest.fn(async () => ok({persistentOverride: true}));
+				const env = makeEnv({version: [8, 3, 0], homeKeyHook, apply});
+				mountApp(env);
+				await chooseOn('Plain Launcher');
+				fireEvent.click(await screen.findByText('Use as Home'));
+				expect(await screen.findByText(TEXT)).toBeTruthy();
+				expect(screen.queryByText("Couldn't set the Home app.")).toBeNull();
+				fireEvent.click(screen.getByText('Clear it and continue'));
+				await screen.findByText('Done. Press Home to try it.');
+				expect(homeKeyHook.install).toHaveBeenCalledWith({clearOverride: true});
+			});
 			test('the dialog has the focus (the list does not take it back)', async () => {
 				const focus = jest.spyOn(Spotlight, 'focus');
 				const homeKeyHook = hookWith({active: false, enabled: true, patch: 'possible', override: true}, []);

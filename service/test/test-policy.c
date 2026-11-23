@@ -118,7 +118,8 @@ static void test_commands(void)
 	}
 	CHECK(!hc_command_lookup("homekeyApplySam"));
 	c = hc_command_lookup("homekeyApplyClear");
-	CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], "apply") == 0 && strcmp(c->argv[3], "clear-override") == 0 && !c->argv[4]);
+	CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], "apply") == 0 && strcmp(c->argv[3], "clear-override") == 0 && !c->argv[4]
+		&& c->timeout_s == 150 && hc_command_lookup("homekeyApply")->timeout_s == 90);
 	CHECK(hc_command_lookup("homekeyStatus") && hc_command_lookup("homekeyRefresh"));
 	c = hc_command_lookup("stopWatcher");
 	CHECK(c && c->tolerant && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "stop") == 0 && !c->argv[3]);

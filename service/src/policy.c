@@ -104,7 +104,9 @@ static const hc_command COMMANDS[] = {
 	{"homekeyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "clear", NULL}, 20, false, false},
 	/* All hook commands use configd volatile reload; no GUI process is restarted. */
 	{"homekeyApply", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", NULL}, 90, false, false},
-	{"homekeyApplyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", "clear-override", NULL}, 90, false, false},
+	/* 150 s: the clear waits for configd's reconfigure (up to 25 s, then up to 33 s of reads), and the apply after it is
+	 * a write, a read, and possibly a stock recovery write and read: about 100 s at the worst, then the gate sync */
+	{"homekeyApplyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", "clear-override", NULL}, 150, false, false},
 	{"homekeyStop", {"/bin/sh", HC_HOMEKEY_SCRIPT, "stop", NULL}, 90, false, false},
 	{"homekeyRefresh", {"/bin/sh", HC_HOMEKEY_SCRIPT, "refresh", NULL}, 90, false, false},
 	/* the launcher API's permission group and API permissions (service/scripts/homechooser-access) */

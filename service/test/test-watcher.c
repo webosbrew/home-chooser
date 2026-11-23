@@ -20,6 +20,7 @@ typedef struct {
     int major, key_calls, stock_calls, key_fail, access_fail, applies, removes;
     int sets, defaults, scans, alerts, toasts, closes, preload_on, preload_off;
     int set_fail, default_fail, alert_fail, toast_fail, preload_fail;
+    int toast_timeout;
     int silent, flap, wait_action, wait_count, title_gets;
     int gate_on, gate_off, gate_fail, gate_last, gate_off_with_choice, gate_off_at_wait, stock_at_wait;
     int running_dead, close_dead, running_calls, launches; /* calls left unanswered; `running` calls seen */
@@ -120,6 +121,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         r = f->alert_fail == -1 ? NULL : response(!f->alert_fail);
         if (f->alert_fail > 0) f->alert_fail--;
     } else if (eq(method, "createToast")) {
+        f->toast_timeout = timeout;
         f->toasts++; r = f->toast_fail == -1 ? NULL : response(!f->toast_fail);
         if (f->toast_fail > 0) f->toast_fail--;
     } else if (eq(method, "setPreloadPolicy")) {
@@ -213,7 +215,7 @@ static Fixture *setup(int major, const char *id) {
     char *os = g_strdup_printf("Rockhopper release %d.0.0-1 (test)\n", major); file(f->c.release_file, os); g_free(os);
     char *init_dir = g_path_get_dirname(f->c.init_link); mkdir_p(init_dir); g_free(init_dir);
     CHECK("fixture init link", !symlink("/missing-package/homechooser", f->c.init_link));
-    const char *names[] = {"homekey", "hook/generated", "hook-stale", "boot/homechooser", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"homekey", "hook/generated", "hook-stale", "boot/homechooser", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
     for (int i = 0; names[i]; i++) file(path(f, f->c.state_dir, names[i]), "x");
     installed(f, HC_APP_ID, 1); installed(f, "my.home", 1); installed(f, "other.home", 1);
     installed(f, "gone.app", -1); installed(f, STOCK, 1); installed(f, FULLHOME, -1);
@@ -485,6 +487,7 @@ static void test_uninstall(void) {
         CHECK("W13 access removed", f->removes == 1);
         CHECK("W13 files removed", !g_file_test(f->w->choice_file, G_FILE_TEST_EXISTS) && !g_file_test(f->c.init_link, G_FILE_TEST_IS_SYMLINK));
         CHECK("W13 boot/cache/flag removed", !g_file_test(path(f, f->c.state_dir, "boot"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "homekey"), G_FILE_TEST_EXISTS));
+        CHECK("W13 override marker removed", !g_file_test(path(f, f->c.state_dir, "override"), G_FILE_TEST_EXISTS));
         CHECK("W13 key filter snapshot and lock removed", !g_file_test(path(f, f->c.state_dir, "keyfilters-stock.json"), G_FILE_TEST_EXISTS) && !g_file_test(path(f, f->c.state_dir, "keyfilter.lock"), G_FILE_TEST_EXISTS));
         CHECK("W18 one uninstall toast", f->toasts == 1 && !f->alerts);
         CHECK("W13 stock refresh", f->stock_calls == (major >= 6 && major <= 9));
@@ -1101,6 +1104,23 @@ static void test_key_follow(void) {
     event(f, 'K', foreign); CHECK("K34 never saw ours: no notice", f->toasts == t0);
     event(f, 'K', own); event(f, 'K', foreign); CHECK("K35 ours seen, then foreign: notice at once", f->toasts == t0 + 1 && f->w->override_toasted);
     g_free(own); teardown(f);
+    /* the owner went back to LG Home or cleared the choice: a later foreign list is not a takeover of anything of ours */
+    for (int mode = 0; mode < 2; mode++) {
+        f = setup(8, "my.home"); f->key_fail = 1; start(f); own = key_text(f, TRUE); t0 = f->toasts;
+        event(f, 'K', own); CHECK("K40 ours seen", f->w->saw_mine);
+        if (mode == 0) choice(f, STOCK); else unlink(f->w->choice_file);
+        event(f, 'K', foreign); CHECK("K41 stock wanted or no choice: no notice, forgotten", f->toasts == t0 && !f->w->saw_mine);
+        choice(f, "my.home"); event(f, 'K', foreign); CHECK("K42 a later choice without our list seen: still none", f->toasts == t0);
+        g_free(own); teardown(f);
+    }
+    /* the timer-driven notice is one short try, the watcher does not stall on it */
+    f = setup(8, "my.home"); start(f); f->toast_fail = -1; hc_key_mark_override(f->c.state_dir, 3); t0 = f->toasts;
+    event(f, 'N', NULL); CHECK("K43 retry: one short try", f->toasts == t0 + 1 && f->toast_timeout <= 2);
+    teardown(f);
+    /* a restart with an undelivered notice (marker 3) keeps the retry: the first event seen does not lower it */
+    f = setup(8, "my.home"); start(f); f->toast_fail = -1; hc_key_mark_override(f->c.state_dir, 3);
+    event(f, 'K', foreign); CHECK("K44 marker 3 kept", hc_key_override_state(f->c.state_dir) == 3);
+    teardown(f);
     /* the boot apply could not tell the owner (marker "notify"): the watcher's N timer delivers it, once */
     f = setup(8, "my.home"); start(f); override_file = g_build_filename(f->c.state_dir, "override", NULL); t0 = f->toasts;
     hc_key_mark_override(f->c.state_dir, 3); f->toast_fail = -1;

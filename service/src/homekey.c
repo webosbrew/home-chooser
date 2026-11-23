@@ -123,7 +123,7 @@ int hc_key_override_state(const char *state_dir) {
 void hc_key_mark_override(const char *state_dir, int state) {
     char *p = g_build_filename(state_dir, "override", NULL);
     if (state <= 0) unlink(p);
-    else if (g_file_test(state_dir, G_FILE_TEST_IS_DIR) && !(state == 1 && hc_key_override_state(state_dir) == 2))
+    else if (g_file_test(state_dir, G_FILE_TEST_IS_DIR) && !(state == 1 && hc_key_override_state(state_dir) >= 2))
         g_file_set_contents(p, state == 2 ? "toasted" : state == 3 ? "notify" : "", -1, NULL);
     g_free(p);
 }
@@ -253,7 +253,7 @@ int hc_key_run_ex(const HCKeyOps *o, const char *action, gboolean force_stock, g
     char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL, *lockpath = NULL;
     char *stock_file = path(o, "keyfilters-stock.json");
     char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->release_file);
-    gboolean overlay = FALSE, cleared = FALSE;
+    gboolean overlay = FALSE, cleared = FALSE, evaluated = FALSE;
     jvalue_ref current = jinvalid(), stock = jinvalid(), next = jinvalid();
     gboolean boot = !strcmp(action, "boot"), status = !strcmp(action, "status"), prepare = !strcmp(action, "prepare");
     /* The existing 5/10-12 policy is owned by the watcher, never this hook. */
@@ -309,8 +309,10 @@ int hc_key_run_ex(const HCKeyOps *o, const char *action, gboolean force_stock, g
         if (++tries >= 50) { reason = g_strdup("another key-filter transaction is running"); goto done; }
     }
     current = get_list(o);
+    evaluated = TRUE;
     if (!jis_valid(current)) { reason = g_strdup("configd did not return a valid nonempty keyFilters list"); goto done; }
-    if (clear_override && !strcmp(action, "apply") && !force_stock && !has_ours(o, current) && g_file_test(flag, G_FILE_TEST_EXISTS)) {
+    if (clear_override && !hc_key_override_state(o->state_dir)) klog(o, "clear: no persistent override was seen, applying without clearing");
+    if (clear_override && hc_key_override_state(o->state_dir) && !strcmp(action, "apply") && !force_stock && !has_ours(o, current) && g_file_test(flag, G_FILE_TEST_EXISTS)) {
         /* Only for an apply that has a choice to make; a restore never writes persistently. */
         char *wanted = readfile(home); if (wanted) g_strstrip(wanted);
         gboolean go = wanted && *wanted; g_free(wanted);
@@ -448,6 +450,10 @@ int hc_key_run_ex(const HCKeyOps *o, const char *action, gboolean force_stock, g
     rc = 0;
     if (reason) toast(o, "Home Chooser cannot change Home on this firmware. LG Home remains available.");
 done:
+    /* The marker says an override was met by the last run that looked: any other outcome of an apply, refresh or boot
+     * that got as far as reading the list takes it away (a killed run or another cause must not leave override=yes). */
+    if (evaluated && (!reason || (strcmp(reason, "persistent-override") && strcmp(reason, "override-not-cleared") && strcmp(reason, "override-clear-failed"))))
+        hc_key_mark_override(o->state_dir, 0);
     if (reason) { g_string_append_printf(out, "reason=%s\n", reason); if (boot && rc) {
         /* One try, no waiting: the notification service is often not up this early, and the boot apply must not hold the
          * watcher back. A notice that was not accepted is left to the watcher (marker 3), which retries on a short timer. */

@@ -2,7 +2,7 @@
 // Home-choice logic. Pure over injected {rootLuna, exec, readFile, writeFile, removeFile, version}; exec takes
 // a command name (see persistence.js), not shell text.
 // See docs/settings-app.md and docs/research/home-key-and-home-app.md.
-import {errorMessage, errorReply} from '../platform/errors';
+import {errorMessage, errorReply, overrideReasonOf} from '../platform/errors';
 import {
 	HOME_FILE, HOMEKEY_FLAG, PREVIOUS_FILE, STOCK_FILE, ensureEntryCommand, homekeyCommand, parsePersistenceStatus, persistenceStatusCommand,
 	removeEntryCommand, startWatcherCommand, stopWatcherCommand
@@ -418,7 +418,17 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 				}
 
 				// The 6-9 filter launches an explicit id; SAM never needs restarting.
-				if (info.needsHomeKeyHook) await run.run(homekeyCommand('refresh'));
+				if (info.needsHomeKeyHook) {
+					try {
+						await run.run(homekeyCommand('refresh'));
+					} catch (e) {
+						// another app saved the key filter list persistently: the owner is asked (views/useHomeChooser.js)
+						const reason = overrideReasonOf(e);
+						if (!reason) throw e;
+						res.persistentOverride = reason === 'persistent-override';
+						if (!res.persistentOverride) throw e;
+					}
+				}
 			} catch (e) {
 				fail(res, e);
 			}
