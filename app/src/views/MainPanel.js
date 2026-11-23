@@ -117,7 +117,12 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 	return (
 		<Panel {...rest}>
 			<Header title="Home Chooser" titleBelow="Choose which app opens when you press Home." />
-			{phase === 'loading' ? <Spinner>{elevating ? SETUP_TEXT : 'Loading...'}</Spinner> : (
+			{phase === 'loading' && elevating ? (
+				<>
+					<Spinner />
+					<BodyText className={css.message} data-testid="setup-text">{SETUP_TEXT}</BodyText>
+				</>
+			) : phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
 					{stocks.map((id) => (

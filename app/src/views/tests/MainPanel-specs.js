@@ -48,7 +48,7 @@ describe('Home Chooser screen', () => {
 		const load = jest.fn((_platform, {onProgress}) => new Promise((resolve) => { finish = resolve; onProgress('elevating'); }));
 		const view = render(<App load={load} onExit={jest.fn()} />);
 		await flush();
-		expect(view.container.textContent).toContain("Setting up Home Chooser's service. This can take a minute on some TVs.");
+		expect(screen.getByTestId('setup-text').textContent).toBe("Setting up Home Chooser's service. This can take a minute on some TVs.");
 		expect(view.container.textContent).not.toContain('Loading...');
 		await act(async () => { finish(makeEnv()); });
 	});
