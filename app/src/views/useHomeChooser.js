@@ -53,6 +53,7 @@ export const plainFailure = (what, errors) => {
 
 export const useHomeChooser = (load = loadEnvironment) => {
 	const [phase, setPhase] = useState('loading');
+	const [elevating, setElevating] = useState(false); // the service is being set up (can take a minute)
 	const [rootError, setRootError] = useState(null); // why root is unavailable, or null
 	const [env, setEnv] = useState(null);
 	const [candidates, setCandidates] = useState([]);
@@ -152,7 +153,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 
 	useEffect(() => {
 		let cancelled = false;
-		Promise.resolve().then(() => load()).then(async (e) => {
+		Promise.resolve().then(() => load(undefined, {onProgress: (what) => { if (what === 'elevating' && !cancelled && mounted.current) setElevating(true); }})).then(async (e) => {
 			if (cancelled || !mounted.current) return;
 			setEnv(e);
 			const state = await refreshWith(e);
@@ -280,7 +281,7 @@ export const useHomeChooser = (load = loadEnvironment) => {
 	}), [run]);
 
 	return {
-		phase, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
+		phase, elevating, rootError, hasPatch: Boolean(env && env.homeKeyHook), patch,
 		// webOS 4.0: LG Home is the compositor's ribbon, there is no Home app
 		ribbonOnly: Boolean(env && env.chooser && env.chooser.info && env.chooser.info.filterOnly),
 		patchActive: Boolean(patchStatus && patchStatus.active),

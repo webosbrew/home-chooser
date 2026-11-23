@@ -43,6 +43,16 @@ const mountApp = (env, onExit = jest.fn()) => {
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
 describe('Home Chooser screen', () => {
+	test('while the service is being set up the spinner says so', async () => {
+		let finish;
+		const load = jest.fn((_platform, {onProgress}) => new Promise((resolve) => { finish = resolve; onProgress('elevating'); }));
+		const view = render(<App load={load} onExit={jest.fn()} />);
+		await flush();
+		expect(view.container.textContent).toContain("Setting up Home Chooser's service. This can take a minute on some TVs.");
+		expect(view.container.textContent).not.toContain('Loading...');
+		await act(async () => { finish(makeEnv()); });
+	});
+
 	let log;
 	beforeEach(() => { log = jest.spyOn(console, 'log').mockImplementation(() => {}); });
 	afterEach(() => { log.mockRestore(); window.localStorage.clear(); });
