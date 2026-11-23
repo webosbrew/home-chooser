@@ -159,6 +159,8 @@ int main(int argc, char **argv) {
         fails=1; assert(run(&o,"apply",FALSE)==1); assert(!strstr(lastout,"persistent-override") && strstr(lastout,"activation failed")); fails=0;
         assert(strstr(logbuf->str,"setConfigs(volatile) reply={\"returnValue\":false}"));
         assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original));
+        /* back to the state this block found: the filter active for other.home (the checks below rely on it) */
+        g_file_set_contents(home,"other.home",-1,NULL); assert(run(&o,"apply",FALSE)==0);
     }
     /* No toast when boot restores stock: missing app, no flag, no choice; and a failed write announces first, then reports the error. */
     starts=0; app_installed=0; assert(run(&o,"boot",FALSE)==0); assert(starts==0); app_installed=1;
