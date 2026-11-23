@@ -117,6 +117,8 @@ static void test_commands(void)
 		CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], kf[i + 1]) == 0 && !c->argv[3]);
 	}
 	CHECK(!hc_command_lookup("homekeyApplySam"));
+	c = hc_command_lookup("homekeyApplyClear");
+	CHECK(c && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser-homekey") == 0 && strcmp(c->argv[2], "apply") == 0 && strcmp(c->argv[3], "clear-override") == 0 && !c->argv[4]);
 	CHECK(hc_command_lookup("homekeyStatus") && hc_command_lookup("homekeyRefresh"));
 	c = hc_command_lookup("stopWatcher");
 	CHECK(c && c->tolerant && strcmp(c->argv[1], HC_SERVICE_DIR "/scripts/homechooser") == 0 && strcmp(c->argv[2], "stop") == 0 && !c->argv[3]);
@@ -138,7 +140,7 @@ static void test_commands(void)
 	CHECK(!hc_command_lookup("systemctl restart sam"));
 	CHECK(!hc_command_lookup("restartSam "));
 	/* every argv[0] is absolute and nothing is left unterminated */
-	static const char *const names[] = {"watch", "homekeyStatus", "homekeyApply", "homekeyStop", "homekeyRefresh", "homekeyPrepare", "homekeyClear", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
+	static const char *const names[] = {"watch", "homekeyStatus", "homekeyApply", "homekeyApplyClear", "homekeyStop", "homekeyRefresh", "homekeyPrepare", "homekeyClear", "stopWatcher", "watcherActive", "profileGet", "profileRescan", "accessApply", "accessRemove", "accessStatus"};
 	for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
 		c = hc_command_lookup(names[i]);
 		CHECK(c && c->argv[0][0] == '/' && c->timeout_s > 0);
@@ -395,6 +397,7 @@ static void test_luna_run(void)
 	CHECK(hc_luna_uri_allowed("luna://com.webos.applicationManager/listLaunchPoints"));
     CHECK(hc_luna_argv("luna://com.webos.service.config/getConfigs", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.service.config/setConfigs", "{}", 1, argv));
+    CHECK(hc_luna_argv("luna://com.webos.service.config/reconfigure", "{}", 1, argv));
     CHECK(hc_luna_argv("luna://com.webos.surfacemanager/getCurrentState", "{}", 1, argv));
     CHECK(hc_call_lookup("luna://com.webos.service.config/setConfigs") == HC_CALL_DENIED);
 	CHECK(hc_luna_uri_allowed("luna://com.webos.appInstallService/dev/remove"));

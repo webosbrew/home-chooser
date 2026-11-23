@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
     char *rel = g_build_filename(dir, "starfish-release", NULL), *js = g_build_filename(dir, "stock-systemUi.js", NULL);
     char *flag = g_build_filename(dir, "homekey", NULL), *home = g_build_filename(dir, "home", NULL);
     const char *r40 = "Rockhopper release 4.4.3-22 (goldilocks-gorongosa)\n", *r45 = "Rockhopper release 4.10.2-29 (goldilocks2-grampians)\n";
-    HCKeyOps o = {dir, js, rel, fake, NULL, 3, 0};
+    HCKeyOps o = {dir, js, rel, fake, NULL, 3, 0, NULL};
 
     /* ---- gating: the mode follows the release major and the stock file, never a version number alone ---- */
     assert(hc_key_mode(r40, stub40) == HC_KEY_INSERT);

@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
     char *home = g_build_filename(state, "home", NULL), *snap = g_build_filename(state, "keyfilters-stock.json", NULL);
     assert(!g_mkdir_with_parents(state, 0755));
     g_file_set_contents(flag, "", -1, NULL); g_file_set_contents(home, "test.home\n", -1, NULL);
-    HCKeyOps o = {state, stock_js, os, fake, NULL, 2, 0};
+    HCKeyOps o = {state, stock_js, os, fake, NULL, 2, 0, NULL};
     /* Two firmware lists: an update may add, drop or reorder other handlers. */
     const char *lists[] = {
         "[{\"file\":\"/other.js\",\"handler\":\"first\",\"extra\":[1,true]},{\"file\":\"" STOCK_LITERAL "\",\"handler\":\"second\",\"extra\":{\"a\":2}}]",

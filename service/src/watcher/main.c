@@ -146,7 +146,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
     guint signal_source = g_unix_fd_add(pipefd[0], G_IO_IN, stop_signal, &r);
     /* Boot apply uses the same bounded luna-send transport. The watcher
      * still runs on readiness failure and retries the live filter on app events. */
-    HCKeyOps key = {c.state_dir, c.stock_js, c.release_file, runner_call, &r, 30, 1000};
+    HCKeyOps key = {c.state_dir, c.stock_js, c.release_file, runner_call, &r, 30, 1000, NULL};
     GString *output = g_string_new(NULL);
     if (boot) {
         hc_key_run(&key, "boot", FALSE, output);

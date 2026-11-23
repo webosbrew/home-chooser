@@ -1068,6 +1068,16 @@ static void test_key_follow(void) {
     f = setup(8, "my.home"); start(f); stock = key_text(f, FALSE); calls = f->key_calls; f->key_fail = 1;
     event(f, 'K', stock); CHECK("K18 failed re-apply tried once", f->key_calls == calls + 1 && eq(f->w->baked, "my.home"));
     g_free(stock); teardown(f);
+    /* another app took the list (none of ours, no stock entry): one toast for the takeover, no re-apply, no clearing;
+     * the toast is due again only after our own list was back in between */
+    f = setup(8, "my.home"); start(f); calls = f->key_calls; int t0 = f->toasts;
+    const char *foreign = "{\"returnValue\":true,\"configs\":{\"com.webos.surfacemanager.keyFilters\":[{\"file\":\"/x/y.js\",\"handler\":\"h\"}]}}";
+    char *override_file = g_build_filename(f->c.state_dir, "override", NULL), *own = key_text(f, TRUE);
+    event(f, 'K', foreign); CHECK("K20 list taken by another app: one toast, no re-apply", f->toasts == t0 + 1 && f->key_calls == calls && g_file_test(override_file, G_FILE_TEST_EXISTS));
+    event(f, 'K', foreign); CHECK("K21 not again", f->toasts == t0 + 1);
+    event(f, 'K', own); CHECK("K22 ours back: marker gone", !g_file_test(override_file, G_FILE_TEST_EXISTS) && f->toasts == t0 + 1);
+    event(f, 'K', foreign); CHECK("K23 taken again: toast again", f->toasts == t0 + 2);
+    g_free(override_file); g_free(own); teardown(f);
 }
 /* webOS 4.0: the Home key filter is the whole redirect (an entry of ours, homekey40-*.js): the watcher applies it, applies it
  * again when configd puts the stock list back, never touches the settings record or the profile, and restores the stock keyFilters

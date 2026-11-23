@@ -104,6 +104,7 @@ static const hc_command COMMANDS[] = {
 	{"homekeyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "clear", NULL}, 20, false, false},
 	/* All hook commands use configd volatile reload; no GUI process is restarted. */
 	{"homekeyApply", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", NULL}, 90, false, false},
+	{"homekeyApplyClear", {"/bin/sh", HC_HOMEKEY_SCRIPT, "apply", "clear-override", NULL}, 90, false, false},
 	{"homekeyStop", {"/bin/sh", HC_HOMEKEY_SCRIPT, "stop", NULL}, 90, false, false},
 	{"homekeyRefresh", {"/bin/sh", HC_HOMEKEY_SCRIPT, "refresh", NULL}, 90, false, false},
 	/* the launcher API's permission group and API permissions (service/scripts/homechooser-access) */
@@ -474,6 +475,7 @@ static const char *const LUNA_URIS[] = {
 	"luna://com.webos.service.systemprofile/debug/rescan",
 	"luna://com.webos.service.config/getConfigs",
 	"luna://com.webos.service.config/setConfigs",
+	"luna://com.webos.service.config/reconfigure",
 	"luna://com.webos.surfacemanager/getCurrentState",
 	"luna://com.webos.service.eim/getLastInput",
 	"luna://com.webos.notification/createAlert",

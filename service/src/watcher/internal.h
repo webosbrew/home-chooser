@@ -50,6 +50,7 @@ struct HCWatch {
     gint64 key_last;
     unsigned key_reapplies;
     gboolean key_logged;
+    gboolean override_toasted; /* the 'another app took over the Home button' toast was shown for this takeover */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }

@@ -21,16 +21,27 @@ static gboolean on_disk(HCWatch *w, const char *id)
     }
     g_strfreev(dirs); return found;
 }
+/* Another app wrote keyFilters persistently (or replaced the list) while Home Chooser's filter is wanted: say so once,
+ * and leave it (clearing needs the owner, in the settings app). */
+static void override_seen(HCWatch *w)
+{
+    if (w->override_toasted) return;
+    w->override_toasted = TRUE;
+    hc_key_mark_override(w->c.state_dir, TRUE);
+    watch_log(w, "Home key: another app has taken over keyFilters; not clearing it");
+    watch_notify(w, HC_OVERRIDE_TOAST, FALSE);
+}
 int key_refresh(HCWatch *w, gboolean stock)
 {
     if (w->key_mode == HC_KEY_NONE) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
-    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000};
+    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000, NULL};
     GString *out = g_string_new(NULL);
     int rc = hc_key_run(&ops, "refresh", stock, out);
     watch_log(w, "Home key refresh%s: %s", stock ? " stock" : "", out->str);
     /* Baked means the filter really redirects: rc 0 with active=no (unknown stock shape, unreadable
      * stock file) is the stock list, so nothing is baked and the home gate stays unmounted. */
+    if (!stock && strstr(out->str, "reason=persistent-override")) override_seen(w);
     if (!rc && !stock && !strstr(out->str, "active=yes")) { rc = 1; g_clear_pointer(&w->baked, g_free); }
     g_string_free(out, TRUE); return rc;
 }
@@ -46,10 +57,11 @@ void sync_baked(HCWatch *w, const char *id)
 #define KEY_QUIET_S 600
 /* TRUE only for a list that plainly is the firmware's own: a stock systemUi entry and none of ours. Anything
  * else (no list, an error reply, our file present, no systemUi entry) is not a change to put right. */
-static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
+static gboolean list_is_stock(HCWatch *w, jvalue_ref reply, gboolean *mine_out, gboolean *listed_out)
 {
     jvalue_ref list = member(member(reply, "configs"), KEY_CONFIG);
     if (!jis_array(list)) return FALSE;
+    if (listed_out) *listed_out = jarray_size(list) > 0;
     char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL), *ours40 = g_build_filename(w->c.state_dir, "homekey40-", NULL);
     gboolean stock = FALSE, mine = FALSE;
     for (ssize_t i = 0; i < jarray_size(list); i++) {
@@ -58,6 +70,7 @@ static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
         if (eq(file, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || eq(file, "/usr/lib/qml/KeyFilters/systemUi.js")) stock = TRUE;
         g_free(file);
     }
+    if (mine_out) *mine_out = mine;
     g_free(ours); g_free(ours40); return stock && !mine;
 }
 void key_follow(HCWatch *w, const char *text)
@@ -66,8 +79,19 @@ void key_follow(HCWatch *w, const char *text)
     jvalue_ref reply;
     if (text) reply = parse_object(text);
     else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
-    gboolean stock = list_is_stock(w, reply);
+    gboolean mine = FALSE, listed = FALSE, stock = list_is_stock(w, reply, &mine, &listed);
     j_release(&reply);
+    if (mine) {
+        if (w->override_toasted) { w->override_toasted = FALSE; hc_key_mark_override(w->c.state_dir, FALSE); }
+        return;
+    }
+    if (listed && !stock) {
+        /* A list with none of ours and no stock systemUi entry: another app wrote it. Same choice only. */
+        char *wanted = watch_choice(w);
+        gboolean same = eq(wanted, w->baked); g_free(wanted);
+        if (same) override_seen(w);
+        return;
+    }
     if (!stock) return;
     /* Only the choice the baked filter was made for: a changed or removed choice has its own path. */
     char *want = watch_choice(w);
