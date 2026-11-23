@@ -218,6 +218,7 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
     else if (tag == 'a') watch_log(w, "apps subscription ended, relying on the periodic check");
     else if (tag == 'k') watch_log(w, "keyFilters subscription ended, relying on the periodic check");
     else if (tag == 'K') key_follow(w, text);
+    else if (tag == 'N') key_notice_retry(w);
     else if (tag == 'f' || tag == 'l') watch_log(w, "foreground subscription ended; the stock-home and previous-launcher closes rely on the periodic check");
     else if (w->only_close && (tag == 'S' || tag == 'A' || tag == 'T')) {
         /* Only closing the previous launcher: a stored choice brings the whole watcher back. */

@@ -1085,7 +1085,29 @@ static void test_key_follow(void) {
     event(f, 'K', foreign); CHECK("K26 once delivered, not again", f->toasts == t0 + 2);
     event(f, 'K', own); f->w->override_toasted = FALSE; hc_key_mark_override(f->c.state_dir, 2); t0 = f->toasts;
     event(f, 'K', foreign); CHECK("K27 the boot already told the owner", f->toasts == t0 && f->w->override_toasted);
+    /* the notification service stays silent for a while: the notice is retried on the 'N' timer, soon, not at the long tick */
+    f->toast_fail = -1; unlink(override_file); f->w->override_toasted = FALSE; f->w->override_pending = FALSE; t0 = f->toasts;
+    event(f, 'K', foreign); CHECK("K28 not delivered: pending", f->w->override_pending && !f->w->override_toasted);
+    event(f, 'N', NULL); event(f, 'N', NULL); CHECK("K29 retried on each N tick", f->toasts == t0 + 3 && f->w->override_pending);
+    f->toast_fail = 0; event(f, 'N', NULL); CHECK("K30 delivered on a later try", f->toasts == t0 + 4 && f->w->override_toasted && !f->w->override_pending);
+    event(f, 'N', NULL); CHECK("K31 not again", f->toasts == t0 + 4);
+    f->toast_fail = -1; unlink(override_file); f->w->override_toasted = FALSE; f->w->override_pending = FALSE;
+    event(f, 'K', foreign); unlink(override_file); event(f, 'N', NULL); CHECK("K32 takeover over (marker gone): the retries stop", !f->w->override_pending);
     g_free(override_file); g_free(own); teardown(f);
+    /* the filter was applied by the app (daemon command), not baked by this watcher: our list seen in a reply is what
+     * makes a later foreign write a takeover; without ever seeing ours, a foreign list is not */
+    f = setup(8, "my.home"); f->key_fail = 1; start(f); CHECK("K33 not baked", !f->w->baked);
+    own = key_text(f, TRUE); t0 = f->toasts;
+    event(f, 'K', foreign); CHECK("K34 never saw ours: no notice", f->toasts == t0);
+    event(f, 'K', own); event(f, 'K', foreign); CHECK("K35 ours seen, then foreign: notice at once", f->toasts == t0 + 1 && f->w->override_toasted);
+    g_free(own); teardown(f);
+    /* the boot apply could not tell the owner (marker "notify"): the watcher's N timer delivers it, once */
+    f = setup(8, "my.home"); start(f); override_file = g_build_filename(f->c.state_dir, "override", NULL); t0 = f->toasts;
+    hc_key_mark_override(f->c.state_dir, 3); f->toast_fail = -1;
+    event(f, 'N', NULL); CHECK("K36 boot notice handed over: tried", f->toasts == t0 + 1 && f->w->override_pending);
+    f->toast_fail = 0; event(f, 'N', NULL); CHECK("K37 delivered, marked", f->toasts == t0 + 2 && hc_key_override_state(f->c.state_dir) == 2);
+    event(f, 'N', NULL); CHECK("K38 once", f->toasts == t0 + 2);
+    g_free(override_file); teardown(f);
 }
 /* webOS 4.0: the Home key filter is the whole redirect (an entry of ours, homekey40-*.js): the watcher applies it, applies it
  * again when configd puts the stock list back, never touches the settings record or the profile, and restores the stock keyFilters

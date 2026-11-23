@@ -117,14 +117,14 @@ static ssize_t first_diff(jvalue_ref a, jvalue_ref b) {
 int hc_key_override_state(const char *state_dir) {
     char *p = g_build_filename(state_dir, "override", NULL), *text = NULL;
     int state = 0;
-    if (g_file_get_contents(p, &text, NULL, NULL)) state = text && !strcmp(g_strstrip(text), "toasted") ? 2 : 1;
+    if (g_file_get_contents(p, &text, NULL, NULL)) state = text && !strcmp(g_strstrip(text), "toasted") ? 2 : text && !strcmp(text, "notify") ? 3 : 1;
     g_free(text); g_free(p); return state;
 }
 void hc_key_mark_override(const char *state_dir, int state) {
     char *p = g_build_filename(state_dir, "override", NULL);
     if (state <= 0) unlink(p);
     else if (g_file_test(state_dir, G_FILE_TEST_IS_DIR) && !(state == 1 && hc_key_override_state(state_dir) == 2))
-        g_file_set_contents(p, state == 2 ? "toasted" : "", -1, NULL);
+        g_file_set_contents(p, state == 2 ? "toasted" : state == 3 ? "notify" : "", -1, NULL);
     g_free(p);
 }
 static gboolean toast(const HCKeyOps *o, const char *message) {
@@ -135,16 +135,6 @@ static gboolean toast(const HCKeyOps *o, const char *message) {
     jvalue_ref r = call(o, "luna://com.webos.notification/createToast", jvalue_stringify(p), 2);
     gboolean ok = success(r);
     j_release(&r); j_release(&p); return ok;
-}
-/* The notification service may not be up yet (a boot apply runs early): a few tries, a few seconds apart. */
-#define NOTICE_TRIES 5
-static gboolean toast_retry(const HCKeyOps *o, const char *message) {
-    for (unsigned n = 0; n < NOTICE_TRIES; n++) {
-        if (toast(o, message)) return TRUE;
-        klog(o, "notice: createToast was not accepted (try %u of %u)", n + 1, (unsigned)NOTICE_TRIES);
-        if (n + 1 < NOTICE_TRIES && o->retry_ms) g_usleep(o->retry_ms * 3000);
-    }
-    return FALSE;
 }
 static gboolean select_list(const HCKeyOps *o, jvalue_ref list, jvalue_ref before, gboolean *persistent) {
     if (persistent) *persistent = FALSE;
@@ -459,7 +449,9 @@ int hc_key_run_ex(const HCKeyOps *o, const char *action, gboolean force_stock, g
     if (reason) toast(o, "Home Chooser cannot change Home on this firmware. LG Home remains available.");
 done:
     if (reason) { g_string_append_printf(out, "reason=%s\n", reason); if (boot && rc) {
-        if (!strcmp(reason, "persistent-override")) { if (toast_retry(o, HC_OVERRIDE_TOAST)) hc_key_mark_override(o->state_dir, 2); }
+        /* One try, no waiting: the notification service is often not up this early, and the boot apply must not hold the
+         * watcher back. A notice that was not accepted is left to the watcher (marker 3), which retries on a short timer. */
+        if (!strcmp(reason, "persistent-override")) hc_key_mark_override(o->state_dir, toast(o, HC_OVERRIDE_TOAST) ? 2 : 3);
         else toast(o, "Home Chooser could not start your home. LG Home remains available."); } }
     if (lock >= 0) close(lock);
     j_release(&current); j_release(&stock); j_release(&next);

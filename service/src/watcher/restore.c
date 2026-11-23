@@ -27,12 +27,28 @@ static void override_seen(HCWatch *w)
 {
     if (w->override_toasted) return;
     /* The boot apply may have told the owner already (the marker says so): once per takeover. */
-    if (hc_key_override_state(w->c.state_dir) == 2) { w->override_toasted = TRUE; return; }
+    if (hc_key_override_state(w->c.state_dir) == 2) { w->override_toasted = TRUE; w->override_pending = FALSE; return; }
     hc_key_mark_override(w->c.state_dir, 1);
-    watch_log(w, "Home key: another app has taken over keyFilters; not clearing it");
-    /* Only a delivered notice counts: the notification service may not be up yet, the next event tries again. */
-    if (watch_notify(w, HC_OVERRIDE_TOAST, FALSE)) { w->override_toasted = TRUE; hc_key_mark_override(w->c.state_dir, 2); }
-    else watch_log(w, "Home key: the notice was not delivered, trying again at the next change");
+    if (!w->override_pending) watch_log(w, "Home key: another app has taken over keyFilters; not clearing it");
+    /* Only a delivered notice counts: the notification service may not be up yet (it answered nothing for minutes
+     * after a boot), so an undelivered one is tried again on the short 'N' timer. */
+    if (watch_notify(w, HC_OVERRIDE_TOAST, FALSE)) {
+        w->override_toasted = TRUE; w->override_pending = FALSE; hc_key_mark_override(w->c.state_dir, 2);
+    } else if (!w->override_pending) {
+        w->override_pending = TRUE; w->override_tries = 0;
+        watch_log(w, "Home key: the notice was not delivered, trying again shortly");
+    }
+}
+#define OVERRIDE_NOTICE_TRIES 30
+void key_notice_retry(HCWatch *w)
+{
+    if (w->override_toasted || w->status >= 0) return;
+    /* the boot apply could not tell the owner (marker 3): the watcher takes that over */
+    if (!w->override_pending && hc_key_override_state(w->c.state_dir) == 3) { w->override_pending = TRUE; w->override_tries = 0; }
+    if (!w->override_pending) return;
+    /* the takeover is over (ours back, or stock restored: the marker is gone), or too many tries */
+    if (!hc_key_override_state(w->c.state_dir) || ++w->override_tries > OVERRIDE_NOTICE_TRIES) { w->override_pending = FALSE; return; }
+    override_seen(w);
 }
 int key_refresh(HCWatch *w, gboolean stock)
 {
@@ -78,24 +94,28 @@ static gboolean list_is_stock(HCWatch *w, jvalue_ref reply, gboolean *mine_out, 
 }
 void key_follow(HCWatch *w, const char *text)
 {
-    if (w->key_mode == HC_KEY_NONE || !w->baked || w->status >= 0) return;
+    if (w->key_mode == HC_KEY_NONE || w->status >= 0) return;
     jvalue_ref reply;
     if (text) reply = parse_object(text);
     else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
     gboolean mine = FALSE, listed = FALSE, stock = list_is_stock(w, reply, &mine, &listed);
     j_release(&reply);
     if (mine) {
+        w->saw_mine = TRUE; w->override_pending = FALSE;
         if (w->override_toasted || hc_key_override_state(w->c.state_dir)) { w->override_toasted = FALSE; hc_key_mark_override(w->c.state_dir, 0); }
         return;
     }
     if (listed && !stock) {
-        /* A list with none of ours and no stock systemUi entry: another app wrote it. Same choice only. */
+        /* A list with none of ours and no stock systemUi entry: another app wrote it. Needs the filter to have been
+         * ours (baked by a refresh, or seen in a reply) and a choice still wanted; the filter may have been applied by
+         * the app, not by this watcher, so `baked` alone is not the test. */
         char *wanted = watch_choice(w);
-        gboolean same = eq(wanted, w->baked); g_free(wanted);
-        if (same) override_seen(w);
+        gboolean ours = (w->baked && eq(wanted, w->baked)) || (w->saw_mine && wanted && *wanted);
+        g_free(wanted);
+        if (ours) override_seen(w);
         return;
     }
-    if (!stock) return;
+    if (!stock || !w->baked) return; /* the stock re-apply is only for a filter this watcher baked */
     /* Only the choice the baked filter was made for: a changed or removed choice has its own path. */
     char *want = watch_choice(w);
     gboolean same = eq(want, w->baked); g_free(want);

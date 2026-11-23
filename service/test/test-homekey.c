@@ -133,13 +133,13 @@ int main(int argc, char **argv) {
         status(&o,"active=no\npatch=possible\nreboot=no\noverride=yes\n");
         /* boot: recovered as today, one line toast, nothing cleared */
         int ot=override_toasts; assert(run(&o,"boot",FALSE)==1); assert(strstr(lastout,"reason=persistent-override\n") && override_toasts==ot+1 && persistent_writes==pw && mask);
-        {   /* the notification service is not up yet: tried again, the marker records the delivery */
+        {   /* the notification service is not up yet: one try, no waiting (the watcher goes on); marker 3 hands it over */
             char *mk=g_build_filename(o.state_dir,"override",NULL),*mt=NULL;
             assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
-            ot=override_toasts; toast_fail=2; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+3 && toast_fail==0);
+            ot=override_toasts; toast_fail=2; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+1);
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"notify")); g_free(mt);
+            toast_fail=0; assert(run(&o,"boot",FALSE)==1);
             assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
-            unlink(mk); ot=override_toasts; toast_fail=99; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+5);
-            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"")); g_free(mt); /* seen, not delivered */
             toast_fail=0; g_free(mk);
         }
         /* the snapshot taken under the override has the other app's entry: that is what the clear replaces */

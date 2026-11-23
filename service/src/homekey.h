@@ -26,7 +26,8 @@ int hc_key_run(const HCKeyOps *ops, const char *action, gboolean force_stock, GS
  * stock was restored), override-not-cleared (the clear was done and the write is still masked), override-clear-failed. */
 /* The state directory's marker that a persistent override was met (written by apply/boot and by the watcher; removed
  * by any apply that ends with the filter active or stock restored, and by the watcher when our list is back).
- * 0 none, 1 seen (the owner has not been told), 2 seen and the notice was delivered. `status` reports it as
+ * 0 none, 1 seen (the owner has not been told), 2 seen and the notice was delivered, 3 seen at boot and the notice
+ * was not accepted (the watcher delivers it on its short timer). `status` reports it as
  * override=yes while the filter is not active, which is how the settings app learns of it. */
 int hc_key_override_state(const char *state_dir);
 void hc_key_mark_override(const char *state_dir, int state);

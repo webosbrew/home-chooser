@@ -168,10 +168,11 @@ Restore, stop, clear, refresh with stock and uninstall never write persistently,
 The consent is not remembered: each clearing is asked for.
 
 **Boot and runtime.** The boot apply and the watcher never clear. At boot a persistent override recovers as above and
-shows the toast "Another app has taken over the Home button. Open Home Chooser to change it." (the notification
-service may not be up yet: five tries, `3 x retry_ms` apart; a notice that was not delivered is tried again by the watcher
-at its next event, one that was is not repeated for the same takeover). While the filter is
-believed baked, the watcher's keyFilters subscription (the `K` events above) shows the same toast once when a list with
+shows the toast "Another app has taken over the Home button. Open Home Chooser to change it." (the boot apply tries
+once and does not wait; when the notification service does not take it, the marker says `notify` and the watcher delivers
+it on a 10 s timer, at most 30 tries per takeover, as it does for a notice of its own that was not delivered; one that
+was delivered is not repeated for the same takeover). While the filter is
+ours (baked by the watcher, or seen in a keyFilters reply: the app's own apply does not bake), the watcher's keyFilters subscription (the `K` events above) shows the same toast once when a list with
 none of ours and no stock `systemUi.js` entry arrives, or when its stock re-apply ends with `persistent-override`;
 it does not re-apply in a loop. The toast is due again only after our own list was back in between. Opening the app
 with `override=yes` and a stored choice asks the same question as a refused apply.
