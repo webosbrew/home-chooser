@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 
+import Spotlight from '@enact/spotlight';
 import App from '../../App';
 import {FatalError} from '../../homechooser/environment';
 import {PENDING_KEY} from '../pending';
@@ -445,6 +446,16 @@ describe('Home Chooser screen', () => {
 				await screen.findByText('Done. Press Home to try it.');
 				expect(homeKeyHook.install).toHaveBeenCalledWith({clearOverride: true});
 				expect(env.chooser.apply).not.toHaveBeenCalled();
+			});
+			test('the dialog has the focus (the list does not take it back)', async () => {
+				const focus = jest.spyOn(Spotlight, 'focus');
+				const homeKeyHook = hookWith({active: false, enabled: true, patch: 'possible', override: true}, []);
+				mountApp(makeEnv({version: [8, 3, 0], homeKeyHook, stored: 'org.plain.launcher'}));
+				await screen.findByText(TEXT);
+				await flush();
+				const last = focus.mock.calls[focus.mock.calls.length - 1];
+				focus.mockRestore();
+				expect(last[0]).toBe('homechooser-dialog');
 			});
 			test('no prompt when the filter is active or nothing was stored', async () => {
 				mountApp(makeEnv({version: [8, 3, 0], stored: 'org.plain.launcher', homeKeyHook: hookWith({active: true, enabled: true, patch: 'possible', override: true}, [])}));

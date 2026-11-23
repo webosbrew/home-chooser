@@ -26,10 +26,13 @@ static gboolean on_disk(HCWatch *w, const char *id)
 static void override_seen(HCWatch *w)
 {
     if (w->override_toasted) return;
-    w->override_toasted = TRUE;
-    hc_key_mark_override(w->c.state_dir, TRUE);
+    /* The boot apply may have told the owner already (the marker says so): once per takeover. */
+    if (hc_key_override_state(w->c.state_dir) == 2) { w->override_toasted = TRUE; return; }
+    hc_key_mark_override(w->c.state_dir, 1);
     watch_log(w, "Home key: another app has taken over keyFilters; not clearing it");
-    watch_notify(w, HC_OVERRIDE_TOAST, FALSE);
+    /* Only a delivered notice counts: the notification service may not be up yet, the next event tries again. */
+    if (watch_notify(w, HC_OVERRIDE_TOAST, FALSE)) { w->override_toasted = TRUE; hc_key_mark_override(w->c.state_dir, 2); }
+    else watch_log(w, "Home key: the notice was not delivered, trying again at the next change");
 }
 int key_refresh(HCWatch *w, gboolean stock)
 {
@@ -82,7 +85,7 @@ void key_follow(HCWatch *w, const char *text)
     gboolean mine = FALSE, listed = FALSE, stock = list_is_stock(w, reply, &mine, &listed);
     j_release(&reply);
     if (mine) {
-        if (w->override_toasted) { w->override_toasted = FALSE; hc_key_mark_override(w->c.state_dir, FALSE); }
+        if (w->override_toasted || hc_key_override_state(w->c.state_dir)) { w->override_toasted = FALSE; hc_key_mark_override(w->c.state_dir, 0); }
         return;
     }
     if (listed && !stock) {

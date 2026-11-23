@@ -148,13 +148,18 @@ persistent override. Recovery is as for any failed write (the saved stock list i
 output says `reason=persistent-override`, and the toast "cannot change Home on this firmware" is not shown. Every failed
 write logs the `setConfigs` reply, the entry counts and the first differing index (syslog id `HOMEKEY_CONFIGD`).
 The service writes the state directory file `override` when it meets this case (at boot or apply, or when the watcher sees
-it); `status` prints `override=yes` while it exists and the filter is not active. Any apply that ends with the filter
-active or stock restored removes it.
+it; its content is `toasted` once the owner's notice was delivered); `status` prints `override=yes` while it exists and the
+filter is not active. Any apply that ends with the filter active or stock restored removes it. The apply exits 1 in this
+case, so the service's `run` reply is a failed one (`errorCode:"exitStatus"`, the output in `stdoutString`); the app reads
+the three reasons from that output and treats any other failed apply as a failure.
 
 **Clearing is never automatic.** The settings app asks (the other app's change is removed, the list goes back to LG's
 own) and repeats the apply as `homekeyApplyClear` (`homechooser-homekey apply clear-override`). Then, for an apply
 with a stored choice that has none of our entries: a persistent null for the key; `getConfigs`; when the list has not
-changed, `reconfigure {}` and a read again (three reads, `retry_ms` apart); the stock snapshot is taken again from the
+changed, `reconfigure {}` once (25 s wait: configd took 7-18 s on a loaded VM, and the call may report false after its
+own wait while configd is still working), then polling `getConfigs` until a valid list is there, for at most 30 s (reads
+during the reconfigure return no valid list: not yet ready, not a final answer; an unchanged valid list counts once the
+reconfigure answered or a gap was seen); the stock snapshot is taken again from the
 result (the old one may hold the other app's entry); then the usual volatile apply. Each step is logged. An unchanged
 valid list is accepted after the retries (a persistent list equal to stock cannot be told from stock by reading), so
 the volatile write is the proof. Reasons: `override-clear-failed` (the null was refused or no valid list came back;
@@ -163,7 +168,9 @@ Restore, stop, clear, refresh with stock and uninstall never write persistently,
 The consent is not remembered: each clearing is asked for.
 
 **Boot and runtime.** The boot apply and the watcher never clear. At boot a persistent override recovers as above and
-shows the toast "Another app has taken over the Home button. Open Home Chooser to change it." While the filter is
+shows the toast "Another app has taken over the Home button. Open Home Chooser to change it." (the notification
+service may not be up yet: five tries, `3 x retry_ms` apart; a notice that was not delivered is tried again by the watcher
+at its next event, one that was is not repeated for the same takeover). While the filter is
 believed baked, the watcher's keyFilters subscription (the `K` events above) shows the same toast once when a list with
 none of ours and no stock `systemUi.js` entry arrives, or when its stock re-apply ends with `persistent-override`;
 it does not re-apply in a loop. The toast is due again only after our own list was back in between. Opening the app

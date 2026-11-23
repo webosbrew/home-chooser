@@ -15,17 +15,19 @@ static jvalue_ref current;
  * and dropped. A persistent null clears it (clear_stuck: it does not; clear_needs_reconfigure: only after a
  * reconfigure; clear_reject: the call fails). */
 static jvalue_ref mask;
-static int persistent_writes, reconfigures, clear_stuck, clear_needs_reconfigure, clear_pending, clear_reject, cannot_toasts, override_toasts;
+static int persistent_writes, reconfigures, clear_stuck, clear_needs_reconfigure, clear_pending, clear_reject, cannot_toasts, override_toasts, toast_fail, reconf_slow, gap_reads;
 static GString *logbuf;
 static void klogcap(const char *line, void *context) { (void)context; g_string_append(logbuf, line); g_string_append_c(logbuf, '\n'); }
 static int sets, gets, fails, corrupt_reads, corrupt_after_set, toasts, starts, app_installed = 1, ready = 1;
 static char *fake(const char *uri, const char *payload, int timeout, void *context) {
-    (void)context; assert(timeout > 0 && timeout <= 5);
+    (void)context; assert(timeout > 0 && timeout <= (strstr(uri, "reconfigure") ? 30 : 5));
     if (strstr(uri, "getCurrentState")) return g_strdup(ready ? "{\"returnValue\":true,\"currentState\":\"launcher\"}" : "{}");
-    if (strstr(uri, "createToast")) { toasts++; if (strstr(payload, "will start shortly")) starts++; if (strstr(payload, "cannot change Home")) cannot_toasts++; if (strstr(payload, "taken over the Home button")) override_toasts++; return g_strdup("{\"returnValue\":false}"); }
+    if (strstr(uri, "createToast")) { toasts++; if (strstr(payload, "will start shortly")) starts++; if (strstr(payload, "cannot change Home")) cannot_toasts++; if (strstr(payload, "taken over the Home button")) override_toasts++; return g_strdup(toast_fail > 0 && strstr(payload, "taken over the Home button") && toast_fail-- ? "{\"returnValue\":false}" : "{\"returnValue\":true}"); }
     if (strstr(uri, "getAppInfo")) return g_strdup(app_installed ? "{\"returnValue\":true}" : "{\"returnValue\":false}");
     if (strstr(uri, "reconfigure")) {
         reconfigures++;
+        /* a slow configd: reads during the reconfigure give no valid list, the call itself runs into its timeout */
+        if (reconf_slow) { gap_reads = 3; return g_strdup("{\"returnValue\":false}"); }
         if (clear_pending) { j_release(&mask); mask = NULL; clear_pending = 0; }
         return g_strdup("{\"returnValue\":true}");
     }
@@ -57,6 +59,8 @@ static char *fake(const char *uri, const char *payload, int timeout, void *conte
         return g_strdup("{\"returnValue\":true}");
     }
     assert(strstr(uri, "getConfigs")); gets++;
+    if (gap_reads > 0 && --gap_reads == 0 && clear_pending) { j_release(&mask); mask = NULL; clear_pending = 0; }
+    if (gap_reads > 0) return g_strdup("{\"returnValue\":false}");
     jvalue_ref reply = jobject_create(), configs = jobject_create();
     jobject_set(reply, kb("returnValue"), jboolean_create(true));
     if (sets && corrupt_reads) { corrupt_reads--; jobject_set(configs, kb(KEY), jarray_create(NULL)); }
@@ -129,6 +133,15 @@ int main(int argc, char **argv) {
         status(&o,"active=no\npatch=possible\nreboot=no\noverride=yes\n");
         /* boot: recovered as today, one line toast, nothing cleared */
         int ot=override_toasts; assert(run(&o,"boot",FALSE)==1); assert(strstr(lastout,"reason=persistent-override\n") && override_toasts==ot+1 && persistent_writes==pw && mask);
+        {   /* the notification service is not up yet: tried again, the marker records the delivery */
+            char *mk=g_build_filename(o.state_dir,"override",NULL),*mt=NULL;
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
+            ot=override_toasts; toast_fail=2; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+3 && toast_fail==0);
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
+            unlink(mk); ot=override_toasts; toast_fail=99; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+5);
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"")); g_free(mt); /* seen, not delivered */
+            toast_fail=0; g_free(mk);
+        }
         /* the snapshot taken under the override has the other app's entry: that is what the clear replaces */
         char *snap=g_build_filename(o.state_dir,"keyfilters-stock.json",NULL),*sb=NULL;
         assert(g_file_get_contents(snap,&sb,NULL,NULL) && strstr(sb,"lumaHomeKey")); g_free(sb);
@@ -147,9 +160,15 @@ int main(int argc, char **argv) {
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; int rc0=reconfigures;
         assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
         clear_needs_reconfigure=0; assert(run(&o,"stop",FALSE)==0);
+        /* a slow TV: the reconfigure call does not answer true, reads give no valid list for a while; configd is
+         * asked once and waited for, and the clear still ends well */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; reconf_slow=1; rc0=reconfigures;
+        assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
+        assert(strstr(logbuf->str,"no valid list yet"));
+        clear_needs_reconfigure=0; reconf_slow=0; gap_reads=0; assert(run(&o,"stop",FALSE)==0);
         /* the null is accepted but does not take: the write is masked again, a distinct reason, stock restored */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_stuck=1; rc0=reconfigures;
-        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-not-cleared\n") && mask && reconfigures==rc0+2);
+        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-not-cleared\n") && mask && reconfigures==rc0+1);
         clear_stuck=0; j_release(&mask); mask=NULL;
         /* the null is refused: nothing else was written */
         mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_reject=1; w0=sets;

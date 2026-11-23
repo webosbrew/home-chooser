@@ -51,9 +51,10 @@ static int notify_call(HCWatch *w, const char *uri, jvalue_ref payload)
         if (w->status >= 0) return 0;
     }
 }
-void watch_notify(HCWatch *w, const char *message, gboolean alert)
+/* TRUE when the notification service accepted the toast (or the alert). */
+gboolean watch_notify(HCWatch *w, const char *message, gboolean alert)
 {
-    if (!w->c.notify) return;
+    if (!w->c.notify) return FALSE;
     jvalue_ref p = jobject_create();
     put_str(p, "sourceId", HC_APP_ID);
     if (alert) {
@@ -68,8 +69,9 @@ void watch_notify(HCWatch *w, const char *message, gboolean alert)
     j_release(&p);
     if (alert && result == -1 && w->status < 0) {
         watch_log(w, "the alert was refused, showing the message as a toast");
-        watch_notify(w, message, FALSE);
+        return watch_notify(w, message, FALSE);
     }
+    return result == 1;
 }
 void notify_removed(HCWatch *w, const char *id)
 {

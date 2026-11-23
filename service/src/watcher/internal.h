@@ -111,7 +111,7 @@ void previous_free(HCWatch *w);
 void handle_life(HCWatch *w, jvalue_ref reply);
 void remember_title(HCWatch *w, const char *id);
 void notify_removed(HCWatch *w, const char *id);
-void watch_notify(HCWatch *w, const char *message, gboolean alert);
+gboolean watch_notify(HCWatch *w, const char *message, gboolean alert);
 void watch_remove_tree(const char *path);
 int watch_access(HCWatch *w, const char *action);
 #endif

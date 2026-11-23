@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The Home key hook for webOS 4.0 and 6 to 9: status, install and remove. Pure over injected
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/home-key-hook.md.
-import {errorMessage} from '../platform/errors';
+import {errorMessage, errorReply} from '../platform/errors';
 import {
 	HOMEKEY_FLAG, HOMEKEY_SCRIPT, ensureEntryCommand, homekeyCommand, parsePersistenceStatus,
 	persistenceStatusCommand
@@ -42,6 +42,21 @@ export const parseStatus = (text) => {
 		rebootNeeded: false,
 		files, skipped
 	};
+};
+
+// The apply exits 1 when it did not activate the filter, and the service answers such a command with a failed reply
+// ({returnValue:false, errorCode:'exitStatus', stdoutString}), which the platform client throws. The reasons that
+// mean something to the owner are read from that stdout; any other failure stays a failure.
+const OWNER_REASONS = ['persistent-override', 'override-not-cleared', 'override-clear-failed'];
+const runApply = async (run, command) => {
+	try {
+		return (await run.run(command)).stdout;
+	} catch (e) {
+		const reply = errorReply(e);
+		const out = reply && typeof reply.stdoutString === 'string' ? reply.stdoutString : null;
+		if (out !== null && OWNER_REASONS.includes(parseStatus(out).reason)) return out;
+		throw e;
+	}
 };
 
 export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, version}) => {
@@ -103,7 +118,7 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 
 				await run.write(HOMEKEY_FLAG, '');
 				await run.run(ensureEntryCommand());
-				const applied = parseStatus((await run.run(script(clearOverride ? 'applyClear' : 'apply'))).stdout);
+				const applied = parseStatus(await runApply(run, script(clearOverride ? 'applyClear' : 'apply')));
 				res.reason = applied.reason;
 				res.persistentOverride = applied.reason === 'persistent-override';
 				res.clearFailed = applied.reason === 'override-not-cleared' || applied.reason === 'override-clear-failed';

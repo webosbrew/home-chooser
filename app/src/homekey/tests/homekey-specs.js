@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
+import {createServiceClient} from '../../platform/service';
 import {homeKeyHookApplies, createHomeKeyHook, parseStatus} from '..';
 import {BOOT_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
@@ -290,6 +291,34 @@ describe('a persistent keyFilters override', () => {
 		const tv = fakeTV({clearOut: `active=no\nreason=${reason}\n`});
 		const res = await homeKeyHook(tv).install({clearOverride: true});
 		expect(res.clearFailed).toBe(true);
+		expect(res.persistentOverride).toBe(false);
+	});
+});
+
+describe('the failed reply of an apply that exited 1 (what the service really sends)', () => {
+	// the reply is built the way the service sends it and goes through the real client (platform/service.js), which throws it
+	const failedReply = (stdoutString) => ({returnValue: false, exitCode: 1, errorCode: 'exitStatus', errorText: 'homekeyApply exited with status 1', stdoutString});
+	const withFailingApply = (tv, command, stdoutString) => {
+		const exec = tv.exec;
+		const service = createServiceClient(async () => failedReply(stdoutString));
+		return Object.assign({}, tv, {exec: async (c) => (c === command ? service.run(c) : exec(c))});
+	};
+	test('persistent-override in the failed reply is a result, not a failure', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, RUN_WORKER, 'reason=persistent-override\n')).install();
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(true);
+	});
+	test('a failed clear is read from its failed reply too', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, 'homekeyApplyClear', 'reason=override-not-cleared\n')).install({clearOverride: true});
+		expect(res.ok).toBe(true);
+		expect(res.clearFailed).toBe(true);
+	});
+	test('any other failed apply stays a failure', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, RUN_WORKER, 'reason=activation failed; restored stock Home\n')).install();
+		expect(res.ok).toBe(false);
 		expect(res.persistentOverride).toBe(false);
 	});
 });

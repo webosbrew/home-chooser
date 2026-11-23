@@ -53,9 +53,13 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 
 	const rowId = (id) => (isChoosableStock(id) ? 'home-' + (id === STOCK_FULLHOME ? 'fullhome' : 'stock') : 'home-' + launchers.findIndex((c) => c.id === id));
 
+	// The Home button dialog takes the focus itself; the list never pulls it away while that dialog is open.
+	const overrideOpen = useRef(false);
+	overrideOpen.current = Boolean(model.overridePrompt);
+
 	// initial focus: the current home
 	useEffect(() => {
-		if (phase !== 'ready' || rootError) return;
+		if (phase !== 'ready' || rootError || overrideOpen.current) return;
 		Spotlight.focus(rowId(current || STOCK_HOME));
 	}, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -71,7 +75,7 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		}
 	}, [pending]); // eslint-disable-line react-hooks/exhaustive-deps
 	useEffect(() => {
-		if (wasBusy.current && !busy && !rootError) Spotlight.focus(rowId(current || STOCK_HOME));
+		if (wasBusy.current && !busy && !rootError && !overrideOpen.current) Spotlight.focus(rowId(current || STOCK_HOME));
 		wasBusy.current = busy;
 	}, [busy]); // eslint-disable-line react-hooks/exhaustive-deps
 

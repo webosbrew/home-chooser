@@ -1077,6 +1077,14 @@ static void test_key_follow(void) {
     event(f, 'K', foreign); CHECK("K21 not again", f->toasts == t0 + 1);
     event(f, 'K', own); CHECK("K22 ours back: marker gone", !g_file_test(override_file, G_FILE_TEST_EXISTS) && f->toasts == t0 + 1);
     event(f, 'K', foreign); CHECK("K23 taken again: toast again", f->toasts == t0 + 2);
+    /* the notice is only counted once delivered: the notification service may not be up yet; a boot that told the owner
+     * (marker "toasted") is not repeated */
+    f->toast_fail = -1; unlink(override_file); f->w->override_toasted = FALSE; t0 = f->toasts;
+    event(f, 'K', foreign); CHECK("K24 not delivered: tried, not counted", f->toasts == t0 + 1 && !f->w->override_toasted);
+    f->toast_fail = 0; event(f, 'K', foreign); CHECK("K25 tried again at the next change, delivered", f->toasts == t0 + 2 && f->w->override_toasted && hc_key_override_state(f->c.state_dir) == 2);
+    event(f, 'K', foreign); CHECK("K26 once delivered, not again", f->toasts == t0 + 2);
+    event(f, 'K', own); f->w->override_toasted = FALSE; hc_key_mark_override(f->c.state_dir, 2); t0 = f->toasts;
+    event(f, 'K', foreign); CHECK("K27 the boot already told the owner", f->toasts == t0 && f->w->override_toasted);
     g_free(override_file); g_free(own); teardown(f);
 }
 /* webOS 4.0: the Home key filter is the whole redirect (an entry of ours, homekey40-*.js): the watcher applies it, applies it
