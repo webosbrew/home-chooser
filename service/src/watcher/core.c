@@ -23,7 +23,7 @@ HCWatchConfig hc_watch_config(void)
         .confirm_ms = 15000, .interval_s = 10, .backoff_s = 300, .recheck_s = 300,
         .preload_retry_ms = 10000, .preload_settle_ms = 45000, .preload_tries = 12, .gate_settle_ms = 20000,
         .input_settle_ms = 20000,
-        .notify_retry_ms = 3000, .notify_tries = 8, .mem_retry_ms = 10000, .mem_tries = 5, .log_max = 65536,
+        .notify_retry_ms = 3000, .notify_tries = 8, .mem_backoff_s = 60, .mem_retry_ms = 10000, .mem_tries = 5, .log_max = 65536,
         .preload = TRUE, .notify = TRUE, .keep_launcher = TRUE
     };
     return c;

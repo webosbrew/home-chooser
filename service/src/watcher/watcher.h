@@ -14,6 +14,7 @@ typedef struct {
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
     unsigned preload_retry_ms, preload_settle_ms, preload_tries, gate_settle_ms, input_settle_ms;
     unsigned notify_retry_ms, notify_tries, log_max;
+    unsigned mem_backoff_s; /* first wait after a failed memchute restart (doubles) */
     unsigned mem_retry_ms, mem_tries; /* 10+: first retry delay (doubles) and number of retries while configd is not ready */
     gboolean preload, notify, keep_launcher; /* keep_launcher: put the chosen launcher on the memory manager's keep list */
 } HCWatchConfig;

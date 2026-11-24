@@ -1466,6 +1466,15 @@ static void test_keep_review(void) {
     CHECK("R03 at most 5 attempts", f->restarts == 5);
     CHECK("R03 given up once in the log", log_count(f, "not trying again") == 1);
     CHECK("R03 still owed on disk", g_file_test(path(f, f->c.state_dir, "keep-restart"), G_FILE_TEST_EXISTS)); teardown(f);
+    /* 3: the backoff drives its own timer, not the 300 s check or an app event */
+    f = mem_setup(6, "my.home", MEM_STOCK_EX); f->restart_fail = 1000; f->w->c.mem_backoff_s = 0; start(f); pump(); pump(); pump(); pump(); pump(); pump();
+    CHECK("R03 timer retries on its own, within the cap", f->restarts == 5); teardown(f);
+    f = mem_setup(6, "my.home", MEM_STOCK_EX); f->restart_fail = 1000; start(f);
+    CHECK("R03 a timer is armed for 60 s", f->restarts == 1 && f->w->mem_restart_source && f->w->mem_restart_delay_ms == 60000);
+    f->clock += 61; event(f, 'T', NULL);
+    CHECK("R03 then 120 s", f->restarts == 2 && f->w->mem_restart_delay_ms == 120000);
+    f->restart_fail = 0; f->clock += 130; event(f, 'T', NULL);
+    CHECK("R03 success cancels the timer", f->restarts == 3 && !f->w->mem_restart_source); teardown(f);
     /* 3: an undo whose restart fails is owed to the next watcher, which does it once */
     for (int major = 6; major <= 12; major += 6) {
         f = mem_setup(major, "my.home", MEM_STOCK_EX); start(f); CHECK("R04 set up", f->restarts == 1);

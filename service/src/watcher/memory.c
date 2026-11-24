@@ -19,8 +19,7 @@
 #define MEM_SHORT "KeepOnLaunchEx"
 #define CONFIG "luna://com.webos.service.config/"
 #define MEM_REAPPLY_MAX 5
-#define MEM_RESTART_MAX 5          /* failed restarts per watcher run; backoff 60 s, 120 s, 240 s ... */
-#define MEM_RESTART_BACKOFF_S 60
+#define MEM_RESTART_MAX 5          /* failed restarts per watcher run; backoff mem_backoff_s (60 s), then double, a timer of its own */
 
 /* causes logged once per watcher run, in mem_logged */
 enum { L_STOCK = 1, L_STOCK_JSON = 2, L_STOCK_LIST = 4, L_WRITE = 8, L_LINK = 16, L_GAVE_UP = 32 };
@@ -71,6 +70,22 @@ static int run_restart(HCWatch *w)
     g_free(systemctl); g_free(initctl);
     g_string_free(out, TRUE); g_string_free(err, TRUE); return rc;
 }
+static void restart_timer_cancel(HCWatch *w)
+{
+    if (w->mem_restart_source) { g_source_remove(w->mem_restart_source); w->mem_restart_source = 0; }
+}
+static void restart_if_owed(HCWatch *w);
+static gboolean restart_fire(gpointer context)
+{
+    HCWatch *w = context;
+    w->mem_restart_source = 0;
+    if (w->status >= 0) return G_SOURCE_REMOVE;
+    w->depth++;
+    restart_if_owed(w);
+    w->depth--;
+    if (w->ops.wake) w->ops.wake(w->ops.context);
+    return G_SOURCE_REMOVE;
+}
 static gboolean restart_due(HCWatch *w)
 {
     return w->mem_rs_fail < MEM_RESTART_MAX && watch_now(w) >= w->mem_rs_next;
@@ -103,10 +118,18 @@ static void restart_if_owed(HCWatch *w)
     if (!run_restart(w)) {
         w->mem_owed = FALSE; w->mem_rs_fail = 0; w->mem_rs_next = 0;
         char *p = state_file(w, MEM_OWED); unlink(p); g_free(p);
+        restart_timer_cancel(w);
         return;
     }
-    w->mem_rs_next = watch_now(w) + ((gint64)MEM_RESTART_BACKOFF_S << w->mem_rs_fail);
+    gint64 wait_s = (gint64)w->c.mem_backoff_s << w->mem_rs_fail;
+    w->mem_rs_next = watch_now(w) + wait_s;
     w->mem_rs_fail++;
+    /* its own timer: the next attempt does not wait for the 300 s check or an app event */
+    restart_timer_cancel(w);
+    if (w->mem_rs_fail < MEM_RESTART_MAX) {
+        w->mem_restart_delay_ms = (unsigned)(wait_s * 1000);
+        w->mem_restart_source = g_timeout_add(w->mem_restart_delay_ms, restart_fire, w);
+    }
 }
 /* TRUE when a call into the apply path could still do something about an owed restart. */
 static gboolean owed_actionable(HCWatch *w) { return w->mem_owed && restart_due(w); }
@@ -468,4 +491,4 @@ void memory_follow(HCWatch *w, const char *id, gboolean force)
     if (config_apply(w, id)) retry_schedule(w);
     else if (eq(w->mem_id, id)) w->mem_tries = 0;
 }
-void memory_free(HCWatch *w) { retry_cancel(w); g_free(w->mem_id); g_free(w->mem_confirmed); w->mem_id = w->mem_confirmed = NULL; }
+void memory_free(HCWatch *w) { retry_cancel(w); restart_timer_cancel(w); g_free(w->mem_id); g_free(w->mem_confirmed); w->mem_id = w->mem_confirmed = NULL; }
