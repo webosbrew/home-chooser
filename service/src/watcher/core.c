@@ -16,13 +16,14 @@ HCWatchConfig hc_watch_config(void)
         .scripts_dir = HC_SERVICE_DIR "/scripts",
         .gate_binary = HC_GATE_BINARY, .gate_dir = HC_GATE_DIR, .proc = "/proc",
         .log = HC_WATCH_LOG, .stock_js = "/usr/lib/qt5/qml/KeyFilters/systemUi.js",
+        .mem_stock = "/etc/palm/memorymanager-conf.json", .mem_link = "/home/root/memorymanager-conf.json",
         .app_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications",
         .install_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications /media/cryptofs/apps/usr/palm/applications",
         .confirm_ms = 15000, .interval_s = 10, .backoff_s = 300, .recheck_s = 300,
         .preload_retry_ms = 10000, .preload_settle_ms = 45000, .preload_tries = 12, .gate_settle_ms = 20000,
         .input_settle_ms = 20000,
         .notify_retry_ms = 3000, .notify_tries = 8, .log_max = 65536,
-        .preload = TRUE, .notify = TRUE
+        .preload = TRUE, .notify = TRUE, .keep_launcher = TRUE
     };
     return c;
 }
@@ -186,6 +187,7 @@ void hc_watch_start(HCWatch *w)
     if (!g_file_test(w->c.app_dir, G_FILE_TEST_IS_DIR)) check_hc(w);
     if (w->status >= 0) goto done;
     char *id = watch_choice(w);
+    if (!id) memory_undo(w);
     if (!id) { repair_leftover(w); id = watch_choice(w); }
     if (w->status >= 0) { g_free(id); goto done; }
     if (!id && previous_pending(w)) {
@@ -250,6 +252,7 @@ void hc_watch_event(HCWatch *w, char tag, const char *text)
                     if (!key_refresh(w, FALSE)) { g_free(w->baked); w->baked = g_strdup(id); }
                 }
                 preload_follow(w, id, 0); close_foreground(w); sync_baked(w, id); gate_sync(w);
+                memory_follow(w, id, TRUE);
                 char *found = record_home(r);
                 if (!eq(found, id)) reconcile(w, id);
                 g_free(found);
@@ -267,12 +270,19 @@ void hc_watch_free(HCWatch *w)
     if (w->status == 0 && !w->early_exit) preload_sync(w, 1, 'e');
     /* Any clean end leaves stock Home in place; a failed watcher keeps it for its restart. */
     if (w->status == 0) gate_apply(w, NULL);
+    /* A clean end with no launcher chosen any more (LG Home again, nothing to watch) takes the keep list away; one with a choice
+     * left (a signal, a shutdown) keeps it, the next boot compares and restarts nothing. */
+    if (w->status == 0) {
+        char *left = watch_choice(w);
+        if (!left || stock_id(left)) memory_undo(w);
+        g_free(left);
+    }
     if (w->preload_source) g_source_remove(w->preload_source);
     if (w->gate_source) g_source_remove(w->gate_source);
     if (w->gate_settle_source) g_source_remove(w->gate_settle_source);
     if (w->input_source) g_source_remove(w->input_source);
     g_free(w->choice_file); g_free(w->missing); g_free(w->baked);
-    previous_free(w);
+    previous_free(w); memory_free(w);
     g_free(w->gate_wait_logged);
     g_free(w->title_id); g_free(w->title); g_free(w->close_choice); g_free(w);
 }

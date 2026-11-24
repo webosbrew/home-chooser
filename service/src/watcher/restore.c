@@ -192,7 +192,8 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
+    memory_undo(w); /* best effort: a memchute that keeps a launcher exempt is no reason to hold the uninstall */
+    const char *names[] = {"home", "previous", "stock", "keep-launcher", "memorymanager-conf.json", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);
@@ -254,6 +255,7 @@ void check_apps(HCWatch *w, char why)
         } else sync_baked(w, want);
     } else if (!st) watch_log(w, "getAppInfo did not answer for %s, leaving things as they are", want);
     if (w->status >= 0) goto done;
+    if (w->missing) memory_undo(w); else memory_follow(w, want, why == 's' || why == 'T');
     preload_follow(w, want, why);
     if (why != 'T') close_foreground(w);
     gate_sync(w);

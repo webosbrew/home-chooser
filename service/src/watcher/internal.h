@@ -55,6 +55,10 @@ struct HCWatch {
     unsigned override_tries;
     gboolean notify_quick; /* notify.c: one short try, no retries (the timer-driven notice) */
     gboolean override_toasted; /* the 'another app took over the Home button' toast was shown for this takeover */
+    /* memory.c: the launcher kept on memchute's keep list */
+    char *mem_id;
+    gboolean mem_owed, mem_foreign_logged, mem_read_logged, mem_mask_logged, mem_loop_logged; /* mem_owed: a memchute restart is due */
+    unsigned mem_reapplies;
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
@@ -120,4 +124,9 @@ void notify_removed(HCWatch *w, const char *id);
 gboolean watch_notify(HCWatch *w, const char *message, gboolean alert);
 void watch_remove_tree(const char *path);
 int watch_access(HCWatch *w, const char *action);
+/* memory.c: put id on memchute's keep list (force: look again even when already done); NULL, a stock home or an invalid id undoes it. */
+void memory_follow(HCWatch *w, const char *id, gboolean force);
+/* Take our keep list away (link, copy or volatile configd value) and restart memchute when something was removed. */
+void memory_undo(HCWatch *w);
+void memory_free(HCWatch *w);
 #endif
