@@ -60,7 +60,7 @@ This archive is a build artifact, not part of the package.
 | `json.c` | pbnjson parsing, members and reply validation |
 | `luna.c` | Bounded privileged one-shot calls through luna-send |
 | `luna-child.c` | Child streams (daemon watcher, service subscriptions), GIOChannel JSON framing, deadlines, cancellation and reaping |
-| `watcher/{main,core,record,restore,preload,notify,gate,input}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount and the 10+ last-input launch after boot |
+| `watcher/{main,core,record,restore,preload,notify,gate,input,previous,memory}.c` | Boot lifecycle, serial event dispatch, reconcile, stock recovery, preload/close guards, notices, the 6–9 home gate mount, the 10+ last-input launch after boot, the previous-launcher close and the memory manager keep list |
 | `revive.c`, `service/revive-glue.c` | Watcher revival: the rate-limited check after a call (plain logic, and the GLib spawn it runs on) |
 | `gate-mount.c` | Home gate bind mount: idempotent mount/unmount, propagated-copy cleanup, release marker, closing a running stock Home |
 | `last-input.c` | The last TV input from an eim `getLastInput` reply, Live TV otherwise; used by the gate and the watcher |
@@ -516,6 +516,21 @@ A non-zero exit of any other command is `errorCode: "exitStatus"` with the outpu
 command that does not finish is killed (`timeout`). The service does not wait for a background
 process that outlives the command (the `watch` script starts a transient unit).
 
+## Keeping the launcher alive
+
+On sets with little memory (seen on 1.5 GB sets running 5.x, 6.x and 7.x) the memory manager, `memchute`, closes a background app whenever another app opens, unless the app is on one of its keep lists. A launcher chosen by the owner is closed that way too, and Home starts it cold. While a launcher other than LG Home is chosen, the watcher (`watcher/memory.c`) puts the launcher's app id on `KeepOnLaunchEx` (`KeepOnLaunch` on 4.0, which has no `KeepOnLaunchEx`). Under real memory pressure the memory manager still closes the launcher with the other background apps; the keep list covers only the close at launch.
+
+`memchute` reads its lists once, when it starts, so the change takes effect with a restart of `memchute`. The restart showed no visible side effect on a device; the preload manager restarts with it on systemd releases. How the lists are replaced depends on the release:
+
+| webOS | How | Restart |
+| --- | --- | --- |
+| 4.0 to 9.x | `memchute` reads `/home/root/memorymanager-conf.json` in place of `/etc/palm/memorymanager-conf.json`, the whole file. Home Chooser keeps a copy of the TV's stock file with the launcher added to the list at `/var/lib/webosbrew/homechooser/memorymanager-conf.json` (written to a temporary file in that directory and renamed into place: a partial file silently changes `memchute`'s policy mode on 6.x) and links `/home/root/memorymanager-conf.json` to it. Never a regular file at `/home/root`. A path there that is not our link is someone else's override: left alone and logged | `systemctl restart memchute`; on 4.x (upstart) `initctl restart memchute`, or `initctl start memchute` when the job is not running |
+| 10 and later | `memchute` ignores the link and takes its lists from configd at start. The watcher writes a volatile `com.webos.memorymanager.KeepOnLaunchEx` (the current value plus the launcher) through `setConfigs` with `volatile:true`, never without it, and reads it back: only an exactly equal read-back counts. A value that does not read back (a persistent value masks it, or the write is refused) is logged and left, not fought. The id is recorded in `keep-launcher` in the state directory so a restarted watcher recognises its own value | the same |
+
+The copy is rebuilt from the TV's current stock file at every boot, so a firmware update's new stock file is not masked. `memchute` is restarted only when what it would read changed (the copy or the link, or the configd value), never in a loop, and each restart is logged in the watcher log. A restart that failed is owed and tried again at the next check. configd may select its layers again and drop the volatile value; the 300 s check writes it again, at most 5 times per watcher run. A launcher that is not installed, a stock Home (`com.webos.app.home`, `com.webos.app.fullhome`) and an invalid id get no entry.
+
+Everything is undone, with a `memchute` restart, when LG Home is chosen again (the watcher started for the previous-launcher close, or at the next boot, finds no choice), when the launcher is uninstalled, when Home Chooser is uninstalled (`restore_all`), and when the watcher ends cleanly with no launcher chosen: the link (only if it is ours) and the copy go on 4.0 to 9.x, a volatile `null` of the configd key on 10 and later (a value on the list that is not ours is never touched). A link whose copy is gone (Home Chooser removed without the watcher) is harmless: on 6.x `memchute` falls back to `/etc/palm`. A watcher that ends on a signal with a launcher still chosen keeps the entry; the next boot compares and restarts nothing.
+
 ## Logs
 
 Every operation, and every refusal, goes to PmLog with the context `HomeChooser`
@@ -538,7 +553,8 @@ The native tests run with CTest: `cmake -S service/test -B build/service-host`,
 * `test-watcher` and `test-watcher-luna`: native watcher policy and child-stream runtime with an executable
   Luna double under qemu-arm and firmware libraries; includes runtime staging, removed-package restore,
   subscription EOF, garbage/pretty JSON, bounded hangs, parent death, cancellation, signal exit, preload retry/settle, close guards
-  and the 10+ last-input launch after boot (once per boot, overlay only, nothing full-screen in front, Live TV fallback, no retry of a failed launch).
+  and the 10+ last-input launch after boot (once per boot, overlay only, nothing full-screen in front, Live TV fallback, no retry of a failed launch);
+  the launcher keep list (`memory.c`) with fakes for the files, configd and the `memchute` restart: the copy and link on 4.0 to 9.x, the volatile value on 10+, restart only on change, firmware update, changed choice, someone else's file, masked value, every undo.
 * `test-homekey`: native live-filter transactions with fake Luna.
 * `test-launcher-contract` and `test-launcher-subscribe`: the launcher handlers against the API
   description on a fake hub, and the lists' subscriptions with real upstream children
