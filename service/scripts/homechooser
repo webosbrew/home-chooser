@@ -10,6 +10,8 @@ SYSTEMD_RUN=${HOMECHOOSER_SYSTEMD_RUN:-systemd-run}
 RUNTIME=${HOMECHOOSER_RUNTIME:-/tmp/homechooser-runtime}
 CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 PIDFILE=${HOMECHOOSER_PIDFILE:-$RUNTIME/watcher.pid}
+DPIDFILE=${HOMECHOOSER_DAEMON_PIDFILE:-$RUNTIME/watcher-daemon.pid}
+PROC=${HOMECHOOSER_PROC:-/proc}
 major=$(sed -n 's/.*release \([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*.*/\1/p' "$RELEASE_FILE" 2>/dev/null | head -1)
 
 # 5/10+ retain a boot restore copy even if the unit was stopped at uninstall.
@@ -27,21 +29,60 @@ stage_boot() {
 # webOS 4.0 and 4.5 run upstart, with no systemd: the watcher is then a detached shell loop in its own process
 # group (the unit's Restart=on-failure as a loop), found again through a pid file on tmpfs.
 have_systemd() { command -v "$SYSTEMD_RUN" > /dev/null 2>&1 && command -v "$SYSTEMCTL" > /dev/null 2>&1; }
-loop_pid() {
-    pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
-    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$pid" 2>/dev/null && grep -q homechooser "/proc/$pid/cmdline" 2>/dev/null
+# A pid counts only while it is alive and its command line still names homechooser (never signal a recycled pid).
+hc_pid() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$1" 2>/dev/null && grep -q homechooser "$PROC/$1/cmdline" 2>/dev/null
+}
+loop_pid() { pid=$(cat "$PIDFILE" 2>/dev/null) || return 1; hc_pid "$pid"; }
+# The daemon moves into its own process group, so a group kill of the loop does not reach it: the loop records its pid.
+daemon_pid() { dpid=$(cat "$DPIDFILE" 2>/dev/null) || return 1; hc_pid "$dpid"; }
+# Daemons that are no one's child any more, such as one left by 0.2.1 (its loop was stopped without it):
+# `homechooser-daemon --boot` owned by this user (root), found by its command line.
+orphan_daemons() {
+    for d in "$PROC"/[0-9]*; do
+        [ -O "$d" ] && [ "${d##*/}" != $$ ] || continue
+        case "$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)" in *homechooser-daemon\ --boot\ *) echo "${d##*/}" ;; esac
+    done
+}
+gone() { # gone PID...: wait up to 5 s for all of them to exit
+    n=0
+    while :; do
+        alive=
+        for g in "$@"; do kill -0 "$g" 2>/dev/null && alive=1; done
+        [ -n "$alive" ] && [ $n -lt 5 ] || return 0
+        sleep 1; n=$((n + 1))
+    done
+}
+# Stop the loop first so it cannot restart the daemon, then the daemon(s); wait, KILL what is left, then drop the pid files.
+stop_loop() {
+    lp=
+    if loop_pid; then
+        lp=$pid
+        kill -s TERM -- "-$lp" 2>/dev/null || kill -s TERM "$lp" 2>/dev/null
+        gone "$lp"
+        ! kill -0 "$lp" 2>/dev/null || kill -s KILL -- "-$lp" 2>/dev/null || kill -s KILL "$lp" 2>/dev/null
+    fi
+    dp=
+    daemon_pid && dp=$dpid
+    dp=$(printf '%s\n' $dp $(orphan_daemons) | sort -u)
+    if [ -n "$dp" ]; then
+        for g in $dp; do kill -s TERM "$g" 2>/dev/null; done
+        gone $dp
+        for g in $dp; do ! kill -0 "$g" 2>/dev/null || kill -s KILL "$g" 2>/dev/null; done
+        gone $dp
+    fi
+    rm -f "$PIDFILE" "$DPIDFILE"
 }
 watcher_active() {
-    if have_systemd; then "$SYSTEMCTL" is-active --quiet homechooser-home; else loop_pid; fi
+    if have_systemd; then "$SYSTEMCTL" is-active --quiet homechooser-home; else loop_pid || daemon_pid; fi
 }
 case "$1" in
     stage) stage_boot; exit $? ;;
     unstage) rm -rf "$BOOT_DIR"; exit 0 ;;
     stop)
         if have_systemd; then exec "$SYSTEMCTL" stop homechooser-home; fi
-        loop_pid && kill -s TERM -- "-$pid" 2>/dev/null
-        rm -f "$PIDFILE"; exit 0 ;;
+        stop_loop; exit 0 ;;
     active)
         if watcher_active; then echo active; exit 0; fi
         echo inactive; exit 3 ;;
@@ -64,8 +105,13 @@ fi
 watcher_active && exit 0
 if ! have_systemd; then
     mkdir -p "$RUNTIME" || exit 1
+    stop_loop # an orphan daemon left by an older version would otherwise run beside the new one
     setsid /bin/sh -c 'for b in "$1" "$2"; do [ -x "$b" ] && break; b=; done; [ -n "$b" ] || exit 0
-        while :; do "$b" --boot && exit 0; sleep 5; done' homechooser-boot "$BINARY" "$RUNTIME/homechooser-daemon" \
+        while :; do
+            "$b" --boot & p=$!; echo $p > "$3"
+            wait $p && { rm -f "$3"; exit 0; }
+            rm -f "$3"; sleep 5
+        done' homechooser-boot "$BINARY" "$RUNTIME/homechooser-daemon" "$DPIDFILE" \
         < /dev/null > /dev/null 2>&1 &
     echo $! > "$PIDFILE"
     exit 0

@@ -9,6 +9,10 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 - The launcher you choose is no longer closed whenever another app opens, on TVs that do that (seen on webOS 4.0 to 7 with 1.5 GB of memory); it can still be closed when the TV is really short of memory. Home Chooser adds it to the memory manager's keep list and restarts the memory manager only when the list changes; choosing LG Home or uninstalling Home Chooser leaves nothing of it behind.
 
+### Fixed
+
+- On webOS 4.0 and 4.5, choosing LG Home (or anything else that stops Home Chooser's watcher) left the watcher's daemon running without the loop that tracks it, so the TV then reported no watcher and the next start ran a second one, which could log duplicate launcher closes. Stopping now ends the loop and then the daemon, waits for both, and a daemon left behind by 0.2.1 is stopped the next time Home Chooser starts or stops the watcher.
+
 ## [0.2.1] - 2026-11-24
 
 ### Fixed
