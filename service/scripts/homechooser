@@ -12,6 +12,9 @@ CHOICE=${HOMECHOOSER_CHOICE:-/var/lib/webosbrew/homechooser/home}
 PIDFILE=${HOMECHOOSER_PIDFILE:-$RUNTIME/watcher.pid}
 DPIDFILE=${HOMECHOOSER_DAEMON_PIDFILE:-$RUNTIME/watcher-daemon.pid}
 PROC=${HOMECHOOSER_PROC:-/proc}
+# The service gives watch and stop 20 s: stop_loop takes up to 12 s, so a stop may wait 4 s for the lock; a watch waits 15 s.
+STOP_WAIT=${HOMECHOOSER_STOP_WAIT:-4}
+WATCH_WAIT=${HOMECHOOSER_WATCH_WAIT:-15}
 major=$(sed -n 's/.*release \([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*.*/\1/p' "$RELEASE_FILE" 2>/dev/null | head -1)
 
 # 5/10+ retain a boot restore copy even if the unit was stopped at uninstall.
@@ -45,12 +48,12 @@ orphan_daemons() {
         case "$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)" in *homechooser-daemon\ --boot\ *) echo "${d##*/}" ;; esac
     done
 }
-gone() { # gone PID...: wait up to 5 s for all of them to exit
+gone() { # gone PID...: wait up to ${GONE_MAX:-5} s for all of them to exit
     n=0
     while :; do
         alive=
         for g in "$@"; do kill -0 "$g" 2>/dev/null && alive=1; done
-        [ -n "$alive" ] && [ $n -lt 5 ] || return 0
+        [ -n "$alive" ] && [ $n -lt "${GONE_MAX:-5}" ] || return 0
         sleep 1; n=$((n + 1))
     done
 }
@@ -70,13 +73,13 @@ stop_loop() {
         for g in $dp; do kill -s TERM "$g" 2>/dev/null; done
         gone $dp
         for g in $dp; do ! kill -0 "$g" 2>/dev/null || kill -s KILL "$g" 2>/dev/null; done
-        gone $dp
+        GONE_MAX=2 gone $dp
     fi
     rm -f "$PIDFILE" "$DPIDFILE"
 }
 # Serialise check-and-start and stop on the no-systemd path: an atomic mkdir lock holding the owner's pid. A holder that
-# is gone (or whose pid is no homechooser) is stale and is moved aside; waits up to 40 s (a stop takes up to 15 s), then
-# goes ahead anyway rather than hang. The lock is dropped when this script exits.
+# is gone (or whose pid is no homechooser) is stale and is moved aside; waits up to the given seconds, then
+# returns 1 (not held) so the caller decides. The lock is dropped when this script exits.
 lock_take() {
     LOCK=$RUNTIME/lock
     n=0
@@ -86,7 +89,7 @@ lock_take() {
             mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -rf "$LOCK.stale.$$"
             continue
         fi
-        if [ $n -ge 40 ]; then [ -n "$holder" ] || rm -rf "$LOCK"; return 0; fi
+        if [ $n -ge "$1" ]; then [ -n "$holder" ] || rm -rf "$LOCK"; return 1; fi
         sleep 1; n=$((n + 1))
     done
     echo $$ > "$LOCK/pid"
@@ -101,7 +104,7 @@ case "$1" in
     unstage) rm -rf "$BOOT_DIR"; exit 0 ;;
     stop)
         if have_systemd; then exec "$SYSTEMCTL" stop homechooser-home; fi
-        mkdir -p "$RUNTIME" && lock_take; stop_loop; exit 0 ;;
+        mkdir -p "$RUNTIME" && { lock_take "$STOP_WAIT" || watcher_active || exit 0; }; stop_loop; exit 0 ;;
     active)
         if watcher_active; then echo active; exit 0; fi
         echo inactive; exit 3 ;;
@@ -125,7 +128,7 @@ watcher_active && exit 0
 if ! have_systemd; then
     mkdir -p "$RUNTIME" || exit 1
     # One starter at a time: a concurrent watch (app open revive and the app's own) waits here, then finds the watcher up.
-    lock_take
+    lock_take "$WATCH_WAIT" || { watcher_active; exit $?; }
     ! watcher_active || exit 0
     stop_loop # an orphan daemon left by an older version would otherwise run beside the new one
     setsid /bin/sh -c 'for b in "$1" "$2"; do [ -x "$b" ] && break; b=; done; [ -n "$b" ] || exit 0

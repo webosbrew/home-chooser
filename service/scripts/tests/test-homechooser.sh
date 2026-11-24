@@ -176,5 +176,35 @@ waitran() { n=0; while [ "$(wc -l < "$T/ran")" -lt "$1" ] && [ $n -lt 50 ]; do s
     $SH "$HERE/homechooser" watch
     waitran 1
     $SH "$HERE/homechooser" stop
+
+    # The service gives watch and stop 20 s, so a wait for the lock is bounded (here 2 s instead of 15 s and 4 s).
+    export HOMECHOOSER_WATCH_WAIT=2 HOMECHOOSER_STOP_WAIT=2
+    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$T/w/homechooser-holder"
+    chmod +x "$T/w/homechooser-holder"
+    "$T/w/homechooser-holder" < /dev/null > /dev/null 2>&1 & holder=$!
+    mkdir -p "$T/rt/lock"; echo "$holder" > "$T/rt/lock/pid"
+    # watch waits behind a live starter and, with nothing running, exits non-zero without starting anything
+    : > "$T/ran"
+    if $SH "$HERE/homechooser" watch; then echo 'watch behind a live lock with no watcher exited 0'; exit 1; fi
+    [ ! -s "$T/ran" ] || { echo 'watch started a daemon without the lock'; exit 1; }
+    # stop behind a live lock with nothing running: done at once
+    $SH "$HERE/homechooser" stop
+    # a watcher that came up meanwhile: the waiting watch exits 0 and starts nothing more
+    rm -rf "$T/rt/lock"
+    $SH "$HERE/homechooser" watch
+    waitran 1
+    mkdir -p "$T/rt/lock"; echo "$holder" > "$T/rt/lock/pid"
+    s=$(date +%s)
+    $SH "$HERE/homechooser" watch || { echo 'waiting watch with an active watcher failed'; exit 1; }
+    [ "$(wc -l < "$T/ran")" = 1 ] || { echo 'waiting watch started a second daemon'; exit 1; }
+    # stop behind a live lock with a watcher up: waits at most 2 s for the lock, then still stops it, within the budget
+    dpid=$(cat "$T/rt/watcher-daemon.pid"); pid=$(cat "$T/rt/watcher.pid")
+    $SH "$HERE/homechooser" stop
+    e=$(date +%s)
+    [ $((e - s)) -lt 16 ] || { echo 'waits did not fit the budget'; exit 1; }
+    alive "$dpid" && { echo 'stop behind a lock left the daemon'; exit 1; }
+    alive "$pid" && { echo 'stop behind a lock left the loop'; exit 1; }
+    alive "$holder" || { echo 'holder was signalled'; exit 1; }
+    kill "$holder"; rm -rf "$T/rt/lock"
 ) || { echo "FAIL watcher without systemd"; exit 1; }
 printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback, watcher loop and daemon without systemd (%s)\n' "$SH"
