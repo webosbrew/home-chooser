@@ -64,7 +64,7 @@ def luna_reply_text(text):
 class RootSession:
     """One root shell kept open, `beanjar ares-shell --root -d T -r sh`, whose stdin takes the commands.
 
-    Each `beanjar ares-TOOL` call to a VM on another machine asks that machine for the VM (`beanjar info`)
+    Each `beanjar ares-TOOL` call to a VM on another machine asks that machine for the VM (`beanjar show`)
     and opens an ssh forward of its own: measured 2026-11-01 from this PC to rockpi4a-1, about 2 s before
     the tool even connects, so 3 to 4 s a command where the old direct device took under 1.  At that pace
     a step's few dozen commands outlast webOS's 180 s screensaver timer and a 6 s toast.  So shell commands

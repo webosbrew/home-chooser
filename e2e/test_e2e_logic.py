@@ -105,6 +105,26 @@ class ClickInput(unittest.TestCase):
             self.assertIn('beanjar start local/w22o-queue-us', cmds)
             self.assertIn('beanjar stop local/w22o-queue-us', cmds)
 
+    def test_beanjar_07_commands_and_real_output(self):
+        """`beanjar show NAME` and `beanjar config show|set NAME` (0.7.0: the verb first); the fakes are
+        output captured from 0.7.0 (fixtures/beanjar-0.7.0-*.txt)."""
+        from unittest.mock import Mock
+        fx = os.path.join(os.path.dirname(__file__), 'fixtures')
+        show = open(os.path.join(fx, 'beanjar-0.7.0-show.txt')).read()
+        cfg = open(os.path.join(fx, 'beanjar-0.7.0-config-show.txt')).read()
+        h = hc_e2e.beanjar.BeanjarHost()
+        h.sh = Mock(side_effect=lambda cmd, timeout=300: (0, {'beanjar show local/vm': show,
+                                                              'beanjar config show local/vm': cfg}.get(cmd, 'ok')))
+        self.assertEqual(h.info('vm')['dir'], '/home/user/.local/share/beanjar/vms/w21a-issue17')
+        self.assertEqual(h.info('vm')['link'], 'nat')
+        self.assertEqual(h.vm_dir('vm'), '/home/user/.local/share/beanjar/vms/w21a-issue17')
+        self.assertFalse(h.awaits_lan('vm'))
+        s = h.settings('vm')
+        self.assertEqual((s['layers'], s['link'], s['debug_mode'], s['mem']),
+                         ('normal,gl,devmode,hbchannel', 'nat', 'release', '(default)'))
+        h.set_settings('vm', link='lan', debug_mode='debug')
+        self.assertEqual(h.sh.call_args.args[0], 'beanjar config set local/vm link=lan debug_mode=debug')
+
     def test_click_command_local_and_host(self):
         from unittest.mock import Mock
         for mode, target in [('local', 'local/vm'), ('remote', 'pi/vm')]:

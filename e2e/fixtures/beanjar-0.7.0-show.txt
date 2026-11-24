@@ -1,0 +1,59 @@
+name: w21a-issue17
+state: Running
+detail: 
+pid: 2961568
+viewer: -
+vnc.pid: 2961788
+vnc.url: vnc://127.0.1.73:5900
+vnc.password_file: /home/user/.local/share/beanjar/vms/w21a-issue17/identity/vnc.password
+uptime: 884.2199999999721
+dir: /home/user/.local/share/beanjar/vms/w21a-issue17
+unit.MainPID: 2953577
+unit.Result: success
+unit.ExecMainStatus: 0
+unit.Description: webOS VM /home/user/.local/share/beanjar/vms/w21a-issue17/run
+unit.ActiveState: active
+unit.SubState: running
+unit.Unit: beanjar-vm-beanjar_609de7-w21a-issue17
+reason: -
+fw: /srv/beanjar/firmware/03.53.25.01-HE_DTV_W21A_AFADATAA
+broadcast: -
+mem: -
+smp: 4
+free_page_reporting: -
+userland: -
+guest_kernel: -
+debug_mode: release
+updatable: -
+layers: normal,gl,devmode,hbchannel
+link: nat
+mode: mitm
+display: dbus
+gpu: on (usage unavailable)
+audio: dbus
+mac: a8:23:fe:48:e0:72
+serial: 696JQHA44091
+listen: -
+forward: -
+address: 127.0.1.73
+lan_access: -
+lg_services: -
+mitm_flows: 5000
+mitm_flow_bytes: 0
+tags: scratch
+slot: 73
+lan_address: -
+lan_hostname: -
+platform: webOS
+tv_ram: 1536
+guest_ram: 1536
+host_swap: 0
+model_key: false
+identity: /home/user/.local/share/beanjar/vms/w21a-issue17/identity
+vnc_password_file: /home/user/.local/share/beanjar/vms/w21a-issue17/identity/vnc.password
+ssh.root: ssh -p 6622 -i /home/user/.local/share/beanjar/vms/w21a-issue17/identity/id_ed25519 -o UserKnownHostsFile=/home/user/.local/share/beanjar/vms/w21a-issue17/identity/known_hosts -o StrictHostKeyChecking=yes root@127.0.1.73
+ssh.devmode: ssh -p 9922 -i /home/user/.local/share/beanjar/vms/w21a-issue17/identity/devmode_rsa -o UserKnownHostsFile=/home/user/.local/share/beanjar/vms/w21a-issue17/identity/known_hosts -o StrictHostKeyChecking=yes prisoner@127.0.1.73
+ssh.devmode_key_server: http://127.0.1.73:9991/webos_rsa
+ssh.ares: beanjar ares-TOOL -d w21a-issue17 [ARGS...]
+inspector.url: http://127.0.1.73:18083/
+inspector.password_file: /home/user/.local/share/beanjar/vms/w21a-issue17/run/mitmweb.password

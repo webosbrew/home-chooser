@@ -1,7 +1,7 @@
 # End-to-end test
 
 `homechooser_e2e.py` records each assertion with its raw evidence. The runner (`homechooser_e2e.py`,
-`run_matrix.py` and the `hc_e2e/` package, see "Code layout") is Python 3 standard library only; Beanjar VMs are
+`run_matrix.py` and the `hc_e2e/` package, see "Code layout") is Python 3 standard library only; Beanjar VMs (0.7.0 or later: `beanjar show NAME`, `beanjar config show|set NAME`) are
 reached with `beanjar ares-TOOL`, televisions with `ares-*` by device name (never raw ssh). pytest is optional: it
 runs the same scenario as one test per phase, with live progress and JUnit and HTML reports (see "The pytest device
 tests").
@@ -481,7 +481,7 @@ on PATH, but the QMP sockets and the VM files are on the machine the VM runs on.
 `--host-device` names another ssh config alias and `--host-mode` forces a mode for one run. The Pi is
 a Linux host, so it is reached with ssh; the `ares-*` tools are for the televisions and VMs only.
 VMs are listed with `beanjar list --local --json` (that machine's own VMs only); the QMP socket is under
-the VM directory `beanjar info` reports. No remote quoting exists outside that class. The screenshots the steps look at come from
+the VM directory `beanjar show` reports. No remote quoting exists outside that class. The screenshots the steps look at come from
 `beanjar screenshot` (Beanjar 0.3.1+), saved on the host and fetched with `scp` in remote mode; desktop capture has no standard-library fallback.
 
 ## Several machines
