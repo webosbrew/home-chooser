@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import {ServiceError} from '../../platform/errors';
+import {createServiceClient} from '../../platform/service';
 import {homeKeyHookApplies, createHomeKeyHook, parseStatus} from '..';
 import {BOOT_SCRIPT, HOMEKEY_FLAG, ensureEntryCommand, homekeyCommand, persistenceStatusCommand} from '../../homechooser/persistence';
 
@@ -15,7 +16,7 @@ const SET = (defaultApps) => ['luna://com.webos.settingsservice/setSystemSetting
 // A fake TV: `record` is general/defaultApps (undefined = never written); `statusOut` what the
 // script's `status` prints; `installed` is the enable flag file, `entry` the init.d link. `active`
 // changes when the fake native worker selects or restores the live filter.
-const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails = false, failLuna = null} = {}) => {
+const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails = false, failLuna = null, applyOut = '', clearOut = ''} = {}) => {
 	const calls = [];
 	const tv = {installed: false, entry: 'none', active: false};
 	// Legacy reboot status is ignored by the current parser.
@@ -48,7 +49,8 @@ const fakeTV = ({record, patch = 'possible', dataMissing = false, refreshFails =
 		if (command === homekeyCommand('status')) return {stdout: statusText(), stderr: ''};
 		if (command === homekeyCommand('prepare')) return {stdout: '', stderr: ''};
 		if (command === homekeyCommand('clear')) { tv.active = false; return {stdout: '', stderr: ''}; }
-		if (command === RUN_WORKER) { tv.active = true; return {stdout: '', stderr: ''}; }
+		if (command === RUN_WORKER) { tv.active = true; return {stdout: applyOut, stderr: ''}; }
+		if (command === 'homekeyApplyClear') { tv.active = true; return {stdout: clearOut, stderr: ''}; }
 		if (command === ENSURE) {
 			tv.entry = 'ok';
 			return {stdout: '', stderr: ''};
@@ -257,5 +259,66 @@ describe('parseStatus reboot', () => {
 		expect(parseStatus('active=no\npatch=possible\nreboot=needed\n').rebootNeeded).toBe(false);
 		expect(parseStatus('active=no\npatch=possible\nreboot=no\n').rebootNeeded).toBe(false);
 		expect(parseStatus('active=yes\npatch=possible\n').rebootNeeded).toBe(false);
+	});
+});
+
+describe('a persistent keyFilters override', () => {
+	const seqOf = (tv) => tv.calls.filter((c) => c[0] === 'exec').map((c) => c[1]);
+	test('parseStatus reads override=yes', () => {
+		expect(parseStatus('active=no\npatch=possible\nreboot=no\noverride=yes\n').override).toBe(true);
+		expect(parseStatus('active=no\npatch=possible\nreboot=no\noverride=no\n').override).toBe(false);
+		expect(parseStatus('active=no\n').override).toBe(false);
+	});
+	test('install reports the reason and does not clear on its own', async () => {
+		const tv = fakeTV({applyOut: 'active=no\nreboot=no\nreason=persistent-override\n'});
+		const res = await homeKeyHook(tv).install();
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(true);
+		expect(res.clearFailed).toBe(false);
+		expect(seqOf(tv)).toContain(RUN_WORKER);
+		expect(seqOf(tv)).not.toContain('homekeyApplyClear');
+	});
+	test('install with clearOverride runs the clearing apply instead of the plain one', async () => {
+		const tv = fakeTV({clearOut: 'active=yes\nreboot=no\n'});
+		const res = await homeKeyHook(tv).install({clearOverride: true});
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(false);
+		expect(res.clearFailed).toBe(false);
+		expect(seqOf(tv)).toContain('homekeyApplyClear');
+		expect(seqOf(tv)).not.toContain(RUN_WORKER);
+	});
+	test.each(['override-not-cleared', 'override-clear-failed'])('a clear that did not take (%s) is a failure of its own', async (reason) => {
+		const tv = fakeTV({clearOut: `active=no\nreason=${reason}\n`});
+		const res = await homeKeyHook(tv).install({clearOverride: true});
+		expect(res.clearFailed).toBe(true);
+		expect(res.persistentOverride).toBe(false);
+	});
+});
+
+describe('the failed reply of an apply that exited 1 (what the service really sends)', () => {
+	// the reply is built the way the service sends it and goes through the real client (platform/service.js), which throws it
+	const failedReply = (stdoutString) => ({returnValue: false, exitCode: 1, errorCode: 'exitStatus', errorText: 'homekeyApply exited with status 1', stdoutString});
+	const withFailingApply = (tv, command, stdoutString) => {
+		const exec = tv.exec;
+		const service = createServiceClient(async () => failedReply(stdoutString));
+		return Object.assign({}, tv, {exec: async (c) => (c === command ? service.run(c) : exec(c))});
+	};
+	test('persistent-override in the failed reply is a result, not a failure', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, RUN_WORKER, 'reason=persistent-override\n')).install();
+		expect(res.ok).toBe(true);
+		expect(res.persistentOverride).toBe(true);
+	});
+	test('a failed clear is read from its failed reply too', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, 'homekeyApplyClear', 'reason=override-not-cleared\n')).install({clearOverride: true});
+		expect(res.ok).toBe(true);
+		expect(res.clearFailed).toBe(true);
+	});
+	test('any other failed apply stays a failure', async () => {
+		const tv = fakeTV();
+		const res = await homeKeyHook(withFailingApply(tv, RUN_WORKER, 'reason=activation failed; restored stock Home\n')).install();
+		expect(res.ok).toBe(false);
+		expect(res.persistentOverride).toBe(false);
 	});
 });

@@ -21,3 +21,16 @@ export class ServiceError extends Error {
 export const errorMessage = (e) => (e && e.message) || String(e);
 // The service reply behind an error, when there is one.
 export const errorReply = (e) => (e && e.reply) || null;
+
+// The apply and refresh commands exit 1 when the Home key filter could not be activated, and the service answers a command
+// that exits non-zero with a failed reply ({returnValue:false, errorCode:'exitStatus', stdoutString}). These reasons printed
+// on its stdout are what the owner can act on (another app saved the key filter list persistently); any other failure
+// stays a failure. Returns the reason, or null.
+export const OVERRIDE_REASONS = ['persistent-override', 'override-not-cleared', 'override-clear-failed'];
+export const overrideReasonOf = (e) => {
+	const reply = errorReply(e);
+	const out = reply && typeof reply.stdoutString === 'string' ? reply.stdoutString : '';
+	const m = /^reason=(.*)$/m.exec(out);
+	const reason = m ? m[1].trim() : null;
+	return OVERRIDE_REASONS.includes(reason) ? reason : null;
+};

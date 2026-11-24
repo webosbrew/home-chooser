@@ -21,16 +21,49 @@ static gboolean on_disk(HCWatch *w, const char *id)
     }
     g_strfreev(dirs); return found;
 }
+/* Another app wrote keyFilters persistently (or replaced the list) while Home Chooser's filter is wanted: say so once,
+ * and leave it (clearing needs the owner, in the settings app). */
+static void override_seen(HCWatch *w)
+{
+    if (w->override_toasted) return;
+    /* The boot apply may have told the owner already (the marker says so): once per takeover. */
+    if (hc_key_override_state(w->c.state_dir) == 2) { w->override_toasted = TRUE; w->override_pending = FALSE; return; }
+    hc_key_mark_override(w->c.state_dir, 1);
+    if (!w->override_pending) watch_log(w, "Home key: another app has taken over keyFilters; not clearing it");
+    /* Only a delivered notice counts: the notification service may not be up yet (it answered nothing for minutes
+     * after a boot), so an undelivered one is tried again on the short 'N' timer. */
+    if (watch_notify(w, HC_OVERRIDE_TOAST, FALSE)) {
+        w->override_toasted = TRUE; w->override_pending = FALSE; hc_key_mark_override(w->c.state_dir, 2);
+    } else if (!w->override_pending) {
+        w->override_pending = TRUE; w->override_tries = 0;
+        watch_log(w, "Home key: the notice was not delivered, trying again shortly");
+    }
+}
+#define OVERRIDE_NOTICE_TRIES 30
+void key_notice_retry(HCWatch *w)
+{
+    if (w->override_toasted || w->status >= 0) return;
+    /* the boot apply could not tell the owner (marker 3): the watcher takes that over */
+    if (!w->override_pending && hc_key_override_state(w->c.state_dir) == 3) { w->override_pending = TRUE; w->override_tries = 0; }
+    if (!w->override_pending) return;
+    /* the takeover is over (ours back, or stock restored: the marker is gone), or too many tries */
+    if (!hc_key_override_state(w->c.state_dir) || ++w->override_tries > OVERRIDE_NOTICE_TRIES) { w->override_pending = FALSE; return; }
+    w->notify_quick = TRUE; /* one short try: this runs on a 10 s timer and must not hold the watcher */
+    override_seen(w);
+    w->notify_quick = FALSE;
+}
 int key_refresh(HCWatch *w, gboolean stock)
 {
+    if (stock) { w->saw_mine = FALSE; w->override_pending = FALSE; } /* stock is what is wanted: nothing of ours to lose */
     if (w->key_mode == HC_KEY_NONE) return 0;
     if (w->ops.key) return w->ops.key(stock, w->ops.context);
-    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000};
+    HCKeyOps ops = {w->c.state_dir, w->c.stock_js, w->c.release_file, w->ops.call, w->ops.context, 30, 1000, NULL};
     GString *out = g_string_new(NULL);
     int rc = hc_key_run(&ops, "refresh", stock, out);
     watch_log(w, "Home key refresh%s: %s", stock ? " stock" : "", out->str);
     /* Baked means the filter really redirects: rc 0 with active=no (unknown stock shape, unreadable
      * stock file) is the stock list, so nothing is baked and the home gate stays unmounted. */
+    if (!stock && strstr(out->str, "reason=persistent-override")) override_seen(w);
     if (!rc && !stock && !strstr(out->str, "active=yes")) { rc = 1; g_clear_pointer(&w->baked, g_free); }
     g_string_free(out, TRUE); return rc;
 }
@@ -46,10 +79,11 @@ void sync_baked(HCWatch *w, const char *id)
 #define KEY_QUIET_S 600
 /* TRUE only for a list that plainly is the firmware's own: a stock systemUi entry and none of ours. Anything
  * else (no list, an error reply, our file present, no systemUi entry) is not a change to put right. */
-static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
+static gboolean list_is_stock(HCWatch *w, jvalue_ref reply, gboolean *mine_out, gboolean *listed_out)
 {
     jvalue_ref list = member(member(reply, "configs"), KEY_CONFIG);
     if (!jis_array(list)) return FALSE;
+    if (listed_out) *listed_out = jarray_size(list) > 0;
     char *ours = g_build_filename(w->c.state_dir, "systemUi-", NULL), *ours40 = g_build_filename(w->c.state_dir, "homekey40-", NULL);
     gboolean stock = FALSE, mine = FALSE;
     for (ssize_t i = 0; i < jarray_size(list); i++) {
@@ -58,17 +92,34 @@ static gboolean list_is_stock(HCWatch *w, jvalue_ref reply)
         if (eq(file, "/usr/lib/qt5/qml/KeyFilters/systemUi.js") || eq(file, "/usr/lib/qml/KeyFilters/systemUi.js")) stock = TRUE;
         g_free(file);
     }
+    if (mine_out) *mine_out = mine;
     g_free(ours); g_free(ours40); return stock && !mine;
 }
 void key_follow(HCWatch *w, const char *text)
 {
-    if (w->key_mode == HC_KEY_NONE || !w->baked || w->status >= 0) return;
+    if (w->key_mode == HC_KEY_NONE || w->status >= 0) return;
     jvalue_ref reply;
     if (text) reply = parse_object(text);
     else reply = watch_call(w, KEY_GET, "{\"configNames\":[\"" KEY_CONFIG "\"]}", 3);
-    gboolean stock = list_is_stock(w, reply);
+    gboolean mine = FALSE, listed = FALSE, stock = list_is_stock(w, reply, &mine, &listed);
     j_release(&reply);
-    if (!stock) return;
+    if (mine) {
+        w->saw_mine = TRUE; w->override_pending = FALSE;
+        if (w->override_toasted || hc_key_override_state(w->c.state_dir)) { w->override_toasted = FALSE; hc_key_mark_override(w->c.state_dir, 0); }
+        return;
+    }
+    if (listed && !stock) {
+        /* A list with none of ours and no stock systemUi entry: another app wrote it. Needs the filter to have been
+         * ours (baked by a refresh, or seen in a reply) and a choice still wanted; the filter may have been applied by
+         * the app, not by this watcher, so `baked` alone is not the test. */
+        char *wanted = watch_choice(w);
+        if (!wanted || !*wanted || stock_id(wanted)) { w->saw_mine = FALSE; w->override_pending = FALSE; } /* no filter of ours is wanted */
+        gboolean ours = (w->baked && eq(wanted, w->baked)) || (w->saw_mine && wanted && *wanted);
+        g_free(wanted);
+        if (ours) override_seen(w);
+        return;
+    }
+    if (!stock || !w->baked) return; /* the stock re-apply is only for a filter this watcher baked */
     /* Only the choice the baked filter was made for: a changed or removed choice has its own path. */
     char *want = watch_choice(w);
     gboolean same = eq(want, w->baked); g_free(want);
@@ -141,7 +192,7 @@ static void restore_all(HCWatch *w)
     if (key_refresh(w, TRUE)) { hc_watch_stop(w, 1, "could not restore stock keyFilters, restore pending"); return; }
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
-    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", NULL};
+    const char *names[] = {"home", "previous", "stock", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);

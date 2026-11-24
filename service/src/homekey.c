@@ -8,11 +8,13 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 
 #define KEY "com.webos.surfacemanager.keyFilters"
 #define GET "luna://com.webos.service.config/getConfigs"
 #define SET "luna://com.webos.service.config/setConfigs"
+#define RECONFIGURE "luna://com.webos.service.config/reconfigure"
 #define GET_PAYLOAD "{\"configNames\":[\"" KEY "\"]}"
 static raw_buffer kb(const char *s) { return j_str_to_buffer(s, strlen(s)); }
 static jvalue_ref parse(const char *s) {
@@ -99,20 +101,49 @@ static jvalue_ref get_list(const HCKeyOps *o) {
     jvalue_ref result = success(r) && valid(o, list, TRUE) ? jvalue_duplicate(list) : jinvalid();
     j_release(&r); return result;
 }
-static void toast(const HCKeyOps *o, const char *message) {
+static void klog(const HCKeyOps *o, const char *fmt, ...) G_GNUC_PRINTF(2, 3);
+static void klog(const HCKeyOps *o, const char *fmt, ...) {
+    if (!o->log) return;
+    va_list ap; va_start(ap, fmt); char *line = g_strdup_vprintf(fmt, ap); va_end(ap);
+    o->log(line, o->context); g_free(line);
+}
+static ssize_t count(jvalue_ref list) { return jis_array(list) ? jarray_size(list) : -1; }
+/* Index of the first entry where two lists differ (the shorter length when one is a prefix), -1 when equal. */
+static ssize_t first_diff(jvalue_ref a, jvalue_ref b) {
+    ssize_t na = count(a), nb = count(b), n = na < nb ? na : nb;
+    for (ssize_t i = 0; i < n; i++) if (!jvalue_equal(jarray_get(a, i), jarray_get(b, i))) return i;
+    return na == nb ? -1 : (n < 0 ? 0 : n);
+}
+int hc_key_override_state(const char *state_dir) {
+    char *p = g_build_filename(state_dir, "override", NULL), *text = NULL;
+    int state = 0;
+    if (g_file_get_contents(p, &text, NULL, NULL)) state = text && !strcmp(g_strstrip(text), "toasted") ? 2 : text && !strcmp(text, "notify") ? 3 : 1;
+    g_free(text); g_free(p); return state;
+}
+void hc_key_mark_override(const char *state_dir, int state) {
+    char *p = g_build_filename(state_dir, "override", NULL);
+    if (state <= 0) unlink(p);
+    else if (g_file_test(state_dir, G_FILE_TEST_IS_DIR) && !(state == 1 && hc_key_override_state(state_dir) >= 2))
+        g_file_set_contents(p, state == 2 ? "toasted" : state == 3 ? "notify" : "", -1, NULL);
+    g_free(p);
+}
+static gboolean toast(const HCKeyOps *o, const char *message) {
     jvalue_ref p = jobject_create();
     jobject_set(p, kb("sourceId"), jstring_create("org.webosbrew.homechooser"));
     jobject_set(p, kb("noaction"), jboolean_create(true));
     jobject_set(p, kb("message"), jstring_create(message));
     jvalue_ref r = call(o, "luna://com.webos.notification/createToast", jvalue_stringify(p), 2);
-    j_release(&r); j_release(&p);
+    gboolean ok = success(r);
+    j_release(&r); j_release(&p); return ok;
 }
-static gboolean select_list(const HCKeyOps *o, jvalue_ref list) {
-    if (!valid(o, list, TRUE)) return FALSE;
+static gboolean select_list(const HCKeyOps *o, jvalue_ref list, jvalue_ref before, gboolean *persistent) {
+    if (persistent) *persistent = FALSE;
+    if (!valid(o, list, TRUE)) { klog(o, "keyFilters write refused: the list is not valid"); return FALSE; }
     for (ssize_t i = 0; i < jarray_size(list); i++) {
         char *file = str(jarray_get(list, i), "file");
         gboolean available = !owned(o, file) || g_file_test(file, G_FILE_TEST_IS_REGULAR);
         if (stock_path(file)) available = g_file_test(o->stock_js, G_FILE_TEST_IS_REGULAR);
+        if (!available) klog(o, "keyFilters write refused: %s is not available", file ? file : "(none)");
         g_free(file);
         if (!available) return FALSE;
     }
@@ -120,12 +151,69 @@ static gboolean select_list(const HCKeyOps *o, jvalue_ref list) {
     jobject_set(configs, kb(KEY), jvalue_duplicate(list));
     jobject_set(p, kb("configs"), configs);
     jobject_set(p, kb("volatile"), jboolean_create(true));
-    jvalue_ref r = call(o, SET, jvalue_stringify(p), 5);
-    gboolean ok = success(r);
+    char *text = o->call(SET, jvalue_stringify(p), 5, o->context);
+    jvalue_ref r = parse(text);
+    gboolean accepted = success(r), ok = accepted;
     j_release(&r); j_release(&p);
     jvalue_ref got = get_list(o);
-    ok = ok && jis_valid(got) && jvalue_equal(got, list);
-    j_release(&got); return ok;
+    gboolean read = jis_valid(got), equal = read && jvalue_equal(got, list);
+    ok = ok && equal;
+    if (!ok) {
+        klog(o, "setConfigs(volatile) reply=%s; wrote %zd entries, read back %zd; first difference at index %zd",
+            text ? text : "(none)", count(list), read ? count(got) : (ssize_t)-1, read ? first_diff(list, got) : (ssize_t)-1);
+        if (persistent && accepted && read && before && jis_array(before) && jvalue_equal(got, before)) {
+            *persistent = TRUE;
+            klog(o, "the read-back is the list from before the write: a persistent keyFilters override masks volatile writes");
+        }
+    }
+    g_free(text); j_release(&got); return ok;
+}
+/* Clear the persistent override: a persistent null (no volatile flag) for the key, then read. When the list has
+ * not changed, configd is asked to reconfigure, once; that takes seconds on a slow TV (7-18 s seen), the reply may
+ * come after our wait, and reads during it give no valid list. So the reads that follow are polled until a valid
+ * list is there (changed, or unchanged after a gap or a reconfigure that answered), for at most CLEAR_WAIT_S. The
+ * result is that list (JINVALID when configd never gave a valid one). A persistent list equal to the stock one
+ * cannot be told from stock by reading, so an unchanged valid list is accepted; the volatile write that follows is
+ * the proof. */
+#define CLEAR_WAIT_S 30
+#define RECONFIGURE_WAIT_S 25
+static jvalue_ref clear_persistent(const HCKeyOps *o, jvalue_ref before) {
+    jvalue_ref p = jobject_create(), configs = jobject_create();
+    jobject_set(configs, kb(KEY), jnull());
+    jobject_set(p, kb("configs"), configs);
+    char *text = o->call(SET, jvalue_stringify(p), 5, o->context);
+    jvalue_ref r = parse(text);
+    gboolean accepted = success(r);
+    klog(o, "clear: setConfigs(persistent null) reply=%s", text ? text : "(none)");
+    g_free(text); j_release(&r); j_release(&p);
+    if (!accepted) return jinvalid();
+    jvalue_ref got = get_list(o);
+    ssize_t at = jis_valid(got) ? first_diff(before, got) : -1;
+    klog(o, "clear: read 1: %zd entries, %s", jis_valid(got) ? count(got) : (ssize_t)-1,
+        !jis_valid(got) ? "no valid list" : at >= 0 ? "changed" : "unchanged");
+    if (jis_valid(got) && at >= 0) return got;
+    jvalue_ref rr = call(o, RECONFIGURE, "{}", RECONFIGURE_WAIT_S);
+    gboolean answered = success(rr);
+    klog(o, "clear: reconfigure %s", answered ? "answered true" : "did not answer true; waiting for configd");
+    j_release(&rr);
+    gint64 end = g_get_monotonic_time() + (gint64)CLEAR_WAIT_S * G_USEC_PER_SEC;
+    gboolean gap = !jis_valid(got);
+    jvalue_ref last = jis_valid(got) ? jvalue_duplicate(got) : jinvalid();
+    for (unsigned n = 2; n < 2 + CLEAR_WAIT_S; n++) {
+        j_release(&got); got = get_list(o);
+        at = jis_valid(got) ? first_diff(before, got) : -1;
+        klog(o, "clear: read %u: %zd entries, %s", n, jis_valid(got) ? count(got) : (ssize_t)-1,
+            !jis_valid(got) ? "no valid list yet" : at >= 0 ? "changed" : "unchanged");
+        if (!jis_valid(got)) gap = TRUE;
+        else {
+            j_release(&last); last = jvalue_duplicate(got);
+            if (at >= 0 || answered || gap) { j_release(&last); return got; }
+        }
+        if (g_get_monotonic_time() >= end) break;
+        if (o->retry_ms) g_usleep(o->retry_ms * 1000);
+    }
+    j_release(&got);
+    return last;
 }
 /* Delete only our unreferenced generated versions, after exact config readback. */
 static void collect(const HCKeyOps *o, jvalue_ref current) {
@@ -160,12 +248,12 @@ static gboolean ready(const HCKeyOps *o) {
     }
     return FALSE;
 }
-int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GString *out) {
+int hc_key_run_ex(const HCKeyOps *o, const char *action, gboolean force_stock, gboolean clear_override, GString *out) {
     int rc = 1, lock = -1;
     char *source = NULL, *generated = NULL, *reason = NULL, *choice = NULL, *version = NULL, *lockpath = NULL;
     char *stock_file = path(o, "keyfilters-stock.json");
     char *flag = path(o, "homekey"), *home = path(o, "home"), *os = readfile(o->release_file);
-    gboolean overlay = FALSE;
+    gboolean overlay = FALSE, cleared = FALSE, evaluated = FALSE;
     jvalue_ref current = jinvalid(), stock = jinvalid(), next = jinvalid();
     gboolean boot = !strcmp(action, "boot"), status = !strcmp(action, "status"), prepare = !strcmp(action, "prepare");
     /* The existing 5/10-12 policy is owned by the watcher, never this hook. */
@@ -192,7 +280,9 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     if (status) {
         current = get_list(o);
         gboolean possible = generated && (mode != HC_KEY_INSERT || insert_index(current) >= 0 || has_ours(o, current));
-        g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\n", has_ours(o, current) ? "yes" : "no", possible ? "possible" : "refused");
+        gboolean live = has_ours(o, current);
+        char *marker = path(o, "override"); gboolean seen = !live && g_file_test(marker, G_FILE_TEST_EXISTS); g_free(marker);
+        g_string_append_printf(out, "active=%s\npatch=%s\nreboot=no\noverride=%s\n", live ? "yes" : "no", possible ? "possible" : "refused", seen ? "yes" : "no");
         rc = 0; goto done;
     }
     /* A restore with no state dir has nothing to restore (stock keyFilters are saved in it, and the
@@ -219,7 +309,21 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
         if (++tries >= 50) { reason = g_strdup("another key-filter transaction is running"); goto done; }
     }
     current = get_list(o);
+    evaluated = TRUE;
     if (!jis_valid(current)) { reason = g_strdup("configd did not return a valid nonempty keyFilters list"); goto done; }
+    if (clear_override && !hc_key_override_state(o->state_dir)) klog(o, "clear: no persistent override was seen, applying without clearing");
+    if (clear_override && hc_key_override_state(o->state_dir) && !strcmp(action, "apply") && !force_stock && !has_ours(o, current) && g_file_test(flag, G_FILE_TEST_EXISTS)) {
+        /* Only for an apply that has a choice to make; a restore never writes persistently. */
+        char *wanted = readfile(home); if (wanted) g_strstrip(wanted);
+        gboolean go = wanted && *wanted; g_free(wanted);
+        if (go) {
+            klog(o, "clear: asked to clear a persistent keyFilters override");
+            jvalue_ref after = clear_persistent(o, current);
+            if (!jis_valid(after) || has_ours(o, after)) { j_release(&after); reason = g_strdup("override-clear-failed"); goto done; }
+            j_release(&current); current = after; cleared = TRUE;
+            klog(o, "clear: the stock snapshot is taken again from the %zd entries now in configd", count(current));
+        }
+    }
     if (!has_ours(o, current)) {
         stock = jvalue_duplicate(current);
         if (!g_file_set_contents(stock_file, jvalue_stringify(stock), -1, NULL)) goto done;
@@ -323,17 +427,20 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
             }
             g_free(file);
         }
-        if (unchanged) { unlink(version); g_string_append(out, "active=yes\nreboot=no\n"); rc = 0; goto done; }
+        if (unchanged) { unlink(version); hc_key_mark_override(o->state_dir, 0); g_string_append(out, "active=yes\nreboot=no\n"); rc = 0; goto done; }
     }
-    if (!jvalue_equal(next, current) && !select_list(o, next)) {
+    gboolean persistent = FALSE;
+    if (!jvalue_equal(next, current) && !select_list(o, next, current, &persistent)) {
         /* A failed/readback-ambiguous write may have applied. Restore stock through configd;
          * never delete any source file until an exact readback proves it is unused. */
-        gboolean recovered = select_list(o, stock);
+        gboolean recovered = select_list(o, stock, NULL, NULL);
         if (recovered) collect(o, stock);
-        reason = g_strdup(recovered ? "activation failed; restored stock Home" : "configd recovery unverified; retaining all generated files");
+        if (persistent) hc_key_mark_override(o->state_dir, 1);
+        reason = g_strdup(recovered ? (persistent ? (cleared ? "override-not-cleared" : "persistent-override") : "activation failed; restored stock Home") : "configd recovery unverified; retaining all generated files");
         goto done;
     }
     collect(o, next);
+    hc_key_mark_override(o->state_dir, 0);
     /* Stock restored and read back (the write above read it back, or the list already was stock) and
      * no choice: the snapshot and the lock have no further use; the dir goes when nothing else is in it. */
     if (restore && (!choice || !*choice)) {
@@ -343,9 +450,20 @@ int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GStr
     rc = 0;
     if (reason) toast(o, "Home Chooser cannot change Home on this firmware. LG Home remains available.");
 done:
-    if (reason) { g_string_append_printf(out, "reason=%s\n", reason); if (boot && rc) toast(o, "Home Chooser could not start your home. LG Home remains available."); }
+    /* The marker says an override was met by the last run that looked: any other outcome of an apply, refresh or boot
+     * that got as far as reading the list takes it away (a killed run or another cause must not leave override=yes). */
+    if (evaluated && (!reason || (strcmp(reason, "persistent-override") && strcmp(reason, "override-not-cleared") && strcmp(reason, "override-clear-failed"))))
+        hc_key_mark_override(o->state_dir, 0);
+    if (reason) { g_string_append_printf(out, "reason=%s\n", reason); if (boot && rc) {
+        /* One try, no waiting: the notification service is often not up this early, and the boot apply must not hold the
+         * watcher back. A notice that was not accepted is left to the watcher (marker 3), which retries on a short timer. */
+        if (!strcmp(reason, "persistent-override")) hc_key_mark_override(o->state_dir, toast(o, HC_OVERRIDE_TOAST) ? 2 : 3);
+        else toast(o, "Home Chooser could not start your home. LG Home remains available."); } }
     if (lock >= 0) close(lock);
     j_release(&current); j_release(&stock); j_release(&next);
     g_free(lockpath); g_free(stock_file); g_free(flag); g_free(home); g_free(source); g_free(generated); g_free(reason); g_free(choice); g_free(version);
     return rc;
+}
+int hc_key_run(const HCKeyOps *o, const char *action, gboolean force_stock, GString *out) {
+    return hc_key_run_ex(o, action, force_stock, FALSE, out);
 }

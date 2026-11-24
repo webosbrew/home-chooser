@@ -133,6 +133,57 @@ touched: a failed or refused refresh, a disabled hook, an unknown stock shape, a
 leave `baked` unset (or the choice different), so the stock list stays and the gate stays unmounted. No service
 is restarted, nothing is written to configd's factory database, and webOS 5 and 10+ do not subscribe.
 
+## Another app saved keyFilters persistently
+
+Other launchers (Luma, Glasshouse) write `com.webos.surfacemanager.keyFilters` to configd **persistently** (a
+`setConfigs` without `volatile`). Home Chooser writes it volatile. Reproduced on a 6.5.2 VM: while a persistent value
+exists, a volatile `setConfigs` returns `returnValue:true` but `getConfigs` keeps returning the persistent list, so
+the exact read-back after the write fails. configd has no delete method; a persistent `setConfigs` of
+`{"configs":{"<key>":null}}` makes `getConfigs` return the layered base list again (once only after a following
+`reconfigure {}`); `reconfigure` alone and a volatile null do not clear it.
+
+**Detection** (every key-filter mode: 6-9 patch and the 4.0 inserted entry). When the volatile write is accepted, the
+read-back differs from what was written and equals the list from before the write, the failure is classified as a
+persistent override. Recovery is as for any failed write (the saved stock list is written back and read back), the apply
+output says `reason=persistent-override`, and the toast "cannot change Home on this firmware" is not shown. Every failed
+write logs the `setConfigs` reply, the entry counts and the first differing index (syslog id `HOMEKEY_CONFIGD`).
+The service writes the state directory file `override` when it meets this case (at boot or apply, or when the watcher sees
+it; its content is `toasted` once the owner's notice was delivered); `status` prints `override=yes` while it exists and the
+filter is not active. Any apply that ends with the filter active or stock restored removes it. The apply exits 1 in this
+case, so the service's `run` reply is a failed one (`errorCode:"exitStatus"`, the output in `stdoutString`); the app reads
+the three reasons from that output and treats any other failed apply as a failure.
+
+**Clearing is never automatic.** The settings app asks (the other app's change is removed, the list goes back to LG's
+own) and repeats the apply as `homekeyApplyClear` (`homechooser-homekey apply clear-override`). Then, for an apply
+with a stored choice that has none of our entries: a persistent null for the key; `getConfigs`; when the list has not
+changed, `reconfigure {}` once (25 s wait: configd took 7-18 s on a loaded VM, and the call may report false after its
+own wait while configd is still working), then polling `getConfigs` until a valid list is there, for at most 30 s (reads
+during the reconfigure return no valid list: not yet ready, not a final answer; an unchanged valid list counts once the
+reconfigure answered or a gap was seen); the stock snapshot is taken again from the
+result (the old one may hold the other app's entry); then the usual volatile apply. Each step is logged. An unchanged
+valid list is accepted after the retries (a persistent list equal to stock cannot be told from stock by reading), so
+the volatile write is the proof. Reasons: `override-clear-failed` (the null was refused or no valid list came back;
+nothing else written) and `override-not-cleared` (cleared, and the write is still masked; stock restored).
+Restore, stop, clear, refresh with stock and uninstall never write persistently, and the flag is ignored for them.
+The flag is also ignored unless the `override` marker says an override was met (then it is a plain apply, logged).
+The command has its own 150 s budget (`homekeyApplyClear` in policy.c; the app waits 180 s): the worst case is the lock
+wait, the list read and `getAppInfo` (about 13 s), the null and first read (8 s), the reconfigure (25 s), the polling
+(33 s), then the write and read-back and a possible stock recovery (16 s): about 95 s before the gate sync, which is why
+the 90 s of the other commands is not enough. A run that is killed after the persistent null but before the apply leaves
+the marker, so the app asks again at its next opening, and clearing again is harmless. The marker is the last run's word:
+an apply, refresh or boot that reads the list and ends in anything but an override removes it, as does uninstall.
+The consent is not remembered: each clearing is asked for.
+
+**Boot and runtime.** The boot apply and the watcher never clear. At boot a persistent override recovers as above and
+shows the toast "Another app has taken over the Home button. Open Home Chooser to change it." (the boot apply tries
+once and does not wait; when the notification service does not take it, the marker says `notify` and the watcher delivers
+it on a 10 s timer, at most 30 tries per takeover, as it does for a notice of its own that was not delivered; one that
+was delivered is not repeated for the same takeover). While the filter is
+ours (baked by the watcher, or seen in a keyFilters reply: the app's own apply does not bake), the watcher's keyFilters subscription (the `K` events above) shows the same toast once when a list with
+none of ours and no stock `systemUi.js` entry arrives, or when its stock re-apply ends with `persistent-override`;
+it does not re-apply in a loop. The notice retries are one short try each (2 s), and "ours" is forgotten when the owner chooses LG Home or clears the choice, so a later foreign list is not reported. The marker `notify` is never lowered by the watcher. The toast is due again only after our own list was back in between. Opening the app
+with `override=yes` and a stored choice asks the same question as a refused apply.
+
 ## webOS 4.0: a filter entry of our own
 
 webOS 4.0 (starfish 4.4.x, W18R verified) has no Home app and no `defaultApps` record. The Home key is
@@ -204,7 +255,8 @@ read back exactly equal.
 ## Status and tests
 
 `active=yes` means that configd selects a Home Chooser JS version; `active=no` means it does not.
-`patch=possible/refused` reports the native generator check, and `reboot=no` is unconditional.
+`patch=possible/refused` reports the native generator check, `reboot=no` is unconditional, and `override=yes|no`
+says whether a persistent keyFilters override was met (above).
 The app has no restart prompt or “Restart now” row.
 
 ```sh

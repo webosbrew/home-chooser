@@ -102,6 +102,11 @@ static gboolean ticker(gpointer context)
 {
     enqueue(context, 'T', NULL); return G_SOURCE_CONTINUE;
 }
+/* A takeover notice that the notification service did not take yet is retried on this short timer (a no-op otherwise). */
+static gboolean notice_ticker(gpointer context)
+{
+    enqueue(context, 'N', NULL); return G_SOURCE_CONTINUE;
+}
 static int signal_fd = -1;
 static void signal_handler(int number)
 {
@@ -146,7 +151,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
     guint signal_source = g_unix_fd_add(pipefd[0], G_IO_IN, stop_signal, &r);
     /* Boot apply uses the same bounded luna-send transport. The watcher
      * still runs on readiness failure and retries the live filter on app events. */
-    HCKeyOps key = {c.state_dir, c.stock_js, c.release_file, runner_call, &r, 30, 1000};
+    HCKeyOps key = {c.state_dir, c.stock_js, c.release_file, runner_call, &r, 30, 1000, NULL};
     GString *output = g_string_new(NULL);
     if (boot) {
         hc_key_run(&key, "boot", FALSE, output);
@@ -163,7 +168,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
     const char *payloads[] = {"{\"category\":\"general\",\"keys\":[\"defaultApps\"],\"subscribe\":true}",
         "{\"subscribe\":true}", "{\"subscribe\":true}", "{\"subscribe\":true}",
         "{\"configNames\":[\"com.webos.surfacemanager.keyFilters\"],\"subscribe\":true}"};
-    guint tick = 0;
+    guint tick = 0, notice_tick = 0;
     if (hc_watch_status(r.watch) < 0) {
         /* Every release: the previous-launcher close follows the foreground and life events (previous.c). */
         for (int i = 0; i < 5; i++) {
@@ -172,6 +177,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
             if (!feeds[i].subscription) enqueue(&r, g_ascii_tolower(feeds[i].tag), NULL);
         }
         tick = g_timeout_add_seconds(c.recheck_s, ticker, &r);
+        notice_tick = g_timeout_add_seconds(10, notice_ticker, &r);
         hc_watch_event(r.watch, 'B', NULL);
         wake(&r);
         if (hc_watch_status(r.watch) < 0) g_main_loop_run(r.loop);
@@ -180,6 +186,7 @@ int hc_watch_run(const HCWatchConfig *config, gboolean boot)
     if (hc_watch_status(r.watch) < 0) hc_watch_stop(r.watch, 1, "watcher event loop ended");
     for (unsigned i = 0; i < G_N_ELEMENTS(feeds); i++) hc_luna_cancel(feeds[i].subscription);
     if (tick) g_source_remove(tick);
+    if (notice_tick) g_source_remove(notice_tick);
     if (r.drain) g_source_remove(r.drain);
     g_source_remove(signal_source);
     for (unsigned i = 0; i < G_N_ELEMENTS(signals); i++) sigaction(signals[i], &previous[i], NULL);

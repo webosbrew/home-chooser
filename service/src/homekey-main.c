@@ -19,6 +19,12 @@ static char *homekey_call(const char *uri, const char *payload, int timeout, voi
     return g_string_free(out, FALSE);
 }
 
+static void homekey_log(const char *line, void *context)
+{
+    (void)context;
+    LOGI("HOMEKEY_CONFIGD", "%s", line);
+}
+
 /* The 6-9 home gate follows a live filter change at once; a watcher may not see a disable. */
 static void gate_follow(const char *action, gboolean stock, int rc, gboolean active)
 {
@@ -49,10 +55,12 @@ int hc_homekey_main(int argc, char **argv)
     if (strcmp(action, "boot") && strcmp(action, "status") && strcmp(action, "prepare") &&
         strcmp(action, "apply") && strcmp(action, "refresh") && strcmp(action, "stop") && strcmp(action, "clear")) return 2;
     HCKeyOps ops = {HC_STATE_DIR, "/usr/lib/qt5/qml/KeyFilters/systemUi.js", HC_STARFISH_RELEASE,
-        homekey_call, NULL, 30, 1000};
+        homekey_call, NULL, 30, 1000, homekey_log};
     GString *out = g_string_new(NULL);
     gboolean stock = argc > 3 && !strcmp(argv[3], "stock");
-    int rc = hc_key_run(&ops, action, stock, out);
+    /* "apply clear-override": the owner agreed to clear another app's persistent keyFilters override. */
+    gboolean clear = argc > 3 && !strcmp(argv[3], "clear-override");
+    int rc = hc_key_run_ex(&ops, action, stock, clear, out);
     /* An unknown stock shape returns 0 with active=no: no filter, so no gate either. */
     gboolean active = strstr(out->str, "active=yes") != NULL;
     fputs(out->str, stdout); fflush(stdout); LOGI("HOMEKEY", "%s: %s", action, out->str);

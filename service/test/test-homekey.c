@@ -11,13 +11,42 @@
 static raw_buffer kb(const char *s) { return j_str_to_buffer(s, strlen(s)); }
 static jvalue_ref parse(const char *s) { return jdom_create(kb(s), jschema_all(), NULL); }
 static jvalue_ref current;
+/* A persistent layer another app wrote: while mask is set, getConfigs returns it and volatile writes are accepted
+ * and dropped. A persistent null clears it (clear_stuck: it does not; clear_needs_reconfigure: only after a
+ * reconfigure; clear_reject: the call fails). */
+static jvalue_ref mask;
+static int persistent_writes, reconfigures, clear_stuck, clear_needs_reconfigure, clear_pending, clear_reject, cannot_toasts, override_toasts, toast_fail, reconf_slow, gap_reads;
+static GString *logbuf;
+static void klogcap(const char *line, void *context) { (void)context; g_string_append(logbuf, line); g_string_append_c(logbuf, '\n'); }
 static int sets, gets, fails, corrupt_reads, corrupt_after_set, toasts, starts, app_installed = 1, ready = 1;
 static char *fake(const char *uri, const char *payload, int timeout, void *context) {
-    (void)context; assert(timeout > 0 && timeout <= 5);
+    (void)context; assert(timeout > 0 && timeout <= (strstr(uri, "reconfigure") ? 30 : 5));
     if (strstr(uri, "getCurrentState")) return g_strdup(ready ? "{\"returnValue\":true,\"currentState\":\"launcher\"}" : "{}");
-    if (strstr(uri, "createToast")) { toasts++; if (strstr(payload, "will start shortly")) starts++; return g_strdup("{\"returnValue\":false}"); }
+    if (strstr(uri, "createToast")) { toasts++; if (strstr(payload, "will start shortly")) starts++; if (strstr(payload, "cannot change Home")) cannot_toasts++; if (strstr(payload, "taken over the Home button")) override_toasts++; return g_strdup(toast_fail > 0 && strstr(payload, "taken over the Home button") && toast_fail-- ? "{\"returnValue\":false}" : "{\"returnValue\":true}"); }
     if (strstr(uri, "getAppInfo")) return g_strdup(app_installed ? "{\"returnValue\":true}" : "{\"returnValue\":false}");
+    if (strstr(uri, "reconfigure")) {
+        reconfigures++;
+        /* a slow configd: reads during the reconfigure give no valid list, the call itself runs into its timeout */
+        if (reconf_slow) { gap_reads = 3; return g_strdup("{\"returnValue\":false}"); }
+        if (clear_pending) { j_release(&mask); mask = NULL; clear_pending = 0; }
+        return g_strdup("{\"returnValue\":true}");
+    }
     if (strstr(uri, "setConfigs")) {
+        {
+            jvalue_ref pr = parse(payload); bool pv = false;
+            jboolean_get(jobject_get(pr, kb("volatile")), &pv);
+            if (!pv) {
+                /* the only persistent write the service may make is the owner-approved null */
+                assert(jis_null(jobject_get(jobject_get(pr, kb("configs")), kb(KEY))));
+                persistent_writes++; j_release(&pr);
+                if (clear_reject) return g_strdup("{\"returnValue\":false}");
+                if (mask && !clear_stuck) {
+                    if (clear_needs_reconfigure) clear_pending = 1; else { j_release(&mask); mask = NULL; }
+                }
+                return g_strdup("{\"returnValue\":true}");
+            }
+            j_release(&pr);
+        }
         sets++;
         if (corrupt_after_set) { corrupt_reads=1; corrupt_after_set=0; }
         jvalue_ref req = parse(payload); bool vol = false;
@@ -25,22 +54,28 @@ static char *fake(const char *uri, const char *payload, int timeout, void *conte
         jvalue_ref list = jobject_get(jobject_get(req, kb("configs")), kb(KEY));
         assert(jis_array(list) && jarray_size(list) > 0);
         if (fails) { if (fails > 0) fails--; j_release(&req); return g_strdup("{\"returnValue\":false}"); }
+        if (mask) { j_release(&req); return g_strdup("{\"returnValue\":true}"); }
         j_release(&current); current = jvalue_duplicate(list); j_release(&req);
         return g_strdup("{\"returnValue\":true}");
     }
     assert(strstr(uri, "getConfigs")); gets++;
+    if (gap_reads > 0 && --gap_reads == 0 && clear_pending) { j_release(&mask); mask = NULL; clear_pending = 0; }
+    if (gap_reads > 0) return g_strdup("{\"returnValue\":false}");
     jvalue_ref reply = jobject_create(), configs = jobject_create();
     jobject_set(reply, kb("returnValue"), jboolean_create(true));
     if (sets && corrupt_reads) { corrupt_reads--; jobject_set(configs, kb(KEY), jarray_create(NULL)); }
-    else jobject_set(configs, kb(KEY), jvalue_duplicate(current));
+    else jobject_set(configs, kb(KEY), jvalue_duplicate(mask ? mask : current));
     jobject_set(reply, kb("configs"), configs);
     char *text = g_strdup(jvalue_stringify(reply)); j_release(&reply); return text;
 }
-static int run(HCKeyOps *o, const char *action, gboolean stock) {
-    GString *out = g_string_new(NULL); int rc = hc_key_run(o, action, stock, out);
-    assert(!strstr(out->str, "mounted="));
+static char lastout[1024];
+static int run_ex(HCKeyOps *o, const char *action, gboolean stock, gboolean clear) {
+    GString *out = g_string_new(NULL); int rc = hc_key_run_ex(o, action, stock, clear, out);
+    assert(!strstr(out->str, "mounted=") && out->len < sizeof lastout);
+    snprintf(lastout, sizeof lastout, "%s", out->str);
     printf("%s rc=%d %s", action, rc, out->str); g_string_free(out, TRUE); return rc;
 }
+static int run(HCKeyOps *o, const char *action, gboolean stock) { return run_ex(o, action, stock, FALSE); }
 static void status(HCKeyOps *o, const char *expected) {
     GString *out = g_string_new(NULL);
     assert(hc_key_run(o, "status", FALSE, out) == 0);
@@ -50,7 +85,8 @@ static void status(HCKeyOps *o, const char *expected) {
 int main(int argc, char **argv) {
     setbuf(stdout,NULL);
     assert(argc == 3);
-    HCKeyOps o = {argv[1], argv[2], NULL, fake, NULL, 3, 0};
+    logbuf = g_string_new(NULL);
+    HCKeyOps o = {argv[1], argv[2], NULL, fake, NULL, 3, 0, klogcap};
     char *os = g_build_filename(o.state_dir, "starfish-release", NULL); o.release_file = os;
     char *flag = g_build_filename(o.state_dir, "homekey", NULL), *home = g_build_filename(o.state_dir, "home", NULL);
     g_file_set_contents(os, "Rockhopper release 7.6.0-19 (mullet-mullet)\n", -1, NULL);
@@ -82,6 +118,80 @@ int main(int argc, char **argv) {
     assert(run(&o,"apply",FALSE)==0);
     corrupt_after_set=1; g_file_set_contents(home,"other.home",-1,NULL); assert(run(&o,"refresh",FALSE)==1); assert(jvalue_equal(current,original));
     assert(run(&o,"apply",FALSE)==0);
+    /* A persistent override another app saved: the volatile write is accepted and masked. It is told apart from
+     * other failures, logged, recovered as before, and cleared only on request (with a persistent null). */
+    {
+        g_file_set_contents(home,"test.home",-1,NULL);
+        assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original));
+        jvalue_ref luma=parse("{\"file\":\"/var/lib/luma-home/home-filter.js\",\"handler\":\"lumaHomeKey\"}");
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma));
+        int pw=persistent_writes, w0=sets; g_string_truncate(logbuf,0);
+        assert(run(&o,"apply",FALSE)==1); assert(strstr(lastout,"reason=persistent-override\n"));
+        assert(sets==w0+2 && persistent_writes==pw && cannot_toasts==0 && mask);
+        assert(strstr(logbuf->str,"setConfigs(volatile) reply={\"returnValue\":true}") && strstr(logbuf->str,"first difference at index"));
+        assert(strstr(logbuf->str,"persistent keyFilters override masks"));
+        status(&o,"active=no\npatch=possible\nreboot=no\noverride=yes\n");
+        /* boot: recovered as today, one line toast, nothing cleared */
+        int ot=override_toasts; assert(run(&o,"boot",FALSE)==1); assert(strstr(lastout,"reason=persistent-override\n") && override_toasts==ot+1 && persistent_writes==pw && mask);
+        {   /* the notification service is not up yet: one try, no waiting (the watcher goes on); marker 3 hands it over */
+            char *mk=g_build_filename(o.state_dir,"override",NULL),*mt=NULL;
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
+            ot=override_toasts; toast_fail=2; assert(run(&o,"boot",FALSE)==1); assert(override_toasts==ot+1);
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"notify")); g_free(mt);
+            toast_fail=0; assert(run(&o,"boot",FALSE)==1);
+            assert(g_file_get_contents(mk,&mt,NULL,NULL) && !strcmp(mt,"toasted")); g_free(mt);
+            toast_fail=0; g_free(mk);
+        }
+        /* the snapshot taken under the override has the other app's entry: that is what the clear replaces */
+        char *snap=g_build_filename(o.state_dir,"keyfilters-stock.json",NULL),*sb=NULL;
+        assert(g_file_get_contents(snap,&sb,NULL,NULL) && strstr(sb,"lumaHomeKey")); g_free(sb);
+        /* a restore or refresh never writes persistently */
+        assert(run(&o,"stop",FALSE)==0); assert(run(&o,"refresh",TRUE)==0); assert(persistent_writes==pw);
+        /* a plain apply stays refused, unchanged */
+        assert(run(&o,"apply",FALSE)==1); assert(persistent_writes==pw && mask);
+        /* cleared on request: null, read, a fresh snapshot, then the normal volatile apply */
+        g_string_truncate(logbuf,0);
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !strstr(lastout,"reason="));
+        status(&o,"active=yes\npatch=possible\nreboot=no\noverride=no\n");
+        assert(persistent_writes==pw+1 && !mask && strstr(logbuf->str,"clear: setConfigs(persistent null)"));
+        assert(g_file_get_contents(snap,&sb,NULL,NULL) && !strstr(sb,"lumaHomeKey")); g_free(sb);
+        assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original)); assert(persistent_writes==pw+1);
+        /* the clear takes only after a reconfigure: read, reconfigure, read */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; int rc0=reconfigures;
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
+        clear_needs_reconfigure=0; assert(run(&o,"stop",FALSE)==0);
+        /* a slow TV: the reconfigure call does not answer true, reads give no valid list for a while; configd is
+         * asked once and waited for, and the clear still ends well */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_needs_reconfigure=1; reconf_slow=1; rc0=reconfigures;
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==0); assert(strstr(lastout,"active=yes\n") && !mask && reconfigures==rc0+1);
+        assert(strstr(logbuf->str,"no valid list yet"));
+        clear_needs_reconfigure=0; reconf_slow=0; gap_reads=0; assert(run(&o,"stop",FALSE)==0);
+        /* the null is accepted but does not take: the write is masked again, a distinct reason, stock restored */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_stuck=1; rc0=reconfigures;
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-not-cleared\n") && mask && reconfigures==rc0+1);
+        clear_stuck=0; j_release(&mask); mask=NULL;
+        /* no override seen (no marker): the flag is just a plain apply, nothing persistent is written */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); hc_key_mark_override(o.state_dir,0); pw=persistent_writes;
+        assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=persistent-override\n") && persistent_writes==pw && mask);
+        j_release(&mask); mask=NULL;
+        /* the marker is the last run's word: a state that is not an override takes it away, and 3 is never lowered to 1 */
+        hc_key_mark_override(o.state_dir,1); assert(run(&o,"apply",FALSE)==0); assert(hc_key_override_state(o.state_dir)==0);
+        assert(run(&o,"stop",FALSE)==0);
+        hc_key_mark_override(o.state_dir,1); fails=1; assert(run(&o,"apply",FALSE)==1); assert(strstr(lastout,"activation failed") && hc_key_override_state(o.state_dir)==0); fails=0;
+        hc_key_mark_override(o.state_dir,3); hc_key_mark_override(o.state_dir,1); assert(hc_key_override_state(o.state_dir)==3);
+        hc_key_mark_override(o.state_dir,2); hc_key_mark_override(o.state_dir,1); assert(hc_key_override_state(o.state_dir)==2);
+        hc_key_mark_override(o.state_dir,0); assert(run(&o,"stop",FALSE)==0);
+        /* the null is refused: nothing else was written */
+        mask=jvalue_duplicate(original); jarray_append(mask,jvalue_duplicate(luma)); clear_reject=1; w0=sets;
+        hc_key_mark_override(o.state_dir,1); assert(run_ex(&o,"apply",FALSE,TRUE)==1); assert(strstr(lastout,"reason=override-clear-failed\n") && sets==w0 && mask);
+        clear_reject=0; j_release(&mask); mask=NULL; j_release(&luma); g_free(snap);
+        /* a failed write that is not a masked one is not called an override */
+        fails=1; assert(run(&o,"apply",FALSE)==1); assert(!strstr(lastout,"persistent-override") && strstr(lastout,"activation failed")); fails=0;
+        assert(strstr(logbuf->str,"setConfigs(volatile) reply={\"returnValue\":false}"));
+        assert(run(&o,"stop",FALSE)==0); assert(jvalue_equal(current,original));
+        /* back to the state this block found: the filter active for other.home (the checks below rely on it) */
+        g_file_set_contents(home,"other.home",-1,NULL); assert(run(&o,"apply",FALSE)==0);
+    }
     /* No toast when boot restores stock: missing app, no flag, no choice; and a failed write announces first, then reports the error. */
     starts=0; app_installed=0; assert(run(&o,"boot",FALSE)==0); assert(starts==0); app_installed=1;
     assert(run(&o,"apply",FALSE)==0);

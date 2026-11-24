@@ -38,7 +38,7 @@ void remember_title(HCWatch *w, const char *id)
 static int notify_call(HCWatch *w, const char *uri, jvalue_ref payload)
 {
     for (unsigned n = 0; ; n++) {
-        jvalue_ref r = watch_call(w, uri, jvalue_stringify(payload), 5);
+        jvalue_ref r = watch_call(w, uri, jvalue_stringify(payload), w->notify_quick ? 2 : 5);
         gboolean ok = reply_ok(r);
         bool value;
         gboolean refused = jboolean_get(member(r, "returnValue"), &value) == CONV_OK && !value;
@@ -46,14 +46,15 @@ static int notify_call(HCWatch *w, const char *uri, jvalue_ref payload)
         j_release(&r);
         if (ok) return 1;
         if (!refused) return 0;
-        if (n + 1 >= w->c.notify_tries || w->status >= 0) return -1;
+        if (w->notify_quick || n + 1 >= w->c.notify_tries || w->status >= 0) return -1;
         watch_wait(w, w->c.notify_retry_ms);
         if (w->status >= 0) return 0;
     }
 }
-void watch_notify(HCWatch *w, const char *message, gboolean alert)
+/* TRUE when the notification service accepted the toast (or the alert). */
+gboolean watch_notify(HCWatch *w, const char *message, gboolean alert)
 {
-    if (!w->c.notify) return;
+    if (!w->c.notify) return FALSE;
     jvalue_ref p = jobject_create();
     put_str(p, "sourceId", HC_APP_ID);
     if (alert) {
@@ -68,8 +69,9 @@ void watch_notify(HCWatch *w, const char *message, gboolean alert)
     j_release(&p);
     if (alert && result == -1 && w->status < 0) {
         watch_log(w, "the alert was refused, showing the message as a toast");
-        watch_notify(w, message, FALSE);
+        return watch_notify(w, message, FALSE);
     }
+    return result == 1;
 }
 void notify_removed(HCWatch *w, const char *id)
 {

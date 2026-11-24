@@ -50,6 +50,11 @@ struct HCWatch {
     gint64 key_last;
     unsigned key_reapplies;
     gboolean key_logged;
+    gboolean saw_mine; /* a keyFilters reply showed our list: the filter is ours to lose, baked or not */
+    gboolean override_pending; /* the takeover notice was not delivered yet: retried on a short timer (key_notice_retry) */
+    unsigned override_tries;
+    gboolean notify_quick; /* notify.c: one short try, no retries (the timer-driven notice) */
+    gboolean override_toasted; /* the 'another app took over the Home button' toast was shown for this takeover */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
@@ -82,6 +87,8 @@ void sync_baked(HCWatch *w, const char *id);
 /* 6-9: a keyFilters reply (subscription event or poll, `text`) showing the stock list while we think the filter is baked:
  * apply it again, once per change. NULL text polls configd. */
 void key_follow(HCWatch *w, const char *text);
+/* The 'N' timer: a takeover notice that was not delivered is tried again, a limited number of times. */
+void key_notice_retry(HCWatch *w);
 void check_apps(HCWatch *w, char why);
 void check_hc(HCWatch *w);
 void repair_leftover(HCWatch *w);
@@ -110,7 +117,7 @@ void previous_free(HCWatch *w);
 void handle_life(HCWatch *w, jvalue_ref reply);
 void remember_title(HCWatch *w, const char *id);
 void notify_removed(HCWatch *w, const char *id);
-void watch_notify(HCWatch *w, const char *message, gboolean alert);
+gboolean watch_notify(HCWatch *w, const char *message, gboolean alert);
 void watch_remove_tree(const char *path);
 int watch_access(HCWatch *w, const char *action);
 #endif

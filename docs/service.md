@@ -498,6 +498,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 | `homekeyPrepare` | same with `prepare` (validate the native generator against this device’s stock JS) | 120 s |
 | `homekeyClear` | same with `clear` (restore stock and delete unused JS versions) | 20 s |
 | `homekeyApply` | same with `apply` (native, checksum-verified volatile reload) | 90 s |
+| `homekeyApplyClear` | same with `apply clear-override`: first clears another app's persistent keyFilters list, only after the owner agreed in the app ([home-key-hook.md](home-key-hook.md#another-app-saved-keyfilters-persistently)) | 90 s |
 | `homekeyStop` | same with `stop` (restore exact stock list volatile before deleting unused copies) | 90 s |
 | `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
 | `stopWatcher` | `/bin/sh <service>/scripts/homechooser stop`: `systemctl stop homechooser-home`, or on 4.x (no systemd) the watcher loop's process group from `/tmp/homechooser-runtime/watcher.pid` (a non-zero exit is not an error) | 20 s |

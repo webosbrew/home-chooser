@@ -10,6 +10,8 @@ export const SERVICE_URI = `luna://${SERVICE_ID}`;
 export const CALL_TIMEOUT_MS = 30000;
 // Commands that restart the compositor or sam can take a while.
 export const RUN_TIMEOUT_MS = 120000;
+// homekeyApplyClear waits for configd to reconfigure (service/src/policy.c gives it 150 s)
+export const CLEAR_TIMEOUT_MS = 180000;
 
 export const withTimeout = (promise, ms, label) =>
 	new Promise((resolve, reject) => {
@@ -53,7 +55,7 @@ export const createServiceClient = (call, {timeoutMs = CALL_TIMEOUT_MS, runTimeo
 		unlink: () => invoke('unlink').then(ok),
 		linkStatus: () => invoke('linkStatus').then(ok),
 		// A named command; resolves {stdout, stderr, exitCode}
-		run: (command) => invoke('run', {command}, runTimeoutMs).then(ok).then((r) => ({
+		run: (command) => invoke('run', {command}, command === 'homekeyApplyClear' ? Math.max(runTimeoutMs, CLEAR_TIMEOUT_MS) : runTimeoutMs).then(ok).then((r) => ({
 			stdout: r.stdoutString || '', stderr: r.stderrString || '', exitCode: r.exitCode || 0
 		}))
 	};

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // The Home key hook for webOS 4.0 and 6 to 9: status, install and remove. Pure over injected
 // {rootLuna, exec, writeFile, removeFile, version}. See docs/home-key-hook.md.
-import {errorMessage} from '../platform/errors';
+import {errorMessage, overrideReasonOf} from '../platform/errors';
 import {
 	HOMEKEY_FLAG, HOMEKEY_SCRIPT, ensureEntryCommand, homekeyCommand, parsePersistenceStatus,
 	persistenceStatusCommand
@@ -36,10 +36,23 @@ export const parseStatus = (text) => {
 		cacheGeneration: out['cache-generation'] || null,
 		recovered: out.recovered || null,
 		reason: out.reason || null,
+		// another app saved keyFilters persistently and the filter is not active (the service's marker)
+		override: out.override === 'yes',
 		unpatchedSites: Number(out['unpatched-sites'] || 0),
 		rebootNeeded: false,
 		files, skipped
 	};
+};
+
+// A failed apply that says why (platform/errors.js overrideReasonOf) is a result, not a failure.
+const runApply = async (run, command) => {
+	try {
+		return (await run.run(command)).stdout;
+	} catch (e) {
+		const reason = overrideReasonOf(e);
+		if (reason) return `reason=${reason}\n`;
+		throw e;
+	}
 };
 
 export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, version}) => {
@@ -74,11 +87,14 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 			return res;
 		},
 
-		// Validate this firmware, enable boot apply, and reload the filter immediately.
-		async install() {
+		// Validate this firmware, enable boot apply, and reload the filter immediately. `clearOverride`: the owner
+		// agreed to clear another app's persistent keyFilters list first (the service never does it unasked).
+		// res.persistentOverride: the filter could not be applied because of such a list; res.clearFailed: the
+		// clearing did not take (reasons in docs/home-key-hook.md).
+		async install({clearOverride = false} = {}) {
 			const log = [];
 			const run = runner(log);
-			const res = Object.assign(result(log), {status: null, createdKey: false, rebootNeeded: false});
+			const res = Object.assign(result(log), {status: null, createdKey: false, rebootNeeded: false, reason: null, persistentOverride: false, clearFailed: false});
 			try {
 				await run.run(script('prepare'));
 				const before = await readStatus(run);
@@ -98,7 +114,10 @@ export const createHomeKeyHook = ({rootLuna, exec, writeFile, removeFile, versio
 
 				await run.write(HOMEKEY_FLAG, '');
 				await run.run(ensureEntryCommand());
-				await run.run(script('apply'));
+				const applied = parseStatus(await runApply(run, script(clearOverride ? 'applyClear' : 'apply')));
+				res.reason = applied.reason;
+				res.persistentOverride = applied.reason === 'persistent-override';
+				res.clearFailed = applied.reason === 'override-not-cleared' || applied.reason === 'override-clear-failed';
 
 				res.status = await readStatus(run);
 				res.rebootNeeded = res.status.rebootNeeded;
