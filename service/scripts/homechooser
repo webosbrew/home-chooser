@@ -14,7 +14,7 @@ DPIDFILE=${HOMECHOOSER_DAEMON_PIDFILE:-$RUNTIME/watcher-daemon.pid}
 PROC=${HOMECHOOSER_PROC:-/proc}
 # The service gives watch and stop 20 s: stop_loop takes up to 12 s, so a stop may wait 4 s for the lock; a watch waits 15 s.
 STOP_WAIT=${HOMECHOOSER_STOP_WAIT:-4}
-WATCH_WAIT=${HOMECHOOSER_WATCH_WAIT:-15}
+WATCH_WAIT=${HOMECHOOSER_WATCH_WAIT:-6}
 major=$(sed -n 's/.*release \([0-9][0-9]*\)\.[0-9][0-9]*\.[0-9][0-9]*.*/\1/p' "$RELEASE_FILE" 2>/dev/null | head -1)
 
 # 5/10+ retain a boot restore copy even if the unit was stopped at uninstall.
