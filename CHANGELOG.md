@@ -5,6 +5,8 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
 ### Added
 
 - The launcher you choose is no longer closed whenever another app opens, on TVs that do that (seen on webOS 4.0 to 7 with 1.5 GB of memory); it can still be closed when the TV is really short of memory. Home Chooser adds it to the memory manager's keep list and restarts the memory manager only when the list changes; choosing LG Home or uninstalling Home Chooser leaves nothing of it behind.
@@ -79,7 +81,9 @@ The first release.
 - Never close an app while Home Chooser's panel is on screen. A change of Home, LG Home included, leaves the launcher it replaces to the watcher, which closes it once the panel is gone and another full-screen app is in front, at most once per change; the stock Home closes on 6–9 and 10+ wait for the panel too. Before, closing the old launcher under the panel let SAM bring up its idle app (the last input under an overlay launcher) and the panel closed before its "Done" toast.
 - On webOS 6 through 9, when a firmware update leaves the stock `systemUi.js` with a `launchHomeApp` Home Chooser does not recognise (or unreadable), Home opens LG Home: the home gate is no longer mounted while the Home key filter is stock, and returns with the redirect once the shape is known. After an update to webOS 10 or later, the generated key filters and the stock snapshot of the old install are removed.
 
-[Unreleased]: https://github.com/webosbrew/home-chooser/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/webosbrew/home-chooser/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/webosbrew/home-chooser/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/webosbrew/home-chooser/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/webosbrew/home-chooser/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/webosbrew/home-chooser/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/webosbrew/home-chooser/compare/v0.1.0...v0.1.1
