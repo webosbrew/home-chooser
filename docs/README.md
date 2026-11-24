@@ -25,6 +25,10 @@ Concluded studies whose conclusions the code relies on:
 * [The Home key on webOS 3 and 4](research/webos-3-and-4.md): why 4.5 uses the record, how 4.0
   takes a key filter entry of its own, why 3.x is out of scope, `/etc/starfish-release` and which
   releases have which stock home.
+* [Keeping the chosen launcher open](research/launcher-keepalive.md): what closes a background
+  launcher, the memory manager's keep lists by release, where they are read and how, symlinks and
+  invalid files, why a keep list does not hold under real low memory, and why preloading was not
+  built.
 * [System font verification](research/system-font-verification.md): why the package ships without
   Moonstone's bundled fonts.
 
