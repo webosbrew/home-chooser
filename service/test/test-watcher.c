@@ -36,7 +36,8 @@ typedef struct {
     GArray *write_times, *waits;
     jvalue_ref keylist; /* the fake configd's keyFilters list (real key path only) */
     jvalue_ref memvol, memlayer; /* the fake configd's volatile and layer value of com.webos.memorymanager.KeepOnLaunchEx */
-    int mem_sets, mem_gets, mem_get_fail, restarts, restart_fail;
+    int mem_sets, mem_gets, mem_get_fail, mem_fail_after_set, restarts, restart_fail, exec_fail;
+    GString *execs; /* argv of every exec, joined by commas, each followed by a semicolon */
     gboolean mem_masked; /* a persistent value masks the volatile one: the write is accepted and has no effect */
     const char *mem_stock, *mem_link; /* paths of the fake /etc/palm file and /home/root link */
 } Fixture;
@@ -89,6 +90,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
         const char *key = "com.webos.memorymanager.KeepOnLaunchEx";
         if (eq(method, "setConfigs")) {
             f->mem_sets++;
+            if (f->mem_fail_after_set) f->mem_get_fail = f->mem_fail_after_set;
             bool vol = false; jboolean_get(member(p, "volatile"), &vol);
             CHECK("K never a persistent configd write", vol);
             jvalue_ref v = member(member(p, "configs"), key);
@@ -199,6 +201,13 @@ static int fake_gate(const char *choice, void *context) {
     f->gate_last = choice ? 1 : 0;
     return f->gate_fail;
 }
+static int fake_exec(const char *const *argv, void *context) {
+    Fixture *f = context;
+    for (int i = 0; argv[i]; i++) g_string_append_printf(f->execs, "%s%s", i ? "," : "", argv[i]);
+    g_string_append(f->execs, ";");
+    if (f->exec_fail) { f->exec_fail--; return 1; }
+    return 0;
+}
 static int fake_restart(void *context) {
     Fixture *f = context; f->restarts++;
     if (f->restart_fail) { f->restart_fail--; return 1; }
@@ -225,7 +234,7 @@ static Fixture *setup(int major, const char *id) {
     f->calls = g_ptr_array_new_with_free_func(g_free); f->apps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     f->write_times = g_array_new(FALSE, FALSE, sizeof(gint64)); f->waits = g_array_new(FALSE, FALSE, sizeof(unsigned));
     f->major = major; f->clock = 1000; f->live = TRUE; f->launched = g_string_new(NULL); f->closed = g_string_new(NULL);
-    f->windows = g_hash_table_new(g_str_hash, g_str_equal);
+    f->windows = g_hash_table_new(g_str_hash, g_str_equal); f->execs = g_string_new(NULL);
     f->title = "Pretty Home";
     f->profiles = "{\"returnValue\":true,\"profiles\":{\"defaultApps\":{\"_source\":\"factory\",\"categories\":{\"home\":\"com.webos.app.home\",\"kids\":\"k.app\"},\"other\":{\"a\":[1,2]},\"_hidden\":true},"
         "\"idleApp\":{\"_configuration\":\"idleApp.json\",\"support\":true,\"appId\":\"com.webos.app.home\",\"keep\":\"me\"}}}";
@@ -259,7 +268,7 @@ static void teardown(Fixture *f) {
     hc_watch_free(f->w); watch_remove_tree(g_ptr_array_index(f->paths, 0));
     g_ptr_array_free(f->paths, TRUE); g_ptr_array_free(f->calls, TRUE); g_hash_table_destroy(f->apps);
     j_release(&f->record); if (f->keylist) j_release(&f->keylist); if (f->memvol) j_release(&f->memvol); if (f->memlayer) j_release(&f->memlayer); g_array_free(f->write_times, TRUE); g_array_free(f->waits, TRUE);
-    g_string_free(f->launched, TRUE); g_string_free(f->closed, TRUE); g_hash_table_destroy(f->windows); g_free(f);
+    g_string_free(f->execs, TRUE); g_string_free(f->launched, TRUE); g_string_free(f->closed, TRUE); g_hash_table_destroy(f->windows); g_free(f);
 }
 static void pump(void) {
     for (int i = 0; i < 50 && g_main_context_pending(NULL); i++) g_main_context_iteration(NULL, FALSE);
@@ -1330,7 +1339,7 @@ static void test_keep_file_edges(void) {
     /* a failed restart is owed and retried, once */
     f = mem_setup(7, "my.home", MEM_STOCK_EX); f->restart_fail = 1; start(f);
     CHECK("M09 first restart failed", f->restarts == 1);
-    event(f, 'T', NULL); CHECK("M09 retried", f->restarts == 2);
+    f->clock += 61; event(f, 'T', NULL); CHECK("M09 retried", f->restarts == 2);
     event(f, 'T', NULL); CHECK("M09 not again", f->restarts == 2); teardown(f);
     /* the launcher is uninstalled: stock policy back until it returns */
     f = mem_setup(7, "my.home", MEM_STOCK_EX); start(f); CHECK("M10 set up", link_is_ours(f));
@@ -1364,7 +1373,7 @@ static void test_keep_configd(void) {
         CHECK("M20 volatile value is layer plus launcher", f->memvol && jarray_size(f->memvol) == 3 && arr_has(f->memvol, "com.webos.app.home") && arr_has(f->memvol, "com.webos.app.seniorhome") && arr_has(f->memvol, "my.home"));
         CHECK("M20 one write, one restart", f->mem_sets == 1 && f->restarts == 1);
         CHECK("M20 no file route", no_keep(f));
-        char *mark = watch_read(mark_file(f)); CHECK("M20 marker names the launcher", eq(mark, "my.home")); g_free(mark);
+        char *mark = watch_read(mark_file(f)); CHECK("M20 marker names the launcher", eq(mark, "my.home\n")); g_free(mark);
         int sets = f->mem_sets;
         event(f, 'T', NULL); event(f, 'A', "{}");
         CHECK("M21 unchanged: no write, no restart", f->mem_sets == sets && f->restarts == 1);
@@ -1385,7 +1394,7 @@ static void test_keep_configd(void) {
     /* a persistent value masks the volatile one: no fight, no restart, no marker */
     char *t; Fixture *f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_masked = TRUE; start(f); event(f, 'T', NULL);
     CHECK("M25 masked: nothing restarts", f->restarts == 0 && !f->memvol);
-    CHECK("M25 masked: no marker", !g_file_test(mark_file(f), G_FILE_TEST_EXISTS));
+    CHECK("M25 masked: the marker still names it", g_file_test(mark_file(f), G_FILE_TEST_EXISTS));
     CHECK("M25 masked: logged", logged(f, "masked")); teardown(f);
     /* the layer already lists it: nothing of ours to write or undo */
     f = mem_setup(12, "my.home", MEM_STOCK_EX); jarray_append(f->memlayer, jstring_create("my.home")); start(f);
@@ -1417,6 +1426,100 @@ static void test_keep_configd(void) {
     /* a stock home chosen on 10+ */
     f = mem_setup(12, STOCK, MEM_STOCK_EX); start(f); CHECK("M29 stock home: no write", f->mem_sets == 0 && f->restarts == 0); teardown(f);
 }
+static unsigned log_count(Fixture *f, const char *text) {
+    char *log = watch_read(f->c.log); unsigned n = 0;
+    for (const char *p = log; p && (p = strstr(p, text)); p += strlen(text)) n++;
+    g_free(log); return n;
+}
+static void lg_home(Fixture *f) { /* LG Home chosen again: the choice is gone, the watcher ends clean */
+    unlink(f->w->choice_file); event(f, 'S', "{\"returnValue\":true,\"settings\":{}}");
+}
+static gboolean effective_has(Fixture *f, const char *id) { return arr_has(f->memvol ? f->memvol : f->memlayer, id); }
+static void test_keep_review(void) {
+    char *t;
+    /* 1: written, but never read back: the marker names it, so the undo takes it away */
+    Fixture *f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_fail_after_set = 1000; start(f); pump();
+    t = watch_read(mark_file(f)); CHECK("R01 marker written before the write", t && strstr(t, "my.home")); g_free(t);
+    CHECK("R01 value is in configd, no restart yet", f->memvol && f->restarts == 0);
+    f->mem_get_fail = 0; f->mem_fail_after_set = 0; lg_home(f); end_watch(f);
+    CHECK("R01 undo clears what was written", !f->memvol && f->restarts == 1 && !g_file_test(mark_file(f), G_FILE_TEST_EXISTS)); teardown(f);
+    /* 1: the read-back shows it later: confirmed, one restart */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_fail_after_set = 2; start(f); pump();
+    CHECK("R01 confirmed by a later read: one restart", f->memvol && f->restarts == 1 && eq(f->w->mem_id, "my.home")); teardown(f);
+    /* 1: masked: the marker still names it */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_masked = TRUE; start(f);
+    t = watch_read(mark_file(f)); CHECK("R01 masked: marker kept", t && strstr(t, "my.home")); g_free(t);
+    CHECK("R01 masked: no restart", f->restarts == 0); lg_home(f); end_watch(f);
+    CHECK("R01 masked: undo drops the marker, no restart", !g_file_test(mark_file(f), G_FILE_TEST_EXISTS) && f->restarts == 0); teardown(f);
+    /* 2: A to B where B is already listed: A leaves */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); jarray_append(f->memlayer, jstring_create("other.home")); start(f);
+    CHECK("R02 A listed", effective_has(f, "my.home") && f->restarts == 1);
+    file(f->w->choice_file, "other.home"); settings(f, "{\"home\":\"other.home\"}");
+    CHECK("R02 A is off the list", !effective_has(f, "my.home") && effective_has(f, "other.home") && f->restarts == 2);
+    CHECK("R02 marker gone", !g_file_test(mark_file(f), G_FILE_TEST_EXISTS)); teardown(f);
+    /* 3: a restart that always fails is bounded, with backoff */
+    f = mem_setup(6, "my.home", MEM_STOCK_EX); f->restart_fail = 1000; start(f);
+    CHECK("R03 first attempt", f->restarts == 1);
+    for (int i = 0; i < 5; i++) event(f, 'A', "{}");
+    CHECK("R03 backoff: nothing at once", f->restarts == 1);
+    for (int i = 0; i < 20; i++) { f->clock += 1000; event(f, 'T', NULL); event(f, 'A', "{}"); }
+    CHECK("R03 at most 5 attempts", f->restarts == 5);
+    CHECK("R03 given up once in the log", log_count(f, "not trying again") == 1);
+    CHECK("R03 still owed on disk", g_file_test(path(f, f->c.state_dir, "keep-restart"), G_FILE_TEST_EXISTS)); teardown(f);
+    /* 3: an undo whose restart fails is owed to the next watcher, which does it once */
+    for (int major = 6; major <= 12; major += 6) {
+        f = mem_setup(major, "my.home", MEM_STOCK_EX); start(f); CHECK("R04 set up", f->restarts == 1);
+        f->restart_fail = 1000; lg_home(f); end_watch(f);
+        CHECK("R04 undo restart failed", f->restarts == 2 && no_keep(f) && g_file_test(path(f, f->c.state_dir, "keep-restart"), G_FILE_TEST_EXISTS));
+        f->restart_fail = 0; hc_watch_free(f->w); new_watch(f, TRUE); start(f);
+        CHECK("R04 the next watcher restarts once", f->restarts == 3 && !g_file_test(path(f, f->c.state_dir, "keep-restart"), G_FILE_TEST_EXISTS));
+        hc_watch_free(f->w); new_watch(f, TRUE); start(f);
+        CHECK("R04 and not again", f->restarts == 3); teardown(f);
+    }
+    /* 4: a boot on 10+ finds no volatile value: not a drop, no reapply used */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); start(f);
+    j_release(&f->memvol); f->memvol = NULL; reboot(f);
+    CHECK("R05 written again", f->memvol && f->restarts == 2);
+    CHECK("R05 no reapply used", f->w->mem_reapplies == 0 && !log_count(f, "dropped our")); teardown(f);
+    /* 5: only an app SAM confirms as installed is added */
+    for (int major = 6; major <= 12; major += 6) {
+        f = mem_setup(major, "unknown.app", MEM_STOCK_EX); start(f);
+        CHECK("R06 unknown app: nothing added", no_keep(f) && f->restarts == 0 && f->mem_sets == 0);
+        settings(f, "{\"home\":\"unknown.app\"}"); event(f, 'T', NULL);
+        CHECK("R06 still nothing on settings and ticker", no_keep(f) && f->restarts == 0 && f->mem_sets == 0); teardown(f);
+        f = mem_setup(major, "my.home", MEM_STOCK_EX); f->silent = 1; start(f);
+        CHECK("R06 no answer from SAM: nothing added", no_keep(f) && f->restarts == 0 && f->mem_sets == 0); teardown(f);
+    }
+    /* 8: a cause is logged once per run */
+    f = mem_setup(6, "my.home", NULL); start(f); for (int i = 0; i < 3; i++) { event(f, 'T', NULL); event(f, 'A', "{}"); }
+    CHECK("R07 missing stock file logged once", log_count(f, "no readable") == 1); teardown(f);
+    f = mem_setup(6, "my.home", "not json"); start(f); for (int i = 0; i < 3; i++) event(f, 'T', NULL);
+    CHECK("R07 bad stock file logged once", log_count(f, "not a JSON object") == 1); teardown(f);
+    f = mem_setup(6, "my.home", MEM_STOCK_EX); mkdir_p(path(f, f->c.state_dir, "memorymanager-conf.json.tmp")); start(f); for (int i = 0; i < 3; i++) event(f, 'T', NULL);
+    CHECK("R07 write failure logged once", log_count(f, "cannot write") == 1 && f->restarts == 0); teardown(f);
+    /* 9: another component's volatile value survives the undo */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); start(f);
+    jarray_append(f->memvol, jstring_create("other.vol")); lg_home(f); end_watch(f);
+    CHECK("R08 ours is off, the other value stays", f->memvol && effective_has(f, "other.vol") && !effective_has(f, "my.home") && effective_has(f, "com.webos.app.home")); teardown(f);
+    /* 10: how memchute is restarted: systemctl, else initctl restart then start, else nothing to run */
+    for (int variant = 0; variant < 4; variant++) {
+        f = mem_setup(6, "my.home", MEM_STOCK_EX);
+        char *dir = g_path_get_dirname(f->mem_link), *sc = g_build_filename(dir, "systemctl", NULL), *ic = g_build_filename(dir, "initctl", NULL);
+        char *scs = g_strdup_printf("%s/none %s", dir, sc);
+        if (variant == 0) { file(sc, "#!/bin/sh\n"); chmod(sc, 0755); }
+        if (variant == 1 || variant == 2) { file(ic, "#!/bin/sh\n"); chmod(ic, 0755); }
+        f->w->ops.restart = NULL; f->w->ops.exec = fake_exec; f->w->c.systemctl = scs; f->w->c.initctl = ic;
+        if (variant == 2) f->exec_fail = 1;
+        start(f);
+        char *want = variant == 0 ? g_strdup_printf("%s,restart,memchute;", sc) : variant == 1 ? g_strdup_printf("%s,restart,memchute;", ic)
+            : variant == 2 ? g_strdup_printf("%s,restart,memchute;%s,start,memchute;", ic, ic) : g_strdup("");
+        CHECK("R09 command selection", eq(f->execs->str, want));
+        gboolean owed = g_file_test(path(f, f->c.state_dir, "keep-restart"), G_FILE_TEST_EXISTS);
+        CHECK("R09 owed only when no command exists", owed == (variant == 3));
+        if (variant == 3) CHECK("R09 says why", logged(f, "neither systemctl nor initctl"));
+        g_free(want); g_free(dir); g_free(sc); g_free(ic); g_free(scs); teardown(f);
+    }
+}
 static void test_end_log(void) {
     Fixture *f=setup(8,"my.home"); start(f); event(f,'a',NULL); event(f,'f',NULL); event(f,'l',NULL);
     CHECK("W07 auxiliary streams degrade",hc_watch_status(f->w)==-1); event(f,'s',NULL); CHECK("W07 settings loss restart",hc_watch_status(f->w)==1);
@@ -1429,6 +1532,6 @@ static void test_end_log(void) {
 int main(int argc,char **argv) {
     if(argc!=2 && argc!=3)return 2;
     base=argv[1]; known_stock=argc>2?argv[2]:NULL; setbuf(stdout,NULL);
-    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_webos40(); test_keep_file(); test_keep_file_edges(); test_keep_configd(); test_end_log();
+    test_choices(); test_record(); test_backoff(); test_profiles(); test_idle_app();test_remove_return(); test_stock_variant(); test_baked(); test_unknown_shape(); test_uninstall(); test_leftover(); test_restore_races(); test_notifications(); test_preload_close(); test_gate(); test_gate_close(); test_gate_relaunch(); test_gate_ran(); test_last_input(); test_previous(); test_gate_overlay(); test_key_follow(); test_webos40(); test_keep_file(); test_keep_file_edges(); test_keep_configd(); test_keep_review(); test_end_log();
     printf("%u passed, %u failed (native watcher)\n",checks-failures,failures); return failures?1:0;
 }

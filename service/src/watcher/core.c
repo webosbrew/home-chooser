@@ -16,6 +16,7 @@ HCWatchConfig hc_watch_config(void)
         .scripts_dir = HC_SERVICE_DIR "/scripts",
         .gate_binary = HC_GATE_BINARY, .gate_dir = HC_GATE_DIR, .proc = "/proc",
         .log = HC_WATCH_LOG, .stock_js = "/usr/lib/qt5/qml/KeyFilters/systemUi.js",
+        .systemctl = "/bin/systemctl /usr/bin/systemctl", .initctl = "/sbin/initctl",
         .mem_stock = "/etc/palm/memorymanager-conf.json", .mem_link = "/home/root/memorymanager-conf.json",
         .app_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications",
         .install_dirs = "/media/developer/apps/usr/palm/applications /usr/palm/applications /media/cryptofs/apps/usr/palm/applications",

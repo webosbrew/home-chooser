@@ -193,7 +193,7 @@ static void restore_all(HCWatch *w)
     if (gate_apply(w, NULL)) { hc_watch_stop(w, 1, "could not remove the home gate, restore pending"); return; }
     if (w->status >= 0) return;
     memory_undo(w); /* best effort: a memchute that keeps a launcher exempt is no reason to hold the uninstall */
-    const char *names[] = {"home", "previous", "stock", "keep-launcher", "memorymanager-conf.json", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
+    const char *names[] = {"home", "previous", "stock", "keep-launcher", "keep-launcher.tmp", "keep-restart", "keep-restart.tmp", "memorymanager-conf.json", "memorymanager-conf.json.tmp", "homekey", "hook", "hook-stale", "boot", "keyfilters-stock.json", "keyfilter.lock", "override", NULL};
     for (int i = 0; names[i]; i++) {
         char *p = g_build_filename(w->c.state_dir, names[i], NULL);
         watch_remove_tree(p); g_free(p);
