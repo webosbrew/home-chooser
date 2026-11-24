@@ -150,5 +150,31 @@ waitran() { n=0; while [ "$(wc -l < "$T/ran")" -lt "$1" ] && [ $n -lt 50 ]; do s
     [ "$(wc -l < "$T/ran")" = 1 ] # exactly one new daemon, the loop's
     $SH "$HERE/homechooser" stop
     [ "$($SH "$HERE/homechooser" active)" = inactive ]
+
+    # Concurrent watch (and watch with stop) never yields two loops or two daemons. Counted by command line under $T.
+    count() { c=0; for d in /proc/[0-9]*; do case "$(cat "$d/cmdline" 2>/dev/null | tr '\0' ' ')" in *"$1"*) c=$((c + 1)) ;; esac; done; echo "$c"; }
+    # an orphan from an older version is present, as after the upgrade
+    "$T/w/homechooser-daemon" --boot < /dev/null > /dev/null 2>&1 & orphan=$!
+    sleep 1; : > "$T/ran"
+    for i in 1 2 3 4; do $SH "$HERE/homechooser" watch & done
+    wait $(jobs -p | grep -v "^$orphan$") 2>/dev/null || true
+    sleep 2
+    [ "$(count "w/homechooser-daemon --boot ")" = 1 ] || { echo "concurrent watch: $(count "w/homechooser-daemon --boot ") daemons"; exit 1; }
+    [ "$(count "homechooser-boot $T/w/homechooser-daemon")" = 1 ] || { echo 'concurrent watch: not one loop'; exit 1; }
+    [ "$(wc -l < "$T/ran")" = 1 ] || { echo 'concurrent watch: daemon started more than once'; exit 1; }
+    alive "$orphan" && { echo 'orphan survived concurrent watch'; exit 1; }
+    for i in 1 2 3; do $SH "$HERE/homechooser" stop & $SH "$HERE/homechooser" watch & done
+    wait
+    sleep 2
+    [ "$(count "w/homechooser-daemon --boot ")" -le 1 ] || { echo 'watch+stop: two daemons'; exit 1; }
+    [ "$(count "homechooser-boot $T/w/homechooser-daemon")" -le 1 ] || { echo 'watch+stop: two loops'; exit 1; }
+    $SH "$HERE/homechooser" stop
+    [ "$(count "w/homechooser-daemon --boot ")" = 0 ] && [ "$(count "homechooser-boot $T/w/homechooser-daemon")" = 0 ] || { echo 'processes left after final stop'; exit 1; }
+    [ ! -e "$T/rt/lock" ] || { echo 'lock left behind'; exit 1; }
+    # a stale lock (holder gone) does not block
+    mkdir -p "$T/rt/lock"; echo 99999999 > "$T/rt/lock/pid"
+    $SH "$HERE/homechooser" watch
+    waitran 1
+    $SH "$HERE/homechooser" stop
 ) || { echo "FAIL watcher without systemd"; exit 1; }
 printf 'PASS boot entry: native unit, active-unit guard, 5-12 staging and stopped uninstall fallback, watcher loop and daemon without systemd (%s)\n' "$SH"

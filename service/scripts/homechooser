@@ -20,11 +20,11 @@ stage_boot() {
     [ "${major:-0}" -lt 6 ] || [ "${major:-0}" -gt 9 ] || return 0
     mkdir -p "$BOOT_DIR/lib" || return 1
     for f in homechooser homechooser-access lib/common.sh; do
-        cp "$SERVICE_SCRIPTS/$f" "$BOOT_DIR/$f.new" && chmod 755 "$BOOT_DIR/$f.new" &&
-            mv "$BOOT_DIR/$f.new" "$BOOT_DIR/$f" || return 1
+        cp "$SERVICE_SCRIPTS/$f" "$BOOT_DIR/$f.new.$$" && chmod 755 "$BOOT_DIR/$f.new.$$" &&
+            mv "$BOOT_DIR/$f.new.$$" "$BOOT_DIR/$f" || return 1
     done
-    cp "$BINARY" "$BOOT_DIR/homechooser-daemon.new" && chmod 755 "$BOOT_DIR/homechooser-daemon.new" &&
-        mv "$BOOT_DIR/homechooser-daemon.new" "$BOOT_DIR/homechooser-daemon"
+    cp "$BINARY" "$BOOT_DIR/homechooser-daemon.new.$$" && chmod 755 "$BOOT_DIR/homechooser-daemon.new.$$" &&
+        mv "$BOOT_DIR/homechooser-daemon.new.$$" "$BOOT_DIR/homechooser-daemon"
 }
 # webOS 4.0 and 4.5 run upstart, with no systemd: the watcher is then a detached shell loop in its own process
 # group (the unit's Restart=on-failure as a loop), found again through a pid file on tmpfs.
@@ -74,6 +74,25 @@ stop_loop() {
     fi
     rm -f "$PIDFILE" "$DPIDFILE"
 }
+# Serialise check-and-start and stop on the no-systemd path: an atomic mkdir lock holding the owner's pid. A holder that
+# is gone (or whose pid is no homechooser) is stale and is moved aside; waits up to 40 s (a stop takes up to 15 s), then
+# goes ahead anyway rather than hang. The lock is dropped when this script exits.
+lock_take() {
+    LOCK=$RUNTIME/lock
+    n=0
+    while ! mkdir "$LOCK" 2>/dev/null; do
+        holder=$(cat "$LOCK/pid" 2>/dev/null)
+        if [ -n "$holder" ] && ! hc_pid "$holder"; then
+            mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -rf "$LOCK.stale.$$"
+            continue
+        fi
+        if [ $n -ge 40 ]; then [ -n "$holder" ] || rm -rf "$LOCK"; return 0; fi
+        sleep 1; n=$((n + 1))
+    done
+    echo $$ > "$LOCK/pid"
+    trap 'rm -rf "$LOCK"' EXIT
+    trap 'exit 1' HUP INT TERM
+}
 watcher_active() {
     if have_systemd; then "$SYSTEMCTL" is-active --quiet homechooser-home; else loop_pid || daemon_pid; fi
 }
@@ -82,7 +101,7 @@ case "$1" in
     unstage) rm -rf "$BOOT_DIR"; exit 0 ;;
     stop)
         if have_systemd; then exec "$SYSTEMCTL" stop homechooser-home; fi
-        stop_loop; exit 0 ;;
+        mkdir -p "$RUNTIME" && lock_take; stop_loop; exit 0 ;;
     active)
         if watcher_active; then echo active; exit 0; fi
         echo inactive; exit 3 ;;
@@ -105,6 +124,9 @@ fi
 watcher_active && exit 0
 if ! have_systemd; then
     mkdir -p "$RUNTIME" || exit 1
+    # One starter at a time: a concurrent watch (app open revive and the app's own) waits here, then finds the watcher up.
+    lock_take
+    ! watcher_active || exit 0
     stop_loop # an orphan daemon left by an older version would otherwise run beside the new one
     setsid /bin/sh -c 'for b in "$1" "$2"; do [ -x "$b" ] && break; b=; done; [ -n "$b" ] || exit 0
         while :; do
