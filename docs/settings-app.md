@@ -66,11 +66,18 @@ narrow operations and answers only this app; see [the service](service.md) for t
 allow-lists and the logs.
 
 At startup the app makes sure the service is root (`[HomeChooser]` lines in the console log):
-`status`; if the service is not root, Homebrew Channel's
+`status`; if the service is not root, `quit` and `status` again (an earlier elevation may have rewritten
+the launch line already, and only the running instance is old; the service cannot tell from inside, so
+this is tried blind, with two probes); if it is still not root, Homebrew Channel's
 `luna://org.webosbrew.hbchannel.service/elevateService {"id":"org.webosbrew.homechooser.service"}`
 (which rewrites the service's launch line so it is no longer jailed and runs as root); `quit`, so
 the next call starts the elevated binary; `status` again, retried a few times. Every step has a
-timeout. The failures map to the problem screens: Homebrew Channel absent (`unreachable`),
+timeout; `elevateService` gets 120 s, because on a slow TV (webOS 6.5.2 emulated) Homebrew Channel's
+service takes 30 to 40 s to start and the rescan another 10 to 27 s, so the reply comes 40 to 60 s after
+the call. While it runs the screen says "Setting up Home Chooser's service. This can take a minute on
+some TVs." instead of "Loading...". A timeout or an error from `elevateService` is not final by itself:
+`quit` and `status` follow anyway, and only a service that is still not root then is reported (with the
+`elevateService` failure if there was one, otherwise `notRoot`). The failures map to the problem screens: Homebrew Channel absent (`unreachable`),
 `elevateService` refused with `Denied method call` (`denied`, webOS 26 and later with a Homebrew Channel
 older than 0.8.0), the service still not root after elevation (`notRoot`), anything else
 (`failed`). Files are written by the service (`writeFile`, text in a JSON string), so their
@@ -97,8 +104,8 @@ runs carry on. Every step of the startup is safe to interrupt, and the next open
 | Step | State a close leaves | Next open |
 | --- | --- | --- |
 | `status` | none | repeats |
-| `elevateService` (Homebrew Channel) | none yet, or the service's launch line rewritten, with the old instance still running unelevated | `status` says not root, `elevateService` is repeated, `quit`, root |
-| after elevation, before `quit` | launch line elevated, instance unelevated (checked on 6.5.2) | same as above; root afterwards |
+| `elevateService` (Homebrew Channel) | none yet, or the service's launch line rewritten, with the old instance still running unelevated | `status` says not root, `quit` and `status` find the elevated instance (no `elevateService` needed); otherwise `elevateService` is repeated, `quit`, root |
+| after elevation, before `quit` | launch line elevated, instance unelevated (checked on 6.5.2) | `quit` and `status`; root afterwards |
 | `accessApply` | files are written through a temporary file and `mv`, so whole or absent; the script runs to the end | repeats, changes nothing if the files match |
 | 11+ restart after `accessApply` | files match but the running service still has the old groups | the script notes the instance it told in `/tmp/homechooser-runtime/access-restart-pending` and asks for the restart again |
 | `watch` | the watcher running, or not started | starts it if not running |

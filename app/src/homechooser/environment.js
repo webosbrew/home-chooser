@@ -10,8 +10,8 @@ import {startWatcherCommand} from './persistence';
 
 export {FatalError};
 
-export const loadEnvironment = async (platform = createPlatform()) => {
-	await platform.ensureRoot();
+export const loadEnvironment = async (platform = createPlatform(), {onProgress} = {}) => {
+	await platform.ensureRoot({onProgress});
 	try {
 		const access = await platform.exec('accessApply');
 		// webOS 11+: the launcher API's LG access groups changed; the running root service registered

@@ -10,6 +10,9 @@ import {STOCK_FULLHOME, STOCK_HOME, isChoosableStock, stockName} from '../homech
 import {ConfirmDialog, HomeItem, Toast} from './parts';
 import css from './Home.module.less';
 
+// Shown instead of "Loading..." while Homebrew Channel sets up the service (40 to 60 s on a slow TV).
+export const SETUP_TEXT = "Setting up Home Chooser's service. This can take a minute on some TVs.";
+
 const FATAL_TEXT = {
 	unreachable: "Homebrew Channel isn't installed or isn't running.",
 	denied: "Homebrew Channel doesn't give Home Chooser root access on this TV.",
@@ -36,7 +39,7 @@ export const OVERRIDE_TEXT = "Another app has saved its own Home button setting,
 export const OVERRIDE_DETAIL = "Clearing it returns the Home button list to LG's own, removing the other app's change.";
 
 const MainPanel = ({model, launchParams, ...rest}) => {
-	const {phase, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle, ribbonOnly} = model;
+	const {phase, elevating, rootError, candidates, currentId, storedId, loadFailed, readFailed, icons, busy, notice, toast, patch, notify, getUninstallTitle, ribbonOnly} = model;
 	const [pending, setPending] = useState(null); // the item awaiting confirmation
 
 	// The stock homes are fixed rows ahead of the launchers, never listed twice. com.webos.app.home is always
@@ -124,7 +127,12 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 	return (
 		<Panel {...rest}>
 			<Header title="Home Chooser" titleBelow="Choose which app opens when you press Home." />
-			{phase === 'loading' ? <Spinner>Loading...</Spinner> : (
+			{phase === 'loading' && elevating ? (
+				<>
+					<Spinner />
+					<BodyText className={css.message} data-testid="setup-text">{SETUP_TEXT}</BodyText>
+				</>
+			) : phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
 					{stocks.map((id) => (

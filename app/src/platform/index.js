@@ -88,7 +88,7 @@ export const createPlatform = (call = createBridgeCall()) => {
 		exec: createExec(service),
 		release: createRelease(service),
 		readIcon: createReadIcon(service),
-		ensureRoot: () => ensureRoot({service, call}),
+		ensureRoot: (opts = {}) => ensureRoot({service, call, ...opts}),
 		restartService: () => restartService({service})
 	};
 };
