@@ -786,12 +786,12 @@ describe('restoreStock', () => {
 		expect(tv.commands).toEqual([STOP, WATCH]);
 	});
 
-	test('no custom home to close: the previous-launcher file is removed and no watcher is started', async () => {
+	test('no custom home to close: the previous-launcher file is removed; the watcher is started only to clean up and exit', async () => {
 		const tv = withApps(fakeTV({record: {home: STOCK}, previous: ''}), [STOCK]);
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
 		expect(tv.previous()).toBeNull();
-		expect(tv.commands).toEqual([STOP, REFRESH, 'unlinkEntry']);
+		expect(tv.commands).toEqual([STOP, REFRESH, WATCH, 'unlinkEntry']);
 		NO_CLOSE(tv);
 	});
 
@@ -799,7 +799,7 @@ describe('restoreStock', () => {
 		const tv = withApps(fakeTV({record: {home: STOCK}, previous: '', homekey: true}), [STOCK]);
 		const res = await chooser(tv, [8, 3, 0]).restoreStock();
 		expect(res.ok).toBe(true);
-		expect(tv.commands).toEqual([STOP, REFRESH]);
+		expect(tv.commands).toEqual([STOP, REFRESH, WATCH]);
 	});
 
 	test('a custom home to close: the watcher removes the boot entry, not the app', async () => {

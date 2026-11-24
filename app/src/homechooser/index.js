@@ -506,6 +506,13 @@ export const createHomeChooser = ({rootLuna, exec, readFile, writeFile, removeFi
 					}
 				} else {
 					await run.remove(PREVIOUS_FILE);
+					// The watcher found no choice and exits at once; on the way out it takes the launcher off the memory
+					// manager's keep list (docs/service.md, "Keeping the launcher alive"), which nothing else would do.
+					try {
+						await run.run(startWatcherCommand());
+					} catch (e) {
+						res.warnings.push(`Could not start the watcher to clean up: ${errorMessage(e)}`);
+					}
 					// No watcher is left to remove the boot entry and its copy, and none would be after an uninstall:
 					// without a choice and without the Home key hook they have nothing to do.
 					try {

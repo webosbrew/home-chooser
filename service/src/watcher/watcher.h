@@ -8,11 +8,15 @@ typedef struct {
     const char *state_dir, *release_file, *app_dir, *override, *init_link;
     const char *runtime, *scripts_dir, *access_script, *log, *stock_js;
     const char *app_dirs, *install_dirs, *luna_send;
+    const char *systemctl, *initctl; /* where memchute is restarted from: a list of paths, the first executable one */
+    const char *mem_stock, *mem_link; /* memchute's stock file and its override link (memory.c) */
     const char *gate_binary, *gate_dir, *proc; /* 6-9 home gate: installed binary, tmpfs runtime dir, /proc */
     unsigned confirm_ms, interval_s, backoff_s, recheck_s;
     unsigned preload_retry_ms, preload_settle_ms, preload_tries, gate_settle_ms, input_settle_ms;
     unsigned notify_retry_ms, notify_tries, log_max;
-    gboolean preload, notify;
+    unsigned mem_backoff_s; /* first wait after a failed memchute restart (doubles) */
+    unsigned mem_retry_ms, mem_tries; /* 10+: first retry delay (doubles) and number of retries while configd is not ready */
+    gboolean preload, notify, keep_launcher; /* keep_launcher: put the chosen launcher on the memory manager's keep list */
 } HCWatchConfig;
 typedef struct {
     char *(*call)(const char *, const char *, int, void *);
@@ -23,6 +27,8 @@ typedef struct {
     gint64 (*now)(void *);
     void (*wait)(unsigned ms, void *);
     void (*wake)(void *);
+    int (*restart)(void *); /* restart memchute (the whole step); 0 ok */
+    int (*exec)(const char *const *argv, void *); /* the command run to restart it: 0 ok. Production runs it with a time limit */
     void *context;
 } HCWatchOps;
 

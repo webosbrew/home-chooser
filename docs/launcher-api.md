@@ -835,8 +835,11 @@ does this and shows the result as a Recent row.
 
 On any release, and most often on sets with little memory, the system may close a launcher that is in
 the background when another app opens (`memoryReclaim` in the `close` and `stop` events of
-[`getAppLifeEvents`](#getapplifeevents-subscribe)). Home launches it again cold, so keep nothing you
-cannot rebuild: restore your state (the recency list above, the focus) from storage on launch and
+[`getAppLifeEvents`](#getapplifeevents-subscribe)). While the owner has chosen your launcher, Home Chooser
+puts its app id on the memory manager's keep list, which stops the close that comes with the launch of
+another app (webOS 4.0 and later). It does not stop the close under real memory pressure, and it is not
+there when the owner has not chosen your launcher or Home Chooser could not set it up. Home launches it
+again cold, so keep nothing you cannot rebuild: restore your state (the recency list above, the focus) from storage on launch and
 subscribe again to everything you subscribed to, because the old subscriptions ended with the page or
 process.
 

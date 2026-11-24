@@ -256,8 +256,11 @@ These hold across the code and are the reasons behind several choices above.
   files, units or binaries; no non-volatile configd writes. The key filter selection, the preload
   policy and the gate bind mount are runtime state that a reboot clears. Boot-time work runs only
   from Homebrew Channel's `init.d`. Home Chooser's own state lives in
-  `/var/lib/webosbrew/homechooser`.
-* **No restarts.** Nothing restarts the compositor, SAM or the TV, at selection or at boot.
+  `/var/lib/webosbrew/homechooser`. The one thing outside it on 4.0 to 9.x is the symlink
+  `/home/root/memorymanager-conf.json` that keeps the launcher on the memory manager's keep list
+  ([service.md](service.md#keeping-the-launcher-alive)); it is removed with the choice.
+* **No restarts of the compositor, SAM or the TV**, at selection or at boot. The memory manager
+  (`memchute`) is restarted, only when the keep list for the chosen launcher changed.
 * **LG Home always works.** A removed launcher, a removed Home Chooser, an unknown firmware shape or
   any error in the gate falls back to stock LG Home, and the owner is told once when a removal
   changed the Home button.
