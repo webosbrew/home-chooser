@@ -7,7 +7,7 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ### Added
 
-- The launcher you choose is no longer closed whenever another app opens, on TVs that do that (webOS 4.0 and later with 1.5 GB of memory); it can still be closed when the TV is really short of memory. Home Chooser adds it to the memory manager's keep list and restarts the memory manager only when the list changes; choosing LG Home or uninstalling Home Chooser leaves nothing of it behind.
+- The launcher you choose is no longer closed whenever another app opens, on TVs that do that (seen on webOS 4.0 to 7 with 1.5 GB of memory); it can still be closed when the TV is really short of memory. Home Chooser adds it to the memory manager's keep list and restarts the memory manager only when the list changes; choosing LG Home or uninstalling Home Chooser leaves nothing of it behind.
 
 ## [0.2.1] - 2026-11-24
 

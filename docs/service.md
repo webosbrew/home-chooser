@@ -518,7 +518,7 @@ process that outlives the command (the `watch` script starts a transient unit).
 
 ## Keeping the launcher alive
 
-On sets with little memory (seen on 1.5 GB sets running 5.x, 6.x and 7.x) the memory manager, `memchute`, closes a background app whenever another app opens, unless the app is on one of its keep lists. A launcher chosen by the owner is closed that way too, and Home starts it cold. While a launcher other than LG Home is chosen, the watcher (`watcher/memory.c`) puts the launcher's app id on `KeepOnLaunchEx` (`KeepOnLaunch` on 4.0, which has no `KeepOnLaunchEx`). Under real memory pressure the memory manager still closes the launcher with the other background apps; the keep list covers only the close at launch.
+On sets with little memory (seen on 1.5 GB sets running 5.x, 6.x and 7.x) the memory manager, `memchute`, closes a background app whenever another app opens, unless the app is on one of its keep lists. A launcher chosen by the owner is closed that way too, and Home starts it cold. While a launcher other than LG Home is chosen, the watcher (`watcher/memory.c`) puts the launcher's app id on `KeepOnLaunchEx` (`KeepOnLaunch` on 4.0, which has no `KeepOnLaunchEx`). Under real memory pressure the memory manager still closes the launcher with the other background apps; the keep list covers only the close at launch. The study behind this is [research/launcher-keepalive.md](research/launcher-keepalive.md).
 
 `memchute` reads its lists once, when it starts, so the change takes effect with a restart of `memchute`. The restart showed no visible side effect on a device; the preload manager restarts with it on systemd releases. How the lists are replaced depends on the release:
 
