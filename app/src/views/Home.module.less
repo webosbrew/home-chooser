@@ -171,3 +171,14 @@
 .fail {
 	background-color: rgba(150, 30, 30, 0.95);
 }
+
+// While the service is being set up: the spinner centred, the setup line under it as body text.
+.setup {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+
+	.message {
+		align-self: stretch;
+	}
+}

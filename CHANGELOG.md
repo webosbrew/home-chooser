@@ -5,6 +5,13 @@ All notable changes to Home Chooser are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-24
+
+### Fixed
+
+- On webOS 4.0 and 6 to 9, choosing a launcher failed ("The Home button isn't set up yet") when another app had saved its own Home key list in configd permanently, as Luma does, including after its own Home takeover is turned off ([#17](https://github.com/webosbrew/home-chooser/issues/17)). Home Chooser's list is temporary, and configd keeps showing a permanent one over it. Home Chooser now recognises this and asks: "Clear it and continue" removes the other app's saved list (back to LG's own) and then sets your launcher; Cancel leaves everything as it was. It never clears it without asking. If another app takes the Home button over later, at boot or while the TV is on, a notice says so once. Uninstalling Home Chooser leaves the other app's setting alone.
+- Opening Home Chooser right after installing it could end in "Home Chooser couldn't set up its service." on a TV where the Homebrew Channel is slow to start: the app gave it 20 seconds, and setup could take a minute. The app now waits up to two minutes and shows "Setting up Home Chooser's service. This can take a minute on some TVs." while it does, still finishes the setup when the Homebrew Channel answers late, and if the panel was closed before the end, the next open finishes it in a few seconds.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

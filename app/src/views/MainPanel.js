@@ -128,10 +128,10 @@ const MainPanel = ({model, launchParams, ...rest}) => {
 		<Panel {...rest}>
 			<Header title="Home Chooser" titleBelow="Choose which app opens when you press Home." />
 			{phase === 'loading' && elevating ? (
-				<>
+				<div className={css.setup}>
 					<Spinner />
 					<BodyText className={css.message} data-testid="setup-text">{SETUP_TEXT}</BodyText>
-				</>
+				</div>
 			) : phase === 'loading' ? <Spinner>Loading...</Spinner> : (
 				<Scroller>
 					{rootError ? <BodyText className={css.message}>{rootReason(rootError)}</BodyText> : null}
