@@ -481,7 +481,10 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 * **Watcher supervision and revival**: on systemd the watcher is the transient unit `homechooser-home`
   (`Restart=on-failure`), which systemd keeps up. webOS 4.x runs upstart (1.10, jobs only from read-only `/etc/init`, no
   transient jobs), so there the watcher is a detached shell loop with a pid file that restarts the daemon on failure but
-  stays dead if the loop itself is killed. Both are revived by the service: after every call that does real work (the
+  stays dead if the loop itself is killed. The daemon puts itself in its own process group (so its `luna-send` children can be
+  signalled with it), which a group kill of the loop does not reach: the loop therefore also writes the daemon's pid to
+  `/tmp/homechooser-runtime/watcher-daemon.pid` on every start, and `active` is true while either the loop or that daemon is
+  alive (a pid counts only while its command line names homechooser, so a recycled pid is never signalled). Both are revived by the service: after every call that does real work (the
   app's `call`, `run`, file and link methods, and every launcher method; not `status` or `quit`), `hc_revive_touch` runs
   once the handler has replied. It does nothing unless the service is root, and at most once per 30 s per process. If a
   home choice is stored (`/var/lib/webosbrew/homechooser/home` is a regular file: the same condition the boot entry starts the
@@ -503,7 +506,7 @@ The policy is in `service/src/policy.c` and tested on the host (`test-policy`, b
 | `homekeyApplyClear` | same with `apply clear-override`: first clears another app's persistent keyFilters list, only after the owner agreed in the app ([home-key-hook.md](home-key-hook.md#another-app-saved-keyfilters-persistently)) | 90 s |
 | `homekeyStop` | same with `stop` (restore exact stock list volatile before deleting unused copies) | 90 s |
 | `homekeyRefresh` | same with `refresh` (live launcher change, no process restart) | 90 s |
-| `stopWatcher` | `/bin/sh <service>/scripts/homechooser stop`: `systemctl stop homechooser-home`, or on 4.x (no systemd) the watcher loop's process group from `/tmp/homechooser-runtime/watcher.pid` (a non-zero exit is not an error) | 20 s |
+| `stopWatcher` | `/bin/sh <service>/scripts/homechooser stop`: `systemctl stop homechooser-home`, or on 4.x (no systemd) the watcher loop first (its process group, from `watcher.pid`, so it cannot restart the daemon), then the daemon (from `watcher-daemon.pid`, plus any `homechooser-daemon --boot` found in `/proc` and owned by root, such as one left by 0.2.1), each waited for up to 5 s and then KILLed, and only then the pid files removed (a non-zero exit is not an error). `watch` does the same cleanup before it starts a new loop. On this path `watch` and `stop` run one at a time under an atomic `mkdir` lock (`/tmp/homechooser-runtime/lock`, holding the owner's pid; a holder that is gone is stale and is moved aside; the service gives both verbs 20 s, so a `watch` waits at most 6 s for the lock (6 s plus a cleanup of at most 12 s stays inside 20 s), then exits 0 if a watcher is active and non-zero if none is, and a `stop` waits at most 4 s, then stops anyway unless nothing is running), and `watch` re-checks `active` once it holds the lock, so the app-open revive and the app's own `watch` cannot start two loops | 20 s |
 | `watcherActive` | same with `active`: prints `active` or `inactive` (`systemctl is-active homechooser-home`, or the pid file on 4.x; a non-zero exit is not an error) | 10 s |
 | `profileGet` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/getProfiles {"names":["defaultApps","idleApp"]}` (stdout is luna-send's reply; the exit status is 0 also for a false `returnValue`, so the caller reads it) | 20 s |
 | `profileRescan` | `/usr/bin/luna-send -a com.webos.applicationManager -n 1 luna://com.webos.service.systemprofile/debug/rescan {}` (same) | 30 s |
