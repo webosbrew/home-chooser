@@ -176,11 +176,14 @@ static void mark_write(HCWatch *w, const char *id)
     if (id) write_atomic(p, id, strlen(id)); else unlink(p);
     g_free(p);
 }
-static void config_apply(HCWatch *w, const char *id)
+/* TRUE when configd was not ready (no usable read, a refused write or no read-back): worth trying again soon. */
+static gboolean config_apply(HCWatch *w, const char *id)
 {
+    gboolean again = FALSE;
     jvalue_ref current = NULL;
     char *mark = mark_read(w);
     if (!config_get(w, &current)) {
+        again = TRUE;
         if (!w->mem_read_logged) { w->mem_read_logged = TRUE; watch_log(w, "memory manager: configd gave no usable %s, launcher keep list not set (retried later)", MEM_KEY); }
         goto done;
     }
@@ -215,9 +218,11 @@ static void config_apply(HCWatch *w, const char *id)
     gboolean wrote = config_put(w, next), exact = FALSE;
     if (wrote) {
         jvalue_ref back = NULL;
-        exact = config_get(w, &back) && jvalue_equal(back, next);
+        gboolean read = config_get(w, &back);
+        exact = read && jvalue_equal(back, next);
+        if (!read) again = TRUE; /* no read-back yet: not a mask */
         j_release(&back);
-    }
+    } else again = TRUE;
     if (!exact) {
         /* a persistent value masks the volatile one, or the write was refused: do not fight it */
         if (!w->mem_mask_logged) { w->mem_mask_logged = TRUE; watch_log(w, "memory manager: a volatile %s is not what configd reads back (%s), left as it is", MEM_SHORT, wrote ? "masked" : "refused"); }
@@ -231,6 +236,7 @@ static void config_apply(HCWatch *w, const char *id)
     j_release(&next);
 done:
     j_release(&current); g_free(mark);
+    return again;
 }
 static void config_undo(HCWatch *w)
 {
@@ -252,6 +258,47 @@ done:
     j_release(&current); g_free(mark);
 }
 
+/* ---- retry soon after boot, 10+ ---- */
+
+static void retry_cancel(HCWatch *w)
+{
+    if (w->mem_retry_source) { g_source_remove(w->mem_retry_source); w->mem_retry_source = 0; }
+}
+static gboolean retry_fire(gpointer context)
+{
+    HCWatch *w = context;
+    w->mem_retry_source = 0;
+    if (w->status >= 0) return G_SOURCE_REMOVE;
+    w->depth++;
+    char *id = watch_choice(w);
+    if (id) memory_follow(w, id, TRUE);
+    g_free(id);
+    w->depth--;
+    if (w->ops.wake) w->ops.wake(w->ops.context);
+    return G_SOURCE_REMOVE;
+}
+/* 10 s, 20 s, 40 s ... (mem_retry_ms doubling), at most mem_tries times per watcher run; the 300 s check goes on after that. */
+static void retry_schedule(HCWatch *w)
+{
+    if (w->mem_retry_source || w->mem_tries >= w->c.mem_tries) return;
+    unsigned delay = w->c.mem_retry_ms << w->mem_tries;
+    w->mem_tries++;
+    w->mem_retry_source = g_timeout_add(delay, retry_fire, w);
+}
+
+/* 10+ ignores the 4.0-9.x link: one left by a set that was upgraded is removed, ours only (a link into our state directory, our copy). */
+static void old_route_cleanup(HCWatch *w)
+{
+    if (w->major < 10 || w->mem_old_done) return;
+    w->mem_old_done = TRUE;
+    char *ours = ours_path(w);
+    gboolean removed = FALSE;
+    if (link_state(w, ours) == 1 && !unlink(w->c.mem_link)) removed = TRUE;
+    if (!unlink(ours)) removed = TRUE;
+    if (removed) watch_log(w, "memory manager: webOS %d ignores %s; the link and copy left from an earlier release are removed", w->major, w->c.mem_link);
+    g_free(ours);
+}
+
 /* ---- entry points ---- */
 
 static gboolean supported(const HCWatch *w) { return w->c.keep_launcher && w->major >= 4; }
@@ -259,6 +306,7 @@ static gboolean supported(const HCWatch *w) { return w->c.keep_launcher && w->ma
 void memory_undo(HCWatch *w)
 {
     if (!supported(w)) return;
+    retry_cancel(w); old_route_cleanup(w);
     if (w->major <= 9) file_undo(w); else config_undo(w);
     g_clear_pointer(&w->mem_id, g_free);
     w->mem_reapplies = 0;
@@ -268,6 +316,9 @@ void memory_follow(HCWatch *w, const char *id, gboolean force)
     if (!supported(w)) return;
     if (!id || !hc_app_id_ok(id) || stock_id(id) || eq(id, HC_APP_ID)) { memory_undo(w); return; }
     if (!force && eq(w->mem_id, id) && !w->mem_owed) return;
-    if (w->major <= 9) file_apply(w, id); else config_apply(w, id);
+    if (w->major <= 9) { file_apply(w, id); return; }
+    old_route_cleanup(w);
+    if (config_apply(w, id)) retry_schedule(w);
+    else if (eq(w->mem_id, id)) w->mem_tries = 0;
 }
-void memory_free(HCWatch *w) { g_free(w->mem_id); w->mem_id = NULL; }
+void memory_free(HCWatch *w) { retry_cancel(w); g_free(w->mem_id); w->mem_id = NULL; }

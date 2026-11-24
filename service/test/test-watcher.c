@@ -96,7 +96,7 @@ static char *fake_call(const char *uri, const char *payload, int timeout, void *
             r = response(TRUE);
         } else {
             f->mem_gets++;
-            if (f->mem_get_fail) r = response(FALSE);
+            if (f->mem_get_fail) { r = response(FALSE); if (f->mem_get_fail < 100) f->mem_get_fail--; }
             else {
                 r = response(TRUE); jvalue_ref configs = jobject_create();
                 jobject_set(configs, key_buf(key), jvalue_duplicate(f->memvol ? f->memvol : f->memlayer)); jobject_set(r, key_buf("configs"), configs);
@@ -1231,7 +1231,7 @@ static void test_webos40(void) {
 #define MEM_STOCK_NEW "{\"KeepOnLaunch\":[\"com.webos.app.systemmusic\",\"new.entry\"],\"KeepOnLaunchEx\":[\"com.webos.app.home\"]}"
 static Fixture *mem_setup(int major, const char *id, const char *stock) {
     Fixture *f = setup(major, id);
-    f->w->c.keep_launcher = TRUE;
+    f->w->c.keep_launcher = TRUE; f->w->c.mem_retry_ms = 0;
     char *dir = g_path_get_dirname(f->mem_link); mkdir_p(dir); g_free(dir);
     if (stock) file(f->mem_stock, stock);
     return f;
@@ -1383,7 +1383,7 @@ static void test_keep_configd(void) {
         teardown(f);
     }
     /* a persistent value masks the volatile one: no fight, no restart, no marker */
-    Fixture *f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_masked = TRUE; start(f); event(f, 'T', NULL);
+    char *t; Fixture *f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_masked = TRUE; start(f); event(f, 'T', NULL);
     CHECK("M25 masked: nothing restarts", f->restarts == 0 && !f->memvol);
     CHECK("M25 masked: no marker", !g_file_test(mark_file(f), G_FILE_TEST_EXISTS));
     CHECK("M25 masked: logged", logged(f, "masked")); teardown(f);
@@ -1393,13 +1393,27 @@ static void test_keep_configd(void) {
     unlink(f->w->choice_file); event(f, 'S', "{\"returnValue\":true,\"settings\":{}}"); end_watch(f); CHECK("M26 undo does not touch it", f->mem_sets == 0 && f->restarts == 0);
     teardown(f);
     /* configd does not answer: never write blind */
-    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_get_fail = 1; start(f);
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_get_fail = 1000; start(f);
     CHECK("M27 no read, no write", f->mem_sets == 0 && f->restarts == 0);
     f->mem_get_fail = 0; event(f, 'T', NULL); CHECK("M27 the ticker tries again", f->mem_sets == 1 && f->restarts == 1); teardown(f);
     /* configd that keeps dropping the value is not chased for ever */
     f = mem_setup(12, "my.home", MEM_STOCK_EX); start(f);
     for (int i = 0; i < 10; i++) { j_release(&f->memvol); f->memvol = NULL; event(f, 'T', NULL); }
     CHECK("M28 bounded re-applies", f->mem_sets == 1 + 5 && f->restarts == 1 + 5); teardown(f);
+    /* configd not ready at boot: retried soon, bounded */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_get_fail = 2; start(f); pump();
+    CHECK("M30 retried until configd answers", f->memvol && f->restarts == 1 && f->mem_sets == 1 && f->mem_gets >= 3);
+    teardown(f);
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); f->mem_get_fail = 1000; start(f); pump(); pump();
+    CHECK("M30 retries are bounded", f->mem_gets == 1 + 5 && f->mem_sets == 0 && f->restarts == 0); teardown(f);
+    /* a set upgraded from 9.x: our link and copy are removed once, nothing else */
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); file(ours_file(f), "{}"); CHECK("M31 link", !symlink(ours_file(f), f->mem_link));
+    start(f);
+    CHECK("M31 old link and copy removed", no_keep(f)); CHECK("M31 only the configd restart", f->restarts == 1 && f->memvol); teardown(f);
+    f = mem_setup(12, "my.home", MEM_STOCK_EX); file(f->mem_link, "{\"mine\":true}"); file(ours_file(f), "{}"); start(f);
+    t = watch_read(f->mem_link); CHECK("M31 a foreign file stays", eq(t, "{\"mine\":true}") && !g_file_test(ours_file(f), G_FILE_TEST_EXISTS)); g_free(t); teardown(f);
+    f = mem_setup(12, NULL, MEM_STOCK_EX); file(ours_file(f), "{}"); CHECK("M31 link", !symlink(ours_file(f), f->mem_link));
+    start(f); CHECK("M31 no choice: old link removed, no restart", no_keep(f) && f->restarts == 0); teardown(f);
     /* a stock home chosen on 10+ */
     f = mem_setup(12, STOCK, MEM_STOCK_EX); start(f); CHECK("M29 stock home: no write", f->mem_sets == 0 && f->restarts == 0); teardown(f);
 }

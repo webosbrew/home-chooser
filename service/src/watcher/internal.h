@@ -58,7 +58,8 @@ struct HCWatch {
     /* memory.c: the launcher kept on memchute's keep list */
     char *mem_id;
     gboolean mem_owed, mem_foreign_logged, mem_read_logged, mem_mask_logged, mem_loop_logged; /* mem_owed: a memchute restart is due */
-    unsigned mem_reapplies;
+    unsigned mem_reapplies, mem_tries, mem_retry_source;
+    gboolean mem_old_done; /* 10+: the 4.0-9.x link and copy were looked for */
 };
 static inline gboolean eq(const char *a, const char *b) { return g_strcmp0(a, b) == 0; }
 static inline gboolean stock_id(const char *id) { return eq(id, STOCK) || eq(id, FULLHOME); }
